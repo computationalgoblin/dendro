@@ -8,7 +8,7 @@
     volumes:
       - .:/workspace
       - narrative_architect_node_modules:/workspace/node_modules
-      - narrative_architect_pnpm_store:/home/dev/.local/share/pnpm/store
+      - narrative_architect_pnpm_store:/root/.local/share/pnpm/store
     stdin_open: true
     tty: true
     environment:
