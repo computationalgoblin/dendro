@@ -192,10 +192,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_entity_commands(sub)
 
-    # ── relation, history, source (B07-T03) ───────────────────────────────
-    sub.add_parser("relation", help="Relation commands — coming in B07-T03")
-    sub.add_parser("history", help="History commands — coming in B07-T03")
-    sub.add_parser("source", help="Source commands — coming in B07-T03")
+    # ── relation ───────────────────────────────────────────────────────────
+    from packages.ui.cli_relation import register_relation_commands
+
+    register_relation_commands(sub)
+
+    # ── history ────────────────────────────────────────────────────────────
+    from packages.ui.cli_history import register_history_commands
+
+    register_history_commands(sub)
+
+    # ── source ─────────────────────────────────────────────────────────────
+    from packages.ui.cli_source import register_source_commands
+
+    register_source_commands(sub)
 
     return parser
 
@@ -230,14 +240,26 @@ def main() -> None:
         handle_entity_command(args, session)
         return
 
-    # ── Placeholder commands (B07-T03) ────────────────────────────────────
-    if args.command in ("relation", "history", "source"):
-        print(
-            f"error: '{args.command}' commands not yet implemented "
-            f"(coming in B07-T02 / B07-T03).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # ── Relation commands ─────────────────────────────────────────────────
+    if args.command == "relation":
+        from packages.ui.cli_relation import handle_relation_command
+
+        handle_relation_command(args, session)
+        return
+
+    # ── History commands ──────────────────────────────────────────────────
+    if args.command == "history":
+        from packages.ui.cli_history import handle_history_command
+
+        handle_history_command(args, session)
+        return
+
+    # ── Source commands ───────────────────────────────────────────────────
+    if args.command == "source":
+        from packages.ui.cli_source import handle_source_command
+
+        handle_source_command(args, session)
+        return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
     sys.exit(1)
