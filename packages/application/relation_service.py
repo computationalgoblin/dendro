@@ -77,6 +77,7 @@ class RelationService:
         target_id: str | None = None,
         relation_type: RelationType | str | None = None,
         data: dict[str, Any] | None = None,
+        history_service: Any = None,
     ) -> Result[NarrativeRelation, str]:
         """Create a new relation and add it to the active project.
 
@@ -130,10 +131,21 @@ class RelationService:
 
         proj.value.relations.append(relation)
         proj.value.touch()
+        if history_service is not None:
+            from packages.domain.source_history import HistoryEventType
+            entry = history_service.make_entry(
+                HistoryEventType.CREACION_RELACION,
+                affected_relation_id=relation.id,
+                new_value=f"{relation.source_id} -> {relation.target_id}",
+                change_origin="RelationService.create_relation",
+                operation="create_relation",
+            )
+            history_service.record(entry)
         return Ok(relation)
 
     def update_relation(
-        self, relation_id: str, data: dict[str, Any]
+        self, relation_id: str, data: dict[str, Any],
+        history_service: Any = None,
     ) -> Result[NarrativeRelation, str]:
         proj = self._active_project()
         if isinstance(proj, Error):
@@ -149,18 +161,39 @@ class RelationService:
                     r.custom_metadata.update(data["custom_metadata"])
                 r.touch()
                 proj.value.touch()
+                if history_service is not None:
+                    from packages.domain.source_history import HistoryEventType
+                    entry = history_service.make_entry(
+                        HistoryEventType.EDICION_RELACION,
+                        affected_relation_id=r.id,
+                        change_origin="RelationService.update_relation",
+                        operation="update_relation",
+                    )
+                    history_service.record(entry)
                 return Ok(r)
         return Error(f"Relation with id '{relation_id}' not found")
 
-    def archive_relation(self, relation_id: str) -> Result[None, str]:
+    def archive_relation(self, relation_id: str, history_service: Any = None) -> Result[None, str]:
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
         for r in proj.value.relations:
             if r.id == relation_id:
+                prev = r.canon_state.value
                 r.canon_state = CanonState.ARCHIVADO
                 r.touch()
                 proj.value.touch()
+                if history_service is not None:
+                    from packages.domain.source_history import HistoryEventType
+                    entry = history_service.make_entry(
+                        HistoryEventType.ARCHIVADO_RELACION,
+                        affected_relation_id=r.id,
+                        previous_value=prev,
+                        new_value=r.canon_state.value,
+                        change_origin="RelationService.archive_relation",
+                        operation="archive_relation",
+                    )
+                    history_service.record(entry)
                 return Ok(None)
         return Error(f"Relation with id '{relation_id}' not found")
 
@@ -373,7 +406,8 @@ class RelationService:
     # ------------------------------------------------------------------
 
     def change_canon_state(
-        self, relation_id: str, new_state: CanonState | str
+        self, relation_id: str, new_state: CanonState | str,
+        history_service: Any = None,
     ) -> Result[NarrativeRelation, str]:
         proj = self._active_project()
         if isinstance(proj, Error):

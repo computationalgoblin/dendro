@@ -66,7 +66,7 @@ class EntityService:
     # CRUD
     # ------------------------------------------------------------------
 
-    def create_entity(self, data: dict[str, Any]) -> Result[NarrativeEntity, str]:
+    def create_entity(self, data: dict[str, Any], history_service: Any = None) -> Result[NarrativeEntity, str]:
         """Create a new entity, add it to the active project, and persist.
 
         Args:
@@ -92,10 +92,21 @@ class EntityService:
 
         proj.value.entities.append(entity)
         proj.value.touch()
+        if history_service is not None:
+            from packages.domain.source_history import HistoryEventType
+            entry = history_service.make_entry(
+                HistoryEventType.CREACION_ENTIDAD,
+                affected_entity_id=entity.id,
+                new_value=entity.name,
+                change_origin="EntityService.create_entity",
+                operation="create_entity",
+            )
+            history_service.record(entry)
         return Ok(entity)
 
     def update_entity(
-        self, entity_id: str, data: dict[str, Any]
+        self, entity_id: str, data: dict[str, Any],
+        history_service: Any = None,
     ) -> Result[NarrativeEntity, str]:
         """Modify an existing entity and persist.
 
@@ -130,9 +141,18 @@ class EntityService:
 
         found.touch()
         proj.value.touch()
+        if history_service is not None:
+            from packages.domain.source_history import HistoryEventType
+            entry = history_service.make_entry(
+                HistoryEventType.EDICION_ENTIDAD,
+                affected_entity_id=found.id,
+                change_origin="EntityService.update_entity",
+                operation="update_entity",
+            )
+            history_service.record(entry)
         return Ok(found)
 
-    def archive_entity(self, entity_id: str) -> Result[None, str]:
+    def archive_entity(self, entity_id: str, history_service: Any = None) -> Result[None, str]:
         """Soft-delete an entity (canon_state → ARCHIVADO).
 
         The entity stays in the project for traceability.
@@ -143,13 +163,25 @@ class EntityService:
 
         for e in proj.value.entities:
             if e.id == entity_id:
+                prev = e.canon_state.value
                 e.canon_state = CanonState.ARCHIVADO
                 e.touch()
                 proj.value.touch()
+                if history_service is not None:
+                    from packages.domain.source_history import HistoryEventType
+                    entry = history_service.make_entry(
+                        HistoryEventType.ARCHIVADO_ENTIDAD,
+                        affected_entity_id=e.id,
+                        previous_value=prev,
+                        new_value=e.canon_state.value,
+                        change_origin="EntityService.archive_entity",
+                        operation="archive_entity",
+                    )
+                    history_service.record(entry)
                 return Ok(None)
         return Error(f"Entity with id '{entity_id}' not found")
 
-    def restore_entity(self, entity_id: str) -> Result[NarrativeEntity, str]:
+    def restore_entity(self, entity_id: str, history_service: Any = None) -> Result[NarrativeEntity, str]:
         """Restore an archived entity to BORRADOR state."""
         proj = self._active_project()
         if isinstance(proj, Error):
@@ -308,7 +340,8 @@ class EntityService:
     # ------------------------------------------------------------------
 
     def change_canon_state(
-        self, entity_id: str, new_state: CanonState | str
+        self, entity_id: str, new_state: CanonState | str,
+        history_service: Any = None,
     ) -> Result[NarrativeEntity, str]:
         proj = self._active_project()
         if isinstance(proj, Error):
@@ -322,14 +355,27 @@ class EntityService:
 
         for e in proj.value.entities:
             if e.id == entity_id:
+                prev = e.canon_state.value
                 e.canon_state = new_state
                 e.touch()
                 proj.value.touch()
+                if history_service is not None:
+                    from packages.domain.source_history import HistoryEventType
+                    entry = history_service.make_entry(
+                        HistoryEventType.CAMBIO_CANON,
+                        affected_entity_id=e.id,
+                        previous_value=prev,
+                        new_value=new_state.value,
+                        change_origin="EntityService.change_canon_state",
+                        operation="change_canon_state",
+                    )
+                    history_service.record(entry)
                 return Ok(e)
         return Error(f"Entity with id '{entity_id}' not found")
 
     def change_visibility_state(
-        self, entity_id: str, new_state: VisibilityState | str
+        self, entity_id: str, new_state: VisibilityState | str,
+        history_service: Any = None,
     ) -> Result[NarrativeEntity, str]:
         proj = self._active_project()
         if isinstance(proj, Error):
@@ -343,9 +389,21 @@ class EntityService:
 
         for e in proj.value.entities:
             if e.id == entity_id:
+                prev = e.visibility_state.value
                 e.visibility_state = new_state
                 e.touch()
                 proj.value.touch()
+                if history_service is not None:
+                    from packages.domain.source_history import HistoryEventType
+                    entry = history_service.make_entry(
+                        HistoryEventType.CAMBIO_VISIBILIDAD,
+                        affected_entity_id=e.id,
+                        previous_value=prev,
+                        new_value=new_state.value,
+                        change_origin="EntityService.change_visibility_state",
+                        operation="change_visibility_state",
+                    )
+                    history_service.record(entry)
                 return Ok(e)
         return Error(f"Entity with id '{entity_id}' not found")
 

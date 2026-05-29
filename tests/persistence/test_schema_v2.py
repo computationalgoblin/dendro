@@ -206,19 +206,12 @@ class TestProjectStoreV2:
         assert p2.issues == ["issue1"]
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
-        from packages.domain.relation import NarrativeRelation
-        from packages.domain.source_history import HistoryEventType, Source
+        from packages.domain.entity import NarrativeEntity, EntityType
+        from packages.domain.source_history import HistoryEventType, Source, HistoryEntry
 
         store = ProjectStore()
-        p = Project(name="Full"
-        p.entities = [
-            NarrativeEntity(name="E1"),
-            NarrativeEntity(name="E2"),
-        ]
-        p.relations = [
-            NarrativeRelation(source_id="a", target_id="b"),
-            NarrativeRelation(source_id="c", target_id="d"),
-        ]
+        p = Project(name="Full")
+        p.entities = [NarrativeEntity(name="E1"), NarrativeEntity(name="E2")]
 
         path = tmp_path / "colls.json"
         store.save(p, path)
