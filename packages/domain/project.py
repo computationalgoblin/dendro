@@ -15,6 +15,8 @@ from typing import TypeVar
 
 from packages.domain.entity import NarrativeEntity
 from packages.domain.relation import NarrativeRelation
+from packages.domain.source_history import Source, HistoryEntry
+from packages.domain.candidate_issue import Issue, Candidate
 from packages.domain.project_config import (
     AIConfig,
     ExportConfig,
@@ -96,9 +98,10 @@ class Project:
     # Prepared collections (empty, for Bloque 3-6+)
     entities: list[NarrativeEntity] = field(default_factory=list)
     relations: list[NarrativeRelation] = field(default_factory=list)
-    sources: list = field(default_factory=list)
-    history: list = field(default_factory=list)
-    issues: list = field(default_factory=list)
+    sources: list[Source] = field(default_factory=list)
+    history: list[HistoryEntry] = field(default_factory=list)
+    issues: list[Issue] = field(default_factory=list)
+    candidates: list[Candidate] = field(default_factory=list)
 
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
@@ -164,9 +167,10 @@ class Project:
             # Prepared collections
             "entities": [e.to_dict() for e in self.entities],
             "relations": [r.to_dict() for r in self.relations],
-            "sources": list(self.sources),
-            "history": list(self.history),
-            "issues": list(self.issues),
+            "sources": [s.to_dict() for s in self.sources],
+            "history": [h.to_dict() for h in self.history],
+            "issues": [i.to_dict() for i in self.issues],
+            "candidates": [c.to_dict() for c in self.candidates],
         }
 
     @classmethod
@@ -234,7 +238,8 @@ class Project:
                 for r in data.get("relations", [])
                 if isinstance(r, dict)
             ],
-            sources=list(data.get("sources", [])),
-            history=list(data.get("history", [])),
-            issues=list(data.get("issues", [])),
+            sources=[Source.from_dict(s) for s in data.get("sources", []) if isinstance(s, dict)],
+            history=[HistoryEntry.from_dict(h) for h in data.get("history", []) if isinstance(h, dict)],
+            issues=[Issue.from_dict(i) for i in data.get("issues", []) if isinstance(i, dict)],
+            candidates=[Candidate.from_dict(c) for c in data.get("candidates", []) if isinstance(c, dict)],
         )

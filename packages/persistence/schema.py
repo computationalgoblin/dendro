@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B04-T02: upgraded to v4)
-CURRENT_SCHEMA_VERSION: int = 4
+# Current schema version for new projects (B05-T02: upgraded to v5)
+CURRENT_SCHEMA_VERSION: int = 5
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 4
+MAX_SUPPORTED_VERSION: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +283,29 @@ def validate_project_relations(relations: Any) -> str | None:
         seen_ids.add(rid)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Migration: v4 → v5
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v4 data to v5 structure.
+
+    v5 formalises Source, HistoryEntry, Issue and Candidate as
+    structured collections.  v4 already had these as empty lists
+    so this migration is trivial — it ensures all four collections
+    are lists.  Purely structural — no narrative data is invented.
+    """
+    migrated: dict[str, Any] = dict(data)
+
+    for collection in ("sources", "history", "issues", "candidates"):
+        raw = migrated.get(collection)
+        if not isinstance(raw, list):
+            migrated[collection] = []
+
+    return migrated
 
 
 # ---------------------------------------------------------------------------

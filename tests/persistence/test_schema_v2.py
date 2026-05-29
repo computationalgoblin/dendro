@@ -27,10 +27,10 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 class TestSchemaVersionB02T03:
     def test_current_schema_is_v2(self):
-        assert CURRENT_SCHEMA_VERSION == 4
+        assert CURRENT_SCHEMA_VERSION == 5
 
     def test_max_supported_is_v2(self):
-        assert MAX_SUPPORTED_VERSION == 4
+        assert MAX_SUPPORTED_VERSION == 5
 
 
 class TestMigrationV1ToV2:
@@ -147,7 +147,7 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 4
+        assert raw.get("schema_version") == 5
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType
@@ -168,9 +168,11 @@ class TestProjectStoreV2:
         p.project_metadata.author = "Alice"
         p.metadata["custom"] = "val"
         p.entities.append(NarrativeEntity(name="Orc", entity_type=EntityType.CRIATURA))
+        from packages.domain.source_history import Source, HistoryEntry
+
         p.relations.append(NarrativeRelation(source_id="x", target_id="y"))
-        p.sources.append("src1")
-        p.history.append("hist1")
+        p.sources.append(Source(name="src1"))
+        p.history.append(HistoryEntry(event_type=HistoryEventType.CREACION_ENTIDAD))
         p.issues.append("issue1")
 
         path = tmp_path / "full.json"
@@ -198,16 +200,17 @@ class TestProjectStoreV2:
         assert p2.entities[0].name == "Orc"
         assert len(p2.relations) == 1
         assert p2.relations[0].source_id == "x"
-        assert p2.sources == ["src1"]
-        assert p2.history == ["hist1"]
+        assert len(p2.sources) == 1
+        assert p2.sources[0].name == "src1"
+        assert len(p2.history) == 1
         assert p2.issues == ["issue1"]
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
-        from packages.domain.entity import NarrativeEntity
         from packages.domain.relation import NarrativeRelation
+        from packages.domain.source_history import HistoryEventType, Source
 
         store = ProjectStore()
-        p = Project()
+        p = Project(name="Full"
         p.entities = [
             NarrativeEntity(name="E1"),
             NarrativeEntity(name="E2"),
