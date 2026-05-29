@@ -266,6 +266,7 @@ class TestToDict:
             "visibility", "export",
             "entities", "relations", "sources", "history", "issues",
             "candidates",
+            "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         }
         assert set(d.keys()) == expected_keys
 

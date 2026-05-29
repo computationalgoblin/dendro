@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B05-T02: upgraded to v5)
-CURRENT_SCHEMA_VERSION: int = 5
+# Current schema version for new projects (B08-T02: upgraded to v6)
+CURRENT_SCHEMA_VERSION: int = 6
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 5
+MAX_SUPPORTED_VERSION: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +309,28 @@ def _apply_migration_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Migration: v5 → v6
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v5 data to v6 structure.
+
+    v6 adds custom entity types, field definitions, and relation types
+    as project-level collections.  Purely structural — adds empty lists
+    to existing projects.  NO data is invented.
+    """
+    migrated: dict[str, Any] = dict(data)
+
+    for collection in ("custom_entity_types", "custom_field_definitions",
+                       "custom_relation_types"):
+        if collection not in migrated or not isinstance(migrated[collection], list):
+            migrated[collection] = []
+
+    return migrated
+
+
+# ---------------------------------------------------------------------------
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -346,6 +368,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     # Collections must be lists when present
     collection_fields = (
         "entities", "relations", "sources", "history", "issues",
+        "custom_entity_types", "custom_field_definitions", "custom_relation_types",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):

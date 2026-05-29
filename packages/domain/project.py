@@ -13,10 +13,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TypeVar
 
+from packages.domain.candidate_issue import Candidate, Issue
+from packages.domain.custom_types import (
+    CustomEntityType,
+    CustomFieldDefinition,
+    CustomRelationType,
+)
 from packages.domain.entity import NarrativeEntity
-from packages.domain.relation import NarrativeRelation
-from packages.domain.source_history import Source, HistoryEntry
-from packages.domain.candidate_issue import Issue, Candidate
 from packages.domain.project_config import (
     AIConfig,
     ExportConfig,
@@ -27,6 +30,8 @@ from packages.domain.project_config import (
     ToneConfig,
     VisibilityConfig,
 )
+from packages.domain.relation import NarrativeRelation
+from packages.domain.source_history import HistoryEntry, Source
 
 _T = TypeVar("_T")
 
@@ -103,6 +108,11 @@ class Project:
     issues: list[Issue] = field(default_factory=list)
     candidates: list[Candidate] = field(default_factory=list)
 
+    # Custom types and taxonomies (Bloque 8)
+    custom_entity_types: list[CustomEntityType] = field(default_factory=list)
+    custom_field_definitions: list[CustomFieldDefinition] = field(default_factory=list)
+    custom_relation_types: list[CustomRelationType] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -171,6 +181,14 @@ class Project:
             "history": [h.to_dict() for h in self.history],
             "issues": [i.to_dict() for i in self.issues],
             "candidates": [c.to_dict() for c in self.candidates],
+            # Custom types (Bloque 8)
+            "custom_entity_types": [ct.to_dict() for ct in self.custom_entity_types],
+            "custom_field_definitions": [
+                fd.to_dict() for fd in self.custom_field_definitions
+            ],
+            "custom_relation_types": [
+                crt.to_dict() for crt in self.custom_relation_types
+            ],
         }
 
     @classmethod
@@ -242,4 +260,20 @@ class Project:
             history=[HistoryEntry.from_dict(h) for h in data.get("history", []) if isinstance(h, dict)],
             issues=[Issue.from_dict(i) for i in data.get("issues", []) if isinstance(i, dict)],
             candidates=[Candidate.from_dict(c) for c in data.get("candidates", []) if isinstance(c, dict)],
+            # Custom types (Bloque 8)
+            custom_entity_types=[
+                CustomEntityType.from_dict(ct)
+                for ct in data.get("custom_entity_types", [])
+                if isinstance(ct, dict)
+            ],
+            custom_field_definitions=[
+                CustomFieldDefinition.from_dict(fd)
+                for fd in data.get("custom_field_definitions", [])
+                if isinstance(fd, dict)
+            ],
+            custom_relation_types=[
+                CustomRelationType.from_dict(crt)
+                for crt in data.get("custom_relation_types", [])
+                if isinstance(crt, dict)
+            ],
         )

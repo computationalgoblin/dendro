@@ -13,11 +13,9 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from packages.domain.project import Project
 from packages.domain.entity import NarrativeEntity
+from packages.domain.project import Project
 from packages.domain.relation import NarrativeRelation
-from packages.domain.source_history import Source, HistoryEntry
-from packages.domain.candidate_issue import Issue, Candidate
 from packages.domain.result import Error, Ok, Result
 from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
@@ -25,9 +23,8 @@ from packages.persistence.schema import (
     _apply_migration_v2_to_v3,
     _apply_migration_v3_to_v4,
     _apply_migration_v4_to_v5,
+    _apply_migration_v5_to_v6,
     detect_schema_version,
-    validate_project_entities,
-    validate_project_relations,
     validate_project_structure,
     validate_schema_version,
 )
@@ -250,6 +247,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 4:
         data = _apply_migration_v4_to_v5(data)
+        data["schema_version"] = 5
+        version = 5
+
+    if version == 5:
+        data = _apply_migration_v5_to_v6(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
