@@ -14,7 +14,12 @@ from packages.application.query_service import (
 from packages.application.relation_service import RelationService
 from packages.application.source_service import SourceService
 from packages.domain.candidate_issue import Candidate, CandidateState, Issue, IssueState
-from packages.domain.entity import CertaintyLevel, EntityType, NarrativeImportance
+from packages.domain.entity import (
+    CanonState,
+    CertaintyLevel,
+    EntityType,
+    NarrativeImportance,
+)
 from packages.domain.result import Error, Ok
 from packages.persistence.store import ProjectStore
 
@@ -163,6 +168,111 @@ class TestCombinedQuery:
         r = qs.query()
         assert isinstance(r, Ok)
         assert len(r.value) == 2
+
+    # --- B09-T03A: canon_state as list ---
+
+    def test_canon_state_list_filters_with_or(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Draft", "entity_type": "nota"}).value
+        e1.canon_state = CanonState.BORRADOR
+        e2 = es.create_entity({"name": "Hypothesis", "entity_type": "nota"}).value
+        e2.canon_state = CanonState.HIPOTESIS
+        e3 = es.create_entity({"name": "Canon", "entity_type": "nota"}).value
+        e3.canon_state = CanonState.CANONICO
+
+        r = qs.query(canon_state=[CanonState.BORRADOR, CanonState.HIPOTESIS])
+        assert isinstance(r, Ok)
+        names = {e.name for e in r.value}
+        assert names == {"Draft", "Hypothesis"}
+
+    def test_canon_state_list_single_value_works(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "Canon", "entity_type": "nota", "canon_state": "canonico"})
+
+        r = qs.query(canon_state=[CanonState.CANONICO])
+        assert isinstance(r, Ok)
+        assert len(r.value) == 1
+
+    def test_canon_state_list_empty_returns_empty(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "X", "entity_type": "nota"})
+
+        r = qs.query(canon_state=[])
+        assert isinstance(r, Ok)
+        assert len(r.value) == 0
+
+    def test_canon_state_backwards_compat_single_value(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "Canon", "entity_type": "nota", "canon_state": "canonico"})
+        es.create_entity({"name": "Draft", "entity_type": "nota", "canon_state": "borrador"})
+
+        r = qs.query(canon_state=CanonState.CANONICO)
+        assert isinstance(r, Ok)
+        assert len(r.value) == 1
+        assert r.value[0].name == "Canon"
+
+    def test_canon_state_string_still_works(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "Draft", "entity_type": "nota", "canon_state": "borrador"})
+        es.create_entity({"name": "Canon", "entity_type": "nota", "canon_state": "canonico"})
+
+        r = qs.query(canon_state="borrador")
+        assert isinstance(r, Ok)
+        assert len(r.value) == 1
+        assert r.value[0].name == "Draft"
+
+    # --- B09-T03A: custom_type_id ---
+
+    def test_custom_type_id_filters(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Custom1", "entity_type": "personaje"}).value
+        e1.custom_type_id = "ct-abc"
+        e2 = es.create_entity({"name": "Normal", "entity_type": "personaje"}).value
+
+        r = qs.query(custom_type_id="ct-abc")
+        assert isinstance(r, Ok)
+        assert len(r.value) == 1
+        assert r.value[0].name == "Custom1"
+
+    def test_custom_type_id_none_returns_all(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Custom1", "entity_type": "personaje"}).value
+        e1.custom_type_id = "ct-abc"
+        es.create_entity({"name": "Normal", "entity_type": "personaje"})
+
+        r = qs.query()
+        assert isinstance(r, Ok)
+        assert len(r.value) == 2
+
+    def test_custom_type_id_nonexistent_returns_empty(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "X", "entity_type": "nota"})
+
+        r = qs.query(custom_type_id="nonexistent")
+        assert isinstance(r, Ok)
+        assert len(r.value) == 0
+
+    # --- B09-T03A: source_id ---
+
+    def test_source_id_filters(self, tmp_path: Path):
+        qs, es, _, ss, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Linked", "entity_type": "personaje"}).value
+        es.create_entity({"name": "NotLinked", "entity_type": "personaje"})
+        src = ss.create_source({"name": "Manual"}).value
+        ss.link_to_entity(src.id, e1.id)
+
+        r = qs.query(source_id=src.id)
+        assert isinstance(r, Ok)
+        assert len(r.value) == 1
+        assert r.value[0].name == "Linked"
+
+    def test_source_id_nonexistent_errors(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "X", "entity_type": "nota"})
+
+        r = qs.query(source_id="nonexistent")
+        assert isinstance(r, Error)
+        assert "not found" in r.error.lower()
 
 
 # -----------------------------------------------------------------------

@@ -14,9 +14,12 @@ from typing import Any
 
 from packages.domain.candidate_issue import Candidate, CandidateState, Issue, IssueState
 from packages.domain.entity import (
+    CanonState,
     CertaintyLevel,
+    EntityType,
     NarrativeEntity,
     NarrativeImportance,
+    VisibilityState,
 )
 from packages.domain.relation import NarrativeRelation
 from packages.domain.result import Error, Ok, Result
@@ -192,6 +195,8 @@ class QueryService:
         domain: str | None = None,
         layer: str | None = None,
         importance=None,
+        custom_type_id: str | None = None,
+        source_id: str | None = None,
         sort_by: str = "name",
         limit: int = 50,
     ) -> Result[list[NarrativeEntity], str]:
@@ -199,6 +204,10 @@ class QueryService:
 
         Each filter is applied only when its argument is not None.
         Results are sorted and truncated to *limit*.
+
+        *canon_state* accepts a single value, a list (OR semantics), or None.
+        *custom_type_id* filters by ``entity.custom_type_id``.
+        *source_id* filters entities linked to a specific source.
         """
         entities = self._all_entities()
         if isinstance(entities, Error):
@@ -207,19 +216,20 @@ class QueryService:
         results = list(entities.value)
 
         if entity_type is not None:
-            from packages.domain.entity import EntityType
             if isinstance(entity_type, str):
                 entity_type = EntityType(entity_type)
             results = [e for e in results if e.entity_type == entity_type]
 
         if canon_state is not None:
-            from packages.domain.entity import CanonState
-            if isinstance(canon_state, str):
-                canon_state = CanonState(canon_state)
-            results = [e for e in results if e.canon_state == canon_state]
+            if isinstance(canon_state, list):
+                # OR semantics: match any of the listed states
+                results = [e for e in results if e.canon_state in canon_state]
+            else:
+                if isinstance(canon_state, str):
+                    canon_state = CanonState(canon_state)
+                results = [e for e in results if e.canon_state == canon_state]
 
         if visibility_state is not None:
-            from packages.domain.entity import VisibilityState
             if isinstance(visibility_state, str):
                 visibility_state = VisibilityState(visibility_state)
             results = [e for e in results if e.visibility_state == visibility_state]
@@ -237,6 +247,16 @@ class QueryService:
             if isinstance(importance, str):
                 importance = NarrativeImportance(importance)
             results = [e for e in results if e.narrative_importance == importance]
+
+        if custom_type_id is not None:
+            results = [e for e in results if e.custom_type_id == custom_type_id]
+
+        if source_id is not None:
+            source_entities = self.source_service.get_entities_from_source(source_id)
+            if isinstance(source_entities, Error):
+                return Error(source_entities.error)
+            linked_ids = {e.id for e in source_entities.value}
+            results = [e for e in results if e.id in linked_ids]
 
         if sort_by == "name":
             results.sort(key=lambda e: e.name.lower())
