@@ -1,0 +1,2879 @@
+# Contrato de Implementación por Bloques
+
+# Plataforma de Creación Narrativa, Worldbuilding y Dirección de Partidas Asistida por IA
+
+## 0. Propósito del documento
+
+Este documento define el orden contractual de implementación de la aplicación. Su función es servir como referencia autoritativa para agentes de desarrollo, diseño de arquitectura, planificación técnica y validación funcional.
+
+La aplicación se construirá de forma incremental, empezando por los fundamentos de dominio, persistencia, trazabilidad y contratos internos antes de implementar interfaces avanzadas, inteligencia artificial, importación documental o herramientas específicas de dirección de partidas.
+
+El objetivo principal de esta secuencia es evitar refactors estructurales innecesarios, preservar escalabilidad conceptual, impedir acoplamientos prematuros y garantizar que cada bloque posterior se apoye en bases ya validadas.
+
+Este documento no sustituye al contrato funcional final de la aplicación. Lo organiza en bloques de implementación coherentes con el desarrollo.
+
+---
+
+# Principios generales de implementación
+
+## 1. Principio de núcleo primero
+
+La aplicación deberá construirse alrededor de una base de conocimiento narrativa estructurada. Ninguna vista, asistente IA, importador, galería o módulo de rol deberá convertirse en propietario real del conocimiento.
+
+El núcleo deberá existir antes que las interfaces avanzadas.
+
+El grafo visual no deberá implementarse como fuente primaria de datos.
+
+La IA no deberá implementarse como capa que escribe directamente sobre el modelo persistente.
+
+La importación documental no deberá implementarse como inserción directa en el canon.
+
+La capa de rol no deberá duplicar modelos de personajes, eventos, facciones o localizaciones ya existentes en el núcleo.
+
+## 2. Principio de contratos internos estables
+
+Cada bloque deberá exponer contratos claros hacia los bloques posteriores. Una vez cerrado un contrato de dominio, persistencia, entidad, relación, estado, evento de cambio, consulta o validación, los bloques siguientes deberán consumirlo sin introducir dependencias inversas.
+
+Los módulos posteriores podrán ampliar datos mediante campos, tipos, extensiones o metadatos, pero no deberán invalidar el modelo base.
+
+## 3. Principio de edición controlada
+
+Toda modificación relevante del corpus narrativo deberá pasar por servicios de aplicación o comandos de dominio definidos. No deberá permitirse que cada interfaz modifique directamente el estado persistente de forma arbitraria.
+
+Las operaciones de creación, edición, eliminación, fusión, importación, aceptación de sugerencias, marcado de canon, revelación de secretos o actualización post-sesión deberán generar cambios trazables.
+
+## 4. Principio de sugerencia antes que mutación
+
+Toda funcionalidad asistida por IA, importación automática, análisis o inferencia deberá producir candidatos, sugerencias, incidencias o propuestas. La incorporación al corpus persistente deberá requerir aceptación explícita del usuario o ejecución de una acción autorizada.
+
+## 5. Principio de trazabilidad desde el inicio
+
+La trazabilidad no será una funcionalidad posterior. Desde los primeros bloques, el sistema deberá conservar origen, estado, historial y autoría técnica de los cambios relevantes.
+
+## 6. Principio de separación entre dominio y presentación
+
+El dominio no deberá depender de la interfaz. La interfaz no deberá definir el modelo. El modelo deberá poder ser manipulado por futuras vistas de grafo, galería, ficha, importación, IA, escritura y rol sin reestructuración profunda.
+
+## 7. Principio de escalabilidad semántica
+
+El sistema deberá soportar tipos personalizados, relaciones personalizadas, campos personalizados, metadatos y extensiones sin requerir cambios estructurales profundos en cada nueva categoría narrativa.
+
+## 8. Principio de no bloqueo por IA
+
+La aplicación deberá ser funcional sin IA. La IA será una capa de asistencia sobre una aplicación narrativa estructurada ya usable. El core de creación, edición, consulta, persistencia y organización deberá existir independientemente de los proveedores de IA.
+
+---
+
+# Bloque 1 — Fundación de proyecto y arquitectura base
+
+## 1.1 Objetivo
+
+Establecer la estructura técnica mínima del proyecto, los límites entre módulos, las reglas de dependencia, la organización de carpetas o paquetes, el sistema de configuración y la infraestructura básica de pruebas.
+
+Este bloque no implementará funcionalidades narrativas completas. Su función será crear una base limpia y sostenible.
+
+## 1.2 Responsabilidades
+
+Este bloque deberá definir:
+
+1. Estructura general del repositorio o proyecto.
+2. Separación entre dominio, aplicación, infraestructura, persistencia, interfaz y servicios externos.
+3. Convenciones de nombres.
+4. Convenciones de errores.
+5. Convenciones de pruebas.
+6. Configuración de entorno.
+7. Mecanismo de logging interno.
+8. Sistema mínimo de ejecución local.
+9. Sistema de validación automatizada.
+10. Contrato inicial de módulos.
+11. Política de dependencias entre capas.
+12. Mecanismo de migraciones o evolución de esquema, aunque inicialmente sea simple.
+13. Punto único de configuración de aplicación.
+14. Punto único de inicialización de servicios.
+15. Mecanismo mínimo de persistencia local preparado para evolucionar.
+
+## 1.3 Reglas de dependencia
+
+La arquitectura deberá respetar esta dirección general:
+
+Interfaz → Aplicación → Dominio
+Infraestructura → Aplicación/Dominio mediante adaptadores
+Persistencia → Dominio mediante repositorios o equivalentes
+Servicios externos → Aplicación mediante puertos o contratos
+
+El dominio no deberá depender de la interfaz, de proveedores de IA, del formato de PDF, de widgets visuales, de frameworks de UI ni de sistemas externos.
+
+## 1.4 Entregables obligatorios
+
+El bloque deberá entregar:
+
+1. Proyecto ejecutable en entorno local.
+2. Estructura modular establecida.
+3. Configuración base.
+4. Logging mínimo.
+5. Sistema de pruebas mínimo.
+6. Primer conjunto de pruebas de sanidad.
+7. Documento interno de límites entre módulos.
+8. Contrato de errores y resultados.
+9. Mecanismo de inicialización de aplicación.
+10. Persistencia mínima preparada para datos de proyecto.
+
+## 1.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. El proyecto pueda ejecutarse localmente.
+2. Exista separación clara entre dominio, aplicación, infraestructura e interfaz.
+3. Las pruebas mínimas se ejecuten de forma automatizada.
+4. Ningún módulo de dominio dependa de UI, IA, importadores o servicios externos.
+5. Exista una base preparada para añadir modelos narrativos sin reestructuración global.
+6. El proyecto pueda crear, cargar y guardar un contenedor de datos vacío o equivalente.
+7. Exista una forma verificable de detectar errores de inicialización.
+
+## 1.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Grafo visual.
+2. IA.
+3. Importación PDF.
+4. Galerías completas.
+5. Capa de rol.
+6. Motor de consistencia.
+7. Marcos narrativos.
+8. Exportación avanzada.
+9. Edición compleja de entidades.
+10. Funcionalidades de escritura.
+
+---
+
+# Bloque 2 — Modelo de proyecto y persistencia base
+
+## 2.1 Objetivo
+
+Implementar el concepto de proyecto como contenedor principal de datos narrativos. Este bloque deberá permitir crear, abrir, guardar, cerrar y validar proyectos.
+
+El proyecto será la unidad de trabajo principal de la aplicación.
+
+## 2.2 Responsabilidades
+
+El proyecto deberá contener, como mínimo:
+
+1. Identificador único.
+2. Nombre.
+3. Descripción.
+4. Idioma principal.
+5. Idiomas secundarios.
+6. Fecha de creación.
+7. Fecha de modificación.
+8. Configuración general.
+9. Configuración de tono.
+10. Configuración de género.
+11. Configuración de realismo.
+12. Configuración de IA, aunque todavía no exista IA operativa.
+13. Configuración de visibilidad.
+14. Configuración de exportación, aunque todavía no exista exportación completa.
+15. Colecciones preparadas para entidades.
+16. Colecciones preparadas para relaciones.
+17. Colecciones preparadas para fuentes.
+18. Colecciones preparadas para eventos de historial.
+19. Colecciones preparadas para incidencias.
+20. Metadatos personalizados.
+
+## 2.3 Persistencia
+
+El sistema deberá poder persistir el proyecto localmente. La persistencia deberá ser suficientemente estructurada para permitir evolución posterior.
+
+La persistencia deberá contemplar:
+
+1. Lectura.
+2. Escritura.
+3. Validación básica al cargar.
+4. Detección de versión de esquema.
+5. Preparación para migraciones.
+6. Manejo de errores de archivo corrupto o incompatible.
+7. Guardado seguro que evite pérdida de datos por escritura parcial.
+8. Metadatos de proyecto.
+9. Separación entre datos de proyecto y configuración local de aplicación cuando proceda.
+
+## 2.4 Contratos necesarios
+
+Este bloque deberá definir contratos para:
+
+1. Crear proyecto.
+2. Abrir proyecto.
+3. Guardar proyecto.
+4. Guardar como.
+5. Cerrar proyecto.
+6. Validar proyecto.
+7. Obtener configuración.
+8. Actualizar configuración.
+9. Consultar versión de esquema.
+10. Ejecutar migración si aplica.
+
+## 2.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se pueda crear un proyecto nuevo.
+2. Se pueda guardar un proyecto.
+3. Se pueda cargar un proyecto guardado.
+4. Se pueda modificar configuración general y persistirla.
+5. Se detecten errores básicos de carga.
+6. Exista versionado de esquema inicial.
+7. La estructura del proyecto permita añadir entidades, relaciones, fuentes e historial sin rediseñar la persistencia.
+8. Las pruebas cubran creación, guardado, carga, modificación y validación básica.
+
+## 2.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Entidades narrativas completas.
+2. Relaciones semánticas completas.
+3. UI avanzada.
+4. IA.
+5. Importación.
+6. Consistencia.
+7. Rol.
+8. Escritura.
+
+---
+
+# Bloque 3 — Entidades narrativas base
+
+## 3.1 Objetivo
+
+Implementar la entidad narrativa como unidad fundamental del sistema. Este bloque deberá permitir crear, editar, consultar, listar, filtrar y persistir entidades narrativas.
+
+## 3.2 Entidad narrativa mínima
+
+La entidad narrativa deberá incluir, como mínimo:
+
+1. Identificador único.
+2. Nombre principal.
+3. Alias.
+4. Tipo.
+5. Descripción breve.
+6. Descripción extendida.
+7. Estado de canon.
+8. Estado de visibilidad.
+9. Nivel de certeza.
+10. Etiquetas.
+11. Dominio de pertenencia.
+12. Capas asociadas.
+13. Fuente u origen inicial.
+14. Fecha de creación.
+15. Fecha de modificación.
+16. Notas privadas.
+17. Notas exportables.
+18. Importancia narrativa.
+19. Nivel de desarrollo.
+20. Metadatos personalizados.
+
+## 3.3 Tipos nativos iniciales
+
+El sistema deberá incluir una taxonomía inicial de tipos de entidad. Esta taxonomía deberá ser ampliable posteriormente.
+
+Tipos mínimos:
+
+1. Personaje.
+2. Localización.
+3. Facción.
+4. Cultura.
+5. Objeto.
+6. Evento.
+7. Escena.
+8. Sesión.
+9. Conflicto.
+10. Secreto.
+11. Pista.
+12. Regla del mundo.
+13. Tecnología.
+14. Sistema mágico.
+15. Religión.
+16. Idioma.
+17. Institución.
+18. Criatura.
+19. Trama.
+20. Nota.
+
+## 3.4 Estados de canon
+
+Los estados de canon deberán implementarse como contrato estable desde este bloque.
+
+Estados mínimos:
+
+1. Canónico.
+2. Borrador.
+3. Hipótesis.
+4. Sugerido por IA.
+5. Importado pendiente de validación.
+6. Contradictorio.
+7. Obsoleto.
+8. Descartado.
+9. Archivado.
+10. Secreto canónico.
+11. Rumor interno del mundo.
+12. Falso dentro del mundo.
+13. Interpretación subjetiva.
+
+## 3.5 Estados de visibilidad
+
+Estados mínimos:
+
+1. Privado del autor o director.
+2. Visible para el usuario.
+3. Visible para jugadores.
+4. Visible para personajes concretos.
+5. Visible para facciones concretas.
+6. Revelado.
+7. Revelado parcialmente.
+8. Preparado pero no revelado.
+9. Exportable.
+10. No exportable.
+11. Público dentro del mundo.
+12. Secreto dentro del mundo.
+13. Rumor.
+14. Mentira conocida.
+
+## 3.6 Operaciones obligatorias
+
+El sistema deberá permitir:
+
+1. Crear entidad.
+2. Editar entidad.
+3. Eliminar entidad de forma controlada.
+4. Archivar entidad.
+5. Restaurar entidad archivada.
+6. Cambiar estado de canon.
+7. Cambiar estado de visibilidad.
+8. Añadir etiquetas.
+9. Eliminar etiquetas.
+10. Buscar por nombre.
+11. Buscar por alias.
+12. Filtrar por tipo.
+13. Filtrar por canon.
+14. Filtrar por visibilidad.
+15. Filtrar por etiqueta.
+16. Filtrar por dominio.
+17. Filtrar por capa.
+18. Ordenar por nombre.
+19. Ordenar por modificación.
+20. Obtener entidad por identificador.
+
+## 3.7 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las entidades puedan crearse, editarse, guardarse y recargarse.
+2. Los estados de canon y visibilidad persistan correctamente.
+3. Los filtros básicos funcionen.
+4. La eliminación no destruya trazabilidad básica.
+5. Las entidades soporten metadatos personalizados mínimos.
+6. El modelo pueda ampliarse sin alterar su identidad fundamental.
+7. Existan pruebas de creación, edición, filtrado, persistencia y carga.
+8. No existan dependencias entre entidad narrativa y componentes visuales específicos.
+
+## 3.8 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Relaciones semánticas completas.
+2. Grafo visual.
+3. IA.
+4. Motor de consistencia.
+5. Importación documental.
+6. Capa de rol avanzada.
+7. Exportación.
+8. Marcos narrativos.
+
+---
+
+# Bloque 4 — Relaciones semánticas base
+
+## 4.1 Objetivo
+
+Implementar relaciones narrativas como entidades estructuradas de primer nivel. Este bloque deberá permitir vincular entidades con semántica, dirección, estado, certeza, visibilidad y trazabilidad.
+
+## 4.2 Relación narrativa mínima
+
+Toda relación deberá incluir:
+
+1. Identificador único.
+2. Entidad origen.
+3. Entidad destino.
+4. Tipo de relación.
+5. Dirección.
+6. Descripción.
+7. Intensidad.
+8. Temporalidad básica.
+9. Causalidad básica.
+10. Estado de canon.
+11. Estado de visibilidad.
+12. Nivel de certeza.
+13. Fuente.
+14. Fecha de creación.
+15. Fecha de modificación.
+16. Condiciones de validez.
+17. Metadatos personalizados.
+
+## 4.3 Tipos iniciales de relación
+
+El sistema deberá incluir una taxonomía inicial de relaciones, ampliable posteriormente.
+
+Tipos mínimos:
+
+1. Pertenece a.
+2. Contiene.
+3. Está ubicado en.
+4. Participó en.
+5. Causó.
+6. Fue causado por.
+7. Gobierna.
+8. Sirve a.
+9. Es aliado de.
+10. Es enemigo de.
+11. Conoce.
+12. Desconoce.
+13. Sospecha.
+14. Oculta.
+15. Revela.
+16. Contradice.
+17. Depende de.
+18. Deriva de.
+19. Simboliza.
+20. Posee.
+21. Busca.
+22. Protege.
+23. Traicionó.
+24. Controla.
+25. Está en conflicto con.
+26. Tiene deuda con.
+27. Está relacionado con.
+
+## 4.4 Operaciones obligatorias
+
+El sistema deberá permitir:
+
+1. Crear relación.
+2. Editar relación.
+3. Eliminar relación de forma controlada.
+4. Archivar relación.
+5. Cambiar tipo.
+6. Cambiar dirección.
+7. Cambiar estado de canon.
+8. Cambiar visibilidad.
+9. Consultar relaciones entrantes de una entidad.
+10. Consultar relaciones salientes de una entidad.
+11. Consultar relaciones por tipo.
+12. Consultar relaciones por estado.
+13. Consultar relaciones entre dos entidades.
+14. Consultar vecindad de una entidad.
+15. Consultar rutas simples entre entidades.
+16. Validar que las entidades referenciadas existen.
+17. Gestionar relaciones rotas si una entidad se archiva o elimina.
+
+## 4.5 Reglas de integridad
+
+El sistema deberá garantizar:
+
+1. Una relación no podrá apuntar a una entidad inexistente.
+2. Una relación archivada no deberá desaparecer del historial.
+3. El archivado de una entidad deberá preservar sus relaciones como inactivas, históricas o revisables.
+4. La eliminación definitiva, si existe, deberá requerir validación explícita y dejar rastro.
+5. La relación deberá poder sobrevivir a cambios de nombre de entidades.
+6. La dirección de relación deberá ser interpretable por consultas posteriores.
+
+## 4.6 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las relaciones puedan crearse, editarse, guardarse y recargarse.
+2. Las entidades puedan consultar sus relaciones entrantes y salientes.
+3. Los filtros de relación funcionen.
+4. La integridad referencial esté protegida.
+5. El sistema permita representar relaciones de conocimiento, causalidad y pertenencia de forma básica.
+6. Existan pruebas sobre creación, edición, eliminación controlada, persistencia e integridad.
+7. El modelo de relación no dependa del grafo visual.
+
+## 4.7 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Visualización gráfica avanzada.
+2. Análisis de consistencia profundo.
+3. IA causal.
+4. Importación automática.
+5. Marcos narrativos.
+6. Capa de rol avanzada.
+
+---
+
+# Bloque 5 — Fuentes, historial y trazabilidad
+
+## 5.1 Objetivo
+
+Implementar la trazabilidad como parte estructural del sistema. Este bloque deberá permitir conocer origen, historial y cambios relevantes de entidades, relaciones y afirmaciones futuras.
+
+## 5.2 Fuentes
+
+El sistema deberá implementar una entidad fuente.
+
+Una fuente deberá incluir:
+
+1. Identificador único.
+2. Tipo de fuente.
+3. Nombre.
+4. Descripción.
+5. Referencia interna o externa.
+6. Fragmento asociado si aplica.
+7. Fecha de incorporación.
+8. Estado.
+9. Metadatos.
+10. Entidades derivadas.
+11. Relaciones derivadas.
+
+Tipos mínimos de fuente:
+
+1. Entrada manual.
+2. Documento importado.
+3. Fragmento documental.
+4. Generación IA.
+5. Sugerencia IA aceptada.
+6. Sesión de rol.
+7. Nota post-sesión.
+8. Decisión del usuario.
+9. Versión anterior.
+10. Plantilla o marco narrativo.
+
+## 5.3 Eventos de historial
+
+El sistema deberá registrar eventos de historial para cambios relevantes.
+
+Un evento de historial deberá incluir:
+
+1. Identificador único.
+2. Tipo de evento.
+3. Fecha.
+4. Entidad afectada.
+5. Relación afectada.
+6. Fuente afectada.
+7. Valor anterior cuando sea viable.
+8. Valor nuevo cuando sea viable.
+9. Origen de cambio.
+10. Motivo o nota.
+11. Operación ejecutada.
+12. Usuario o agente responsable cuando aplique.
+13. Reversibilidad.
+14. Metadatos.
+
+## 5.4 Operaciones trazables mínimas
+
+Deberán registrarse, como mínimo:
+
+1. Creación de proyecto.
+2. Cambio de configuración relevante.
+3. Creación de entidad.
+4. Edición de entidad.
+5. Cambio de canon.
+6. Cambio de visibilidad.
+7. Archivado de entidad.
+8. Restauración de entidad.
+9. Creación de relación.
+10. Edición de relación.
+11. Archivado de relación.
+12. Asociación de fuente.
+13. Fusión de entidades cuando se implemente.
+14. Aceptación de sugerencia cuando se implemente.
+15. Importación documental cuando se implemente.
+16. Actualización post-sesión cuando se implemente.
+
+## 5.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Entidades y relaciones puedan vincularse a fuentes.
+2. Los cambios relevantes generen eventos de historial.
+3. Se pueda consultar el historial de una entidad.
+4. Se pueda consultar el historial de una relación.
+5. Se pueda consultar qué elementos proceden de una fuente.
+6. La persistencia conserve historial y fuentes.
+7. Existan pruebas sobre creación de fuentes, asociación y eventos de cambio.
+8. La trazabilidad no dependa de IA ni de importación documental.
+
+## 5.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Comparación visual avanzada de versiones.
+2. Reversión compleja.
+3. Importación documental real.
+4. IA.
+5. Auditoría completa de dependencias.
+6. Motor de consistencia completo.
+
+---
+
+# Bloque 6 — Consultas, búsqueda y servicios de lectura
+
+## 6.1 Objetivo
+
+Crear una capa robusta de consulta sobre el corpus. Esta capa será consumida después por galería, ficha, grafo, IA, consistencia, importación, escritura y rol.
+
+## 6.2 Responsabilidades
+
+La capa de consulta deberá permitir recuperar datos de forma consistente sin exponer detalles internos de persistencia.
+
+Deberá soportar:
+
+1. Consulta por identificador.
+2. Consulta por nombre.
+3. Consulta por alias.
+4. Consulta por tipo.
+5. Consulta por etiqueta.
+6. Consulta por estado de canon.
+7. Consulta por visibilidad.
+8. Consulta por dominio.
+9. Consulta por capa.
+10. Consulta por fuente.
+11. Consulta por fecha de modificación.
+12. Consulta por importancia.
+13. Consulta por certeza.
+14. Consulta de relaciones por entidad.
+15. Consulta de relaciones por tipo.
+16. Consulta de vecindad.
+17. Consulta de rutas simples.
+18. Consulta de entidades huérfanas.
+19. Consulta de entidades archivadas.
+20. Consulta de sugerencias o elementos pendientes cuando existan.
+
+## 6.3 Búsqueda textual básica
+
+El sistema deberá implementar búsqueda textual básica sobre:
+
+1. Nombre.
+2. Alias.
+3. Descripción breve.
+4. Descripción extendida.
+5. Notas.
+6. Etiquetas.
+7. Tipos.
+8. Relaciones.
+
+La búsqueda semántica avanzada podrá incorporarse después. La búsqueda textual estructurada deberá existir antes.
+
+## 6.4 Contratos para consumidores
+
+La capa de consulta deberá exponer respuestas estables para:
+
+1. Listados.
+2. Fichas.
+3. Grafos.
+4. IA.
+5. Validadores.
+6. Exportadores.
+7. Importadores.
+8. Módulo de rol.
+
+Estas respuestas deberán evitar que cada consumidor reconstruya consultas complejas por su cuenta.
+
+## 6.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las entidades puedan buscarse y filtrarse por criterios principales.
+2. Las relaciones puedan buscarse y filtrarse por criterios principales.
+3. Se pueda construir una ficha de entidad a partir de servicios de lectura.
+4. Se pueda construir una vecindad de grafo a partir de servicios de lectura.
+5. Las consultas estén cubiertas por pruebas.
+6. La capa de lectura no modifique estado.
+7. Las consultas funcionen tras guardar y recargar proyecto.
+
+## 6.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. UI compleja de búsqueda.
+2. Búsqueda semántica con embeddings.
+3. IA.
+4. Consistencia profunda.
+5. Grafo visual interactivo.
+6. Importación documental.
+
+---
+
+# Bloque 7 — Interfaz mínima de proyecto, entidades y relaciones
+
+## 7.1 Objetivo
+
+Implementar una primera interfaz funcional que permita usar el core sin depender todavía de grafo avanzado, IA o vistas complejas.
+
+Este bloque tiene como objetivo validar el flujo fundamental de creación y edición.
+
+## 7.2 Funcionalidades requeridas
+
+La interfaz deberá permitir:
+
+1. Crear proyecto.
+2. Abrir proyecto.
+3. Guardar proyecto.
+4. Editar configuración básica.
+5. Crear entidad.
+6. Editar entidad.
+7. Archivar entidad.
+8. Listar entidades.
+9. Filtrar entidades por tipo.
+10. Filtrar entidades por canon.
+11. Filtrar entidades por visibilidad.
+12. Ver ficha básica de entidad.
+13. Crear relación.
+14. Editar relación.
+15. Archivar relación.
+16. Ver relaciones entrantes y salientes de una entidad.
+17. Ver historial básico.
+18. Ver fuentes básicas.
+
+## 7.3 Restricciones
+
+La interfaz no deberá saltarse los servicios de aplicación. No deberá escribir directamente en persistencia. No deberá crear modelos paralelos incompatibles con el dominio.
+
+La interfaz podrá ser provisional, pero deberá trabajar contra contratos reales.
+
+## 7.4 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Un usuario pueda crear un proyecto narrativo básico.
+2. Un usuario pueda crear entidades y relaciones.
+3. Un usuario pueda guardar, cerrar y recargar el proyecto sin pérdida.
+4. Un usuario pueda revisar entidades desde una ficha básica.
+5. Un usuario pueda consultar relaciones de una entidad.
+6. El historial básico sea visible.
+7. La interfaz use los servicios del core.
+8. Existan pruebas o validaciones manuales documentadas del flujo completo.
+
+## 7.5 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Grafo visual avanzado.
+2. Galería final.
+3. IA.
+4. Importación PDF.
+5. Rol avanzado.
+6. Motor de consistencia.
+7. Exportación.
+
+---
+
+# Bloque 8 — Tipos personalizados, campos personalizados y taxonomías extendibles
+
+## 8.1 Objetivo
+
+Evitar rigidez temprana. Este bloque deberá permitir que la aplicación se adapte a distintos estilos narrativos sin modificar código para cada nuevo tipo de elemento.
+
+## 8.2 Tipos personalizados
+
+El usuario deberá poder definir tipos de entidad personalizados.
+
+Cada tipo deberá incluir:
+
+1. Identificador.
+2. Nombre.
+3. Descripción.
+4. Categoría base opcional.
+5. Icono o representación visual.
+6. Color o estilo visual.
+7. Campos personalizados asociados.
+8. Relaciones sugeridas.
+9. Participación en filtros.
+10. Participación en exportación.
+11. Participación en IA futura.
+12. Participación en consistencia futura.
+
+## 8.3 Campos personalizados
+
+El sistema deberá soportar campos personalizados sobre entidades y relaciones.
+
+Tipos de campo mínimos:
+
+1. Texto corto.
+2. Texto largo.
+3. Número.
+4. Fecha.
+5. Fecha interna del mundo.
+6. Booleano.
+7. Selección única.
+8. Selección múltiple.
+9. Referencia a entidad.
+10. Lista simple.
+11. Escala o nivel.
+12. Etiqueta.
+13. Estado.
+14. URL o referencia externa.
+15. Referencia a fuente.
+
+## 8.4 Tipos de relación personalizados
+
+El usuario deberá poder definir tipos de relación personalizados.
+
+Cada tipo deberá incluir:
+
+1. Nombre.
+2. Descripción.
+3. Dirección por defecto.
+4. Entidades origen permitidas o sugeridas.
+5. Entidades destino permitidas o sugeridas.
+6. Representación visual futura.
+7. Participación en consistencia futura.
+8. Participación en IA futura.
+9. Campos personalizados propios.
+
+## 8.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se puedan crear tipos de entidad personalizados.
+2. Se puedan asignar campos personalizados.
+3. Los campos persistan.
+4. Los campos aparezcan en ficha.
+5. Los campos puedan editarse.
+6. Los tipos personalizados puedan usarse en filtros básicos.
+7. Se puedan crear tipos de relación personalizados.
+8. La persistencia soporte evolución sin romper proyectos existentes.
+9. Las pruebas cubran creación, edición, guardado y carga de extensiones.
+
+## 8.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Plantillas avanzadas.
+2. UI visual sofisticada de formularios.
+3. IA adaptada a tipos personalizados.
+4. Consistencia basada en campos personalizados.
+5. Exportación avanzada.
+
+---
+
+# Bloque 9 — Galerías, fichas completas y vistas de organización
+
+## 9.1 Objetivo
+
+Construir la capa de organización visual de la base narrativa. Este bloque convierte el core en una herramienta cómoda para revisar y mantener corpus grandes.
+
+## 9.2 Vistas requeridas
+
+La aplicación deberá incluir vistas organizadas para:
+
+1. Personajes.
+2. Localizaciones.
+3. Facciones.
+4. Culturas.
+5. Objetos.
+6. Eventos.
+7. Escenas.
+8. Sesiones.
+9. Secretos.
+10. Pistas.
+11. Conflictos.
+12. Reglas del mundo.
+13. Tecnologías.
+14. Sistemas mágicos.
+15. Religiones.
+16. Idiomas.
+17. Instituciones.
+18. Criaturas.
+19. Tramas.
+20. Notas.
+21. Elementos archivados.
+22. Elementos pendientes.
+23. Elementos por fuente.
+24. Elementos por capa.
+25. Elementos por estado de canon.
+
+## 9.3 Ficha completa
+
+La ficha de entidad deberá mostrar:
+
+1. Nombre.
+2. Alias.
+3. Tipo.
+4. Resumen.
+5. Descripción extendida.
+6. Estado de canon.
+7. Estado de visibilidad.
+8. Nivel de certeza.
+9. Etiquetas.
+10. Capas.
+11. Dominio.
+12. Campos personalizados.
+13. Relaciones entrantes.
+14. Relaciones salientes.
+15. Relaciones principales.
+16. Fuentes.
+17. Historial.
+18. Notas privadas.
+19. Notas exportables.
+20. Entidades relacionadas.
+21. Incidencias futuras asociadas.
+22. Sugerencias IA futuras asociadas.
+23. Acciones disponibles.
+
+## 9.4 Organización
+
+Las vistas deberán permitir:
+
+1. Filtrado compuesto.
+2. Ordenación.
+3. Búsqueda textual.
+4. Agrupación por tipo.
+5. Agrupación por etiqueta.
+6. Agrupación por canon.
+7. Agrupación por visibilidad.
+8. Agrupación por fuente.
+9. Edición rápida de campos básicos.
+10. Navegación a ficha.
+11. Navegación a relaciones.
+12. Navegación a historial.
+13. Navegación futura a grafo.
+
+## 9.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. El usuario pueda navegar el corpus desde vistas de organización.
+2. Las fichas completas representen correctamente el modelo.
+3. Los campos personalizados se muestren y editen.
+4. Las relaciones sean visibles desde ficha.
+5. Los filtros compuestos funcionen.
+6. El historial y fuentes sean consultables desde ficha.
+7. Las vistas soporten proyectos con volumen moderado sin degradación funcional evidente.
+8. Las vistas consuman servicios de consulta, no persistencia directa.
+
+## 9.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Grafo avanzado.
+2. IA.
+3. Importación documental.
+4. Motor de consistencia.
+5. Modo de rol en vivo.
+6. Exportación avanzada.
+
+---
+
+# Bloque 10 — Capas de mundo, dominios narrativos y configuración de proyecto avanzada
+
+## 10.1 Objetivo
+
+Implementar la organización conceptual de proyectos en mundo, historia y campaña, junto con capas de worldbuilding y configuración avanzada de tono, género y realismo.
+
+## 10.2 Dominios narrativos
+
+El sistema deberá distinguir:
+
+1. Mundo o escenario.
+2. Historia.
+3. Campaña.
+4. Material compartido.
+5. Material no asignado.
+
+Una entidad podrá pertenecer a uno o varios dominios.
+
+## 10.3 Capas de mundo
+
+El sistema deberá permitir clasificar entidades y relaciones por capas.
+
+Capas mínimas:
+
+1. Premisa estética y tonal.
+2. Metafísica y cosmología.
+3. Reglas fundamentales.
+4. Física y restricciones materiales.
+5. Geografía, clima y recursos.
+6. Biología, especies y ecologías.
+7. Comunidades, culturas y sociedades.
+8. Economía, política e instituciones.
+9. Lenguaje, símbolos y tradición.
+10. Religión, mito e ideología.
+11. Tecnología, magia y sistemas de poder.
+12. Historia y memoria colectiva.
+13. Situación actual.
+14. Conflictos activos.
+15. Narrativa, trama y escenas.
+16. Campaña, sesiones y consecuencias.
+
+El usuario deberá poder modificar, ocultar, reordenar o crear capas.
+
+## 10.4 Configuración avanzada
+
+El proyecto deberá permitir configurar:
+
+1. Género principal.
+2. Subgéneros.
+3. Tono global.
+4. Tonos secundarios.
+5. Grado de realismo.
+6. Nivel de tolerancia a contradicción.
+7. Convenciones de nombres.
+8. Idiomas internos.
+9. Calendario interno.
+10. Unidades de medida.
+11. Reglas de visibilidad.
+12. Restricciones creativas.
+13. Preferencias futuras de IA.
+
+## 10.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las entidades puedan asignarse a dominios.
+2. Las entidades puedan asignarse a capas.
+3. Las vistas puedan filtrar por dominio y capa.
+4. El proyecto persista configuración avanzada.
+5. La configuración esté disponible para módulos posteriores.
+6. Las capas sean personalizables.
+7. No exista acoplamiento entre capas y tipos fijos de entidad.
+8. Las pruebas validen persistencia y consulta por dominio/capa.
+
+## 10.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Propagación IA de consecuencias entre capas.
+2. Análisis automático de realismo.
+3. Consistencia tonal avanzada.
+4. Marcos narrativos.
+5. Exportación dependiente de perfiles.
+
+---
+
+# Bloque 11 — Grafo semántico interactivo inicial
+
+## 11.1 Objetivo
+
+Implementar el grafo como vista interactiva del modelo de entidades y relaciones ya existente. El grafo deberá consumir el core y no definir su propio modelo paralelo.
+
+## 11.2 Capacidades iniciales
+
+El grafo deberá permitir:
+
+1. Mostrar entidades como nodos.
+2. Mostrar relaciones como aristas.
+3. Diferenciar tipos de entidad visualmente.
+4. Diferenciar tipos de relación visualmente.
+5. Seleccionar nodo.
+6. Seleccionar relación.
+7. Abrir ficha desde nodo.
+8. Abrir ficha de relación.
+9. Crear entidad desde grafo mediante servicios del core.
+10. Crear relación desde grafo mediante servicios del core.
+11. Editar relación desde grafo.
+12. Filtrar por tipo de entidad.
+13. Filtrar por tipo de relación.
+14. Filtrar por canon.
+15. Filtrar por visibilidad.
+16. Filtrar por capa.
+17. Filtrar por dominio.
+18. Expandir vecindad de entidad.
+19. Contraer vecindad.
+20. Guardar vista de grafo básica.
+
+## 11.3 Control de complejidad
+
+El grafo deberá incluir desde el inicio mecanismos básicos para evitar saturación:
+
+1. Profundidad máxima.
+2. Foco en entidad.
+3. Filtros visibles.
+4. Ocultación de archivados.
+5. Ocultación de relaciones no canónicas si el usuario lo decide.
+6. Vista por vecindad.
+7. Límite operativo de nodos visibles.
+8. Agrupación simple por tipo o capa cuando proceda.
+
+## 11.4 Reglas
+
+El grafo no deberá:
+
+1. Guardar datos narrativos fuera del core.
+2. Crear relaciones sin pasar por validación de dominio.
+3. Borrar entidades directamente.
+4. Interpretar visualmente estados de canon de forma incompatible con el modelo.
+5. Sustituir a las galerías o fichas.
+
+## 11.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. El grafo represente entidades y relaciones persistidas.
+2. Las acciones del grafo modifiquen el corpus mediante servicios oficiales.
+3. Los filtros principales funcionen.
+4. La selección de nodo permita navegar a ficha.
+5. La selección de relación permita editar la relación.
+6. El grafo pueda abrirse, cerrarse y reconstruirse desde datos guardados.
+7. No exista duplicación de modelo entre grafo y dominio.
+8. Existan pruebas o validaciones manuales documentadas del flujo visual.
+
+## 11.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Grafos de conocimiento avanzados.
+2. Grafos causales complejos.
+3. Grafos de secretos.
+4. Layouts sofisticados.
+5. IA dentro del grafo.
+6. Incidencias de consistencia visuales avanzadas.
+
+---
+
+# Bloque 12 — Motor de incidencias y consistencia básica
+
+## 12.1 Objetivo
+
+Implementar la infraestructura de incidencias y los primeros validadores de consistencia. Este bloque no debe intentar resolver toda la coherencia narrativa, pero debe fijar el contrato para todos los análisis futuros.
+
+## 12.2 Incidencia estructurada
+
+Toda incidencia deberá incluir:
+
+1. Identificador.
+2. Tipo.
+3. Severidad.
+4. Estado.
+5. Entidades afectadas.
+6. Relaciones afectadas.
+7. Fuentes afectadas.
+8. Descripción.
+9. Evidencia interna.
+10. Posibles soluciones.
+11. Fecha de detección.
+12. Fecha de revisión.
+13. Resolución.
+14. Marcador de intencionalidad.
+15. Metadatos.
+
+Estados mínimos:
+
+1. Abierta.
+2. Revisada.
+3. Aceptada como problema.
+4. Descartada.
+5. Resuelta.
+6. Marcada como intencional.
+7. Pendiente de información.
+8. Pospuesta.
+
+## 12.3 Validadores básicos
+
+El bloque deberá implementar validadores para:
+
+1. Relaciones con entidades inexistentes.
+2. Entidades duplicadas por nombre o alias probable.
+3. Entidades sin tipo válido.
+4. Relaciones sin tipo válido.
+5. Relaciones circulares problemáticas en tipos jerárquicos.
+6. Entidades huérfanas según criterios configurables.
+7. Entidades sin descripción.
+8. Entidades canónicas con certeza baja.
+9. Entidades exportables con notas privadas no separadas.
+10. Secretos marcados como visibles sin estado de revelación coherente.
+11. Pistas sin secreto asociado.
+12. Secretos sin pistas asociadas.
+13. Eventos sin temporalidad cuando el proyecto requiera cronología.
+14. Elementos importados pendientes no revisados cuando existan.
+15. Relaciones contradictorias explícitas.
+
+## 12.4 Gestión de incidencias
+
+El usuario deberá poder:
+
+1. Ver incidencias.
+2. Filtrar incidencias.
+3. Abrir entidades afectadas.
+4. Abrir relaciones afectadas.
+5. Marcar incidencia como resuelta.
+6. Descartar incidencia.
+7. Marcar incidencia como intencional.
+8. Añadir nota de resolución.
+9. Reejecutar validación.
+10. Consultar historial de incidencias.
+
+## 12.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. El sistema pueda ejecutar validaciones básicas.
+2. Las incidencias se persistan.
+3. Las incidencias puedan revisarse desde UI.
+4. Las entidades afectadas sean navegables.
+5. Una incidencia marcada como intencional no se reporte repetidamente como error nuevo sin motivo.
+6. Existan pruebas para validadores básicos.
+7. El motor esté preparado para validadores posteriores sin rediseño.
+
+## 12.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. IA crítica avanzada.
+2. Consistencia causal profunda.
+3. Consistencia tonal avanzada.
+4. Consistencia geográfica compleja.
+5. Simulación de consecuencias.
+6. Reparación automática.
+
+---
+
+# Bloque 13 — Marcos narrativos y plantillas estructurales
+
+## 13.1 Objetivo
+
+Implementar marcos narrativos como estructuras opcionales de análisis, organización y generación futura. Este bloque deberá crear el modelo y la interfaz base antes de conectarlo con IA.
+
+## 13.2 Marco narrativo
+
+Un marco narrativo deberá incluir:
+
+1. Identificador.
+2. Nombre.
+3. Descripción.
+4. Tipo de marco.
+5. Estructura interna.
+6. Etapas, roles, nodos o componentes.
+7. Reglas de aplicación.
+8. Campos esperados.
+9. Relaciones sugeridas.
+10. Dominio aplicable.
+11. Capas aplicables.
+12. Estado activo o inactivo.
+13. Configuración de severidad para huecos.
+14. Metadatos.
+
+## 13.3 Tipos de marco
+
+El sistema deberá soportar:
+
+1. Estructura de historia.
+2. Estructura de arco de personaje.
+3. Estructura de campaña.
+4. Estructura de misterio.
+5. Estructura de investigación.
+6. Estructura de horror.
+7. Estructura de tragedia.
+8. Estructura de aventura.
+9. Estructura de sandbox.
+10. Estructura de facciones.
+11. Estructura episódica.
+12. Estructura de revelación.
+13. Estructura de conspiración.
+14. Estructura personalizada.
+
+## 13.4 Funciones
+
+El sistema deberá permitir:
+
+1. Crear marco.
+2. Editar marco.
+3. Activar marco en proyecto.
+4. Desactivar marco.
+5. Asociar entidades a componentes del marco.
+6. Asociar relaciones a componentes del marco.
+7. Consultar cobertura del marco.
+8. Detectar componentes vacíos.
+9. Marcar ausencia como deliberada.
+10. Crear marcos personalizados.
+11. Guardar plantillas de marco.
+12. Duplicar marco.
+
+## 13.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Un proyecto pueda tener marcos activos.
+2. Las entidades puedan asociarse a componentes de un marco.
+3. El sistema pueda mostrar cobertura básica.
+4. El sistema pueda detectar componentes vacíos.
+5. Las ausencias puedan marcarse como deliberadas.
+6. Los marcos persistan.
+7. Las pruebas cubran creación, asociación, cobertura y persistencia.
+8. La IA no sea necesaria para usar marcos.
+
+## 13.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Generación IA guiada por marcos.
+2. Análisis estructural avanzado con lenguaje natural.
+3. Adaptación automática de historias.
+4. Comparación compleja entre marcos.
+
+---
+
+# Bloque 14 — Sistema de sugerencias y candidatos
+
+## 14.1 Objetivo
+
+Implementar una infraestructura genérica para contenido propuesto pero no aceptado. Este bloque es obligatorio antes de IA e importación documental.
+
+## 14.2 Candidato
+
+Un candidato deberá poder representar:
+
+1. Entidad candidata.
+2. Relación candidata.
+3. Cambio candidato.
+4. Fusión candidata.
+5. Corrección candidata.
+6. Incidencia candidata.
+7. Fragmento importado.
+8. Sugerencia IA.
+9. Propuesta post-sesión.
+
+## 14.3 Campos del candidato
+
+Cada candidato deberá incluir:
+
+1. Identificador.
+2. Tipo de candidato.
+3. Estado.
+4. Contenido propuesto.
+5. Entidades afectadas.
+6. Relaciones afectadas.
+7. Fuente.
+8. Confianza.
+9. Justificación.
+10. Impacto previsto.
+11. Posibles contradicciones.
+12. Fecha de creación.
+13. Fecha de revisión.
+14. Acción final.
+15. Metadatos.
+
+Estados mínimos:
+
+1. Pendiente.
+2. Aceptado.
+3. Editado y aceptado.
+4. Rechazado.
+5. Fusionado.
+6. Pospuesto.
+7. Archivado.
+8. Requiere revisión.
+9. Parcialmente aceptado.
+
+## 14.4 Operaciones
+
+El sistema deberá permitir:
+
+1. Crear candidato.
+2. Ver candidato.
+3. Editar candidato.
+4. Aceptar candidato.
+5. Aceptar con cambios.
+6. Rechazar candidato.
+7. Posponer candidato.
+8. Fusionar candidato con entidad existente.
+9. Convertir candidato a otro tipo.
+10. Consultar candidatos por fuente.
+11. Consultar candidatos por estado.
+12. Consultar candidatos por entidad afectada.
+13. Registrar historial de decisión.
+
+## 14.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se puedan crear candidatos manualmente o mediante servicios internos.
+2. Un candidato pueda aceptarse y convertirse en entidad o relación real.
+3. Un candidato pueda rechazarse sin contaminar el canon.
+4. La aceptación genere historial.
+5. La fuente del candidato se conserve.
+6. La UI permita revisar candidatos.
+7. El sistema esté preparado para IA e importación.
+8. Existan pruebas de ciclo completo de candidato.
+
+## 14.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Generación IA real.
+2. Extracción PDF real.
+3. Ranking inteligente de candidatos.
+4. Fusión semántica avanzada.
+5. Análisis automático de impacto profundo.
+
+---
+
+# Bloque 15 — Integración IA base y orquestador de contexto
+
+## 15.1 Objetivo
+
+Implementar la infraestructura de IA de forma desacoplada del proveedor concreto. La IA deberá operar sobre contexto controlado y producir candidatos, no mutaciones directas.
+
+## 15.2 Orquestador IA
+
+El orquestador deberá encargarse de:
+
+1. Recibir intención de operación.
+2. Construir contexto autorizado.
+3. Aplicar filtros de canon.
+4. Aplicar filtros de visibilidad.
+5. Aplicar tono, género y realismo.
+6. Aplicar marcos narrativos si procede.
+7. Enviar solicitud al proveedor o motor correspondiente.
+8. Recibir respuesta.
+9. Validar estructura de respuesta.
+10. Crear candidatos, análisis o informes.
+11. Registrar fuente IA.
+12. Registrar historial.
+13. Gestionar errores.
+14. Evitar mutación automática del canon.
+
+## 15.3 Contexto autorizado
+
+El contexto enviado a IA deberá poder configurarse según:
+
+1. Proyecto.
+2. Dominio.
+3. Capa.
+4. Entidades seleccionadas.
+5. Relaciones seleccionadas.
+6. Estados de canon permitidos.
+7. Estados de visibilidad permitidos.
+8. Fuentes permitidas.
+9. Marcos narrativos activos.
+10. Historial relevante.
+11. Incidencias relevantes.
+12. Perfil de salida.
+
+## 15.4 Modos iniciales de IA
+
+Este bloque deberá implementar los modos mínimos:
+
+1. Generación de entidades candidatas.
+2. Generación de relaciones candidatas.
+3. Expansión de entidad existente.
+4. Resumen de entidad o grupo.
+5. Reescritura de descripción.
+6. Sugerencia de etiquetas.
+7. Sugerencia de relaciones.
+8. Pregunta de continuidad básica.
+
+## 15.5 Seguridad de canon
+
+La IA no deberá:
+
+1. Crear entidades canónicas directamente.
+2. Editar entidades existentes directamente.
+3. Eliminar contenido.
+4. Cambiar visibilidad.
+5. Revelar secretos en salida pública.
+6. Ignorar filtros de contexto.
+7. Tratar hipótesis como canon si no está autorizado.
+8. Fusionar entidades sin revisión.
+
+## 15.6 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. La IA pueda recibir contexto controlado.
+2. La IA pueda generar candidatos revisables.
+3. Los candidatos IA puedan aceptarse o rechazarse.
+4. Las fuentes IA queden registradas.
+5. La IA respete estados de canon y visibilidad configurados.
+6. Existan pruebas con proveedor simulado o capa de abstracción.
+7. La aplicación siga siendo funcional sin IA.
+8. Los errores de IA no corrompan el proyecto.
+
+## 15.7 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. IA crítica avanzada.
+2. Importación PDF IA.
+3. Preparación de sesiones IA.
+4. Análisis causal profundo.
+5. Simulación de consecuencias.
+6. Memoria vectorial avanzada si no es estrictamente necesaria.
+
+---
+
+# Bloque 16 — IA crítica, causal y de consistencia asistida
+
+## 16.1 Objetivo
+
+Ampliar la IA para que analice el corpus y produzca incidencias, explicaciones y propuestas de mejora sin modificar el canon directamente.
+
+## 16.2 IA crítica
+
+El sistema deberá permitir analizar:
+
+1. Entidad individual.
+2. Grupo de entidades.
+3. Relaciones de una entidad.
+4. Trama.
+5. Facción.
+6. Localización.
+7. Conjunto de escenas.
+8. Capa del mundo.
+9. Proyecto completo dentro de límites de contexto.
+
+Deberá producir:
+
+1. Observaciones.
+2. Incidencias candidatas.
+3. Propuestas de corrección.
+4. Preguntas abiertas.
+5. Elementos infrautilizados.
+6. Elementos redundantes.
+7. Riesgos de tono.
+8. Riesgos de estructura.
+9. Problemas de continuidad.
+
+## 16.3 IA causal
+
+El sistema deberá permitir:
+
+1. Analizar consecuencias de una entidad, regla o evento.
+2. Proponer consecuencias directas.
+3. Proponer consecuencias indirectas.
+4. Proponer consecuencias retardadas.
+5. Detectar eventos sin causa suficiente.
+6. Detectar consecuencias ausentes.
+7. Crear relaciones causales candidatas.
+8. Señalar entidades afectadas.
+9. Clasificar consecuencias por probabilidad o severidad.
+
+## 16.4 IA de consistencia
+
+La IA deberá complementar, no sustituir, los validadores deterministas.
+
+Deberá poder detectar:
+
+1. Contradicciones narrativas.
+2. Contradicciones motivacionales.
+3. Contradicciones de conocimiento.
+4. Contradicciones de tono.
+5. Contradicciones de género.
+6. Contradicciones de escala.
+7. Huecos causales.
+8. Incoherencias de facción.
+9. Incoherencias entre sesiones.
+10. Incoherencias entre marco narrativo y contenido.
+
+## 16.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. La IA pueda generar incidencias candidatas.
+2. Las incidencias IA puedan aceptarse, descartarse o marcarse como intencionales.
+3. La IA pueda generar propuestas de corrección como candidatos.
+4. La IA pueda analizar consecuencias sin mutar el canon.
+5. El sistema distinga incidencias deterministas de incidencias asistidas por IA.
+6. Los análisis respeten contexto autorizado.
+7. Existan pruebas con proveedor simulado o respuestas controladas.
+8. La UI permita revisar resultados críticos de forma ordenada.
+
+## 16.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Importación documental.
+2. Modo de rol en vivo.
+3. Escritura avanzada.
+4. Exportación avanzada.
+5. Automatización post-sesión.
+
+---
+
+# Bloque 17 — Importación documental base
+
+## 17.1 Objetivo
+
+Implementar el pipeline de importación documental con revisión humana. Este bloque deberá permitir importar documentos, extraer candidatos y conservar fuente trazable.
+
+## 17.2 Formatos iniciales
+
+La importación deberá admitir, como mínimo:
+
+1. Texto plano.
+2. PDF.
+
+La arquitectura deberá permitir añadir otros formatos posteriormente.
+
+## 17.3 Pipeline obligatorio
+
+El pipeline deberá incluir:
+
+1. Carga de documento.
+2. Registro como fuente.
+3. Extracción de texto.
+4. Segmentación del contenido.
+5. Identificación de secciones.
+6. Identificación de entidades candidatas.
+7. Identificación de relaciones candidatas.
+8. Identificación de eventos candidatos.
+9. Identificación de fechas o referencias temporales candidatas.
+10. Identificación de posibles duplicados.
+11. Identificación de posibles contradicciones básicas.
+12. Creación de candidatos.
+13. Presentación en bandeja de revisión.
+14. Aceptación, edición, fusión, descarte o posposición.
+15. Trazabilidad desde candidato aceptado hasta fuente documental.
+
+## 17.4 Bandeja de importación
+
+La interfaz deberá mostrar:
+
+1. Documento fuente.
+2. Fragmentos procesados.
+3. Candidatos extraídos.
+4. Confianza de extracción.
+5. Tipo propuesto.
+6. Relaciones propuestas.
+7. Duplicados posibles.
+8. Contradicciones posibles.
+9. Estado de revisión.
+10. Acciones disponibles.
+
+## 17.5 Importación parcial
+
+El usuario deberá poder importar selectivamente:
+
+1. Solo entidades.
+2. Solo relaciones.
+3. Solo eventos.
+4. Solo cronología.
+5. Solo personajes.
+6. Solo localizaciones.
+7. Solo facciones.
+8. Solo secretos.
+9. Solo pistas.
+10. Solo texto como fuente consultable.
+
+## 17.6 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Un documento pueda registrarse como fuente.
+2. Se pueda extraer texto.
+3. Se puedan generar candidatos.
+4. Los candidatos puedan revisarse.
+5. Los candidatos aceptados conserven trazabilidad al documento.
+6. Los candidatos rechazados no contaminen el canon.
+7. La importación parcial funcione.
+8. Los errores de importación no corrompan el proyecto.
+9. Existan pruebas con documentos controlados.
+
+## 17.7 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. OCR avanzado si no es imprescindible.
+2. Extracción perfecta de tablas complejas.
+3. Comprensión semántica completa de cualquier PDF.
+4. Importación de formatos editoriales complejos.
+5. Importación automática sin revisión.
+6. Sincronización con fuentes externas.
+
+---
+
+# Bloque 18 — Cronología, eventos y temporalidad avanzada
+
+## 18.1 Objetivo
+
+Implementar un sistema temporal capaz de soportar historias, mundos y campañas con calendarios absolutos, relativos, incompletos o ficticios.
+
+## 18.2 Modelo temporal
+
+El sistema deberá soportar:
+
+1. Fechas reales.
+2. Fechas internas del mundo.
+3. Fechas relativas.
+4. Periodos.
+5. Eras.
+6. Orden parcial.
+7. Antes de.
+8. Después de.
+9. Durante.
+10. Simultáneo a.
+11. Fecha desconocida.
+12. Fecha aproximada.
+13. Fecha contradictoria.
+14. Fecha mítica o no verificable.
+
+## 18.3 Eventos
+
+Los eventos deberán poder representarse como entidades con propiedades temporales reforzadas.
+
+Un evento deberá incluir:
+
+1. Fecha o periodo.
+2. Participantes.
+3. Localización.
+4. Causas.
+5. Consecuencias.
+6. Fuentes.
+7. Estado de canon.
+8. Estado de visibilidad.
+9. Relación con sesiones o escenas.
+10. Relación con historia del mundo.
+11. Relación con facciones.
+12. Relación con secretos o pistas.
+
+## 18.4 Vista cronológica
+
+La aplicación deberá incluir una vista de cronología que permita:
+
+1. Ver eventos ordenados.
+2. Filtrar por capa.
+3. Filtrar por dominio.
+4. Filtrar por entidad.
+5. Filtrar por canon.
+6. Filtrar por visibilidad.
+7. Mostrar fechas inciertas.
+8. Mostrar contradicciones temporales.
+9. Crear eventos.
+10. Editar temporalidad.
+11. Navegar a ficha.
+12. Navegar a grafo.
+
+## 18.5 Consistencia temporal
+
+El motor de consistencia deberá ampliarse para detectar:
+
+1. Eventos imposibles por orden.
+2. Participación de entidad antes de existir.
+3. Participación después de muerte o destrucción si aplica.
+4. Consecuencia anterior a causa.
+5. Revelación anterior a pista.
+6. Sesión que referencia evento no ocurrido.
+7. Duplicados temporales.
+8. Fechas incompatibles entre fuentes.
+
+## 18.6 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Los eventos puedan modelarse con temporalidad avanzada.
+2. La cronología pueda visualizarse.
+3. Las fechas inciertas sean soportadas.
+4. Los filtros temporales funcionen.
+5. Las relaciones temporales se integren con relaciones semánticas.
+6. El motor detecte inconsistencias temporales básicas.
+7. Las pruebas cubran fechas absolutas, relativas, inciertas y orden parcial.
+
+## 18.7 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Simulación histórica automática.
+2. Calendarios ficticios extremadamente complejos si no son necesarios.
+3. Generación IA de cronologías completas.
+4. Mapas geográficos temporales.
+
+---
+
+# Bloque 19 — Capa de escritura
+
+## 19.1 Objetivo
+
+Implementar herramientas para desarrollar historias, escenas, capítulos, arcos y estructura narrativa sobre el corpus existente.
+
+## 19.2 Elementos de escritura
+
+El sistema deberá soportar:
+
+1. Historia.
+2. Arco narrativo.
+3. Trama.
+4. Subtrama.
+5. Capítulo.
+6. Escena.
+7. Secuencia.
+8. Punto de giro.
+9. Revelación.
+10. Conflicto.
+11. Tema.
+12. Motivo.
+13. Símbolo.
+14. Voz narrativa.
+15. Punto de vista.
+16. Personaje focal.
+17. Estado de revisión.
+18. Nota de autor.
+
+## 19.3 Vinculación con corpus
+
+Cada unidad de escritura deberá poder vincularse a:
+
+1. Personajes.
+2. Localizaciones.
+3. Facciones.
+4. Objetos.
+5. Eventos.
+6. Secretos.
+7. Pistas.
+8. Conflictos.
+9. Reglas del mundo.
+10. Marcos narrativos.
+11. Capas.
+12. Fuentes.
+
+## 19.4 Funciones de escritura
+
+La interfaz deberá permitir:
+
+1. Crear historia.
+2. Crear arco.
+3. Crear capítulo.
+4. Crear escena.
+5. Ordenar escenas.
+6. Vincular escenas a entidades.
+7. Ver qué entidades aparecen en una escena.
+8. Ver qué secretos se revelan en una escena.
+9. Ver qué tramas avanzan en una escena.
+10. Marcar estado de revisión.
+11. Consultar continuidad de escena.
+12. Aplicar análisis estructural básico.
+13. Usar IA para resumen, expansión, crítica o reescritura controlada.
+14. Generar incidencias de escritura.
+
+## 19.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se puedan crear historias, capítulos y escenas.
+2. Las escenas puedan vincularse al corpus.
+3. Se pueda navegar desde escena a entidades relacionadas.
+4. Se pueda analizar cobertura básica de trama o marco.
+5. La IA pueda asistir sin sobrescribir texto automáticamente.
+6. Las escenas persistan.
+7. Las pruebas cubran creación, ordenación, vinculación y persistencia.
+8. La capa de escritura no duplique el modelo de entidades.
+
+## 19.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Procesador de textos editorial completo.
+2. Maquetación avanzada.
+3. Control de cambios editorial complejo.
+4. Publicación directa.
+5. Colaboración multiusuario.
+
+---
+
+# Bloque 20 — Capa de campaña de rol
+
+## 20.1 Objetivo
+
+Implementar el dominio específico de campaña de rol sin duplicar el modelo narrativo existente. La campaña deberá usar entidades, relaciones, secretos, pistas, facciones y eventos del core.
+
+## 20.2 Campaña
+
+Una campaña deberá incluir:
+
+1. Identificador.
+2. Nombre.
+3. Descripción.
+4. Mundo asociado.
+5. Sistema de juego.
+6. Tono.
+7. Género.
+8. Estado.
+9. Jugadores.
+10. Personajes jugadores.
+11. Sesiones.
+12. Tramas activas.
+13. Facciones activas.
+14. Localizaciones activas.
+15. Secretos.
+16. Pistas.
+17. Relojes o amenazas.
+18. Notas privadas.
+19. Resúmenes públicos.
+20. Reglas de visibilidad.
+21. Historial.
+
+## 20.3 Personajes jugadores
+
+Los personajes jugadores deberán modelarse como entidades narrativas con extensión de campaña.
+
+Deberán poder tener:
+
+1. Jugador asociado.
+2. Objetivos.
+3. Trasfondo.
+4. Secretos.
+5. Relaciones.
+6. Facciones relacionadas.
+7. Información conocida.
+8. Información ignorada.
+9. Arcos personales.
+10. Deudas.
+11. Promesas.
+12. Conflictos.
+13. Estado actual.
+14. Sesiones donde aparece.
+
+## 20.4 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se pueda crear una campaña vinculada a un proyecto.
+2. Se puedan crear personajes jugadores como entidades extendidas.
+3. La campaña pueda vincular entidades existentes.
+4. Las relaciones de campaña usen el sistema semántico general.
+5. La visibilidad de campaña esté integrada con el modelo global.
+6. La campaña persista correctamente.
+7. Las pruebas cubran creación, vinculación, edición y carga.
+8. No exista modelo paralelo incompatible de PNJ, localizaciones o facciones.
+
+## 20.5 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Preparación detallada de sesión.
+2. Dirección en vivo.
+3. IA de sesión.
+4. Post-sesión.
+5. Integración con VTT.
+6. Automatización de reglas de sistemas concretos.
+
+---
+
+# Bloque 21 — Secretos, pistas, conocimiento y revelación
+
+## 21.1 Objetivo
+
+Implementar de forma estructurada el control de información, secretos, pistas y estados de conocimiento. Este bloque es crítico para campañas de rol, misterios e historias con revelaciones.
+
+## 21.2 Secretos
+
+Un secreto deberá incluir:
+
+1. Contenido verdadero.
+2. Entidades afectadas.
+3. Estado de revelación.
+4. Quién lo sabe.
+5. Quién lo sospecha.
+6. Quién lo ignora.
+7. Quién lo oculta.
+8. Pistas asociadas.
+9. Consecuencias de revelación.
+10. Consecuencias de ocultación.
+11. Sesiones previstas de revelación.
+12. Sesión real de revelación.
+13. Forma de revelación.
+14. Nivel de importancia.
+15. Estado de canon.
+16. Estado de visibilidad.
+
+## 21.3 Pistas
+
+Una pista deberá incluir:
+
+1. Contenido.
+2. Secreto asociado.
+3. Fuente.
+4. Localización.
+5. PNJ asociado.
+6. Forma de entrega.
+7. Estado de entrega.
+8. Claridad.
+9. Redundancia.
+10. Riesgo de pérdida.
+11. Sesión prevista.
+12. Sesión entregada.
+13. Personajes que la conocen.
+14. Interpretación probable.
+15. Interpretaciones erróneas posibles.
+
+## 21.4 Conocimiento
+
+El sistema deberá representar conocimiento mediante relaciones semánticas y estados específicos.
+
+Deberá distinguir:
+
+1. Sabe.
+2. Cree.
+3. Sospecha.
+4. Ignora.
+5. Malinterpreta.
+6. Oculta.
+7. Ha oído.
+8. Ha visto.
+9. Ha recibido pista.
+10. Conoce parcialmente.
+11. Conoce falsamente.
+
+## 21.5 Funciones
+
+El sistema deberá permitir:
+
+1. Crear secreto.
+2. Crear pista.
+3. Asociar pista a secreto.
+4. Marcar pista como entregada.
+5. Marcar secreto como revelado.
+6. Asociar conocimiento a personaje.
+7. Asociar conocimiento a facción.
+8. Consultar qué sabe un personaje.
+9. Consultar qué saben los jugadores.
+10. Consultar qué secretos siguen ocultos.
+11. Consultar pistas pendientes.
+12. Detectar secretos sin pistas.
+13. Detectar pistas sin secreto.
+14. Detectar secretos revelados sin consecuencias.
+15. Detectar pistas entregadas sin seguimiento.
+
+## 21.6 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Secretos y pistas funcionen como entidades estructuradas.
+2. Los estados de revelación persistan.
+3. El conocimiento pueda consultarse por personaje, facción o jugadores.
+4. El motor de consistencia detecte problemas básicos de secretos y pistas.
+5. La visibilidad impida filtraciones en vistas públicas o exportables futuras.
+6. Las pruebas cubran creación, asociación, revelación y consulta.
+7. La capa de rol pueda consumir esta información.
+
+## 21.7 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Preparación completa de sesión.
+2. Modo en vivo completo.
+3. IA avanzada de misterio.
+4. Generación automática de redes de pistas.
+5. Exportación pública final.
+
+---
+
+# Bloque 22 — Facciones, frentes, amenazas y relojes
+
+## 22.1 Objetivo
+
+Implementar entidades dinámicas que evolucionan con o sin intervención de personajes o jugadores.
+
+## 22.2 Facciones
+
+Una facción deberá poder contener:
+
+1. Objetivos.
+2. Recursos.
+3. Líderes.
+4. Miembros.
+5. Aliados.
+6. Enemigos.
+7. Territorios.
+8. Planes.
+9. Secretos.
+10. Métodos.
+11. Ideología.
+12. Estado actual.
+13. Relojes o progreso.
+14. Reacciones posibles.
+15. Relación con personajes jugadores.
+16. Relación con otras facciones.
+17. Eventos asociados.
+18. Consecuencias de inacción.
+19. Consecuencias de intervención.
+20. Visibilidad para jugadores.
+
+## 22.3 Frentes, amenazas y relojes
+
+El sistema deberá permitir crear procesos dinámicos con progreso.
+
+Cada proceso deberá incluir:
+
+1. Nombre.
+2. Tipo.
+3. Descripción.
+4. Facción o amenaza asociada.
+5. Estado actual.
+6. Etapas.
+7. Progreso.
+8. Condiciones de avance.
+9. Condiciones de retroceso.
+10. Consecuencias por etapa.
+11. Sesiones afectadas.
+12. Entidades afectadas.
+13. Visibilidad.
+14. Historial.
+
+## 22.4 Funciones
+
+El sistema deberá permitir:
+
+1. Crear facción.
+2. Definir objetivos.
+3. Definir planes.
+4. Crear reloj.
+5. Avanzar reloj.
+6. Retroceder reloj.
+7. Registrar motivo.
+8. Asociar reloj a sesión.
+9. Asociar reloj a facción.
+10. Consultar amenazas activas.
+11. Consultar consecuencias pendientes.
+12. Generar incidencias si procesos carecen de objetivos o consecuencias.
+13. Usar IA para sugerir movimientos de facción como candidatos.
+
+## 22.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las facciones puedan modelarse con objetivos, relaciones y recursos.
+2. Los relojes puedan crearse y modificarse.
+3. Los cambios de reloj generen historial.
+4. Las facciones se integren con secretos, pistas, campañas y eventos.
+5. La IA pueda sugerir movimientos sin aplicarlos automáticamente.
+6. Las pruebas cubran creación, avance, consulta e historial.
+7. No exista duplicación de modelo respecto a entidades y relaciones generales.
+
+## 22.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Simulación autónoma completa.
+2. IA multiagente persistente.
+3. Resolución mecánica de sistemas concretos.
+4. Integración con calendarios externos.
+
+---
+
+# Bloque 23 — Preparación de sesiones de rol
+
+## 23.1 Objetivo
+
+Implementar el espacio de preparación de sesión, conectando campaña, corpus narrativo, secretos, pistas, facciones, localizaciones, PNJ y continuidad.
+
+## 23.2 Sesión
+
+Cada sesión deberá incluir:
+
+1. Identificador.
+2. Número o nombre.
+3. Fecha real.
+4. Fecha interna.
+5. Campaña asociada.
+6. Resumen de contexto.
+7. Objetivos del director.
+8. Objetivos conocidos de jugadores.
+9. Escenas previstas.
+10. Escenas opcionales.
+11. Localizaciones previstas.
+12. PNJ previstos.
+13. Facciones relevantes.
+14. Conflictos activos.
+15. Pistas disponibles.
+16. Secretos revelables.
+17. Rumores.
+18. Encuentros.
+19. Recompensas.
+20. Complicaciones.
+21. Consecuencias esperadas.
+22. Preguntas abiertas.
+23. Material improvisable.
+24. Notas privadas.
+25. Resumen seguro para jugadores.
+26. Checklist de continuidad.
+27. Sugerencias IA.
+
+## 23.3 Funciones
+
+El sistema deberá permitir:
+
+1. Crear sesión.
+2. Duplicar sesión como plantilla.
+3. Vincular entidades a sesión.
+4. Vincular pistas a sesión.
+5. Vincular secretos a sesión.
+6. Vincular facciones a sesión.
+7. Vincular relojes a sesión.
+8. Crear escenas de sesión.
+9. Ordenar escenas.
+10. Marcar escenas como previstas, opcionales o improvisadas.
+11. Generar resumen privado.
+12. Generar resumen seguro para jugadores.
+13. Consultar continuidad antes de sesión.
+14. Generar sugerencias IA como candidatos.
+15. Ver incidencias relevantes para la sesión.
+
+## 23.4 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se pueda preparar una sesión completa.
+2. La sesión consuma entidades existentes.
+3. Las pistas y secretos se integren correctamente.
+4. Las facciones y relojes se integren correctamente.
+5. La IA pueda proponer material de sesión como candidato.
+6. El resumen seguro no incluya información privada si la visibilidad está bien configurada.
+7. La sesión persista.
+8. Las pruebas cubran creación, vinculación, filtrado y guardado.
+
+## 23.5 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Modo de dirección en vivo.
+2. Automatización post-sesión.
+3. Integración con VTT.
+4. Gestión táctica de combate.
+5. Reglas específicas de sistemas.
+
+---
+
+# Bloque 24 — Modo de dirección en vivo
+
+## 24.1 Objetivo
+
+Implementar una interfaz optimizada para consulta rápida e improvisación durante la partida. Este modo deberá minimizar fricción y proteger secretos.
+
+## 24.2 Funciones principales
+
+El modo en vivo deberá permitir:
+
+1. Abrir sesión activa.
+2. Consultar PNJ relevantes.
+3. Consultar localizaciones relevantes.
+4. Consultar secretos relevantes.
+5. Consultar pistas disponibles.
+6. Consultar facciones activas.
+7. Consultar relojes activos.
+8. Crear nota rápida.
+9. Crear entidad provisional.
+10. Crear relación provisional.
+11. Marcar pista como entregada.
+12. Marcar secreto como revelado.
+13. Registrar decisión de jugador.
+14. Registrar evento ocurrido.
+15. Registrar consecuencia pendiente.
+16. Solicitar improvisación IA.
+17. Generar nombre.
+18. Generar descripción breve.
+19. Generar complicación.
+20. Generar consecuencia.
+21. Consultar continuidad.
+22. Evitar spoilers en paneles visibles.
+23. Preparar material para post-sesión.
+
+## 24.3 Entidades provisionales
+
+Las entidades creadas en vivo deberán poder entrar como:
+
+1. Borrador.
+2. Hipótesis.
+3. Provisional de sesión.
+4. Candidato post-sesión.
+5. Canon inmediato si el usuario lo decide explícitamente.
+
+Por defecto, el modo en vivo deberá favorecer estados provisionales para evitar contaminar el canon durante improvisación.
+
+## 24.4 Reglas de IA en vivo
+
+La IA en vivo deberá priorizar:
+
+1. Brevedad.
+2. Coherencia.
+3. Rapidez.
+4. Respeto a canon.
+5. No revelación de secretos no autorizados.
+6. Salida accionable.
+7. Creación de candidatos si el resultado debe persistir.
+8. Separación entre material temporal y canon.
+
+## 24.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Una sesión preparada pueda abrirse en modo vivo.
+2. El usuario pueda registrar eventos durante sesión.
+3. El usuario pueda marcar pistas y secretos.
+4. El usuario pueda crear notas rápidas.
+5. El usuario pueda crear entidades provisionales.
+6. La IA pueda asistir sin aplicar cambios irreversibles.
+7. El modo respete visibilidad y secretos.
+8. Lo registrado quede disponible para post-sesión.
+9. Las pruebas o validaciones manuales cubran un flujo completo de sesión.
+
+## 24.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Automatización completa post-sesión.
+2. VTT.
+3. Tablero táctico.
+4. Iniciativa avanzada si no es parte del contrato principal.
+5. Integraciones externas en tiempo real.
+
+---
+
+# Bloque 25 — Flujo post-sesión y actualización de canon
+
+## 25.1 Objetivo
+
+Implementar el proceso que convierte lo ocurrido en sesión en cambios estructurados del corpus narrativo.
+
+## 25.2 Entrada post-sesión
+
+El usuario deberá poder introducir:
+
+1. Notas libres.
+2. Eventos ocurridos.
+3. Decisiones de jugadores.
+4. Entidades nuevas.
+5. Entidades modificadas.
+6. Relaciones nuevas.
+7. Relaciones modificadas.
+8. Pistas entregadas.
+9. Secretos revelados.
+10. Consecuencias pendientes.
+11. Relojes avanzados.
+12. Facciones afectadas.
+13. Errores o improvisaciones que requieren canonización.
+14. Preguntas abiertas.
+
+## 25.3 Procesamiento
+
+El sistema deberá producir:
+
+1. Resumen privado.
+2. Resumen público.
+3. Candidatos de nuevas entidades.
+4. Candidatos de nuevas relaciones.
+5. Candidatos de cambio de estado.
+6. Candidatos de revelación.
+7. Candidatos de avance de reloj.
+8. Incidencias generadas.
+9. Consecuencias pendientes.
+10. Semillas para próxima sesión.
+11. Actualización de historial.
+12. Fuentes de sesión.
+
+## 25.4 Aceptación
+
+Nada deberá incorporarse automáticamente al canon salvo acciones explícitas del usuario.
+
+El usuario deberá poder aceptar, editar, rechazar, posponer o archivar cada cambio propuesto.
+
+## 25.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Una sesión jugada pueda cerrarse.
+2. Las notas puedan transformarse en candidatos.
+3. Los cambios aceptados actualicen entidades, relaciones, secretos, pistas y relojes.
+4. Los cambios rechazados no contaminen el canon.
+5. Se genere resumen privado.
+6. Se genere resumen seguro para jugadores.
+7. Se cree fuente de sesión.
+8. El historial registre los cambios.
+9. Las pruebas cubran un ciclo de sesión completa desde preparación hasta post-sesión.
+
+## 25.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Automatización autónoma sin revisión.
+2. Sincronización externa con plataformas de rol.
+3. Edición colaborativa multiusuario.
+4. Publicación automática.
+
+---
+
+# Bloque 26 — Exportación y perfiles de visibilidad
+
+## 26.1 Objetivo
+
+Implementar exportación controlada respetando canon, visibilidad, secretos, destinatarios y perfiles.
+
+## 26.2 Perfiles de exportación
+
+El sistema deberá soportar, como mínimo:
+
+1. Autor completo.
+2. Director completo.
+3. Jugadores sin spoilers.
+4. Personaje concreto.
+5. Facción concreta.
+6. Documento público del mundo.
+7. Documento de trabajo.
+8. Documento de revisión.
+9. Documento de inconsistencias.
+10. Documento de pitch.
+
+## 26.3 Tipos de exportación
+
+La aplicación deberá permitir exportar:
+
+1. Biblia de mundo.
+2. Resumen de historia.
+3. Resumen de campaña.
+4. Resumen de sesión.
+5. Resumen público para jugadores.
+6. Resumen privado para director.
+7. Fichas de personajes.
+8. Fichas de localización.
+9. Fichas de facción.
+10. Cronología.
+11. Lista de secretos.
+12. Lista de pistas.
+13. Lista de tramas.
+14. Informe de inconsistencias.
+15. Vista de grafo.
+16. Documento de preparación de sesión.
+17. Handouts.
+18. Documento de referencia.
+19. Dataset estructurado.
+
+## 26.4 Reglas
+
+La exportación deberá:
+
+1. Respetar estados de visibilidad.
+2. Respetar estados de canon.
+3. Excluir notas privadas salvo perfil autorizado.
+4. Excluir secretos no revelados salvo perfil autorizado.
+5. Excluir contenido no exportable.
+6. Indicar si se omiten contenidos por seguridad.
+7. Permitir previsualización.
+8. Permitir configuración de formato.
+9. Registrar evento de exportación si procede.
+
+## 26.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Se puedan exportar documentos básicos.
+2. Los perfiles de visibilidad funcionen.
+3. Los secretos no se filtren en exportación pública.
+4. Las notas privadas no se filtren.
+5. La exportación de sesión produzca versión privada y pública.
+6. La exportación de dataset estructurado respete filtros.
+7. Existan pruebas de seguridad de visibilidad.
+8. El usuario pueda previsualizar antes de exportar.
+
+## 26.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Maquetación editorial avanzada.
+2. Publicación web completa.
+3. Sincronización con wikis externas.
+4. Exportación colaborativa con permisos multiusuario.
+
+---
+
+# Bloque 27 — IA avanzada de estructuras, tono y worldbuilding por capas
+
+## 27.1 Objetivo
+
+Ampliar la IA para trabajar de forma profunda con marcos narrativos, tono, género, realismo y capas de mundo.
+
+## 27.2 IA estructural
+
+La IA deberá poder:
+
+1. Analizar historia contra marco narrativo.
+2. Analizar campaña contra marco narrativo.
+3. Detectar huecos estructurales.
+4. Detectar sobrecarga estructural.
+5. Proponer correspondencias.
+6. Proponer escenas, entidades o relaciones candidatas.
+7. Marcar desviaciones deliberadas.
+8. Comparar varios marcos.
+9. Adaptar contenido a un marco.
+10. Sugerir alternativas estructurales.
+
+## 27.3 IA de tono
+
+La IA deberá poder:
+
+1. Evaluar coherencia tonal.
+2. Reescribir descripciones según tono.
+3. Proponer ajustes de género.
+4. Detectar elementos que rompen tono.
+5. Generar variantes con distinto grado de realismo.
+6. Mantener restricciones de proyecto.
+7. Trabajar por capa, entidad, escena o campaña.
+
+## 27.4 IA por capas
+
+La IA deberá poder:
+
+1. Propagar consecuencias descendentes.
+2. Propagar consecuencias ascendentes.
+3. Propagar consecuencias laterales.
+4. Detectar capas poco desarrolladas.
+5. Detectar capas sobredesarrolladas.
+6. Proponer elementos faltantes.
+7. Evaluar coherencia entre capas.
+8. Crear relaciones candidatas entre capas.
+9. Sugerir conflictos derivados de decisiones estructurales.
+
+## 27.5 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. La IA pueda analizar marcos narrativos activos.
+2. La IA pueda generar candidatos ligados a marcos.
+3. La IA pueda analizar tono y realismo.
+4. La IA pueda operar por capas.
+5. Las propuestas indiquen impacto y contexto usado.
+6. Las propuestas sigan entrando como candidatos.
+7. Los análisis respeten visibilidad y canon.
+8. Existan pruebas con respuestas controladas.
+
+## 27.6 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Simulación autónoma completa de mundos.
+2. Escritura automática de obras completas.
+3. Dirección automática de campañas.
+4. Sustitución del criterio del usuario.
+
+---
+
+# Bloque 28 — Grafos especializados y visualizaciones avanzadas
+
+## 28.1 Objetivo
+
+Ampliar el grafo inicial con vistas especializadas que respondan a necesidades concretas de análisis, escritura y rol.
+
+## 28.2 Grafos requeridos
+
+La aplicación deberá soportar:
+
+1. Grafo global.
+2. Grafo de personaje.
+3. Grafo de localización.
+4. Grafo de facción.
+5. Grafo de conflicto.
+6. Grafo de secretos.
+7. Grafo de pistas.
+8. Grafo de cronología.
+9. Grafo causal.
+10. Grafo de campaña.
+11. Grafo de sesión.
+12. Grafo de conocimiento.
+13. Grafo de estructura narrativa.
+14. Grafo de inconsistencias.
+15. Grafo de mundo por capas.
+
+## 28.3 Capacidades avanzadas
+
+El grafo deberá permitir:
+
+1. Rutas causales.
+2. Rutas de conocimiento.
+3. Filtros combinados.
+4. Vistas guardadas.
+5. Comparación de estados.
+6. Superposición de incidencias.
+7. Superposición de candidatos IA.
+8. Superposición de secretos.
+9. Superposición de revelaciones.
+10. Clustering por facción, capa o dominio.
+11. Análisis de vecindad profunda.
+12. Ocultación avanzada.
+13. Exportación de vista.
+
+## 28.4 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Las vistas especializadas representen correctamente el corpus.
+2. Los grafos consuman datos del core.
+3. Los filtros avanzados funcionen.
+4. Las incidencias puedan visualizarse.
+5. Los candidatos puedan visualizarse sin aceptarse.
+6. Los secretos se oculten según perfil.
+7. Las vistas puedan guardarse y recuperarse.
+8. El grafo siga sin ser fuente primaria de datos.
+
+## 28.5 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Edición colaborativa en tiempo real.
+2. Animaciones o estética no funcional.
+3. Dependencia de layouts como lógica de negocio.
+4. Simulaciones visuales autónomas.
+
+---
+
+# Bloque 29 — Revisión, optimización, migraciones y robustez de proyecto
+
+## 29.1 Objetivo
+
+Consolidar el sistema para soportar proyectos grandes, evolución de esquema, migraciones, integridad y mantenimiento a largo plazo.
+
+## 29.2 Robustez
+
+El sistema deberá reforzar:
+
+1. Carga de proyectos grandes.
+2. Guardado seguro.
+3. Recuperación ante errores.
+4. Validación de integridad.
+5. Migraciones de esquema.
+6. Reparación asistida de datos.
+7. Compactación o limpieza si procede.
+8. Rendimiento de consultas.
+9. Rendimiento de grafo.
+10. Rendimiento de búsqueda.
+11. Gestión de fuentes grandes.
+12. Manejo de documentos importados.
+13. Historial voluminoso.
+14. Candidatos acumulados.
+15. Incidencias acumuladas.
+
+## 29.3 Herramientas internas
+
+La aplicación deberá incluir herramientas de diagnóstico para:
+
+1. Revisar integridad.
+2. Detectar referencias rotas.
+3. Detectar datos obsoletos.
+4. Detectar migraciones pendientes.
+5. Medir tamaño del proyecto.
+6. Revisar entidades sin uso.
+7. Revisar historial excesivo.
+8. Exportar diagnóstico.
+9. Crear copia de seguridad.
+10. Restaurar copia de seguridad.
+
+## 29.4 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Los proyectos existentes puedan migrarse.
+2. La validación de integridad sea fiable.
+3. El guardado sea resistente a fallo parcial.
+4. Existan pruebas de migración.
+5. Existan pruebas de carga con corpus grande simulado.
+6. Las consultas críticas mantengan rendimiento aceptable.
+7. Exista diagnóstico exportable.
+8. El sistema pueda recuperar o informar claramente errores de datos.
+
+## 29.5 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. Multiusuario completo.
+2. Cloud sync.
+3. Marketplace de plantillas.
+4. Plugins externos complejos.
+
+---
+
+# Bloque 30 — Pulido funcional, experiencia integrada y cierre contractual
+
+## 30.1 Objetivo
+
+Integrar todos los bloques en una experiencia coherente, eliminar duplicidades, cerrar flujos incompletos y validar que el producto cumple el contrato funcional global.
+
+## 30.2 Flujos completos obligatorios
+
+Deberán validarse, como mínimo, los siguientes flujos:
+
+1. Crear proyecto desde cero.
+2. Crear mundo con entidades y relaciones.
+3. Organizar entidades en galerías.
+4. Visualizar relaciones en grafo.
+5. Configurar capas, tono, género y realismo.
+6. Crear marco narrativo y asociar contenido.
+7. Ejecutar validación de consistencia.
+8. Generar sugerencias IA y aceptarlas como candidatos.
+9. Importar documento y revisar candidatos.
+10. Crear historia con escenas vinculadas.
+11. Crear campaña de rol.
+12. Crear personajes jugadores.
+13. Crear secretos y pistas.
+14. Preparar sesión.
+15. Dirigir sesión en vivo.
+16. Registrar cambios.
+17. Ejecutar post-sesión.
+18. Exportar resumen seguro para jugadores.
+19. Exportar documento completo para director.
+20. Revisar historial y fuentes.
+
+## 30.3 Revisión de coherencia interna
+
+Deberá verificarse que:
+
+1. No existen modelos duplicados incompatibles.
+2. El grafo no es fuente primaria.
+3. La IA no muta canon directamente.
+4. La importación no contamina canon sin revisión.
+5. Las sesiones usan entidades del core.
+6. Secretos y pistas respetan visibilidad.
+7. Los perfiles de exportación son seguros.
+8. El historial cubre cambios relevantes.
+9. Las incidencias son revisables.
+10. Los candidatos son trazables.
+11. Los marcos son opcionales.
+12. Los tipos personalizados no rompen vistas principales.
+13. Las capas son configurables.
+14. El proyecto funciona sin IA.
+15. La aplicación puede manejar corpus extensos.
+
+## 30.4 Criterios de aceptación finales
+
+El producto se considerará alineado con este contrato cuando:
+
+1. Todos los bloques anteriores estén implementados o conscientemente excluidos por decisión contractual posterior.
+2. Los flujos completos funcionen sin pérdida de datos.
+3. Los módulos estén desacoplados según la arquitectura.
+4. La persistencia sea estable.
+5. La trazabilidad sea verificable.
+6. Los estados de canon y visibilidad sean respetados en IA, exportación, rol e importación.
+7. El sistema permita crear, organizar, analizar, escribir, preparar, dirigir y actualizar proyectos narrativos complejos.
+8. Los agentes de desarrollo no necesiten reinterpretar el concepto base para implementar funcionalidades.
+9. Cualquier funcionalidad nueva pueda ubicarse claramente dentro de uno de los módulos existentes o requerir una extensión explícita del contrato.
+10. El producto mantenga la premisa central: una base de conocimiento narrativa estructurada, asistida por IA, visualizable como grafo, navegable como base de datos y utilizable para escritura y dirección de partidas.
+
+---
+
+# Matriz de dependencias obligatorias
+
+## Dependencias principales
+
+Bloque 1 debe preceder a todos los demás.
+
+Bloque 2 depende de Bloque 1.
+
+Bloque 3 depende de Bloque 2.
+
+Bloque 4 depende de Bloque 3.
+
+Bloque 5 depende de Bloques 3 y 4.
+
+Bloque 6 depende de Bloques 3, 4 y 5.
+
+Bloque 7 depende de Bloques 2, 3, 4, 5 y 6.
+
+Bloque 8 depende de Bloques 3, 4 y 6.
+
+Bloque 9 depende de Bloques 6, 7 y 8.
+
+Bloque 10 depende de Bloques 3, 4, 6 y 8.
+
+Bloque 11 depende de Bloques 4, 6, 7 y 9.
+
+Bloque 12 depende de Bloques 3, 4, 5 y 6.
+
+Bloque 13 depende de Bloques 3, 4, 6, 8 y 10.
+
+Bloque 14 depende de Bloques 3, 4, 5 y 6.
+
+Bloque 15 depende de Bloques 10, 13 y 14.
+
+Bloque 16 depende de Bloques 12, 14 y 15.
+
+Bloque 17 depende de Bloques 5, 12, 14 y 15.
+
+Bloque 18 depende de Bloques 3, 4, 6 y 12.
+
+Bloque 19 depende de Bloques 10, 13, 15, 16 y 18.
+
+Bloque 20 depende de Bloques 3, 4, 6, 10 y 12.
+
+Bloque 21 depende de Bloques 4, 12, 20 y 23 parcialmente si se quiere integración de sesión; para modelo base basta con Bloques 4, 12 y 20.
+
+Bloque 22 depende de Bloques 4, 12, 18 y 20.
+
+Bloque 23 depende de Bloques 20, 21 y 22.
+
+Bloque 24 depende de Bloque 23.
+
+Bloque 25 depende de Bloques 23 y 24.
+
+Bloque 26 depende de Bloques 5, 9, 20, 21, 23 y 25.
+
+Bloque 27 depende de Bloques 15, 16, 10 y 13.
+
+Bloque 28 depende de Bloques 11, 12, 18, 21, 22 y 23.
+
+Bloque 29 depende de todos los bloques estructurales previos.
+
+Bloque 30 depende de todos los bloques previos.
+
+---
+
+# Reglas para agentes de desarrollo
+
+## Regla 1: no implementar funcionalidades posteriores antes de sus contratos base
+
+Un agente no deberá implementar IA generativa, importación documental, grafo avanzado, modo en vivo, exportación o consistencia avanzada si los contratos de entidad, relación, fuente, historial, candidato y consulta no están cerrados.
+
+## Regla 2: no crear modelos paralelos
+
+Un agente no deberá crear modelos separados de personaje, localización, facción, evento, secreto, pista o sesión si estos pueden expresarse como entidades, relaciones o extensiones del core.
+
+## Regla 3: no escribir directamente sobre persistencia desde UI
+
+Toda modificación deberá pasar por servicios de aplicación o comandos de dominio.
+
+## Regla 4: no aceptar automáticamente resultados IA
+
+Todo resultado IA deberá entrar como candidato, incidencia, sugerencia o informe, salvo funciones explícitamente marcadas como no persistentes.
+
+## Regla 5: no importar directamente a canon
+
+Todo contenido extraído de documentos deberá pasar por bandeja de revisión.
+
+## Regla 6: no romper trazabilidad
+
+Toda operación que cree, modifique, archive, fusione, acepte, rechace o revele información relevante deberá registrar fuente o evento de historial.
+
+## Regla 7: no acoplar grafo a dominio
+
+El grafo deberá consumir entidades y relaciones, no definirlas.
+
+## Regla 8: no filtrar secretos
+
+Toda salida pública, exportación, vista de jugador o consulta IA pública deberá respetar estados de visibilidad.
+
+## Regla 9: no hacer obligatoria una metodología narrativa
+
+Marcos, capas, plantillas y estructuras deberán ser opcionales y configurables.
+
+## Regla 10: no asumir proveedor IA único
+
+La arquitectura IA deberá abstraer proveedor, modelo y formato de respuesta.
+
+---
+
+# Declaración final de implementación
+
+La aplicación deberá desarrollarse siguiendo una progresión de base a especialización:
+
+Primero se construye el proyecto, la persistencia y el modelo de dominio.
+
+Después se construyen entidades, relaciones, fuentes, historial y consultas.
+
+Después se construyen interfaces básicas, personalización, galerías y grafo.
+
+Después se construyen consistencia, marcos y candidatos.
+
+Después se incorpora IA sobre contratos seguros.
+
+Después se incorpora importación documental.
+
+Después se incorporan temporalidad, escritura, campaña de rol, secretos, pistas, facciones, sesiones, modo vivo y post-sesión.
+
+Finalmente se incorporan exportación, visualizaciones avanzadas, IA profunda, robustez y cierre funcional.
+
+Cualquier desviación de este orden deberá justificarse porque no compromete el modelo base, no introduce acoplamiento indebido, no crea modelos paralelos, no reduce trazabilidad y no obliga a refactors estructurales previsibles.
+
+La prioridad contractual será siempre preservar el núcleo de conocimiento narrativo estructurado, trazable, extensible y controlado por el usuario.
