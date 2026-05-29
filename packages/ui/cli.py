@@ -222,6 +222,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_gallery_commands(sub)
 
+    # ── domain ──────────────────────────────────────────────────────
+    from packages.ui.cli_domain import register_domain_commands
+
+    register_domain_commands(sub)
+
+    # ── layer ───────────────────────────────────────────────────────
+    from packages.ui.cli_layer import register_layer_commands
+
+    register_layer_commands(sub)
+
     return parser
 
 
@@ -295,6 +305,20 @@ def main() -> None:
         from packages.ui.cli_gallery import handle_gallery_command
 
         handle_gallery_command(args, session)
+        return
+
+    # ── Domain commands ─────────────────────────────────────────────
+    if args.command == "domain":
+        from packages.ui.cli_domain import handle_domain_command
+
+        handle_domain_command(args, session)
+        return
+
+    # ── Layer commands ──────────────────────────────────────────────
+    if args.command == "layer":
+        from packages.ui.cli_layer import handle_layer_command
+
+        handle_layer_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)

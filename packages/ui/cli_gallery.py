@@ -83,6 +83,11 @@ def _add_query_flags(parser: argparse.ArgumentParser, *, exclude: set[str] | Non
         parser.add_argument("--custom-type-id", default=None, help="Filter by custom entity type ID")
     if "source_id" not in ex:
         parser.add_argument("--source-id", default=None, help="Filter by source ID")
+    if "domain_id" not in ex:
+        parser.add_argument("--domain-id", default=None,
+                            help="Filter by narrative domain (mundo/historia/campaña/compartido/sin_asignar)")
+    if "layer_id" not in ex:
+        parser.add_argument("--layer-id", default=None, help="Filter by world layer ID")
     # ── sort & pagination ──
     parser.add_argument(
         "--sort", default="name",
@@ -182,6 +187,8 @@ def _run_gallery(
         layer=ly,
         custom_type_id=cid,
         source_id=sid,
+        domain_id=getattr(args, "domain_id", None),
+        layer_id=getattr(args, "layer_id", None),
         sort_by=_sort_key_for(args.sort),
         sort_desc=args.sort_desc,
         limit=args.limit,

@@ -79,6 +79,16 @@ def register_relation_commands(subparsers: Any) -> None:
     p_rmf.add_argument("relation_id", help="Relation ID")
     p_rmf.add_argument("field_id", help="Field definition ID")
 
+    # relation assign-layer <id> <layer-id>
+    p_al = rel_subs.add_parser("assign-layer", help="Assign a world layer")
+    p_al.add_argument("id", help="Relation ID")
+    p_al.add_argument("layer_id", help="World layer ID (e.g. layer_geografia)")
+
+    # relation remove-layer <id> <layer-id>
+    p_rl = rel_subs.add_parser("remove-layer", help="Remove a world layer")
+    p_rl.add_argument("id", help="Relation ID")
+    p_rl.add_argument("layer_id", help="World layer ID")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -131,6 +141,10 @@ def handle_relation_command(args: argparse.Namespace, session: SessionContext) -
         _cmd_set_field(args, session)
     elif cmd == "remove-field":
         _cmd_remove_field(args, session)
+    elif cmd == "assign-layer":
+        _cmd_assign_layer(args, session)
+    elif cmd == "remove-layer":
+        _cmd_remove_layer(args, session)
     else:
         print(f"error: Unknown relation command '{cmd}'", file=sys.stderr)
         sys.exit(1)
@@ -334,6 +348,17 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
             print(f"Causality:    {r.causality}")
         if hasattr(r, "validity_conditions") and r.validity_conditions:
             print(f"Validity:     {', '.join(r.validity_conditions)}")
+        if hasattr(r, "layer_ids") and r.layer_ids:
+            from packages.application.world_layer_service import WorldLayerService
+            wls = WorldLayerService(ps)
+            resolved = []
+            for lid in r.layer_ids:
+                lr = wls.get_layer(lid)
+                if isinstance(lr, __import__('packages.domain.result', fromlist=['Ok']).Ok):
+                    resolved.append(lr.value.name)
+                else:
+                    resolved.append(lid)
+            print(f"Layers:       {', '.join(resolved)}")
 
     # --- shared fields ---
     if hasattr(r, "custom_relation_type_id") and r.custom_relation_type_id:
@@ -447,3 +472,37 @@ def _cmd_remove_field(args: argparse.Namespace, session: SessionContext) -> None
         print(f"error: Field removed but save failed: {save_result.error}", file=sys.stderr)
         sys.exit(1)
     print(f"Custom field '{args.field_id}' removed from relation '{args.relation_id}'")
+
+
+def _cmd_assign_layer(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = rs.assign_layer(args.id, args.layer_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Layer assigned but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Layer '{args.layer_id}' assigned to relation '{args.id}'")
+
+
+def _cmd_remove_layer(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = rs.remove_layer(args.id, args.layer_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Layer removed but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Layer '{args.layer_id}' removed from relation '{args.id}'")

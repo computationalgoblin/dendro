@@ -62,6 +62,8 @@ def register_entity_commands(subparsers: Any) -> None:
     p_list.add_argument("--layer", default=None, help="Filter by layer")
     p_list.add_argument("--custom-type-id", default=None, help="Filter by custom entity type")
     p_list.add_argument("--source-id", default=None, help="Filter by source")
+    p_list.add_argument("--domain-id", default=None, help="Filter by narrative domain (mundo/historia/campaña/compartido/sin_asignar)")
+    p_list.add_argument("--layer-id", default=None, help="Filter by world layer ID")
     p_list.add_argument(
         "--sort", default="name",
         choices=["name", "updated_at", "created_at", "type", "canon", "certainty", "importance"],
@@ -126,6 +128,26 @@ def register_entity_commands(subparsers: Any) -> None:
     p_es = entity_subs.add_parser("sources", help="Show sources of an entity")
     p_es.add_argument("id", help="Entity ID")
 
+    # entity assign-domain <id> <domain>
+    p_ad = entity_subs.add_parser("assign-domain", help="Assign a narrative domain")
+    p_ad.add_argument("id", help="Entity ID")
+    p_ad.add_argument("domain", help="Domain (mundo, historia, campaña, compartido, sin_asignar)")
+
+    # entity remove-domain <id> <domain>
+    p_rd = entity_subs.add_parser("remove-domain", help="Remove a narrative domain")
+    p_rd.add_argument("id", help="Entity ID")
+    p_rd.add_argument("domain", help="Domain to remove")
+
+    # entity assign-layer <id> <layer-id>
+    p_al = entity_subs.add_parser("assign-layer", help="Assign a world layer")
+    p_al.add_argument("id", help="Entity ID")
+    p_al.add_argument("layer_id", help="World layer ID (e.g. layer_geografia)")
+
+    # entity remove-layer <id> <layer-id>
+    p_rl = entity_subs.add_parser("remove-layer", help="Remove a world layer")
+    p_rl.add_argument("id", help="Entity ID")
+    p_rl.add_argument("layer_id", help="World layer ID")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,6 +209,14 @@ def handle_entity_command(args: argparse.Namespace, session: SessionContext) -> 
         _cmd_history(args, session)
     elif cmd == "sources":
         _cmd_sources(args, session)
+    elif cmd == "assign-domain":
+        _cmd_assign_domain(args, session)
+    elif cmd == "remove-domain":
+        _cmd_remove_domain(args, session)
+    elif cmd == "assign-layer":
+        _cmd_assign_layer(args, session)
+    elif cmd == "remove-layer":
+        _cmd_remove_layer(args, session)
     else:
         print(f"error: Unknown entity command '{cmd}'", file=sys.stderr)
         sys.exit(1)
@@ -304,6 +334,8 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
         layer=args.layer,
         custom_type_id=args.custom_type_id,
         source_id=args.source_id,
+        domain_id=getattr(args, "domain_id", None),
+        layer_id=getattr(args, "layer_id", None),
         sort_by=sort_map.get(args.sort, args.sort),
         sort_desc=args.sort_desc,
         limit=args.limit,
@@ -508,6 +540,24 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
         print(f"Tags:         {', '.join(e.tags)}")
     if e.layers:
         print(f"Layers:       {', '.join(e.layers)}")
+
+    # --- extended-only: domain_ids and layer_ids (Bloque 10) ---
+    if args.extended:
+        if e.domain_ids:
+            print(f"Domain (narr): {', '.join(e.domain_ids)}")
+        if e.layer_ids:
+            from packages.application.world_layer_service import WorldLayerService
+            from packages.domain.result import Ok as ROk
+            wls = WorldLayerService(ps)
+            resolved = []
+            for lid in e.layer_ids:
+                lr = wls.get_layer(lid)
+                if isinstance(lr, ROk):
+                    resolved.append(lr.value.name)
+                else:
+                    resolved.append(lid)
+            print(f"Layers (mundo): {', '.join(resolved)}")
+
     if e.custom_fields:
         print(f"Custom fields:")
         for cf in e.custom_fields:
@@ -755,3 +805,71 @@ def _cmd_sources(args: argparse.Namespace, session: SessionContext) -> None:
     for s in sources:
         st = s.source_type.value if hasattr(s, "source_type") else "?"
         print(f"  {s.id}  {s.name} ({st})")
+
+
+def _cmd_assign_domain(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = es.assign_domain(args.id, args.domain)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Domain assigned but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Domain '{args.domain}' assigned to entity '{args.id}'")
+
+
+def _cmd_remove_domain(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = es.remove_domain(args.id, args.domain)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Domain removed but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Domain '{args.domain}' removed from entity '{args.id}'")
+
+
+def _cmd_assign_layer(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = es.assign_layer(args.id, args.layer_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Layer assigned but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Layer '{args.layer_id}' assigned to entity '{args.id}'")
+
+
+def _cmd_remove_layer(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = es.remove_layer(args.id, args.layer_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Layer removed but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Layer '{args.layer_id}' removed from entity '{args.id}'")
