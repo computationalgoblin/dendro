@@ -168,12 +168,13 @@ class TestProjectStoreV2:
         p.project_metadata.author = "Alice"
         p.metadata["custom"] = "val"
         p.entities.append(NarrativeEntity(name="Orc", entity_type=EntityType.CRIATURA))
-        from packages.domain.source_history import Source, HistoryEntry
+        from packages.domain.source_history import Source, HistoryEntry, HistoryEventType
 
         p.relations.append(NarrativeRelation(source_id="x", target_id="y"))
         p.sources.append(Source(name="src1"))
         p.history.append(HistoryEntry(event_type=HistoryEventType.CREACION_ENTIDAD))
-        p.issues.append("issue1")
+        from packages.domain.candidate_issue import Issue
+        p.issues.append(Issue(title="issue1"))
 
         path = tmp_path / "full.json"
         save_result = store.save(p, path)
@@ -203,15 +204,19 @@ class TestProjectStoreV2:
         assert len(p2.sources) == 1
         assert p2.sources[0].name == "src1"
         assert len(p2.history) == 1
-        assert p2.issues == ["issue1"]
+        assert len(p2.issues) == 1
+        assert p2.issues[0].title == "issue1"
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType
+        from packages.domain.relation import NarrativeRelation
         from packages.domain.source_history import HistoryEventType, Source, HistoryEntry
 
         store = ProjectStore()
         p = Project(name="Full")
         p.entities = [NarrativeEntity(name="E1"), NarrativeEntity(name="E2")]
+        p.relations = [NarrativeRelation(source_id="a", target_id="b"),
+                       NarrativeRelation(source_id="c", target_id="d")]
 
         path = tmp_path / "colls.json"
         store.save(p, path)

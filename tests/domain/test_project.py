@@ -265,6 +265,7 @@ class TestToDict:
             "general", "tone", "genre", "realism", "ai",
             "visibility", "export",
             "entities", "relations", "sources", "history", "issues",
+            "candidates",
         }
         assert set(d.keys()) == expected_keys
 
