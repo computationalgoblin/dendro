@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B08-T02: upgraded to v6)
-CURRENT_SCHEMA_VERSION: int = 6
+# Current schema version for new projects (B10-T02: upgraded to v7)
+CURRENT_SCHEMA_VERSION: int = 7
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 6
+MAX_SUPPORTED_VERSION: int = 7
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +331,159 @@ def _apply_migration_v5_to_v6(data: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Migration: v6 → v7
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v6 data to v7 structure (Bloque 10 — domains, layers, advanced config).
+
+    Adds the three new project-level collections (domains, world_layers,
+    advanced_config) and the individual entity/relation fields (domain_ids,
+    layer_ids).  Purely structural — NO data is inferred from legacy fields
+    (``domain: str``, ``layers: list[str]``).
+
+    Args:
+        data: v6 project data dictionary.
+
+    Returns:
+        New dictionary with v7 collections and fields added.
+    """
+    migrated: dict[str, Any] = dict(data)
+
+    # ── Project-level ──
+
+    # 5 domains base (§10.2)
+    migrated.setdefault("domains", [
+        "mundo", "historia", "campaña", "compartido", "sin_asignar",
+    ])
+
+    # 16 predefined world layers (§10.3) — imported lazily to avoid
+    # circular dependency at module level
+    if "world_layers" not in migrated:
+        from packages.domain.world_layer import default_world_layers
+        migrated["world_layers"] = [wl.to_dict() for wl in default_world_layers()]
+
+    # Advanced config (§10.4) — all defaults
+    if "advanced_config" not in migrated:
+        from packages.domain.advanced_config import AdvancedProjectConfig
+        migrated["advanced_config"] = AdvancedProjectConfig().to_dict()
+
+    # ── Entity-level ──
+    raw_entities = migrated.get("entities")
+    if isinstance(raw_entities, list):
+        for entity in raw_entities:
+            if isinstance(entity, dict):
+                entity.setdefault("domain_ids", [])
+                entity.setdefault("layer_ids", [])
+
+    # ── Relation-level ──
+    raw_relations = migrated.get("relations")
+    if isinstance(raw_relations, list):
+        for relation in raw_relations:
+            if isinstance(relation, dict):
+                relation.setdefault("layer_ids", [])
+
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# v7 validations: domains, world_layers, advanced_config
+# ---------------------------------------------------------------------------
+
+
+def validate_domains(domains: Any) -> list[str]:
+    """Validate project.domains. Returns list of error messages (empty = valid).
+
+    Checks:
+    - Is a list (not None, not a dict, not something else).
+    - Not empty.
+    - No duplicate values.
+    """
+    errors: list[str] = []
+
+    if not isinstance(domains, list):
+        return [f"domains must be a JSON array, got {type(domains).__name__}"]
+
+    if len(domains) == 0:
+        errors.append("domains list is empty; at least one domain is required")
+
+    seen: set[str] = set()
+    for domain in domains:
+        key = str(domain)
+        if key in seen:
+            errors.append(f"Duplicate domain: '{key}'")
+        seen.add(key)
+
+    return errors
+
+
+def validate_world_layers(layers: Any) -> list[str]:
+    """Validate project.world_layers. Returns list of error messages.
+
+    Checks:
+    - Is a list.
+    - Each item has ``id`` and ``name``.
+    - No duplicate IDs.
+    """
+    errors: list[str] = []
+
+    if not isinstance(layers, list):
+        return [f"world_layers must be a JSON array, got {type(layers).__name__}"]
+
+    seen_ids: set[str] = set()
+    for idx, layer in enumerate(layers):
+        if not isinstance(layer, dict):
+            errors.append(f"world_layers[{idx}] is not a JSON object")
+            continue
+
+        lid = layer.get("id")
+        if not lid:
+            errors.append(f"world_layers[{idx}] is missing required key: 'id'")
+            continue
+
+        if not layer.get("name"):
+            errors.append(f"world_layers[{idx}] ('{lid}') is missing required key: 'name'")
+
+        if lid in seen_ids:
+            errors.append(f"Duplicate world_layer id: '{lid}'")
+        seen_ids.add(lid)
+
+    return errors
+
+
+def validate_advanced_config(config: Any) -> list[str]:
+    """Validate project.advanced_config structure. Returns list of errors.
+
+    Checks:
+    - Is a dict (when present).
+    - Missing optional fields are acceptable (defaults apply on load).
+    """
+    if not isinstance(config, dict):
+        return [f"advanced_config must be a JSON object, got {type(config).__name__}"]
+    return []
+
+
+def validate_entity_domain_ids(
+    domain_ids: list[str],
+    valid_domains: set[str],
+) -> list[str]:
+    """Validate an entity's domain_ids against the project's known domains.
+
+    Returns a list of *warnings* (not blocking errors).  Unknown domains
+    produce warnings so custom domains added later don't break loading.
+    """
+    warnings: list[str] = []
+    for did in domain_ids:
+        if did not in valid_domains:
+            warnings.append(
+                f"Entity references unknown domain '{did}'; "
+                f"not in project domains {sorted(valid_domains)}"
+            )
+    return warnings
+
+
+# ---------------------------------------------------------------------------
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -356,7 +509,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     # Config sections must be dicts when present
     config_sections = (
         "general", "tone", "genre", "realism", "ai",
-        "visibility", "export", "project_metadata",
+        "visibility", "export", "project_metadata", "advanced_config",
     )
     for section in config_sections:
         if section in data and not isinstance(data[section], dict):
@@ -369,6 +522,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     collection_fields = (
         "entities", "relations", "sources", "history", "issues",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
+        "domains", "world_layers",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
