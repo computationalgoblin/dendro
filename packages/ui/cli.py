@@ -187,9 +187,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_project_commands(sub)
 
-    # ── entity, relation, history, source (B07-T02 / B07-T03) ────────────
-    # Registered by later tickets — stubbed for now.
-    sub.add_parser("entity", help="Entity commands — coming in B07-T02")
+    # ── entity ────────────────────────────────────────────────────────────
+    from packages.ui.cli_entity import register_entity_commands
+
+    register_entity_commands(sub)
+
+    # ── relation, history, source (B07-T03) ───────────────────────────────
     sub.add_parser("relation", help="Relation commands — coming in B07-T03")
     sub.add_parser("history", help="History commands — coming in B07-T03")
     sub.add_parser("source", help="Source commands — coming in B07-T03")
@@ -220,8 +223,15 @@ def main() -> None:
         handle_project_command(args, session)
         return
 
-    # ── Placeholder commands (B07-T02 / B07-T03) ─────────────────────────
-    if args.command in ("entity", "relation", "history", "source"):
+    # ── Entity commands ───────────────────────────────────────────────────
+    if args.command == "entity":
+        from packages.ui.cli_entity import handle_entity_command
+
+        handle_entity_command(args, session)
+        return
+
+    # ── Placeholder commands (B07-T03) ────────────────────────────────────
+    if args.command in ("relation", "history", "source"):
         print(
             f"error: '{args.command}' commands not yet implemented "
             f"(coming in B07-T02 / B07-T03).",
