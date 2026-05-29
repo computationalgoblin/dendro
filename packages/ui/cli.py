@@ -207,6 +207,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_source_commands(sub)
 
+    # ── custom-type ─────────────────────────────────────────────────
+    from packages.ui.cli_custom_type import register_custom_type_commands
+
+    register_custom_type_commands(sub)
+
+    # ── custom-field ────────────────────────────────────────────────
+    from packages.ui.cli_custom_field import register_custom_field_commands
+
+    register_custom_field_commands(sub)
+
     return parser
 
 
@@ -259,6 +269,20 @@ def main() -> None:
         from packages.ui.cli_source import handle_source_command
 
         handle_source_command(args, session)
+        return
+
+    # ── Custom type commands ────────────────────────────────────────────
+    if args.command == "custom-type":
+        from packages.ui.cli_custom_type import handle_custom_type_command
+
+        handle_custom_type_command(args, session)
+        return
+
+    # ── Custom field commands ───────────────────────────────────────────
+    if args.command == "custom-field":
+        from packages.ui.cli_custom_field import handle_custom_field_command
+
+        handle_custom_field_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)

@@ -60,6 +60,17 @@ def register_relation_commands(subparsers: Any) -> None:
     p_show = rel_subs.add_parser("show", help="Show relation details")
     p_show.add_argument("id", help="Relation ID")
 
+    # relation set-field <relation-id> <field-id> <value>
+    p_setf = rel_subs.add_parser("set-field", help="Set a custom field value")
+    p_setf.add_argument("relation_id", help="Relation ID")
+    p_setf.add_argument("field_id", help="Field definition ID")
+    p_setf.add_argument("value", help="Value")
+
+    # relation remove-field <relation-id> <field-id>
+    p_rmf = rel_subs.add_parser("remove-field", help="Remove a custom field value")
+    p_rmf.add_argument("relation_id", help="Relation ID")
+    p_rmf.add_argument("field_id", help="Field definition ID")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,6 +119,10 @@ def handle_relation_command(args: argparse.Namespace, session: SessionContext) -
         _cmd_list(args, session)
     elif cmd == "show":
         _cmd_show(args, session)
+    elif cmd == "set-field":
+        _cmd_set_field(args, session)
+    elif cmd == "remove-field":
+        _cmd_remove_field(args, session)
     else:
         print(f"error: Unknown relation command '{cmd}'", file=sys.stderr)
         sys.exit(1)
@@ -260,4 +275,72 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
         print(f"Direction:    {r.direction}")
     if r.description:
         print(f"Description:  {r.description}")
+    if hasattr(r, "custom_relation_type_id") and r.custom_relation_type_id:
+        print(f"Custom type:  {r.custom_relation_type_id}")
+    if hasattr(r, "custom_fields") and r.custom_fields:
+        print(f"Custom fields:")
+        for cf in r.custom_fields:
+            print(f"  {cf.field_id}: {cf.value}")
     print("═" * 55)
+
+
+def _relation_convert_value(raw: str) -> Any:
+    """Convert a CLI string value to the best typed equivalent."""
+    import json as _json
+    lowered = raw.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if raw.startswith("{") or raw.startswith("["):
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            pass
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
+
+def _cmd_set_field(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, *_ = _bootstrap_services(project_path)
+    from packages.application.custom_type_service import CustomTypeService
+    cts = CustomTypeService(project_service=ps)
+
+    value = _relation_convert_value(args.value)
+
+    result = rs.set_custom_field(
+        args.relation_id, args.field_id, value, custom_type_service=cts,
+    )
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Field set but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Custom field '{args.field_id}' set on relation '{args.relation_id}'")
+
+
+def _cmd_remove_field(args: argparse.Namespace, session: SessionContext) -> None:
+    from packages.application.custom_type_service import CustomTypeService
+
+    project_path = require_project_path(args, session)
+    ps, es, rs, *_ = _bootstrap_services(project_path)
+
+    result = rs.remove_custom_field(args.relation_id, args.field_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Field removed but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Custom field '{args.field_id}' removed from relation '{args.relation_id}'")

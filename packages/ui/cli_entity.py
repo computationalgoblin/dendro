@@ -72,6 +72,17 @@ def register_entity_commands(subparsers: Any) -> None:
         help="Exclude private notes from search",
     )
 
+    # entity set-field <entity-id> <field-id> <value>
+    p_setf = entity_subs.add_parser("set-field", help="Set a custom field value")
+    p_setf.add_argument("entity_id", help="Entity ID")
+    p_setf.add_argument("field_id", help="Field definition ID")
+    p_setf.add_argument("value", help="Value")
+
+    # entity remove-field <entity-id> <field-id>
+    p_rmf = entity_subs.add_parser("remove-field", help="Remove a custom field value")
+    p_rmf.add_argument("entity_id", help="Entity ID")
+    p_rmf.add_argument("field_id", help="Field definition ID")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -121,6 +132,10 @@ def handle_entity_command(args: argparse.Namespace, session: SessionContext) -> 
         _cmd_show(args, session)
     elif cmd == "search":
         _cmd_search(args, session)
+    elif cmd == "set-field":
+        _cmd_set_field(args, session)
+    elif cmd == "remove-field":
+        _cmd_remove_field(args, session)
     else:
         print(f"error: Unknown entity command '{cmd}'", file=sys.stderr)
         sys.exit(1)
@@ -249,6 +264,65 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
         print(_entity_list_row(e, index=i))
 
 
+def _cmd_set_field(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+    from packages.application.custom_type_service import CustomTypeService
+    cts = CustomTypeService(project_service=ps)
+
+    value = _convert_field_value(args.value)
+
+    result = es.set_custom_field(
+        args.entity_id, args.field_id, value, custom_type_service=cts,
+    )
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Field set but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Custom field '{args.field_id}' set on entity '{args.entity_id}'")
+
+
+def _cmd_remove_field(args: argparse.Namespace, session: SessionContext) -> None:
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = es.remove_custom_field(args.entity_id, args.field_id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Field removed but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Custom field '{args.field_id}' removed from entity '{args.entity_id}'")
+
+
+def _convert_field_value(raw: str) -> Any:
+    """Convert a CLI string value to the best typed equivalent."""
+    import json as _json
+    lowered = raw.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if raw.startswith("{") or raw.startswith("["):
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            pass
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
 def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
     ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
@@ -281,6 +355,12 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
         print(f"Tags:         {', '.join(e.tags)}")
     if e.layers:
         print(f"Layers:       {', '.join(e.layers)}")
+    if e.custom_type_id:
+        print(f"Custom type:  {e.custom_type_id}")
+    if e.custom_fields:
+        print(f"Custom fields:")
+        for cf in e.custom_fields:
+            print(f"  {cf.field_id}: {cf.value}")
     print()
 
     # Relations
