@@ -107,6 +107,8 @@ class TestProjectStructure:
             "reglas-trabajo.md",
             "skills-map.md",
             "convenciones-errores.md",
+            "convencion-pruebas.md",
+            "limites-modulos.md",
             "perfiles",
         }
         found = {d.name for d in contracts.iterdir()
