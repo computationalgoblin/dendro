@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from packages.domain.project import Project
+from packages.domain.entity import NarrativeEntity
 from packages.domain.result import Error, Ok, Result
 from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
+    _apply_migration_v2_to_v3,
     detect_schema_version,
+    validate_project_entities,
     validate_project_structure,
     validate_schema_version,
 )
@@ -223,10 +226,14 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     if validation_error is not None:
         return Error(validation_error)
 
-    # Step 4: Migrate v1 → v2 (structural defaults only, no narrative data)
+    # Step 4: Migrate if needed
     if version == 1:
         data = _apply_migration_v1_to_v2(data)
-        # Update schema version in the migrated data
+        data["schema_version"] = 2
+        version = 2
+
+    if version == 2:
+        data = _apply_migration_v2_to_v3(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -323,3 +330,110 @@ class ProjectStore:
                 pass
         backups.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in backups]
+
+    # ------------------------------------------------------------------
+    # Entity operations
+    # ------------------------------------------------------------------
+
+    def add_entity(
+        self, project: Project, entity: NarrativeEntity, path: Path
+    ) -> Result[None, str]:
+        """Add an entity to the project and persist.
+
+        Args:
+            project: The project to add to.
+            entity: The entity to add.
+            path: File path to persist to.
+
+        Returns:
+            Ok(None) on success, Error on failure.
+        """
+        project.entities.append(entity)
+        return self.save(project, path)
+
+    def update_entity(
+        self, project: Project, entity: NarrativeEntity, path: Path
+    ) -> Result[None, str]:
+        """Replace an entity by id and persist.
+
+        Args:
+            project: The project containing the entity.
+            entity: The updated entity (matched by id).
+            path: File path to persist to.
+
+        Returns:
+            Ok(None) on success, Error if entity not found.
+        """
+        for i, existing in enumerate(project.entities):
+            if existing.id == entity.id:
+                project.entities[i] = entity
+                return self.save(project, path)
+        return Error(f"Entity with id '{entity.id}' not found in project")
+
+    def archive_entity(
+        self, project: Project, entity_id: str, path: Path
+    ) -> Result[None, str]:
+        """Soft-delete an entity by setting canon_state=ARCHIVED.
+
+        The entity remains in the list for traceability.
+
+        Args:
+            project: The project containing the entity.
+            entity_id: The entity to archive.
+            path: File path to persist to.
+
+        Returns:
+            Ok(None) on success, Error if entity not found.
+        """
+        from packages.domain.entity import CanonState
+
+        for entity in project.entities:
+            if entity.id == entity_id:
+                entity.canon_state = CanonState.ARCHIVADO
+                entity.touch()
+                return self.save(project, path)
+        return Error(f"Entity with id '{entity_id}' not found in project")
+
+    def restore_entity(
+        self, project: Project, entity_id: str, path: Path
+    ) -> Result[None, str]:
+        """Restore an archived entity to BORRADOR state.
+
+        Args:
+            project: The project containing the entity.
+            entity_id: The entity to restore.
+            path: File path to persist to.
+
+        Returns:
+            Ok(None) on success, Error if entity not found or not archived.
+        """
+        from packages.domain.entity import CanonState
+
+        for entity in project.entities:
+            if entity.id == entity_id:
+                if entity.canon_state != CanonState.ARCHIVADO:
+                    return Error(
+                        f"Entity '{entity_id}' is not archived "
+                        f"(current state: {entity.canon_state.value})"
+                    )
+                entity.canon_state = CanonState.BORRADOR
+                entity.touch()
+                return self.save(project, path)
+        return Error(f"Entity with id '{entity_id}' not found in project")
+
+    def find_entity(
+        self, project: Project, entity_id: str
+    ) -> Result[NarrativeEntity, str]:
+        """Find an entity by id in the project.
+
+        Args:
+            project: The project to search.
+            entity_id: The entity id to find.
+
+        Returns:
+            Ok(NarrativeEntity) on success, Error if not found.
+        """
+        for entity in project.entities:
+            if entity.id == entity_id:
+                return Ok(entity)
+        return Error(f"Entity with id '{entity_id}' not found in project")

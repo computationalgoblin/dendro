@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TypeVar
 
+from packages.domain.entity import NarrativeEntity
 from packages.domain.project_config import (
     AIConfig,
     ExportConfig,
@@ -92,7 +93,7 @@ class Project:
     export: ExportConfig = field(default_factory=ExportConfig)
 
     # Prepared collections (empty, for Bloque 3-6+)
-    entities: list = field(default_factory=list)
+    entities: list[NarrativeEntity] = field(default_factory=list)
     relations: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     history: list = field(default_factory=list)
@@ -160,7 +161,7 @@ class Project:
             "visibility": self._config_to_dict(self.visibility),
             "export": self._config_to_dict(self.export),
             # Prepared collections
-            "entities": list(self.entities),
+            "entities": [e.to_dict() for e in self.entities],
             "relations": list(self.relations),
             "sources": list(self.sources),
             "history": list(self.history),
@@ -222,7 +223,11 @@ class Project:
                 ExportConfig, data.get("export", {})
             ),
             # Prepared collections (all optional — empty list defaults)
-            entities=list(data.get("entities", [])),
+            entities=[
+                NarrativeEntity.from_dict(e)
+                for e in data.get("entities", [])
+                if isinstance(e, dict)
+            ],
             relations=list(data.get("relations", [])),
             sources=list(data.get("sources", [])),
             history=list(data.get("history", [])),

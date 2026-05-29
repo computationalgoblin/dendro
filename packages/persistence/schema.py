@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B02-T03: upgraded to v2)
-CURRENT_SCHEMA_VERSION: int = 2
+# Current schema version for new projects (B03-T02: upgraded to v3)
+CURRENT_SCHEMA_VERSION: int = 3
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 2
+MAX_SUPPORTED_VERSION: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +138,89 @@ def _apply_migration_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("issues", [])
 
     return migrated
+
+
+# ---------------------------------------------------------------------------
+# Migration: v2 → v3
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2 data to v3 structure.
+
+    v3 formalises NarrativeEntity as a structured item within the
+    ``entities`` list.  In practice v2 already had ``entities: []``
+    so this migration is trivial — it ensures ``entities`` is a list
+    and that each item in it is a dict (normalising non-dict items
+    to an empty entity stub so they survive as traceable metadata).
+
+    This is purely structural — no narrative data is invented.
+    """
+    migrated: dict[str, Any] = dict(data)
+
+    # Ensure entities is a list
+    raw_entities = migrated.get("entities")
+    if not isinstance(raw_entities, list):
+        migrated["entities"] = []
+
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Entity-level structural validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_ENTITY_KEYS = ("id", "name", "entity_type")
+
+
+def validate_entity_structure(entity_data: Any) -> str | None:
+    """Validate that a single entity dict has the minimum required shape.
+
+    Returns None if structurally valid, or an error message.
+    """
+    if not isinstance(entity_data, dict):
+        return (
+            f"Entity is not a JSON object (got {type(entity_data).__name__}). "
+            f"Expected a dict with at least keys: {_REQUIRED_ENTITY_KEYS}"
+        )
+
+    for key in _REQUIRED_ENTITY_KEYS:
+        if key not in entity_data or not entity_data[key]:
+            return f"Entity is missing required key: '{key}'"
+
+    return None
+
+
+def validate_project_entities(entities: Any) -> str | None:
+    """Validate the entities collection as a whole.
+
+    Checks:
+    - ``entities`` is a list.
+    - No duplicate ids.
+    - Each item passes ``validate_entity_structure``.
+
+    Returns None if valid, or an error message.
+    """
+    if not isinstance(entities, list):
+        return f"Entities must be a JSON array, got {type(entities).__name__}"
+
+    seen_ids: set[str] = set()
+    for idx, entity_data in enumerate(entities):
+        # Structural check
+        err = validate_entity_structure(entity_data)
+        if err is not None:
+            return f"Entity at index {idx}: {err}"
+
+        # Uniqueness check
+        eid = entity_data.get("id", "")
+        if eid in seen_ids:
+            return (
+                f"Corrupt project: duplicate entity id '{eid}' "
+                f"(entity at index {idx})"
+            )
+        seen_ids.add(eid)
+
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -27,10 +27,10 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 class TestSchemaVersionB02T03:
     def test_current_schema_is_v2(self):
-        assert CURRENT_SCHEMA_VERSION == 2
+        assert CURRENT_SCHEMA_VERSION == 3
 
     def test_max_supported_is_v2(self):
-        assert MAX_SUPPORTED_VERSION == 2
+        assert MAX_SUPPORTED_VERSION == 3
 
 
 class TestMigrationV1ToV2:
@@ -147,9 +147,11 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw["schema_version"] == 2
+        assert raw.get("schema_version") == 3
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
+        from packages.domain.entity import NarrativeEntity, EntityType
+
         store = ProjectStore()
         p = Project(name="Full", description="All fields")
         p.primary_language = "en"
@@ -163,7 +165,7 @@ class TestProjectStoreV2:
         p.export.export_format_preference = "pdf"
         p.project_metadata.author = "Alice"
         p.metadata["custom"] = "val"
-        p.entities.append({"name": "Orc"})
+        p.entities.append(NarrativeEntity(name="Orc", entity_type=EntityType.CRIATURA))
         p.relations.append("rel1")
         p.sources.append("src1")
         p.history.append("hist1")
@@ -190,16 +192,22 @@ class TestProjectStoreV2:
         assert p2.export.export_format_preference == "pdf"
         assert p2.project_metadata.author == "Alice"
         assert p2.metadata["custom"] == "val"
-        assert p2.entities == [{"name": "Orc"}]
+        assert len(p2.entities) == 1
+        assert p2.entities[0].name == "Orc"
         assert p2.relations == ["rel1"]
         assert p2.sources == ["src1"]
         assert p2.history == ["hist1"]
         assert p2.issues == ["issue1"]
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
+        from packages.domain.entity import NarrativeEntity
+
         store = ProjectStore()
         p = Project()
-        p.entities = [{"id": "e1"}, {"id": "e2"}]
+        p.entities = [
+            NarrativeEntity(name="E1"),
+            NarrativeEntity(name="E2"),
+        ]
         p.relations = ["r1", "r2"]
 
         path = tmp_path / "colls.json"
@@ -208,6 +216,8 @@ class TestProjectStoreV2:
         assert isinstance(loaded, Ok)
         p2 = loaded.value
         assert len(p2.entities) == 2
+        assert p2.entities[0].name == "E1"
+        assert p2.entities[1].name == "E2"
         assert len(p2.relations) == 2
 
 
@@ -343,7 +353,7 @@ class TestLoadStructuralErrors:
         store = ProjectStore()
         path = tmp_path / "badtype.json"
         path.write_text(json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "id": "x", "name": "bad",
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
@@ -357,7 +367,7 @@ class TestLoadStructuralErrors:
         store = ProjectStore()
         path = tmp_path / "badcoll.json"
         path.write_text(json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "id": "x", "name": "bad",
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
