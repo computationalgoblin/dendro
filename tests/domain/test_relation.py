@@ -83,7 +83,7 @@ class TestRelationCreation:
             source="Manual",
             created_at=now,
             updated_at=now,
-            conditions="while the treaty holds",
+            validity_conditions=["while the treaty holds"],
             custom_metadata={"key": "val"},
         )
         assert r.relation_type == RelationType.ES_ALIADO_DE
@@ -108,7 +108,7 @@ class TestSerialisation:
             causality="spell",
             canon_state=CanonState.CANONICO,
             source="Written by DM",
-            conditions="breaks at dawn",
+            validity_conditions=["breaks at dawn"],
             custom_metadata={"notes": "important"},
         )
         d = r1.to_dict()
