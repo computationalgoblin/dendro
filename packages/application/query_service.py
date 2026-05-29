@@ -197,6 +197,8 @@ class QueryService:
         importance=None,
         custom_type_id: str | None = None,
         source_id: str | None = None,
+        domain_id: str | None = None,
+        layer_id: str | None = None,
         sort_by: str = "name",
         sort_desc: bool = False,
         limit: int = 50,
@@ -210,6 +212,8 @@ class QueryService:
         *canon_state* accepts a single value, a list (OR semantics), or None.
         *custom_type_id* filters by ``entity.custom_type_id``.
         *source_id* filters entities linked to a specific source.
+        *domain_id* filters by ``entity.domain_ids`` (new, §10).
+        *layer_id* filters by ``entity.layer_ids`` (new, §10).
         *sort_by* accepts: name, updated_at, created_at, entity_type,
           canon_state, certainty, importance.
         *sort_desc* reverses sort direction when True.
@@ -263,6 +267,12 @@ class QueryService:
                 return Error(source_entities.error)
             linked_ids = {e.id for e in source_entities.value}
             results = [e for e in results if e.id in linked_ids]
+
+        if domain_id is not None:
+            results = [e for e in results if domain_id in e.domain_ids]
+
+        if layer_id is not None:
+            results = [e for e in results if layer_id in e.layer_ids]
 
         if sort_by == "name":
             results.sort(key=lambda e: e.name.lower(), reverse=sort_desc)

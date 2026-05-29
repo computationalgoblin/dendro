@@ -511,5 +511,116 @@ class EntityService:
                 return Ok(list(e.custom_fields))
         return Error(f"Entity with id '{entity_id}' not found")
 
+    # ------------------------------------------------------------------
+    # Domains & Layers (Bloque 10)
+    # ------------------------------------------------------------------
+
+    def assign_domain(self, entity_id: str, domain: str) -> Result[NarrativeEntity, str]:
+        """Assign a narrative domain to an entity.
+
+        Validates that *domain* exists in ``project.domains``.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        if domain not in proj.value.domains:
+            return Error(
+                f"Invalid domain '{domain}'. "
+                f"Valid domains: {', '.join(proj.value.domains)}"
+            )
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                if domain not in e.domain_ids:
+                    e.domain_ids.append(domain)
+                    e.touch()
+                    proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def remove_domain(
+        self, entity_id: str, domain: str,
+    ) -> Result[NarrativeEntity, str]:
+        """Remove a domain from an entity. Idempotent."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                if domain in e.domain_ids:
+                    e.domain_ids.remove(domain)
+                    e.touch()
+                    proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def get_by_domain(
+        self, domain: str,
+    ) -> Result[list[NarrativeEntity], str]:
+        """Return all entities assigned to a given domain."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+        return Ok([e for e in proj.value.entities if domain in e.domain_ids])
+
+    def assign_layer(
+        self, entity_id: str, layer_id: str,
+    ) -> Result[NarrativeEntity, str]:
+        """Assign a world layer to an entity.
+
+        Validates that *layer_id* exists and is visible.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        # Validate layer exists and is visible
+        layer = None
+        for wl in proj.value.world_layers:
+            if wl.id == layer_id:
+                layer = wl
+                break
+        if layer is None:
+            return Error(f"World layer '{layer_id}' not found")
+        if not layer.is_visible:
+            return Error(f"World layer '{layer_id}' is hidden")
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                if layer_id not in e.layer_ids:
+                    e.layer_ids.append(layer_id)
+                    e.touch()
+                    proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def remove_layer(
+        self, entity_id: str, layer_id: str,
+    ) -> Result[NarrativeEntity, str]:
+        """Remove a world layer from an entity. Idempotent."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                if layer_id in e.layer_ids:
+                    e.layer_ids.remove(layer_id)
+                    e.touch()
+                    proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def get_by_layer(
+        self, layer_id: str,
+    ) -> Result[list[NarrativeEntity], str]:
+        """Return all entities assigned to a given world layer."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+        return Ok([e for e in proj.value.entities if layer_id in e.layer_ids])
+
 
 __all__ = ["EntityService"]

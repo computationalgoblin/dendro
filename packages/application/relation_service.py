@@ -540,5 +540,66 @@ class RelationService:
                 return Ok(list(r.custom_fields))
         return Error(f"Relation with id '{relation_id}' not found")
 
+    # ------------------------------------------------------------------
+    # Layers (Bloque 10)
+    # ------------------------------------------------------------------
+
+    def assign_layer(
+        self, relation_id: str, layer_id: str,
+    ) -> Result[NarrativeRelation, str]:
+        """Assign a world layer to a relation.
+
+        Validates that *layer_id* exists and is visible.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        # Validate layer exists and is visible
+        layer = None
+        for wl in proj.value.world_layers:
+            if wl.id == layer_id:
+                layer = wl
+                break
+        if layer is None:
+            return Error(f"World layer '{layer_id}' not found")
+        if not layer.is_visible:
+            return Error(f"World layer '{layer_id}' is hidden")
+
+        for r in proj.value.relations:
+            if r.id == relation_id:
+                if layer_id not in r.layer_ids:
+                    r.layer_ids.append(layer_id)
+                    r.touch()
+                    proj.value.touch()
+                return Ok(r)
+        return Error(f"Relation with id '{relation_id}' not found")
+
+    def remove_layer(
+        self, relation_id: str, layer_id: str,
+    ) -> Result[NarrativeRelation, str]:
+        """Remove a world layer from a relation. Idempotent."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for r in proj.value.relations:
+            if r.id == relation_id:
+                if layer_id in r.layer_ids:
+                    r.layer_ids.remove(layer_id)
+                    r.touch()
+                    proj.value.touch()
+                return Ok(r)
+        return Error(f"Relation with id '{relation_id}' not found")
+
+    def get_by_layer(
+        self, layer_id: str,
+    ) -> Result[list[NarrativeRelation], str]:
+        """Return all relations assigned to a given world layer."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+        return Ok([r for r in proj.value.relations if layer_id in r.layer_ids])
+
 
 __all__ = ["RelationService"]
