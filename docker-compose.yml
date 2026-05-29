@@ -9,6 +9,9 @@
       - .:/workspace
       - narrative_architect_node_modules:/workspace/node_modules
       - narrative_architect_pnpm_store:/root/.local/share/pnpm/store
+      - narrative_architect_root_local:/root/.local
+      - narrative_architect_root_config:/root/.config
+      - narrative_architect_root_cache:/root/.cache
     stdin_open: true
     tty: true
     environment:
@@ -17,3 +20,6 @@
 volumes:
   narrative_architect_node_modules:
   narrative_architect_pnpm_store:
+  narrative_architect_root_local:
+  narrative_architect_root_config:
+  narrative_architect_root_cache:
