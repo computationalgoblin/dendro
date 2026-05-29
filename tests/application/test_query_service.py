@@ -274,6 +274,105 @@ class TestCombinedQuery:
         assert isinstance(r, Error)
         assert "not found" in r.error.lower()
 
+    # --- B09-T03A: extended sort, sort_desc, offset ---
+
+    def test_sort_by_each_field(self, tmp_path: Path):
+        """Verify sort_by works for all 7 supported fields."""
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Zeta", "entity_type": "nota"}).value
+        e1.canon_state = CanonState.ARCHIVADO
+        e1.certainty_level = CertaintyLevel.CONFIRMADO
+        e1.narrative_importance = NarrativeImportance.ALTO
+        import time
+        time.sleep(0.01)
+        e2 = es.create_entity({"name": "Alpha", "entity_type": "personaje"}).value
+        e2.canon_state = CanonState.BORRADOR
+        e2.certainty_level = CertaintyLevel.DUDOSO
+        e2.narrative_importance = NarrativeImportance.CRITICO
+
+        # sort_by name ascending
+        r = qs.query(sort_by="name")
+        assert r.value[0].name == "Alpha"
+
+        # sort_by entity_type (nota < personaje alphabetically by value)
+        r = qs.query(sort_by="entity_type")
+        assert r.value[0].entity_type == EntityType.NOTA
+
+        # sort_by canon_state (archivado < borrador alphabetically by value)
+        r = qs.query(sort_by="canon_state")
+        assert r.value[0].canon_state == CanonState.ARCHIVADO
+
+        # sort_by certainty (confirmado < dudoso alphabetically by value)
+        r = qs.query(sort_by="certainty")
+        assert r.value[0].certainty_level == CertaintyLevel.CONFIRMADO
+
+        # sort_by importance (alto < critico alphabetically by value)
+        r = qs.query(sort_by="importance")
+        assert r.value[0].narrative_importance == NarrativeImportance.ALTO
+
+        # sort_by updated_at (newest first)
+        r = qs.query(sort_by="updated_at")
+        assert r.value[0].name == "Alpha"  # created last = newest
+
+        # sort_by created_at (oldest first)
+        r = qs.query(sort_by="created_at")
+        assert r.value[0].name == "Zeta"  # created first = oldest
+
+    def test_sort_desc_reverses_order(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "Alpha", "entity_type": "nota"})
+        es.create_entity({"name": "Zeta", "entity_type": "nota"})
+
+        r = qs.query(sort_by="name", sort_desc=True)
+        assert r.value[0].name == "Zeta"
+
+    def test_sort_by_invalid_errors(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "X", "entity_type": "nota"})
+
+        r = qs.query(sort_by="color")
+        assert isinstance(r, Error)
+        assert "sort" in r.error.lower()
+
+    def test_offset_basic_pagination(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        for name in ["A", "B", "C", "D", "E"]:
+            es.create_entity({"name": name, "entity_type": "nota"})
+
+        r = qs.query(sort_by="name", limit=2, offset=2)
+        assert len(r.value) == 2
+        names = [e.name for e in r.value]
+        assert names == ["C", "D"]
+
+    def test_offset_exceeds_total(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        es.create_entity({"name": "X", "entity_type": "nota"})
+
+        r = qs.query(offset=10, limit=10)
+        assert len(r.value) == 0
+
+    def test_four_filters_combined_and(self, tmp_path: Path):
+        qs, es, _, _, _, _ = _setup(tmp_path)
+        e1 = es.create_entity({"name": "Match", "entity_type": "personaje",
+                                "domain": "tierra_media"}).value
+        e1.tags.append("elfo")
+        e1.canon_state = CanonState.CANONICO
+        es.create_entity({"name": "WrongType", "entity_type": "localizacion",
+                           "domain": "tierra_media", "tags": ["elfo"],
+                           "canon_state": "canonico"})
+        es.create_entity({"name": "WrongDomain", "entity_type": "personaje",
+                           "domain": "otro", "tags": ["elfo"],
+                           "canon_state": "canonico"})
+
+        r = qs.query(
+            entity_type="personaje",
+            canon_state=CanonState.CANONICO,
+            tag="elfo",
+            domain="tierra_media",
+        )
+        assert len(r.value) == 1
+        assert r.value[0].name == "Match"
+
 
 # -----------------------------------------------------------------------
 # EntityCard

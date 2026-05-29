@@ -198,7 +198,9 @@ class QueryService:
         custom_type_id: str | None = None,
         source_id: str | None = None,
         sort_by: str = "name",
+        sort_desc: bool = False,
         limit: int = 50,
+        offset: int = 0,
     ) -> Result[list[NarrativeEntity], str]:
         """Combine multiple filters on entities.
 
@@ -208,6 +210,10 @@ class QueryService:
         *canon_state* accepts a single value, a list (OR semantics), or None.
         *custom_type_id* filters by ``entity.custom_type_id``.
         *source_id* filters entities linked to a specific source.
+        *sort_by* accepts: name, updated_at, created_at, entity_type,
+          canon_state, certainty, importance.
+        *sort_desc* reverses sort direction when True.
+        *offset* skips the first N results (pagination).
         """
         entities = self._all_entities()
         if isinstance(entities, Error):
@@ -259,11 +265,23 @@ class QueryService:
             results = [e for e in results if e.id in linked_ids]
 
         if sort_by == "name":
-            results.sort(key=lambda e: e.name.lower())
+            results.sort(key=lambda e: e.name.lower(), reverse=sort_desc)
         elif sort_by == "updated_at":
-            results.sort(key=lambda e: e.updated_at, reverse=True)
+            results.sort(key=lambda e: e.updated_at, reverse=not sort_desc)
+        elif sort_by == "created_at":
+            results.sort(key=lambda e: e.created_at, reverse=sort_desc)
+        elif sort_by == "entity_type":
+            results.sort(key=lambda e: e.entity_type.value, reverse=sort_desc)
+        elif sort_by == "canon_state":
+            results.sort(key=lambda e: e.canon_state.value, reverse=sort_desc)
+        elif sort_by == "certainty":
+            results.sort(key=lambda e: e.certainty_level.value, reverse=sort_desc)
+        elif sort_by == "importance":
+            results.sort(key=lambda e: e.narrative_importance.value, reverse=sort_desc)
+        else:
+            return Error(f"Invalid sort field '{sort_by}'")
 
-        return Ok(results[:limit])
+        return Ok(results[offset:offset + limit])
 
     # ------------------------------------------------------------------
     # Entity card (§6.5 #3)
