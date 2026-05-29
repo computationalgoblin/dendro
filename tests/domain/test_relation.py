@@ -63,7 +63,7 @@ class TestRelationCreation:
     def test_18_fields(self):
         r = NarrativeRelation(source_id="a", target_id="b")
         d = r.to_dict()
-        assert len(d) == 20, f"Expected 20, got {len(d)}: {list(d.keys())}"
+        assert len(d) == 21, f"Expected 21, got {len(d)}: {list(d.keys())}"
 
     def test_full_construction(self):
         now = datetime.now(timezone.utc)

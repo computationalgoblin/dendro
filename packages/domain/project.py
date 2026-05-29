@@ -20,6 +20,9 @@ from packages.domain.custom_types import (
     CustomRelationType,
 )
 from packages.domain.entity import NarrativeEntity
+from packages.domain.narrative_domain import NarrativeDomain
+from packages.domain.world_layer import WorldLayer, default_world_layers
+from packages.domain.advanced_config import AdvancedProjectConfig
 from packages.domain.project_config import (
     AIConfig,
     ExportConfig,
@@ -113,6 +116,17 @@ class Project:
     custom_field_definitions: list[CustomFieldDefinition] = field(default_factory=list)
     custom_relation_types: list[CustomRelationType] = field(default_factory=list)
 
+    # ── Domains, layers & advanced config (Bloque 10) ──
+    domains: list[str] = field(default_factory=lambda: [
+        NarrativeDomain.MUNDO.value,
+        NarrativeDomain.HISTORIA.value,
+        NarrativeDomain.CAMPANA.value,
+        NarrativeDomain.COMPARTIDO.value,
+        NarrativeDomain.SIN_ASIGNAR.value,
+    ])
+    world_layers: list[WorldLayer] = field(default_factory=default_world_layers)
+    advanced_config: AdvancedProjectConfig = field(default_factory=AdvancedProjectConfig)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -189,6 +203,10 @@ class Project:
             "custom_relation_types": [
                 crt.to_dict() for crt in self.custom_relation_types
             ],
+            # Domains, layers & advanced config (Bloque 10)
+            "domains": list(self.domains),
+            "world_layers": [wl.to_dict() for wl in self.world_layers],
+            "advanced_config": self.advanced_config.to_dict(),
         }
 
     @classmethod
@@ -276,4 +294,31 @@ class Project:
                 for crt in data.get("custom_relation_types", [])
                 if isinstance(crt, dict)
             ],
+            # Domains, layers & advanced config (Bloque 10)
+            **(
+                {"domains": _parse_str_list(data["domains"])}
+                if "domains" in data else {}
+            ),
+            **(
+                {"world_layers": [
+                    WorldLayer.from_dict(wl)
+                    for wl in data.get("world_layers", [])
+                    if isinstance(wl, dict)
+                ]}
+                if "world_layers" in data else {}
+            ),
+            **(
+                {"advanced_config": AdvancedProjectConfig.from_dict(
+                    data.get("advanced_config", {})
+                )}
+                if "advanced_config" in data else {}
+            ),
         )
+
+# ── Helpers ──
+
+def _parse_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return []
+

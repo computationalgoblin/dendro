@@ -156,6 +156,10 @@ class NarrativeEntity:
     layers: list[str] = field(default_factory=list)
     origin: str = ""
 
+    # --- Domains & layers — structured (Bloque 10) ---
+    domain_ids: list[str] = field(default_factory=list)
+    layer_ids: list[str] = field(default_factory=list)
+
     # --- Timestamps (14–15) ---
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
@@ -204,6 +208,8 @@ class NarrativeEntity:
             "domain": self.domain,
             "layers": list(self.layers),
             "origin": self.origin,
+            "domain_ids": list(self.domain_ids),
+            "layer_ids": list(self.layer_ids),
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "private_notes": self.private_notes,
@@ -244,6 +250,8 @@ class NarrativeEntity:
             domain=data.get("domain", ""),
             layers=_parse_list(data.get("layers")),
             origin=data.get("origin", ""),
+            domain_ids=_parse_list(data.get("domain_ids")),
+            layer_ids=_parse_list(data.get("layer_ids")),
             created_at=_parse_datetime(data.get("created_at")),
             updated_at=_parse_datetime(data.get("updated_at")),
             private_notes=data.get("private_notes", ""),

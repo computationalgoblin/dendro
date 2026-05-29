@@ -127,6 +127,9 @@ class NarrativeRelation:
     custom_relation_type_id: str | None = None
     custom_fields: list[Any] = field(default_factory=list)  # list[CustomFieldValue]
 
+    # --- Layers — structured (Bloque 10) ---
+    layer_ids: list[str] = field(default_factory=list)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -165,6 +168,7 @@ class NarrativeRelation:
                 )
                 for f in self.custom_fields
             ],
+            "layer_ids": list(self.layer_ids),
         }
 
     @classmethod
@@ -208,6 +212,7 @@ class NarrativeRelation:
                 CustomFieldValue.from_dict(f) if isinstance(f, dict) else f
                 for f in _parse_list(data.get("custom_fields"))
             ],
+            layer_ids=_parse_list(data.get("layer_ids")),
         )
 
 
