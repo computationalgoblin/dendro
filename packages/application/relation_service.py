@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, VisibilityState
 from packages.domain.relation import (
     NarrativeRelation,
@@ -470,6 +471,73 @@ class RelationService:
                     r.touch()
                     proj.value.touch()
                 return Ok(r)
+        return Error(f"Relation with id '{relation_id}' not found")
+
+    # ------------------------------------------------------------------
+    # Custom fields (Bloque 8)
+    # ------------------------------------------------------------------
+
+    def set_custom_field(
+        self, relation_id: str, field_id: str, value: Any,
+        custom_type_service: Any = None,
+    ) -> Result[NarrativeRelation, str]:
+        """Assign a custom field value to a relation."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        if custom_type_service is not None:
+            fd_result = custom_type_service.get_field_definition(field_id)
+            if isinstance(fd_result, Error):
+                return Error(fd_result.error)
+            fd = fd_result.value
+            if not fd.is_active:
+                return Error(f"Field definition '{field_id}' is inactive")
+            validation = custom_type_service._validate_field_value(fd, value)
+            if isinstance(validation, Error):
+                return Error(validation.error)
+
+        for r in proj.value.relations:
+            if r.id == relation_id:
+                cfv = CustomFieldValue(field_id=field_id, value=value)
+                r.custom_fields = [
+                    f for f in r.custom_fields if f.field_id != field_id
+                ]
+                r.custom_fields.append(cfv)
+                r.touch()
+                proj.value.touch()
+                return Ok(r)
+        return Error(f"Relation with id '{relation_id}' not found")
+
+    def remove_custom_field(
+        self, relation_id: str, field_id: str,
+    ) -> Result[NarrativeRelation, str]:
+        """Remove a custom field value from a relation."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for r in proj.value.relations:
+            if r.id == relation_id:
+                r.custom_fields = [
+                    f for f in r.custom_fields if f.field_id != field_id
+                ]
+                r.touch()
+                proj.value.touch()
+                return Ok(r)
+        return Error(f"Relation with id '{relation_id}' not found")
+
+    def get_custom_fields(
+        self, relation_id: str,
+    ) -> Result[list[CustomFieldValue], str]:
+        """Get all custom field values for a relation."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for r in proj.value.relations:
+            if r.id == relation_id:
+                return Ok(list(r.custom_fields))
         return Error(f"Relation with id '{relation_id}' not found")
 
 

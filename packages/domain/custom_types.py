@@ -115,7 +115,7 @@ class CustomEntityType:
     def from_dict(cls, data: dict[str, Any]) -> CustomEntityType:
         """Deserialize from a plain dict."""
         return cls(
-            id=data.get("id", ""),
+            id=data.get("id") or uuid.uuid4().hex[:12],
             name=data.get("name", ""),
             description=data.get("description", ""),
             base_category=data.get("base_category"),
@@ -194,7 +194,7 @@ class CustomFieldDefinition:
         ft_raw = data.get("field_type", "text_short")
         ft = FieldType(ft_raw) if isinstance(ft_raw, str) else ft_raw
         return cls(
-            id=data.get("id", ""),
+            id=data.get("id") or uuid.uuid4().hex[:12],
             name=data.get("name", ""),
             field_type=ft,
             description=data.get("description", ""),
@@ -267,7 +267,7 @@ class CustomRelationType:
     def from_dict(cls, data: dict[str, Any]) -> CustomRelationType:
         """Deserialize from a plain dict."""
         return cls(
-            id=data.get("id", ""),
+            id=data.get("id") or uuid.uuid4().hex[:12],
             name=data.get("name", ""),
             description=data.get("description", ""),
             default_direction=data.get("default_direction", "unidireccional"),

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import (
     CanonState,
     EntityType,
@@ -433,6 +434,81 @@ class EntityService:
                     e.touch()
                     proj.value.touch()
                 return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    # ------------------------------------------------------------------
+    # Custom fields (Bloque 8)
+    # ------------------------------------------------------------------
+
+    def set_custom_field(
+        self, entity_id: str, field_id: str, value: Any,
+        custom_type_service: Any = None,
+    ) -> Result[NarrativeEntity, str]:
+        """Assign a custom field value to an entity.
+
+        Validates the value against the field definition if
+        *custom_type_service* is provided.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        # Validate field definition exists
+        if custom_type_service is not None:
+            fd_result = custom_type_service.get_field_definition(field_id)
+            if isinstance(fd_result, Error):
+                return Error(fd_result.error)
+            fd = fd_result.value
+            if not fd.is_active:
+                return Error(f"Field definition '{field_id}' is inactive")
+            validation = custom_type_service._validate_field_value(
+                fd, value, self,
+            )
+            if isinstance(validation, Error):
+                return Error(validation.error)
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                cfv = CustomFieldValue(field_id=field_id, value=value)
+                # Replace existing value for same field_id
+                e.custom_fields = [
+                    f for f in e.custom_fields if f.field_id != field_id
+                ]
+                e.custom_fields.append(cfv)
+                e.touch()
+                proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def remove_custom_field(
+        self, entity_id: str, field_id: str,
+    ) -> Result[NarrativeEntity, str]:
+        """Remove a custom field value from an entity."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                e.custom_fields = [
+                    f for f in e.custom_fields if f.field_id != field_id
+                ]
+                e.touch()
+                proj.value.touch()
+                return Ok(e)
+        return Error(f"Entity with id '{entity_id}' not found")
+
+    def get_custom_fields(
+        self, entity_id: str,
+    ) -> Result[list[CustomFieldValue], str]:
+        """Get all custom field values for an entity."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        for e in proj.value.entities:
+            if e.id == entity_id:
+                return Ok(list(e.custom_fields))
         return Error(f"Entity with id '{entity_id}' not found")
 
 
