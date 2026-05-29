@@ -1,0 +1,213 @@
+# Evolución de esquema
+
+Este documento define la estrategia de versionado de esquema para los archivos
+de proyecto de narrative-architect. Aplica a la persistencia de proyectos
+(`ProjectStore`), migraciones futuras y compatibilidad hacia atrás.
+
+---
+
+## 1. Estado actual
+
+### Schema version: 1
+
+El proyecto actualmente usa **schema v1** para todos los archivos de proyecto.
+La versión actual y máxima soportada se definen en `packages/persistence/schema.py`:
+
+```python
+CURRENT_SCHEMA_VERSION: int = 1
+MAX_SUPPORTED_VERSION: int = 1
+```
+
+### Formato de archivo
+
+Los proyectos se guardan como **JSON** con un campo `schema_version` en la raíz:
+
+```json
+{
+    "schema_version": 1,
+    "id": "abc123def456",
+    "name": "Mi Proyecto",
+    "created_at": "2026-05-29T10:00:00+00:00",
+    "updated_at": "2026-05-29T10:00:00+00:00",
+    "metadata": {}
+}
+```
+
+### Detección y validación
+
+El sistema implementa dos funciones en `packages/persistence/schema.py`:
+
+- **`detect_schema_version(data)`**: extrae `schema_version` del JSON. Retorna 0 si no está presente o no es parseable.
+- **`validate_schema_version(version)`**: verifica que la versión esté entre 1 y `MAX_SUPPORTED_VERSION`. Retorna `None` si es válida, o un mensaje de error si no lo es.
+
+### Lectura de datos — flujo
+
+1. `_read_json()` — lee el archivo, parsea JSON.
+2. `detect_schema_version()` — extrae la versión del JSON.
+3. `validate_schema_version()` — valida que sea soportada.
+4. Si la versión es mayor que `MAX_SUPPORTED_VERSION`, se rechaza con un error claro.
+5. `Project.from_dict()` — deserializa según la versión detectada.
+
+### Escritura de datos — flujo
+
+1. `Project.to_dict()` — serializa el modelo a dict.
+2. `save_project_data()` — añade `schema_version` al dict.
+3. `_write_json_atomic()` — escritura segura: temp file → fsync → rename.
+
+---
+
+## 2. Estrategia de migraciones
+
+### Principios generales
+
+1. **Hacia adelante siempre.** Una migración transforma datos de versión N a N+1.
+   Nunca existen migraciones hacia atrás. Si se necesita abrir un archivo más nuevo
+   con una versión antigua del software, se rechaza con un mensaje claro pidiendo
+   actualizar la aplicación (no se intenta "adivinar" el formato).
+
+2. **Una versión por migración.** Cada schema version tiene exactamente una
+   migración que la produce. No hay migraciones que salten versiones.
+
+3. **Inmutabilidad de datos viejos.** Una migración no modifica el archivo original.
+   Produce un nuevo archivo con la nueva versión. El backup se genera antes de migrar.
+
+4. **Idempotencia.** Una migración aplicada dos veces sobre el mismo dato debe
+   producir el mismo resultado (check de version antes de aplicar).
+
+5. **Trazabilidad.** Toda migración debe ser registrada en el historial del proyecto
+   como un `HistoryEntry` (cuando exista ese módulo).
+
+### Infraestructura de migraciones (futuro)
+
+Cuando se necesite la primera migración real (v1 → v2), se implementará:
+
+```
+packages/persistence/
+├── schema.py                    # Versiones, detección, validación
+├── store.py                     # ProjectStore (save/load/exists)
+└── migrations/
+    ├── __init__.py              # Registry de migraciones
+    ├── registry.py              # Mapa version -> funcion migradora
+    └── v1_to_v2.py              # Primera migración real (cuando exista)
+```
+
+#### Registry (propuesta)
+
+```python
+# packages/persistence/migrations/registry.py
+
+MIGRATIONS: dict[int, Callable[[dict], Result[dict, str]]] = {
+    1: migrate_v1_to_v2,  # cuando exista
+    2: migrate_v2_to_v3,  # etc.
+}
+
+
+def run_migrations(
+    data: dict,
+    from_version: int,
+    to_version: int,
+) -> Result[dict, str]:
+    """Apply all migrations from from_version to to_version sequentially."""
+    current = from_version
+    data = dict(data)
+    while current < to_version:
+        next_version = current + 1
+        migrator = MIGRATIONS.get(current)
+        if migrator is None:
+            return Error(f"No migration found for v{current} -> v{next_version}")
+        result = migrator(data)
+        if is_error(result):
+            return Error(f"Migration v{current} -> v{next_version} failed: {unwrap_error(result)}")
+        data = unwrap(result)
+        data["schema_version"] = next_version
+        current = next_version
+    return Ok(data)
+```
+
+#### Carga con migración automática (propuesta)
+
+```python
+def load_with_migration(path: Path) -> Result[Project, str]:
+    data = load_project_data(path)  # puede fallar si version > MAX
+    
+    version = detect_schema_version(data)
+    if version == CURRENT_SCHEMA_VERSION:
+        return Project.from_dict(data)
+    
+    # Migrar automáticamente
+    result = run_migrations(data, version, CURRENT_SCHEMA_VERSION)
+    if is_error(result):
+        return Error(...)
+    
+    # Guardar versión migrada (con backup del original)
+    save_project_data(result.value, path)
+    return Project.from_dict(result.value)
+```
+
+### Cuándo crear una nueva versión de esquema
+
+Crear una nueva versión cuando:
+
+1. Se añaden **campos obligatorios** a un modelo existente.
+2. Se **renombra o elimina** un campo existente.
+3. Cambia el **formato de serialización** de un campo (ej: de string a objeto).
+4. Cambia la **estructura de colecciones** (ej: de dict a lista de objetos).
+5. Se **reorganiza** la jerarquía del JSON (ej: mover campos a sub-objetos).
+
+**No** crear nueva versión cuando:
+
+1. Se añaden campos opcionales (el default cubre la carga de versiones anteriores).
+2. Se añaden metadatos en el campo `metadata` existente.
+3. Se añaden colecciones vacías que no afectan a la estructura existente.
+
+### Reglas para escribir una migración
+
+1. La función recibe un `dict` con datos de la versión anterior.
+2. Retorna `Result[dict, str]` — Ok con los datos transformados, o Error.
+3. No modifica el dict de entrada (trabajar sobre una copia).
+4. La migración **no** toca el campo `schema_version` (el registry lo gestiona).
+5. Documentar en el docstring qué campos se añaden/eliminan/renombran.
+
+### Compatibilidad
+
+| Situación | Comportamiento |
+|-----------|---------------|
+| Versión = CURRENT_SCHEMA_VERSION | Carga normal, sin migración |
+| Versión < CURRENT_SCHEMA_VERSION | Migrar secuencialmente, guardar copia migrada |
+| Versión > MAX_SUPPORTED_VERSION | Rechazar con error: "actualice la aplicación" |
+| Versión = 0 o negativa | Rechazar con error: "formato no reconocido" |
+| Sin campo schema_version | Rechazar con error: "formato no reconocido" |
+
+---
+
+## 3. Procedimiento para añadir una nueva versión
+
+1. Incrementar `CURRENT_SCHEMA_VERSION` en `schema.py`.
+2. Incrementar `MAX_SUPPORTED_VERSION` si es necesario.
+3. Crear `packages/persistence/migrations/v{N}_to_v{N+1}.py` con la función migradora.
+4. Registrar la migración en el `registry.py`.
+5. Actualizar `Project.to_dict()` y `Project.from_dict()` para la nueva versión.
+6. Añadir tests:
+   - Datos v{N} cargan correctamente y migran a v{N+1}.
+   - Datos v{N+1} guardan y cargan sin migración.
+   - Datos con versión futura se rechazan.
+7. Documentar el cambio en este documento (sección 4. Historial de versiones).
+
+---
+
+## 4. Historial de versiones de esquema
+
+| Versión | Descripción | Fecha | Ticket |
+|---------|------------|-------|--------|
+| 1 | Versión inicial. Project básico (id, name, timestamps, metadata). | 2026-05-29 | B01-T05 |
+| (próxima) | _(aquí se documentará la v2 cuando se implemente)_ | — | — |
+
+---
+
+## 5. Referencias
+
+- `packages/persistence/schema.py` — implementación actual de versionado
+- `packages/persistence/store.py` — ProjectStore con save/load atómico
+- `docs/contracts/convenciones-nombres.md` — convenciones de nombres
+- `docs/contracts/limites-modulos.md` — reglas de dependencia entre capas
+- `docs/contracts/convenciones-errores.md` — Result type y manejo de errores
