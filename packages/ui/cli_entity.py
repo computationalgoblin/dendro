@@ -133,7 +133,7 @@ def handle_entity_command(args: argparse.Namespace, session: SessionContext) -> 
 
 def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
     entity_type = _parse_enum(args.type, EntityType, "entity type")
     data: dict[str, Any] = {"name": args.name, "entity_type": entity_type}
@@ -144,7 +144,7 @@ def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
     if args.domain is not None:
         data["domain"] = args.domain
 
-    result = es.create_entity(data)
+    result = es.create_entity(data, history_service=hs)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
@@ -161,7 +161,7 @@ def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
 
 def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
     data: dict[str, Any] = {}
     if args.name is not None:
@@ -181,7 +181,7 @@ def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
         )
         sys.exit(1)
 
-    result = es.update_entity(args.id, data)
+    result = es.update_entity(args.id, data, history_service=hs)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
@@ -198,9 +198,9 @@ def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
 
 def _cmd_archive(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
-    result = es.archive_entity(args.id)
+    result = es.archive_entity(args.id, history_service=hs)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)

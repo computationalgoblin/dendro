@@ -163,20 +163,56 @@ class TestRelationShow:
 
 
 class TestHistory:
-    def test_history_entity_no_events(self, populated_project: tuple) -> None:
+    def test_history_entity_has_events(self, populated_project: tuple) -> None:
         _, eid1, _ = populated_project
-        # No history service injected, so no events recorded — but should not crash
+        # After entity creation in the fixture, history should record it
         r = _cli(f"history entity {eid1}")
-        # Returns 0 events gracefully
         assert r.returncode == 0, r.stderr
+        # B07-T04: HistoryService is now injected, so should have at least
+        # the CREACION_ENTIDAD event from the fixture's entity creation.
+        assert "creacion_entidad" in r.stdout.lower()
 
-    def test_history_recent(self, populated_project: tuple) -> None:
+    def test_history_entity_after_mutations(self, populated_project: tuple) -> None:
+        _, eid1, _ = populated_project
+        _cli(f"entity edit {eid1} --brief 'Updated for history test'")
+
+        r = _cli(f"history entity {eid1} --limit 10")
+        assert r.returncode == 0, r.stderr
+        assert "edicion_entidad" in r.stdout.lower()
+
+    def test_history_after_archive(self, populated_project: tuple) -> None:
+        _, eid1, eid2 = populated_project
+        _cli(f"entity archive {eid2}")
+
+        r = _cli(f"history entity {eid2} --limit 10")
+        assert "archivado_entidad" in r.stdout.lower()
+
+    def test_history_recent_has_events(self, populated_project: tuple) -> None:
+        # At minimum the 2 entity creations from the fixture
+        r = _cli("history recent --limit 10")
+        assert r.returncode == 0, r.stderr
+        assert "creacion_entidad" in r.stdout.lower()
+
+    def test_history_relation_create(self, populated_project: tuple) -> None:
+        _, eid1, eid2 = populated_project
+        _cli(f"relation create {eid1} {eid2} --type es_aliado_de")
+        r = _cli("history recent --limit 5")
+        assert "creacion_relacion" in r.stdout.lower()
+
+    def test_history_persists_after_close_open(self, tmp_path: Path) -> None:
+        proj = tmp_path / "history_persist.json"
+        _cli(f'project create "PersistTest" --path {proj}')
+        _cli(f"project open {proj}")
+        _cli("entity create PersistMe --type objeto")
+        _cli("project close")
+        _cli(f"project open {proj}")
+
         r = _cli("history recent --limit 5")
         assert r.returncode == 0, r.stderr
+        assert "creacion_entidad" in r.stdout.lower()
 
     def test_history_entity_nonexistent(self, populated_project: tuple) -> None:
         r = _cli("history entity deadbeef-dead-beef-dead-beefdeadbeef")
-        # Should not crash — just shows 0 events
         assert r.returncode == 0, r.stderr
 
 

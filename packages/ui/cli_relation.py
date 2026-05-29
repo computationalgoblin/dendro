@@ -120,7 +120,7 @@ def handle_relation_command(args: argparse.Namespace, session: SessionContext) -
 
 def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, rs, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
     rtype = _parse_relation_type(args.type)
     data: dict[str, Any] = {}
@@ -133,6 +133,7 @@ def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
         target_id=args.target_id,
         relation_type=rtype,
         data=data,
+        history_service=hs,
     )
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
@@ -156,7 +157,7 @@ def _cmd_create(args: argparse.Namespace, session: SessionContext) -> None:
 
 def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, rs, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
     data: dict[str, Any] = {}
     if args.desc is not None:
@@ -166,7 +167,7 @@ def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
         print("error: No fields to edit. Provide --desc.", file=sys.stderr)
         sys.exit(1)
 
-    result = rs.update_relation(args.id, data)
+    result = rs.update_relation(args.id, data, history_service=hs)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
@@ -185,9 +186,9 @@ def _cmd_edit(args: argparse.Namespace, session: SessionContext) -> None:
 
 def _cmd_archive(args: argparse.Namespace, session: SessionContext) -> None:
     project_path = require_project_path(args, session)
-    ps, es, rs, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
-    result = rs.archive_relation(args.id)
+    result = rs.archive_relation(args.id, history_service=hs)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
