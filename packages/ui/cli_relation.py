@@ -56,9 +56,17 @@ def register_relation_commands(subparsers: Any) -> None:
     p_list.add_argument("--entity", default=None, help="Filter by entity ID")
     p_list.add_argument("--type", default=None, metavar="TYPE", help="Filter by relation type")
 
-    # relation show <id>
+    # relation show <id> [--extended] [--json]
     p_show = rel_subs.add_parser("show", help="Show relation details")
     p_show.add_argument("id", help="Relation ID")
+    p_show.add_argument(
+        "--extended", action="store_true",
+        help="Show full relation card",
+    )
+    p_show.add_argument(
+        "--json", action="store_true",
+        help="JSON output",
+    )
 
     # relation set-field <relation-id> <field-id> <value>
     p_setf = rel_subs.add_parser("set-field", help="Set a custom field value")
@@ -254,8 +262,11 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
 
 
 def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
+    """Show a relation, optionally extended."""
+    import json as _json
+
     project_path = require_project_path(args, session)
-    ps, es, rs, *_ = _bootstrap_services(project_path)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
     result = rs.get_by_id(args.id)
     if isinstance(result, Error):
@@ -263,25 +274,117 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
         sys.exit(1)
 
     r = result.value
+
+    # Resolve entity names
+    src_name = _rel_resolve_name(es, r.source_id)
+    tgt_name = _rel_resolve_name(es, r.target_id)
+
+    if args.json:
+        payload = {
+            "id": r.id,
+            "relation_type": r.relation_type.value,
+            "source_id": r.source_id,
+            "source_name": src_name,
+            "target_id": r.target_id,
+            "target_name": tgt_name,
+            "direction": r.direction.value if hasattr(r, "direction") else None,
+            "description": r.description,
+            "intensity": r.intensity.value if hasattr(r, "intensity") else None,
+            "temporality": r.temporality if hasattr(r, "temporality") else None,
+            "causality": r.causality if hasattr(r, "causality") else None,
+            "canon_state": r.canon_state.value,
+            "visibility_state": r.visibility_state.value,
+            "certainty_level": r.certainty_level.value,
+            "validity_conditions": list(r.validity_conditions) if hasattr(r, "validity_conditions") else [],
+            "custom_relation_type_id": r.custom_relation_type_id if hasattr(r, "custom_relation_type_id") else None,
+            "custom_fields": [
+                {"field_id": cf.field_id, "value": cf.value}
+                if hasattr(cf, "field_id") else cf
+                for cf in (r.custom_fields if hasattr(r, "custom_fields") else [])
+            ],
+            "created_at": r.created_at.isoformat(),
+            "updated_at": r.updated_at.isoformat(),
+        }
+        print(_json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    # ── Compact / extended text display ──
     print("═" * 55)
     print(f"  Relation: {r.id}")
     print("═" * 55)
     print(f"Type:         {r.relation_type.value}")
-    print(f"Source:       {r.source_id}")
-    print(f"Target:       {r.target_id}")
+    print(f"Source:       {r.source_id} ({src_name})")
+    print(f"Target:       {r.target_id} ({tgt_name})")
     print(f"Canon:        {r.canon_state.value}")
     print(f"Visibility:   {r.visibility_state.value}")
     if hasattr(r, "direction"):
         print(f"Direction:    {r.direction}")
     if r.description:
         print(f"Description:  {r.description}")
+
+    # --- extended-only fields ---
+    if args.extended:
+        if hasattr(r, "intensity"):
+            print(f"Intensity:    {r.intensity.value}")
+        if hasattr(r, "certainty_level"):
+            print(f"Certainty:    {r.certainty_level.value}")
+        if hasattr(r, "temporality") and r.temporality:
+            print(f"Temporality:  {r.temporality}")
+        if hasattr(r, "causality") and r.causality:
+            print(f"Causality:    {r.causality}")
+        if hasattr(r, "validity_conditions") and r.validity_conditions:
+            print(f"Validity:     {', '.join(r.validity_conditions)}")
+
+    # --- shared fields ---
     if hasattr(r, "custom_relation_type_id") and r.custom_relation_type_id:
         print(f"Custom type:  {r.custom_relation_type_id}")
     if hasattr(r, "custom_fields") and r.custom_fields:
         print(f"Custom fields:")
         for cf in r.custom_fields:
-            print(f"  {cf.field_id}: {cf.value}")
+            fid = cf.field_id if hasattr(cf, "field_id") else cf
+            fval = cf.value if hasattr(cf, "value") else ""
+            print(f"  {fid}: {fval}")
+
+    # --- extended-only: sources & history ---
+    if args.extended:
+        # Sources linked to this relation
+        try:
+            src_result = ss.get_sources_for_relation(r.id)
+            rel_sources = src_result.value if not isinstance(src_result, Error) else []
+        except Exception:
+            rel_sources = []
+        print(f"Sources ({len(rel_sources)}):")
+        if rel_sources:
+            for s in rel_sources:
+                st = s.source_type.value if hasattr(s, "source_type") else "?"
+                print(f"  {s.id}  {s.name} ({st})")
+        else:
+            print("  (none)")
+
+        # History
+        try:
+            hist_result = hs.get_for_relation(r.id)
+            rel_history = hist_result.value if not isinstance(hist_result, Error) else []
+        except Exception:
+            rel_history = []
+        print(f"History ({len(rel_history)}):")
+        if rel_history:
+            for h in rel_history[-5:]:
+                ts = h.timestamp.isoformat() if hasattr(h, "timestamp") else "?"
+                et = h.event_type.value if hasattr(h, "event_type") else "?"
+                print(f"  {ts}  {et}")
+        else:
+            print("  (none)")
+
     print("═" * 55)
+
+
+def _rel_resolve_name(es: Any, entity_id: str) -> str:
+    """Resolve an entity name from its ID."""
+    r = es.get_by_id(entity_id)
+    if isinstance(r, Error):
+        return f"(no encontrada: {entity_id})"
+    return r.value.name
 
 
 def _relation_convert_value(raw: str) -> Any:

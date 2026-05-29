@@ -60,9 +60,17 @@ def register_entity_commands(subparsers: Any) -> None:
     p_list.add_argument("--tag", default=None, help="Filter by tag")
     p_list.add_argument("--limit", type=int, default=50, help="Max results (default: 50)")
 
-    # entity show <id>
+    # entity show <id> [--extended] [--json]
     p_show = entity_subs.add_parser("show", help="Show entity card")
     p_show.add_argument("id", help="Entity ID")
+    p_show.add_argument(
+        "--extended", action="store_true",
+        help="Show full entity card (23 fields)",
+    )
+    p_show.add_argument(
+        "--json", action="store_true",
+        help="JSON output",
+    )
 
     # entity search <query> [--no-private]
     p_search = entity_subs.add_parser("search", help="Text search across entities")
@@ -324,6 +332,9 @@ def _convert_field_value(raw: str) -> Any:
     return raw
 
 def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
+    """Show an entity card, optionally extended with all 23 fields."""
+    import json as _json
+
     project_path = require_project_path(args, session)
     ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
 
@@ -335,6 +346,76 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     card = result.value
     e = card.entity
 
+    if args.json:
+        # JSON output — always full
+        payload = {
+            "id": e.id,
+            "name": e.name,
+            "aliases": list(e.aliases),
+            "entity_type": e.entity_type.value,
+            "brief_description": e.brief_description,
+            "extended_description": e.extended_description,
+            "canon_state": e.canon_state.value,
+            "visibility_state": e.visibility_state.value,
+            "certainty_level": e.certainty_level.value,
+            "tags": list(e.tags),
+            "domain": e.domain,
+            "layers": list(e.layers),
+            "custom_type_id": e.custom_type_id,
+            "custom_fields": [
+                {"field_id": cf.field_id, "value": cf.value}
+                if hasattr(cf, "field_id") else cf
+                for cf in e.custom_fields
+            ],
+            "narrative_importance": e.narrative_importance.value,
+            "development_level": e.development_level.value,
+            "private_notes": e.private_notes,
+            "exportable_notes": e.exportable_notes,
+            "created_at": e.created_at.isoformat(),
+            "updated_at": e.updated_at.isoformat(),
+            "relations": {
+                "incoming": [
+                    {
+                        "id": r.id,
+                        "type": r.relation_type.value,
+                        "source_id": r.source_id,
+                        "source_name": _resolve_name(es, r.source_id),
+                        "intensity": r.intensity.value if hasattr(r, "intensity") else None,
+                    }
+                    for r in card.incoming_relations
+                ],
+                "outgoing": [
+                    {
+                        "id": r.id,
+                        "type": r.relation_type.value,
+                        "target_id": r.target_id,
+                        "target_name": _resolve_name(es, r.target_id),
+                        "intensity": r.intensity.value if hasattr(r, "intensity") else None,
+                    }
+                    for r in card.outgoing_relations
+                ],
+            },
+            "sources": [
+                {"id": s.id, "name": s.name, "type": s.source_type.value if hasattr(s, "source_type") else "?"}
+                for s in card.sources
+            ],
+            "open_issues": [
+                {"id": iss.id, "title": iss.title, "severity": iss.severity}
+                for iss in card.open_issues
+            ],
+            "history": [
+                {"timestamp": h.timestamp.isoformat() if hasattr(h, "timestamp") else "?",
+                 "event_type": h.event_type.value if hasattr(h, "event_type") else "?"}
+                for h in card.history
+            ],
+        }
+        print(_json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+
+    # ── Compact or extended text display ──
+    from packages.domain.relation import IntensityLevel
+    MAIN_INTENSITIES = {IntensityLevel.ALTA, IntensityLevel.MUY_ALTA}
+
     # Header
     print("═" * 60)
     print(f"  {e.name}")
@@ -343,8 +424,22 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     print(f"Type:         {e.entity_type.value}")
     print(f"Canon:        {e.canon_state.value}")
     print(f"Visibility:   {e.visibility_state.value}")
+
+    # --- extended-only fields ---
+    if args.extended:
+        if e.aliases:
+            print(f"Alias(es):    {', '.join(e.aliases)}")
+        print(f"Certainty:    {e.certainty_level.value}")
+        print(f"Importance:   {e.narrative_importance.value}")
+        print(f"Development:  {e.development_level.value}")
+        print(f"Created:      {e.created_at.isoformat()}")
+        print(f"Updated:      {e.updated_at.isoformat()}")
+
+    # --- shared fields ---
     if e.domain:
         print(f"Domain:       {e.domain}")
+    if e.custom_type_id:
+        print(f"Custom type:  {e.custom_type_id}")
     if e.brief_description:
         print(f"Brief:        {e.brief_description}")
     if e.extended_description:
@@ -355,12 +450,18 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
         print(f"Tags:         {', '.join(e.tags)}")
     if e.layers:
         print(f"Layers:       {', '.join(e.layers)}")
-    if e.custom_type_id:
-        print(f"Custom type:  {e.custom_type_id}")
     if e.custom_fields:
         print(f"Custom fields:")
         for cf in e.custom_fields:
             print(f"  {cf.field_id}: {cf.value}")
+
+    # --- extended-only: notes ---
+    if args.extended:
+        if e.private_notes:
+            print(f"Notes (private): [PRIVADO] {e.private_notes[:120]}")
+        if e.exportable_notes:
+            print(f"Notes (export):  {e.exportable_notes[:120]}")
+
     print()
 
     # Relations
@@ -369,9 +470,15 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     rel_count = len(incoming) + len(outgoing)
     print(f"Relations ({len(incoming)} incoming, {len(outgoing)} outgoing):")
     for r in incoming:
-        print(f"  ← {r.relation_type.value} from {r.source_id}")
+        rel_name = _resolve_name(es, r.source_id)
+        intensity = getattr(r, "intensity", None)
+        main_mark = " ★" if args.extended and intensity in MAIN_INTENSITIES else ""
+        print(f"  ← {r.relation_type.value} from {r.source_id} ({rel_name}){main_mark}")
     for r in outgoing:
-        print(f"  → {r.relation_type.value} to {r.target_id}")
+        rel_name = _resolve_name(es, r.target_id)
+        intensity = getattr(r, "intensity", None)
+        main_mark = " ★" if args.extended and intensity in MAIN_INTENSITIES else ""
+        print(f"  → {r.relation_type.value} to {r.target_id} ({rel_name}){main_mark}")
     if rel_count == 0:
         print("  (none)")
     print()
@@ -399,11 +506,32 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     print(f"History (last {len(card.history)}):")
     if card.history:
         for h in card.history:
-            ts = h.timestamp.isoformat() if hasattr(h, 'timestamp') else "?"
-            print(f"  {ts}  {h.event_type.value if hasattr(h, 'event_type') else '?'}")
+            ts = h.timestamp.isoformat() if hasattr(h, "timestamp") else "?"
+            et = h.event_type.value if hasattr(h, "event_type") else "?"
+            print(f"  {ts}  {et}")
     else:
         print("  Historial: no disponible")
+    print()
+
+    # --- extended-only: placeholders & actions ---
+    if args.extended:
+        print("Incidencias:  (no disponible — Bloque 12)")
+        print("Sugerencias IA: (no disponible — Bloque 14)")
+        print()
+        print("Acciones:")
+        print(f"  edit <id>           → entity edit {e.id}")
+        print(f"  relations <id>      → relation list --entity {e.id}")
+        print(f"  archive <id>        → entity archive {e.id}")
+
     print("═" * 60)
+
+
+def _resolve_name(es: Any, entity_id: str) -> str:
+    """Resolve an entity name from its ID, or return placeholder."""
+    r = es.get_by_id(entity_id)
+    if isinstance(r, Error):
+        return f"(entidad no encontrada: {entity_id})"
+    return r.value.name
 
 
 def _cmd_search(args: argparse.Namespace, session: SessionContext) -> None:

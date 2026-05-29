@@ -156,6 +156,26 @@ class TestRelationShow:
         assert eid1 in r_show.stdout
         assert eid2 in r_show.stdout
 
+    def test_show_extended(self, populated_project: tuple) -> None:
+        _, eid1, eid2 = populated_project
+        r = _cli(f"relation create {eid1} {eid2} --type es_aliado_de")
+        rid = r.stdout.split("'")[1]
+        r_show = _cli(f"relation show {rid} --extended")
+        assert r_show.returncode == 0, r_show.stderr
+        assert "Intensity:" in r_show.stdout
+        assert "Certainty:" in r_show.stdout
+
+    def test_show_json(self, populated_project: tuple) -> None:
+        import json
+        _, eid1, eid2 = populated_project
+        r = _cli(f"relation create {eid1} {eid2} --type es_aliado_de")
+        rid = r.stdout.split("'")[1]
+        r_show = _cli(f"relation show {rid} --json")
+        assert r_show.returncode == 0, r_show.stderr
+        data = json.loads(r_show.stdout)
+        assert "source_name" in data
+        assert "target_name" in data
+
 
 # ---------------------------------------------------------------------------
 # History tests

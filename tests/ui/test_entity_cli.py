@@ -198,6 +198,44 @@ class TestEntityShow:
         assert "Canon:" in r_show.stdout
         assert "Visibility:" in r_show.stdout
 
+    def test_show_extended_has_all_23_fields(self, project_with_session: Path) -> None:
+        r = _cli("entity create FullCard --type personaje --brief 'Brief' "
+                  "--extended 'Extended' --domain 'midgard'")
+        eid = _entity_id(r.stdout)
+        r_show = _cli(f"entity show {eid} --extended")
+        assert r_show.returncode == 0, r_show.stderr
+        assert "Certainty:" in r_show.stdout
+        assert "Importance:" in r_show.stdout
+        assert "Development:" in r_show.stdout
+        assert "Created:" in r_show.stdout
+        assert "Updated:" in r_show.stdout
+        assert "Incidencias:" in r_show.stdout
+        assert "Sugerencias IA:" in r_show.stdout
+        assert "Acciones:" in r_show.stdout
+        assert "Bloque 12" in r_show.stdout
+        assert "Bloque 14" in r_show.stdout
+
+    def test_show_extended_json(self, project_with_session: Path) -> None:
+        import json
+        r = _cli("entity create JSONTest --type personaje")
+        eid = _entity_id(r.stdout)
+        r_show = _cli(f"entity show {eid} --json")
+        assert r_show.returncode == 0, r_show.stderr
+        data = json.loads(r_show.stdout)
+        assert data["name"] == "JSONTest"
+        assert "relations" in data
+        assert "sources" in data
+        assert "history" in data
+
+    def test_show_resolves_relation_names(self, project_with_session: Path) -> None:
+        r1 = _cli("entity create Gandalf --type personaje")
+        gid = _entity_id(r1.stdout)
+        r2 = _cli("entity create Frodo --type personaje")
+        fid = _entity_id(r2.stdout)
+        _cli(f"relation create {gid} {fid} --type es_aliado_de")
+        r_show = _cli(f"entity show {gid} --extended")
+        assert "Frodo" in r_show.stdout
+
     def test_show_nonexistent(self, project_with_session: Path) -> None:
         r = _cli("entity show deadbeef-1234")
         assert r.returncode != 0
