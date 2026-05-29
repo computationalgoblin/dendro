@@ -203,13 +203,6 @@ class TestGalleryCompoundFilters:
         # Default entity state is borrador, so canonico filter should be empty
         assert "0" in r.stdout or "(no entities)" in r.stdout
 
-    def test_gallery_canon_canonico(self, populated_project: Path) -> None:
-        """gallery personajes --canon canonico returns empty (entities are borrador by default)."""
-        r = _cli("gallery personajes --canon canonico")
-        assert r.returncode == 0, r.stderr
-        # Default entity state is borrador, so canonico filter should be empty
-        assert "0" in r.stdout or "(no entities)" in r.stdout
-
     def test_gallery_canon_borrador(self, populated_project: Path) -> None:
         """gallery personajes --canon borrador returns created entities."""
         r = _cli("gallery personajes --canon borrador")
