@@ -118,7 +118,7 @@ class TestEntityCreation:
     def test_20_fields(self):
         e = NarrativeEntity(name="Test")
         d = e.to_dict()
-        assert len(d) == 20, f"Expected 20 fields, got {len(d)}: {list(d.keys())}"
+        assert len(d) == 22, f"Expected 22 fields, got {len(d)}: {list(d.keys())}"
 
     def test_full_construction(self):
         now = datetime.now(timezone.utc)

@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, CertaintyLevel, VisibilityState
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # Enums
@@ -123,6 +123,10 @@ class NarrativeRelation:
     tags: list[str] = field(default_factory=list)
     custom_metadata: dict[str, Any] = field(default_factory=dict)
 
+    # --- Custom types and fields (Bloque 8) ---
+    custom_relation_type_id: str | None = None
+    custom_fields: list[Any] = field(default_factory=list)  # list[CustomFieldValue]
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -154,6 +158,13 @@ class NarrativeRelation:
             "validity_conditions": list(self.validity_conditions),
             "tags": list(self.tags),
             "custom_metadata": dict(self.custom_metadata),
+            "custom_relation_type_id": self.custom_relation_type_id,
+            "custom_fields": [
+                f if isinstance(f, dict) else (
+                    f.to_dict() if hasattr(f, "to_dict") else f
+                )
+                for f in self.custom_fields
+            ],
         }
 
     @classmethod
@@ -192,6 +203,11 @@ class NarrativeRelation:
             validity_conditions=_parse_list(data.get("validity_conditions")),
             tags=_parse_list(data.get("tags")),
             custom_metadata=_parse_dict(data.get("custom_metadata")),
+            custom_relation_type_id=data.get("custom_relation_type_id"),
+            custom_fields=[
+                CustomFieldValue.from_dict(f) if isinstance(f, dict) else f
+                for f in _parse_list(data.get("custom_fields"))
+            ],
         )
 
 
