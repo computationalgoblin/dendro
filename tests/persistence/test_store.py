@@ -311,7 +311,12 @@ class TestDataLevelIO:
     """save_project_data / load_project_data (without Project model)."""
 
     def test_save_and_load_data(self, tmp_path: Path):
-        data = {"id": "test", "name": "Raw Data"}
+        data = {
+            "id": "test",
+            "name": "Raw Data",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
         path = tmp_path / "data.json"
         result = save_project_data(data, path)
         assert isinstance(result, Ok), f"Save failed: {result}"

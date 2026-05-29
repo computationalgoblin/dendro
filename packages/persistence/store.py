@@ -17,7 +17,9 @@ from packages.domain.project import Project
 from packages.domain.result import Error, Ok, Result
 from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
+    _apply_migration_v1_to_v2,
     detect_schema_version,
+    validate_project_structure,
     validate_schema_version,
 )
 
@@ -199,6 +201,8 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     1. File existence check
     2. JSON parse
     3. Schema version detection and validation
+    4. Schema migration (v1 → v2) if needed
+    5. Structural validation
 
     Args:
         path: Path to the project file.
@@ -218,6 +222,17 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     validation_error = validate_schema_version(version)
     if validation_error is not None:
         return Error(validation_error)
+
+    # Step 4: Migrate v1 → v2 (structural defaults only, no narrative data)
+    if version == 1:
+        data = _apply_migration_v1_to_v2(data)
+        # Update schema version in the migrated data
+        data["schema_version"] = CURRENT_SCHEMA_VERSION
+
+    # Step 5: Structural validation
+    structure_error = validate_project_structure(data)
+    if structure_error is not None:
+        return Error(structure_error)
 
     return Ok(data)
 
