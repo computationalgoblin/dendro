@@ -38,6 +38,32 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
-    "integration: marks tests that need external resources",
-    "slow: marks tests as slow",
+    "integration: marks tests that need external resources (DB, files, network)",
+    "slow: marks tests as slow (>5s)",
+    "unit: marks tests as pure unit tests (no I/O, no fixtures)",
+    "smoke: marks smoke/sanity tests (must pass before any testing)",
+    "domain: marks domain-layer tests",
+    "application: marks application-layer tests",
+    "persistence: marks persistence-layer tests",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:.*pkg_resources",
+]
+log_cli = false
+log_cli_level = "WARNING"
+log_cli_format = "%(levelname)-8s %(name)s | %(message)s"
+
+[tool.coverage.run]
+source = ["packages"]
+omit = ["packages/*/__pycache__/*", "packages/*/.gitkeep"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "__all__",
+    "if __name__ == .__main__.:",
 ]
