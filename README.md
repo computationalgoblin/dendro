@@ -12,15 +12,15 @@ directamente** sin aceptación explícita del usuario.
 
 Fundación de proyecto completada. Ver tickets en `.kanban/tickets/`.
 
-**Próximo ticket:** `NA-001` — Fundación de proyecto y estructura de paquetes Python
-(actualmente en Ready).
+**Próximo ticket:** `B01-T02` — Configuración base, logging y manejo de errores
+(actualmente en Backlog).
 
 ## Estructura del repositorio
 
 ```
 .kanban/                    — Sistema Kanban (tickets, templates, resúmenes)
 ├── KANBAN.md              — Visión general del Kanban
-├── tickets/               — Tickets individuales (NA-001, NA-002...)
+├── tickets/               — Tickets individuales (B01-T01, B01-T02...)
 ├── templates/             — Plantillas
 └── resumenes/             — Resúmenes técnicos de cierre
 
