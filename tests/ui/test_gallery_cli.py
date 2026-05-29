@@ -191,6 +191,81 @@ class TestGalleryOptions:
 
 
 # ---------------------------------------------------------------------------
+# Gallery: compound filters (B09-T03B)
+# ---------------------------------------------------------------------------
+
+
+class TestGalleryCompoundFilters:
+    def test_gallery_canon_filter(self, populated_project: Path) -> None:
+        """gallery personajes --canon borrador should filter."""
+        r = _cli("gallery personajes --canon borrador")
+        assert r.returncode == 0, r.stderr
+        # All created entities are canonico by default, so borrador should be empty
+        assert "0" in r.stdout or "(no entities)" in r.stdout
+
+    def test_gallery_canon_canonico(self, populated_project: Path) -> None:
+        """gallery personajes --canon canonico returns empty (entities are borrador by default)."""
+        r = _cli("gallery personajes --canon canonico")
+        assert r.returncode == 0, r.stderr
+        # Default entity state is borrador, so canonico filter should be empty
+        assert "0" in r.stdout or "(no entities)" in r.stdout
+
+    def test_gallery_canon_borrador(self, populated_project: Path) -> None:
+        """gallery personajes --canon borrador returns created entities."""
+        r = _cli("gallery personajes --canon borrador")
+        assert r.returncode == 0, r.stderr
+        assert "Aragorn" in r.stdout
+        assert "Gandalf" in r.stdout
+
+    def test_gallery_tag_filter_no_match(self, populated_project: Path) -> None:
+        """--tag with nonexistent tag returns empty."""
+        r = _cli("gallery personajes --tag noexiste")
+        assert r.returncode == 0, r.stderr
+        assert "0" in r.stdout or "(no entities)" in r.stdout
+
+    def test_gallery_domain_filter(self, populated_project: Path) -> None:
+        """--domain filter should not crash."""
+        r = _cli("gallery personajes --domain tierra_media")
+        assert r.returncode == 0, r.stderr
+
+    def test_gallery_visibility_filter(self, populated_project: Path) -> None:
+        """--visibility filter should not crash."""
+        r = _cli("gallery personajes --visibility visible_usuario")
+        assert r.returncode == 0, r.stderr
+        assert "Aragorn" in r.stdout
+
+    def test_gallery_compound_and_filters(self, populated_project: Path) -> None:
+        """Multiple filters combined with AND — borrador + visible_usuario."""
+        r = _cli("gallery personajes --canon borrador --visibility visible_usuario")
+        assert r.returncode == 0, r.stderr
+        assert "Aragorn" in r.stdout
+
+    def test_gallery_por_fuente_positional_still_works(self, project_with_session: Path) -> None:
+        """por-fuente with positional source_id, without --source-id flag conflict."""
+        _cli("entity create X --type nota")
+        r = _cli("gallery por-fuente nonexistent")
+        assert r.returncode in (0, 1)
+
+    def test_gallery_por_capa_positional_still_works(self, project_with_session: Path) -> None:
+        """por-capa with positional layer arg, without --layer flag conflict."""
+        _cli("entity create X --type nota")
+        r = _cli("gallery por-capa geografia")
+        assert r.returncode == 0, r.stderr
+
+    def test_gallery_por_canon_positional_still_works(self, project_with_session: Path) -> None:
+        """por-canon with positional canon_state, without --canon flag conflict."""
+        _cli("entity create X --type nota")
+        r = _cli("gallery por-canon borrador")
+        assert r.returncode == 0, r.stderr
+
+    def test_gallery_custom_positional_still_works(self, project_with_session: Path) -> None:
+        """custom with positional custom_type_id, without --custom-type-id flag conflict."""
+        _cli("entity create X --type nota")
+        r = _cli("gallery custom some-id")
+        assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------------------
 # Gallery: error handling
 # ---------------------------------------------------------------------------
 

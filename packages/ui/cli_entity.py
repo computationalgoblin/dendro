@@ -49,7 +49,7 @@ def register_entity_commands(subparsers: Any) -> None:
     p_archive = entity_subs.add_parser("archive", help="Archive an entity (soft delete)")
     p_archive.add_argument("id", help="Entity ID")
 
-    # entity list [--type <t>] [--canon <c>] [--visibility <v>] [--tag <t>] [--limit <n>]
+    # entity list [--type <t>] [--canon <c>] [--visibility <v>] [--tag <t>] [--domain ...] [--limit <n>]
     p_list = entity_subs.add_parser("list", help="List/filter entities")
     p_list.add_argument("--type", default=None, metavar="TYPE", help="Filter by entity type")
     p_list.add_argument("--canon", default=None, metavar="STATE", help="Filter by canon state")
@@ -58,7 +58,23 @@ def register_entity_commands(subparsers: Any) -> None:
         help="Filter by visibility state",
     )
     p_list.add_argument("--tag", default=None, help="Filter by tag")
+    p_list.add_argument("--domain", default=None, help="Filter by domain")
+    p_list.add_argument("--layer", default=None, help="Filter by layer")
+    p_list.add_argument("--custom-type-id", default=None, help="Filter by custom entity type")
+    p_list.add_argument("--source-id", default=None, help="Filter by source")
+    p_list.add_argument(
+        "--sort", default="name",
+        choices=["name", "updated_at", "created_at", "type", "canon", "certainty", "importance"],
+        help="Sort field (default: name)",
+    )
+    p_list.add_argument("--sort-desc", action="store_true", help="Sort descending")
+    p_list.add_argument("--offset", type=int, default=0, help="Pagination offset")
     p_list.add_argument("--limit", type=int, default=50, help="Max results (default: 50)")
+    p_list.add_argument(
+        "--group-by", default=None,
+        choices=["type", "tag", "canon", "visibility", "source"],
+        help="Group results by field",
+    )
 
     # entity show <id> [--extended] [--json]
     p_show = entity_subs.add_parser("show", help="Show entity card")
@@ -90,6 +106,25 @@ def register_entity_commands(subparsers: Any) -> None:
     p_rmf = entity_subs.add_parser("remove-field", help="Remove a custom field value")
     p_rmf.add_argument("entity_id", help="Entity ID")
     p_rmf.add_argument("field_id", help="Field definition ID")
+
+    # entity quick-edit <id> [--name ...] [--brief ...] [--domain ...]
+    p_qe = entity_subs.add_parser("quick-edit", help="Quick edit an entity")
+    p_qe.add_argument("id", help="Entity ID")
+    p_qe.add_argument("--name", default=None, help="New name")
+    p_qe.add_argument("--brief", default=None, help="New brief description")
+    p_qe.add_argument("--domain", default=None, help="New domain")
+
+    # entity relations <id>
+    p_er = entity_subs.add_parser("relations", help="Show relations of an entity")
+    p_er.add_argument("id", help="Entity ID")
+
+    # entity history <id>
+    p_eh = entity_subs.add_parser("history", help="Show history of an entity")
+    p_eh.add_argument("id", help="Entity ID")
+
+    # entity sources <id>
+    p_es = entity_subs.add_parser("sources", help="Show sources of an entity")
+    p_es.add_argument("id", help="Entity ID")
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +179,14 @@ def handle_entity_command(args: argparse.Namespace, session: SessionContext) -> 
         _cmd_set_field(args, session)
     elif cmd == "remove-field":
         _cmd_remove_field(args, session)
+    elif cmd == "quick-edit":
+        _cmd_quick_edit(args, session)
+    elif cmd == "relations":
+        _cmd_relations(args, session)
+    elif cmd == "history":
+        _cmd_history(args, session)
+    elif cmd == "sources":
+        _cmd_sources(args, session)
     else:
         print(f"error: Unknown entity command '{cmd}'", file=sys.stderr)
         sys.exit(1)
@@ -249,12 +292,22 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
         if args.visibility else None
     )
 
+    # Map --sort choices to query sort_by
+    sort_map = {"type": "entity_type", "canon": "canon_state"}
+
     result = qs.query(
         entity_type=entity_type,
         canon_state=canon_state,
         visibility_state=visibility,
         tag=args.tag,
+        domain=args.domain,
+        layer=args.layer,
+        custom_type_id=args.custom_type_id,
+        source_id=args.source_id,
+        sort_by=sort_map.get(args.sort, args.sort),
+        sort_desc=args.sort_desc,
         limit=args.limit,
+        offset=args.offset,
     )
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
@@ -263,6 +316,11 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
     entities = result.value
     if not entities:
         print("No entities found.")
+        return
+
+    # ── group-by ──
+    if args.group_by:
+        _print_grouped(entities, args.group_by, es, ss)
         return
 
     active = sum(1 for e in entities if e.canon_state != CanonState.ARCHIVADO)
@@ -552,3 +610,148 @@ def _cmd_search(args: argparse.Namespace, session: SessionContext) -> None:
     print(f"Found {len(entities)} entities matching '{args.query}':")
     for i, e in enumerate(entities, 1):
         print(_entity_list_row(e, index=i))
+
+
+# ---------------------------------------------------------------------------
+# Group-by helper
+# ---------------------------------------------------------------------------
+
+
+def _print_grouped(entities: list[Any], field: str, es: Any, ss: Any) -> None:
+    """Group entities by *field* and print with headers."""
+    groups: dict[str, list[Any]] = {}
+    for e in entities:
+        if field == "type":
+            key = e.entity_type.value
+        elif field == "tag":
+            keys = e.tags if e.tags else ["(sin etiqueta)"]
+        elif field == "canon":
+            key = e.canon_state.value
+        elif field == "visibility":
+            key = e.visibility_state.value
+        elif field == "source":
+            try:
+                srcs = ss.get_sources_for_entity(e.id)
+                keys = [s.name for s in srcs.value] if not isinstance(srcs, Error) else ["(sin fuente)"]
+            except Exception:
+                keys = ["(sin fuente)"]
+            if not keys:
+                keys = ["(sin fuente)"]
+        else:
+            continue
+
+        if field in ("tag", "source"):
+            for k in keys:
+                groups.setdefault(k, []).append(e)
+        else:
+            groups.setdefault(key, []).append(e)
+
+    for key in sorted(groups):
+        g = groups[key]
+        print(f"=== {key} ({len(g)}) ===")
+        for i, e in enumerate(g, 1):
+            print(_entity_list_row(e, index=i))
+
+
+# ---------------------------------------------------------------------------
+# Quick-edit
+# ---------------------------------------------------------------------------
+
+
+def _cmd_quick_edit(args: argparse.Namespace, session: SessionContext) -> None:
+    """Edit a single field on an entity and auto-save."""
+    edit_count = sum(1 for v in (args.name, args.brief, args.domain) if v is not None)
+    if edit_count == 0:
+        print("error: Especifica un campo: --name, --brief, o --domain", file=sys.stderr)
+        sys.exit(1)
+    if edit_count > 1:
+        print("error: Solo se permite un campo por quick-edit", file=sys.stderr)
+        sys.exit(1)
+
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    data: dict[str, Any] = {}
+    if args.name is not None:
+        data["name"] = args.name
+    elif args.brief is not None:
+        data["brief_description"] = args.brief
+    elif args.domain is not None:
+        data["domain"] = args.domain
+
+    result = es.update_entity(args.id, data, history_service=hs)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        print(f"error: Quick-edit applied but save failed: {save_result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    updated = result.value
+    print(f"Entity '{updated.name}' quick-edited: {list(data.keys())[0]} updated")
+
+
+# ---------------------------------------------------------------------------
+# Navigation shorthands
+# ---------------------------------------------------------------------------
+
+
+def _cmd_relations(args: argparse.Namespace, session: SessionContext) -> None:
+    """Show relations for an entity (delegates to relation list --entity <id>)."""
+    from packages.ui.cli_relation import _cmd_list as rel_list
+
+    class _RelArgs:
+        pass
+    rel_args = _RelArgs()
+    rel_args.entity = args.id
+    rel_args.type = None
+    rel_args.relation_command = "list"
+
+    rel_list(rel_args, session)
+
+
+def _cmd_history(args: argparse.Namespace, session: SessionContext) -> None:
+    """Show history for an entity."""
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = hs.get_for_entity(args.id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    entries = result.value
+    if not entries:
+        print(f"No history entries for entity '{args.id}'.")
+        return
+
+    print(f"History for entity '{args.id}' ({len(entries)} entries):")
+    for h in entries:
+        ts = h.timestamp.isoformat() if hasattr(h, "timestamp") else "?"
+        et = h.event_type.value if hasattr(h, "event_type") else "?"
+        desc = getattr(h, "description", "")
+        detail = f" — {desc}" if desc else ""
+        print(f"  {ts}  {et}{detail}")
+
+
+def _cmd_sources(args: argparse.Namespace, session: SessionContext) -> None:
+    """Show sources linked to an entity."""
+    project_path = require_project_path(args, session)
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+
+    result = ss.get_sources_for_entity(args.id)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+
+    sources = result.value
+    if not sources:
+        print(f"No sources linked to entity '{args.id}'.")
+        return
+
+    print(f"Sources for entity '{args.id}' ({len(sources)}):")
+    for s in sources:
+        st = s.source_type.value if hasattr(s, "source_type") else "?"
+        print(f"  {s.id}  {s.name} ({st})")

@@ -20,6 +20,7 @@ from packages.ui.cli import (
     _bootstrap_services,
     require_project_path,
 )
+from packages.ui.cli_entity import _parse_enum
 
 # ═══════════════════════════════════════════════════════════════════════
 # Map: gallery subcommand name → EntityType (§9.2)
@@ -54,8 +55,35 @@ GALLERY_ENTITY_TYPE_MAP: dict[str, EntityType] = {
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _add_query_flags(parser: argparse.ArgumentParser) -> None:
-    """Add shared query flags (--sort, --sort-desc, --limit, --offset, --json)."""
+def _add_query_flags(parser: argparse.ArgumentParser, *, exclude: set[str] | None = None) -> None:
+    """Add shared query flags (filters, sort, pagination, json).
+
+    *exclude* is a set of flag dest names to skip (e.g. ``{\"source_id\"}`` for
+    subcommands that already have a positional ``source_id`` argument).
+    """
+    ex = exclude or set()
+    # ── filters ──
+    if "canon" not in ex:
+        parser.add_argument(
+            "--canon", default=None, metavar="STATE",
+            help="Filter by canon state (canonico, borrador, hipotesis, archivado, etc.)",
+        )
+    if "visibility" not in ex:
+        parser.add_argument(
+            "--visibility", default=None, metavar="STATE",
+            help="Filter by visibility state (visible_usuario, visible_dm, privado_dm, etc.)",
+        )
+    if "domain" not in ex:
+        parser.add_argument("--domain", default=None, help="Filter by domain")
+    if "tag" not in ex:
+        parser.add_argument("--tag", default=None, help="Filter by tag")
+    if "layer" not in ex:
+        parser.add_argument("--layer", default=None, help="Filter by layer")
+    if "custom_type_id" not in ex:
+        parser.add_argument("--custom-type-id", default=None, help="Filter by custom entity type ID")
+    if "source_id" not in ex:
+        parser.add_argument("--source-id", default=None, help="Filter by source ID")
+    # ── sort & pagination ──
     parser.add_argument(
         "--sort", default="name",
         choices=["name", "updated_at", "created_at", "type", "canon", "certainty", "importance"],
@@ -117,16 +145,43 @@ def _run_gallery(
     custom_type_id: str | None = None,
     label: str = "",
 ) -> None:
-    """Execute a gallery query and display results."""
+    """Execute a gallery query and display results.
+
+    Explicit keyword args (derived from subcommand selection) take precedence
+    over CLI flags.  CLI flags (--canon, --visibility, --domain, --tag,
+    --layer, --custom-type-id, --source-id) are used for compound filtering
+    on type galleries and as fallbacks.
+    """
     project_path = require_project_path(args, session)
     _, _, _, _, _, qs, _ = _bootstrap_services(project_path)
 
+    # ── Resolve enum filters from args ──
+    visibility: Any = None
+    if getattr(args, "visibility", None):
+        from packages.domain.entity import VisibilityState
+        visibility = _parse_enum(args.visibility, VisibilityState, "visibility state")
+
+    canon: Any = canon_state  # explicit takes precedence
+    if canon is None and getattr(args, "canon", None):
+        canon = _parse_enum(args.canon, CanonState, "canon state")
+
+    # Layer / source / custom-type: explicit overrides args
+    ly = layer if layer is not None else getattr(args, "layer", None)
+    sid = source_id if source_id is not None else getattr(args, "source_id", None)
+    cid = custom_type_id if custom_type_id is not None else getattr(args, "custom_type_id", None)
+
+    domain = getattr(args, "domain", None)
+    tag = getattr(args, "tag", None)
+
     result = qs.query(
         entity_type=entity_type,
-        canon_state=canon_state,
-        layer=layer,
-        source_id=source_id,
-        custom_type_id=custom_type_id,
+        canon_state=canon,
+        visibility_state=visibility,
+        tag=tag,
+        domain=domain,
+        layer=ly,
+        custom_type_id=cid,
+        source_id=sid,
         sort_by=_sort_key_for(args.sort),
         sort_desc=args.sort_desc,
         limit=args.limit,
@@ -172,22 +227,22 @@ def register_gallery_commands(subparsers: Any) -> None:
     # ── Source ──
     p = gallery_subs.add_parser("por-fuente", help="Browse entities by source")
     p.add_argument("source_id", help="Source ID")
-    _add_query_flags(p)
+    _add_query_flags(p, exclude={"source_id"})
 
     # ── Layer ──
     p = gallery_subs.add_parser("por-capa", help="Browse entities by layer")
     p.add_argument("layer", help="Layer name")
-    _add_query_flags(p)
+    _add_query_flags(p, exclude={"layer"})
 
     # ── Canon state ──
     p = gallery_subs.add_parser("por-canon", help="Browse entities by canon state")
     p.add_argument("canon_state", help="Canon state (e.g. canonico, borrador)")
-    _add_query_flags(p)
+    _add_query_flags(p, exclude={"canon"})
 
     # ── Custom type ──
     p = gallery_subs.add_parser("custom", help="Browse entities by custom type")
     p.add_argument("custom_type_id", help="Custom entity type ID")
-    _add_query_flags(p)
+    _add_query_flags(p, exclude={"custom_type_id"})
 
 
 # ═══════════════════════════════════════════════════════════════════════
