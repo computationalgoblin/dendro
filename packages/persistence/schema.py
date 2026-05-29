@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B03-T02: upgraded to v3)
-CURRENT_SCHEMA_VERSION: int = 3
+# Current schema version for new projects (B04-T02: upgraded to v4)
+CURRENT_SCHEMA_VERSION: int = 4
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 3
+MAX_SUPPORTED_VERSION: int = 4
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,68 @@ def validate_project_entities(entities: Any) -> str | None:
                 f"(entity at index {idx})"
             )
         seen_ids.add(eid)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Migration: v3 → v4
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v3 data to v4 structure.
+
+    v4 formalises NarrativeRelation as a structured item within the
+    ``relations`` list.  v3 already had ``relations: []`` so this
+    migration is trivial — it ensures ``relations`` is a list.
+    Purely structural — no narrative data is invented.
+    """
+    migrated: dict[str, Any] = dict(data)
+
+    raw_relations = migrated.get("relations")
+    if not isinstance(raw_relations, list):
+        migrated["relations"] = []
+
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Relation-level structural validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_RELATION_KEYS = ("id", "source_id", "target_id", "relation_type")
+
+
+def validate_relation_structure(relation_data: Any) -> str | None:
+    """Validate that a single relation dict has the minimum required shape."""
+    if not isinstance(relation_data, dict):
+        return (
+            f"Relation is not a JSON object (got {type(relation_data).__name__})"
+        )
+    for key in _REQUIRED_RELATION_KEYS:
+        if key not in relation_data or not relation_data[key]:
+            return f"Relation is missing required key: '{key}'"
+    return None
+
+
+def validate_project_relations(relations: Any) -> str | None:
+    """Validate the relations collection: list, no duplicate ids, each item valid."""
+    if not isinstance(relations, list):
+        return f"Relations must be a JSON array, got {type(relations).__name__}"
+
+    seen_ids: set[str] = set()
+    for idx, rel_data in enumerate(relations):
+        err = validate_relation_structure(rel_data)
+        if err is not None:
+            return f"Relation at index {idx}: {err}"
+        rid = rel_data.get("id", "")
+        if rid in seen_ids:
+            return (
+                f"Corrupt project: duplicate relation id '{rid}' "
+                f"(relation at index {idx})"
+            )
+        seen_ids.add(rid)
 
     return None
 

@@ -60,10 +60,10 @@ class TestRelationCreation:
         r2 = NarrativeRelation()
         assert r1.id != r2.id
 
-    def test_17_fields(self):
+    def test_18_fields(self):
         r = NarrativeRelation(source_id="a", target_id="b")
         d = r.to_dict()
-        assert len(d) == 17, f"Expected 17, got {len(d)}: {list(d.keys())}"
+        assert len(d) == 18, f"Expected 18, got {len(d)}: {list(d.keys())}"
 
     def test_full_construction(self):
         now = datetime.now(timezone.utc)

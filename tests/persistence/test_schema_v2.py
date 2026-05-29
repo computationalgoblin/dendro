@@ -27,10 +27,10 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 class TestSchemaVersionB02T03:
     def test_current_schema_is_v2(self):
-        assert CURRENT_SCHEMA_VERSION == 3
+        assert CURRENT_SCHEMA_VERSION == 4
 
     def test_max_supported_is_v2(self):
-        assert MAX_SUPPORTED_VERSION == 3
+        assert MAX_SUPPORTED_VERSION == 4
 
 
 class TestMigrationV1ToV2:
@@ -147,10 +147,12 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 3
+        assert raw.get("schema_version") == 4
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType
+
+        from packages.domain.relation import NarrativeRelation
 
         store = ProjectStore()
         p = Project(name="Full", description="All fields")
@@ -166,7 +168,7 @@ class TestProjectStoreV2:
         p.project_metadata.author = "Alice"
         p.metadata["custom"] = "val"
         p.entities.append(NarrativeEntity(name="Orc", entity_type=EntityType.CRIATURA))
-        p.relations.append("rel1")
+        p.relations.append(NarrativeRelation(source_id="x", target_id="y"))
         p.sources.append("src1")
         p.history.append("hist1")
         p.issues.append("issue1")
@@ -194,13 +196,15 @@ class TestProjectStoreV2:
         assert p2.metadata["custom"] == "val"
         assert len(p2.entities) == 1
         assert p2.entities[0].name == "Orc"
-        assert p2.relations == ["rel1"]
+        assert len(p2.relations) == 1
+        assert p2.relations[0].source_id == "x"
         assert p2.sources == ["src1"]
         assert p2.history == ["hist1"]
         assert p2.issues == ["issue1"]
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity
+        from packages.domain.relation import NarrativeRelation
 
         store = ProjectStore()
         p = Project()
@@ -208,7 +212,10 @@ class TestProjectStoreV2:
             NarrativeEntity(name="E1"),
             NarrativeEntity(name="E2"),
         ]
-        p.relations = ["r1", "r2"]
+        p.relations = [
+            NarrativeRelation(source_id="a", target_id="b"),
+            NarrativeRelation(source_id="c", target_id="d"),
+        ]
 
         path = tmp_path / "colls.json"
         store.save(p, path)

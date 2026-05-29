@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import TypeVar
 
 from packages.domain.entity import NarrativeEntity
+from packages.domain.relation import NarrativeRelation
 from packages.domain.project_config import (
     AIConfig,
     ExportConfig,
@@ -94,7 +95,7 @@ class Project:
 
     # Prepared collections (empty, for Bloque 3-6+)
     entities: list[NarrativeEntity] = field(default_factory=list)
-    relations: list = field(default_factory=list)
+    relations: list[NarrativeRelation] = field(default_factory=list)
     sources: list = field(default_factory=list)
     history: list = field(default_factory=list)
     issues: list = field(default_factory=list)
@@ -162,7 +163,7 @@ class Project:
             "export": self._config_to_dict(self.export),
             # Prepared collections
             "entities": [e.to_dict() for e in self.entities],
-            "relations": list(self.relations),
+            "relations": [r.to_dict() for r in self.relations],
             "sources": list(self.sources),
             "history": list(self.history),
             "issues": list(self.issues),
@@ -228,7 +229,11 @@ class Project:
                 for e in data.get("entities", [])
                 if isinstance(e, dict)
             ],
-            relations=list(data.get("relations", [])),
+            relations=[
+                NarrativeRelation.from_dict(r)
+                for r in data.get("relations", [])
+                if isinstance(r, dict)
+            ],
             sources=list(data.get("sources", [])),
             history=list(data.get("history", [])),
             issues=list(data.get("issues", [])),

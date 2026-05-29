@@ -120,6 +120,7 @@ class NarrativeRelation:
 
     # --- Conditions & metadata (16–17) ---
     conditions: str = ""
+    tags: list[str] = field(default_factory=list)
     custom_metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -151,6 +152,7 @@ class NarrativeRelation:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "conditions": self.conditions,
+            "tags": list(self.tags),
             "custom_metadata": dict(self.custom_metadata),
         }
 
@@ -188,6 +190,7 @@ class NarrativeRelation:
             created_at=_parse_datetime(data.get("created_at")),
             updated_at=_parse_datetime(data.get("updated_at")),
             conditions=data.get("conditions", ""),
+            tags=_parse_list(data.get("tags")),
             custom_metadata=_parse_dict(data.get("custom_metadata")),
         )
 
@@ -239,6 +242,12 @@ def _parse_datetime(value: Any) -> datetime:
         except (ValueError, TypeError):
             pass
     return _now()
+
+
+def _parse_list(value: Any) -> list:
+    if isinstance(value, list):
+        return list(value)
+    return []
 
 
 def _parse_dict(value: Any) -> dict[str, Any]:

@@ -15,13 +15,16 @@ from typing import Any
 
 from packages.domain.project import Project
 from packages.domain.entity import NarrativeEntity
+from packages.domain.relation import NarrativeRelation
 from packages.domain.result import Error, Ok, Result
 from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
+    _apply_migration_v3_to_v4,
     detect_schema_version,
     validate_project_entities,
+    validate_project_relations,
     validate_project_structure,
     validate_schema_version,
 )
@@ -234,6 +237,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 2:
         data = _apply_migration_v2_to_v3(data)
+        data["schema_version"] = 3
+        version = 3
+
+    if version == 3:
+        data = _apply_migration_v3_to_v4(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -437,3 +445,96 @@ class ProjectStore:
             if entity.id == entity_id:
                 return Ok(entity)
         return Error(f"Entity with id '{entity_id}' not found in project")
+
+    # ------------------------------------------------------------------
+    # Relation operations
+    # ------------------------------------------------------------------
+
+    def add_relation(
+        self, project: Project, relation: NarrativeRelation
+    ) -> None:
+        """Add a relation to project.relations in memory. No implicit save."""
+        project.relations.append(relation)
+
+    def update_relation(
+        self, project: Project, relation: NarrativeRelation
+    ) -> Result[None, str]:
+        """Replace a relation by id in project.relations."""
+        for i, existing in enumerate(project.relations):
+            if existing.id == relation.id:
+                project.relations[i] = relation
+                return Ok(None)
+        return Error(f"Relation with id '{relation.id}' not found in project")
+
+    def archive_relation(
+        self, project: Project, relation_id: str
+    ) -> Result[None, str]:
+        """Soft-delete a relation by setting canon_state=ARCHIVADO."""
+        from packages.domain.entity import CanonState
+
+        for rel in project.relations:
+            if rel.id == relation_id:
+                rel.canon_state = CanonState.ARCHIVADO
+                rel.touch()
+                return Ok(None)
+        return Error(f"Relation with id '{relation_id}' not found in project")
+
+    def restore_relation(
+        self, project: Project, relation_id: str
+    ) -> Result[None, str]:
+        """Restore an archived relation to BORRADOR state."""
+        from packages.domain.entity import CanonState
+
+        for rel in project.relations:
+            if rel.id == relation_id:
+                if rel.canon_state != CanonState.ARCHIVADO:
+                    return Error(
+                        f"Relation '{relation_id}' is not archived "
+                        f"(current: {rel.canon_state.value})"
+                    )
+                rel.canon_state = CanonState.BORRADOR
+                rel.touch()
+                return Ok(None)
+        return Error(f"Relation with id '{relation_id}' not found in project")
+
+    def find_relation(
+        self, project: Project, relation_id: str
+    ) -> Result[NarrativeRelation, str]:
+        """Find a relation by id."""
+        for rel in project.relations:
+            if rel.id == relation_id:
+                return Ok(rel)
+        return Error(f"Relation with id '{relation_id}' not found in project")
+
+    def find_relations_by_entity(
+        self, project: Project, entity_id: str
+    ) -> list[NarrativeRelation]:
+        """Return all relations where entity_id is source or target."""
+        return [
+            r for r in project.relations
+            if r.source_id == entity_id or r.target_id == entity_id
+        ]
+
+    def validate_relations_integrity(
+        self, project: Project
+    ) -> Result[None, str]:
+        """Validate referential integrity of all relations.
+
+        Checks that every source_id and target_id references an
+        existing entity in project.entities.  This is the persistence
+        layer's safety barrier — the application layer (B04-T03)
+        validates at create/update time as well.
+        """
+        entity_ids = {e.id for e in project.entities}
+        for i, rel in enumerate(project.relations):
+            if rel.source_id and rel.source_id not in entity_ids:
+                return Error(
+                    f"Relation at index {i} (id='{rel.id}'): "
+                    f"source entity '{rel.source_id}' not found"
+                )
+            if rel.target_id and rel.target_id not in entity_ids:
+                return Error(
+                    f"Relation at index {i} (id='{rel.id}'): "
+                    f"target entity '{rel.target_id}' not found"
+                )
+        return Ok(None)
