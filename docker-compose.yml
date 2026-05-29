@@ -1,0 +1,19 @@
+﻿services:
+  dev:
+    build:
+      context: .
+      dockerfile: .docker/Dockerfile
+    container_name: narrative-architect-dev
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - narrative_architect_node_modules:/workspace/node_modules
+      - narrative_architect_pnpm_store:/home/dev/.local/share/pnpm/store
+    stdin_open: true
+    tty: true
+    environment:
+      - NODE_ENV=development
+
+volumes:
+  narrative_architect_node_modules:
+  narrative_architect_pnpm_store:

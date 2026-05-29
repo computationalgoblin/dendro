@@ -1,0 +1,12 @@
+﻿.git
+node_modules
+dist
+build
+out
+coverage
+.cache
+.venv
+__pycache__
+*.pyc
+ai_outputs/*
+!ai_outputs/.gitkeep

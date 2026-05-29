@@ -1,0 +1,14 @@
+﻿node_modules
+.venv
+__pycache__
+*.pyc
+dist
+build
+out
+coverage
+.cache
+.env
+.env.*
+!.env.example
+ai_outputs/*
+!ai_outputs/.gitkeep
