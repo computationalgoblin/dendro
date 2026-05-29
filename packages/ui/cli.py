@@ -217,6 +217,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_custom_field_commands(sub)
 
+    # ── gallery ──────────────────────────────────────────────────────
+    from packages.ui.cli_gallery import register_gallery_commands
+
+    register_gallery_commands(sub)
+
     return parser
 
 
@@ -283,6 +288,13 @@ def main() -> None:
         from packages.ui.cli_custom_field import handle_custom_field_command
 
         handle_custom_field_command(args, session)
+        return
+
+    # ── Gallery commands ──────────────────────────────────────────────
+    if args.command == "gallery":
+        from packages.ui.cli_gallery import handle_gallery_command
+
+        handle_gallery_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
