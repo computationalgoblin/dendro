@@ -14,4 +14,6 @@ RUN python3 -m venv /opt/venv
 
 ENV PATH=/opt/venv/bin:/root/.local/bin:/root/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || true
+
 CMD ["/bin/bash"]
