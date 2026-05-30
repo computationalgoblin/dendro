@@ -83,7 +83,7 @@ def handle_issue_command(args, session):
         for i in issues:
             print(
                 f"  [{i.severity.value.upper():6s}] {i.type.value:<25s} "
-                f"{i.state.value:<12s} {i.description[:40]:40s} {i.id[:8]}"
+                f"{i.state.value:<12s} {i.description[:40]:40s} {i.id}"
             )
 
     elif cmd == "show":
