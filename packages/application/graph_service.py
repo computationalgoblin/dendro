@@ -388,7 +388,8 @@ class GraphService:
             return False
         if gf.relation_type and edge.relation_type != gf.relation_type:
             return False
-        if gf.custom_relation_type_id and edge.custom_relation_type_id != gf.custom_relation_type_id:
+        crt_id = gf.custom_relation_type_id
+        if crt_id and edge.custom_relation_type_id != crt_id:
             return False
         return True
 
