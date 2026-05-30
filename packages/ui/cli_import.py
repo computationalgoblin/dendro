@@ -10,20 +10,18 @@ from pathlib import Path
 from packages.application.import_service import ImportService
 from packages.domain.import_models import ImportFormat
 from packages.domain.result import Error, is_ok, unwrap
+from packages.ui.cli import (
+    _bootstrap_services,
+    resolve_project_path,
+)
 
 
-def _resolve_path(args: argparse.Namespace, session_ctx) -> Path | None:
-    from packages.ui.cli import resolve_project_path
-    return resolve_project_path(args, session_ctx)
-
-
-def _import_service(args: argparse.Namespace, session_ctx) -> ImportService:
-    from packages.ui.cli import bootstrap
-    services = bootstrap(_resolve_path(args, session_ctx))
+def _import_service(project_path: Path) -> ImportService:
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
     return ImportService(
-        project_service=services["project_service"],
-        candidate_service=services.get("candidate_service"),
-        source_service=services.get("source_service"),
+        project_service=ps,
+        candidate_service=None,
+        source_service=ss,
     )
 
 
@@ -83,27 +81,35 @@ def register_import_commands(sub: argparse._SubParsersAction) -> None:
 
 
 def handle_import_command(args: argparse.Namespace, session_ctx=None) -> str:
+    project_path = resolve_project_path(args, session_ctx)
+    if project_path is None:
+        return "Error: no active project. Use: project open <path>"
     action = getattr(args, "import_action", None)
 
     if action == "document":
-        return _cmd_import_document(args, session_ctx)
+        return _cmd_import_document(args, session_ctx, project_path)
     elif action == "basket":
-        return _cmd_basket(args, session_ctx)
+        return _cmd_basket(args, session_ctx, project_path)
     elif action == "review":
-        return _cmd_review(args, session_ctx)
+        return _cmd_review(args, session_ctx, project_path)
     elif action == "partial":
-        return _cmd_partial(args, session_ctx)
+        return _cmd_partial(args, session_ctx, project_path)
     else:
         return "Error: unknown import subcommand. Use: import document|basket|review|partial"
 
 
-def _cmd_import_document(args: argparse.Namespace, session_ctx) -> str:
-    svc = _import_service(args, session_ctx)
+def _cmd_import_document(args: argparse.Namespace, session_ctx, project_path: Path) -> str:
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+    svc = ImportService(project_service=ps, candidate_service=None, source_service=ss)
     fmt = _format_flag(args)
     result = svc.import_document(args.file, fmt)
     if isinstance(result, Error):
         return f"Import failed: {result.error}"
     basket = result.value
+    # Save after successful import
+    save_result = ps.save(project_path)
+    if isinstance(save_result, Error):
+        return f"Import succeeded but save failed: {save_result.error}"
     return (
         f"Document imported successfully.\n"
         f"  Basket ID: {basket.id}\n"
@@ -115,8 +121,8 @@ def _cmd_import_document(args: argparse.Namespace, session_ctx) -> str:
     )
 
 
-def _cmd_basket(args: argparse.Namespace, session_ctx) -> str:
-    svc = _import_service(args, session_ctx)
+def _cmd_basket(args: argparse.Namespace, session_ctx, project_path: Path) -> str:
+    svc = _import_service(project_path)
     b_action = getattr(args, "basket_action", None)
 
     if b_action == "list":
@@ -176,8 +182,9 @@ def _cmd_basket(args: argparse.Namespace, session_ctx) -> str:
     return "Error: unknown basket action. Use: import basket list|show"
 
 
-def _cmd_review(args: argparse.Namespace, session_ctx) -> str:
-    svc = _import_service(args, session_ctx)
+def _cmd_review(args: argparse.Namespace, session_ctx, project_path: Path) -> str:
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+    svc = ImportService(project_service=ps, candidate_service=None, source_service=ss)
     r_action = getattr(args, "review_action", None)
 
     if r_action == "accept":
@@ -185,6 +192,8 @@ def _cmd_review(args: argparse.Namespace, session_ctx) -> str:
         if isinstance(result, Error):
             return f"Accept failed: {result.error}"
         candidate = result.value
+        # Save
+        ps.save(project_path)
         return (
             "Import candidate accepted into candidate inbox:\n"
             f"  ImportCandidate: {args.cand_id}\n"
@@ -199,13 +208,15 @@ def _cmd_review(args: argparse.Namespace, session_ctx) -> str:
         result = svc.reject_import_candidate(args.basket_id, args.cand_id)
         if isinstance(result, Error):
             return f"Reject failed: {result.error}"
+        # Save
+        ps.save(project_path)
         return f"Import candidate {args.cand_id[:8]} rejected."
 
     return "Error: unknown review action. Use: import review accept|reject"
 
 
-def _cmd_partial(args: argparse.Namespace, session_ctx) -> str:
-    svc = _import_service(args, session_ctx)
+def _cmd_partial(args: argparse.Namespace, session_ctx, project_path: Path) -> str:
+    svc = _import_service(project_path)
     filters: dict = {}
     if getattr(args, "characters", False):
         filters["characters_only"] = True

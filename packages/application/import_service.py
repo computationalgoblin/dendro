@@ -142,11 +142,13 @@ class ImportService:
             return Error("No active project")
         return Ok(p)
 
-    def _save(self, proj) -> Result[None, str]:
+    def _save(self, proj, project_path: Path | None = None) -> Result[None, str]:
+        from packages.persistence.store import ProjectStore
+        store = ProjectStore()
+        if project_path:
+            return store.save(proj, project_path)
         ps = self.project_service
         if hasattr(ps, "_current_path") and ps._current_path:
-            from packages.persistence.store import ProjectStore
-            store = ProjectStore()
             return store.save(proj, ps._current_path)
         return Error("No project path to save to")
 
@@ -204,15 +206,9 @@ class ImportService:
         # ── Step 6: Create basket ──
         basket = self.create_review_basket(source_id, segments, import_candidates, path=str(path), format=format.value)
 
-        # ── COMMIT: only now add to project ──
+        # ── COMMIT: only now add to project (no save — CLI handles that) ──
         proj.sources.append(source)
         proj.import_baskets.append(basket)
-        save_result = self._save(proj)
-        if isinstance(save_result, Error):
-            # Rollback in-memory
-            proj.sources.remove(source)
-            proj.import_baskets.remove(basket)
-            return Error(f"Save failed after import: {save_result.error}")
 
         return Ok(basket)
 
@@ -431,13 +427,6 @@ class ImportService:
         import_cand.review_state = ImportReviewState.ACEPTADO
         basket.updated_at = _now_iso()
 
-        save_result = self._save(proj)
-        if isinstance(save_result, Error):
-            # Rollback in-memory
-            proj.candidates.remove(candidate)
-            import_cand.review_state = ImportReviewState.PENDIENTE
-            return Error(f"Save failed: {save_result.error}")
-
         return Ok(candidate)
 
     def reject_import_candidate(
@@ -467,11 +456,6 @@ class ImportService:
 
         import_cand.review_state = ImportReviewState.RECHAZADO
         basket.updated_at = _now_iso()
-
-        save_result = self._save(proj)
-        if isinstance(save_result, Error):
-            import_cand.review_state = ImportReviewState.PENDIENTE
-            return Error(f"Save failed: {save_result.error}")
 
         return Ok(None)
 
