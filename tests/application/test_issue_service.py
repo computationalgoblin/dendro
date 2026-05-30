@@ -158,7 +158,7 @@ class TestValidators:
         p = _setup()[0].active_project
         e = NarrativeEntity(name="Clo", entity_type=EntityType.PERSONAJE)
         e.canon_state = CanonState.CANONICO
-        e.certainty_level = e.certainty_level = CertaintyLevel.BAJA
+        e.certainty_level = CertaintyLevel.DUDOSO
         p.entities.append(e)
         issues = run_validators(p)
         clc = [i for i in issues if i.type == StructuredIssueType.CANON_LOW_CERTAINTY]
@@ -200,19 +200,20 @@ class TestNoDuplication:
 
     def test_intentional_not_regenerated(self) -> None:
         ps, svc = _setup()
-        svc.create_issue({
-            "type": "broken_relation",
-            "state": "intencional",
-            "is_intentional": True,
-            "affected_entity_ids": ["e1"],
-        })
-        # Create actual broken relation
+        # Create actual broken relation first
         e = NarrativeEntity(name="A", entity_type=EntityType.PERSONAJE)
         ps.active_project.entities.append(e)
         ps.active_project.relations.append(NarrativeRelation(
             source_id=e.id, target_id="does-not-exist",
             relation_type=RelationType.ES_ALIADO_DE,
         ))
+        # Mark as intentional with matching entity_id
+        svc.create_issue({
+            "type": "broken_relation",
+            "state": "intencional",
+            "is_intentional": True,
+            "affected_entity_ids": [e.id, "does-not-exist"],
+        })
         result = svc.run_validation().value
         # Should not create new broken_relation because INTENCIONAL exists
         open_br = svc.list_issues(itype="broken_relation", state="abierta").value

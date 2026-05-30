@@ -346,7 +346,7 @@ def run_validators(
     # 8. Canon low certainty
     for e in project.entities:
         if e.canon_state == CanonState.CANONICO:
-            if e.certainty_level.value in ("baja", "muy_baja"):
+            if e.certainty_level.value in ("dudoso", "falso"):
                 results.append(_make_issue(
                     StructuredIssueType.CANON_LOW_CERTAINTY,
                     StructuredIssueSeverity.MEDIA,

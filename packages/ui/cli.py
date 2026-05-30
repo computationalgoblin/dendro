@@ -237,6 +237,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_graph_commands(sub)
 
+    # ── issue ──────────────────────────────────────────────────────────
+    from packages.ui.cli_issue import register_issue_commands
+
+    register_issue_commands(sub)
+
     return parser
 
 
@@ -326,10 +331,18 @@ def main() -> None:
         handle_layer_command(args, session)
         return
 
-        # ── Graph commands ──────────────────────────────────────────────
+    # ── Graph commands ──────────────────────────────────────────────
     if args.command == "graph":
         from packages.ui.cli_graph import handle_graph_command
+
         handle_graph_command(args, session)
+        return
+
+    # ── Issue commands ──────────────────────────────────────────────
+    if args.command == "issue":
+        from packages.ui.cli_issue import handle_issue_command
+
+        handle_issue_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)

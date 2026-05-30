@@ -266,6 +266,7 @@ class TestToDict:
             "visibility", "export",
             "entities", "relations", "sources", "history", "issues",
             "candidates",
+            "structured_issues",
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
         }
