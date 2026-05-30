@@ -9,7 +9,7 @@ from packages.application.history_service import HistoryService
 from packages.application.project_service import ProjectService
 from packages.application.relation_service import RelationService
 from packages.application.source_service import SourceService
-from packages.domain.candidate_issue import Candidate, CandidateState, Issue, IssueState
+from packages.domain.candidate_issue import Candidate, CandidateState, StructuredIssue, StructuredIssueState, StructuredIssueType
 from packages.domain.entity import CanonState, EntityType, VisibilityState
 from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok
@@ -25,10 +25,10 @@ from packages.persistence.store import ProjectStore
 
 class TestSchemaV5:
     def test_current_is_5(self):
-        assert CURRENT_SCHEMA_VERSION == 7
+        assert CURRENT_SCHEMA_VERSION == 8
 
     def test_max_supported_is_5(self):
-        assert MAX_SUPPORTED_VERSION == 7
+        assert MAX_SUPPORTED_VERSION == 8
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -79,8 +79,8 @@ class TestPersistenceV5:
         p = ps.active_project
 
         from packages.domain.candidate_issue import IssueType, IssueSeverity
-        p.issues.append(Issue(title="Bug", issue_type=IssueType.ERROR,
-                               severity=IssueSeverity.ALTA, state=IssueState.ABIERTA))
+        p.issues.append(StructuredStructuredIssue(description="Bug", type=StructuredIssueType.ERROR,
+                               severity=IssueSeverity.ALTA, state=StructuredIssueState.ABIERTA))
         path = tmp_path / "issue.json"
         store.save(p, path)
 
@@ -147,7 +147,7 @@ class TestDuplicateIds:
         ps = ProjectService(store=store)
         ps.create(name="DupIssue")
         p = ps.active_project
-        i = Issue(title="Dup")
+        i = StructuredIssue(description="Dup")
         p.issues.append(i)
         p.issues.append(i)
 
@@ -160,7 +160,7 @@ class TestDuplicateIds:
         ps = ProjectService(store=store)
         ps.create(name="DupCand")
         p = ps.active_project
-        c = Candidate(title="Dup")
+        c = Candidate(description="Dup")
         p.candidates.append(c)
         p.candidates.append(c)
 

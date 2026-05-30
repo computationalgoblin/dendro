@@ -179,7 +179,7 @@ class QueryService:
             return Error(proj.error)
         return Ok([
             i for i in proj.value.issues
-            if i.state in (IssueState.ABIERTA, IssueState.EN_PROGRESO)
+            if getattr(i, "state", None) and i.state.value in ("abierta", "en_progreso")
         ])
 
     # ------------------------------------------------------------------

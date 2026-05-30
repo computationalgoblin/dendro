@@ -6,7 +6,7 @@ Covers:
 - Validation functions (domains, world_layers, advanced_config, entity_domain_ids)
 - Migration chain v1→v7 accumulation test
 - ProjectStore v7 roundtrip
-- Future version rejection (v8)
+- Future version rejection (v9)
 """
 
 import json
@@ -70,10 +70,10 @@ def _v6_minimal(**overrides) -> dict:
 
 class TestSchemaVersionV7:
     def test_current_schema_is_v7(self):
-        assert CURRENT_SCHEMA_VERSION == 7
+        assert CURRENT_SCHEMA_VERSION == 8
 
     def test_max_supported_is_v7(self):
-        assert MAX_SUPPORTED_VERSION == 7
+        assert MAX_SUPPORTED_VERSION == 8
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -366,8 +366,8 @@ class TestProjectStoreRoundtripV7:
 # Migration chain: v1 → v7 (accumulative)
 # ══════════════════════════════════════════════════════════════════
 
-class TestMigrationChainV1ToV7:
-    """A project that starts at v1 should migrate all the way to v7."""
+class TestMigrationChainV1ToV8:
+    """A project that starts at v1 should migrate all the way to v8."""
 
     def _v1_data(self) -> dict:
         return {
@@ -388,7 +388,7 @@ class TestMigrationChainV1ToV7:
         data = result.value
 
         # Verify the result is v7
-        assert data["schema_version"] == 7
+        assert data["schema_version"] == 8
 
         # All v7 fields present
         assert data["domains"] == [
@@ -412,7 +412,7 @@ class TestMigrationChainV1ToV7:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 7
+        assert data["schema_version"] == 8
 
         # Legacy data preserved
         assert data["id"] == "proj-001"
@@ -421,7 +421,7 @@ class TestMigrationChainV1ToV7:
         # New fields added
         assert len(data["domains"]) == 5
 
-    def test_v7_project_loads_directly_no_migration(self, tmp_path: Path):
+    def test_v8_project_loads_directly_no_migration(self, tmp_path: Path):
         path = tmp_path / "v7proj.json"
         v7 = _v6_minimal()
         v7["schema_version"] = 7
@@ -443,7 +443,7 @@ class TestMigrationChainV1ToV7:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 7
+        assert data["schema_version"] == 8
         assert data["domains"] == ["mundo", "historia"]
         assert len(data["world_layers"]) == 1
         assert data["world_layers"][0]["name"] == "Custom"
@@ -454,16 +454,16 @@ class TestMigrationChainV1ToV7:
 # ══════════════════════════════════════════════════════════════════
 
 class TestFutureVersionRejection:
-    def test_v8_rejected(self, tmp_path: Path):
+    def test_v9_rejected(self, tmp_path: Path):
         path = tmp_path / "future.json"
-        future = {"schema_version": 8, "id": "x", "name": "Future",
+        future = {"schema_version": 9, "id": "x", "name": "Future",
                    "created_at": "2026-01-01T00:00:00+00:00",
                    "updated_at": "2026-01-01T00:00:00+00:00"}
         path.write_text(json.dumps(future), encoding="utf-8")
 
         result = load_project_data(path)
         assert isinstance(result, Error)
-        assert "v8" in result.error or "schema" in result.error.lower()
+        assert "v9" in result.error or "schema" in result.error.lower()
         assert "update" in result.error.lower() or "actuali" in result.error.lower()
 
     def test_v7_passes_validation(self, tmp_path: Path):

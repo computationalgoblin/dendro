@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TypeVar
 
-from packages.domain.candidate_issue import Candidate, Issue
+from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.custom_types import (
     CustomEntityType,
     CustomFieldDefinition,
@@ -108,7 +108,7 @@ class Project:
     relations: list[NarrativeRelation] = field(default_factory=list)
     sources: list[Source] = field(default_factory=list)
     history: list[HistoryEntry] = field(default_factory=list)
-    issues: list[Issue] = field(default_factory=list)
+    issues: list[StructuredIssue] = field(default_factory=list)
     candidates: list[Candidate] = field(default_factory=list)
 
     # Custom types and taxonomies (Bloque 8)
@@ -194,6 +194,7 @@ class Project:
             "sources": [s.to_dict() for s in self.sources],
             "history": [h.to_dict() for h in self.history],
             "issues": [i.to_dict() for i in self.issues],
+            "structured_issues": [i.to_dict() for i in self.issues],
             "candidates": [c.to_dict() for c in self.candidates],
             # Custom types (Bloque 8)
             "custom_entity_types": [ct.to_dict() for ct in self.custom_entity_types],
@@ -276,7 +277,11 @@ class Project:
             ],
             sources=[Source.from_dict(s) for s in data.get("sources", []) if isinstance(s, dict)],
             history=[HistoryEntry.from_dict(h) for h in data.get("history", []) if isinstance(h, dict)],
-            issues=[Issue.from_dict(i) for i in data.get("issues", []) if isinstance(i, dict)],
+            issues=[
+                StructuredIssue.from_dict(i)
+                for i in data.get("structured_issues", data.get("issues", []))
+                if isinstance(i, dict)
+            ],
             candidates=[Candidate.from_dict(c) for c in data.get("candidates", []) if isinstance(c, dict)],
             # Custom types (Bloque 8)
             custom_entity_types=[

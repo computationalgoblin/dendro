@@ -26,11 +26,11 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 
 class TestSchemaVersionB02T03:
-    def test_current_schema_is_v2(self):
-        assert CURRENT_SCHEMA_VERSION == 7
+    def test_current_schema_is_v8(self):
+        assert CURRENT_SCHEMA_VERSION == 8
 
-    def test_max_supported_is_v2(self):
-        assert MAX_SUPPORTED_VERSION == 7
+    def test_max_supported_is_v8(self):
+        assert MAX_SUPPORTED_VERSION == 8
 
 
 class TestMigrationV1ToV2:
@@ -139,7 +139,7 @@ class TestStructuralValidation:
 
 
 class TestProjectStoreV2:
-    def test_save_produces_schema_version_2(self, tmp_path: Path):
+    def test_save_produces_schema_version_8(self, tmp_path: Path):
         store = ProjectStore()
         p = Project(name="v2test")
         path = tmp_path / "v2.json"
@@ -147,7 +147,7 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 7
+        assert raw.get("schema_version") == 8
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType
@@ -173,8 +173,8 @@ class TestProjectStoreV2:
         p.relations.append(NarrativeRelation(source_id="x", target_id="y"))
         p.sources.append(Source(name="src1"))
         p.history.append(HistoryEntry(event_type=HistoryEventType.CREACION_ENTIDAD))
-        from packages.domain.candidate_issue import Issue
-        p.issues.append(Issue(title="issue1"))
+        from packages.domain.candidate_issue import StructuredIssue
+        p.issues.append(StructuredIssue(description="issue1"))
 
         path = tmp_path / "full.json"
         save_result = store.save(p, path)
@@ -205,7 +205,7 @@ class TestProjectStoreV2:
         assert p2.sources[0].name == "src1"
         assert len(p2.history) == 1
         assert len(p2.issues) == 1
-        assert p2.issues[0].title == "issue1"
+        assert p2.issues[0].description == "issue1"
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType
@@ -348,7 +348,7 @@ class TestLoadStructuralErrors:
         store = ProjectStore()
         path = tmp_path / "missing.json"
         path.write_text(json.dumps({
-            "schema_version": 2,
+            "schema_version": 8,
             "name": "no_id",
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",

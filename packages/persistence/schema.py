@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B10-T02: upgraded to v7)
-CURRENT_SCHEMA_VERSION: int = 7
+# Current schema version for new projects (B12-T03: upgraded to v8)
+CURRENT_SCHEMA_VERSION: int = 8
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 7
+MAX_SUPPORTED_VERSION: int = 8
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +484,54 @@ def validate_entity_domain_ids(
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Migration: v7 -> v8
+# ---------------------------------------------------------------------------
+
+CATEGORY_TO_TYPE: dict[str, str] = {
+    "contradiction": "contradictory_relation",
+    "contradiccion": "contradictory_relation",
+    "warning": "no_description",
+    "advertencia": "no_description",
+    "error": "invalid_entity_type",
+    "broken_relation": "broken_relation",
+    "duplicate": "duplicate_entity",
+}
+
+
+def _apply_migration_v7_to_v8(data):
+    legacy = data.get("issues", [])
+    structured = []
+    for item in legacy:
+        if not isinstance(item, dict):
+            continue
+        cat = item.get("issue_type", "") or item.get("category", "")
+        itype = CATEGORY_TO_TYPE.get(cat, "broken_relation")
+        detected = item.get("created_at") or item.get("detected_at") or ""
+        structured.append({
+            "id": item.get("id", ""),
+            "type": itype,
+            "severity": item.get("severity", "media"),
+            "state": item.get("state", "abierta"),
+            "affected_entity_ids": [item["affected_entity_id"]] if item.get("affected_entity_id") else [],
+            "affected_relation_ids": [item["affected_relation_id"]] if item.get("affected_relation_id") else [],
+            "affected_source_ids": [item["affected_source_id"]] if item.get("affected_source_id") else [],
+            "description": item.get("description", "") or item.get("title", ""),
+            "evidence": item.get("evidence", ""),
+            "possible_solutions": item.get("possible_solutions", []),
+            "detected_at": detected,
+            "reviewed_at": item.get("reviewed_at") or item.get("resolved_at"),
+            "resolution": item.get("resolution", ""),
+            "is_intentional": item.get("is_intentional", False),
+            "metadata": {"legacy_category": cat} if cat and cat not in CATEGORY_TO_TYPE else {},
+        })
+    data["structured_issues"] = structured
+    data["schema_version"] = 8
+    return data
+
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -520,7 +568,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
 
     # Collections must be lists when present
     collection_fields = (
-        "entities", "relations", "sources", "history", "issues",
+        "entities", "relations", "sources", "history", "issues", "structured_issues",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers",
     )
