@@ -3,7 +3,6 @@ merge, convert, archive, partial-accept (B14-T04)."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from pathlib import Path
@@ -96,7 +95,8 @@ def handle_candidate_command(args, session):
             ctype=getattr(args, "ctype", None),
         )
         if isinstance(r, Error):
-            print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            print(f"error: {r.error}", file=sys.stderr)
+            sys.exit(1)
         cands = r.value
         if not cands:
             print("No candidates found")
@@ -112,7 +112,8 @@ def handle_candidate_command(args, session):
         ps, svc = _get_svc(project_path)
         r = svc.get_candidate(args.id)
         if isinstance(r, Error):
-            print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            print(f"error: {r.error}", file=sys.stderr)
+            sys.exit(1)
         c = r.value
         print(f"Candidate: {c.id}")
         print(f"  Type: {c.candidate_type.value}")
@@ -143,10 +144,12 @@ def handle_candidate_command(args, session):
         try:
             data["proposed_data"] = json.loads(args.data)
         except json.JSONDecodeError:
-            print("error: --data must be valid JSON", file=sys.stderr); sys.exit(1)
+            print("error: --data must be valid JSON", file=sys.stderr)
+            sys.exit(1)
         r = svc.create_candidate(data)
         if isinstance(r, Error):
-            print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            print(f"error: {r.error}", file=sys.stderr)
+            sys.exit(1)
         ps.save(Path(project_path))
         print(f"Candidate '{r.value.title}' ({r.value.id}) created")
 
@@ -158,11 +161,16 @@ def handle_candidate_command(args, session):
 
         if cmd == "edit":
             data = {}
-            if args.title: data["title"] = args.title
-            if args.data: data["proposed_data"] = json.loads(args.data)
-            if args.confidence is not None: data["confidence"] = args.confidence
-            if args.justification: data["justification"] = args.justification
-            if args.source: data["source"] = args.source
+            if args.title:
+                data["title"] = args.title
+            if args.data:
+                data["proposed_data"] = json.loads(args.data)
+            if args.confidence is not None:
+                data["confidence"] = args.confidence
+            if args.justification:
+                data["justification"] = args.justification
+            if args.source:
+                data["source"] = args.source
             r = svc.update_candidate(args.id, data)
             msg = f"Candidate '{args.id[:8]}' updated"
         elif cmd == "accept":
@@ -199,7 +207,8 @@ def handle_candidate_command(args, session):
             return
 
         if isinstance(r, Error):
-            print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            print(f"error: {r.error}", file=sys.stderr)
+            sys.exit(1)
         if save:
             ps.save(Path(project_path))
         if cmd in ("by-source", "by-entity"):

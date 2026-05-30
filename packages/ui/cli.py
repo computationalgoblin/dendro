@@ -353,5 +353,15 @@ def main() -> None:
         handle_issue_command(args, session)
         return
 
+    if args.command == "framework":
+        from packages.ui.cli_framework import handle_framework_command
+        handle_framework_command(args, session)
+        return
+
+    if args.command == "candidate":
+        from packages.ui.cli_candidate import handle_candidate_command
+        handle_candidate_command(args, session)
+        return
+
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
     sys.exit(1)
