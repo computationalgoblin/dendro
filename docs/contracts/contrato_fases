@@ -62,6 +62,22 @@ El sistema deberá soportar tipos personalizados, relaciones personalizadas, cam
 
 La aplicación deberá ser funcional sin IA. La IA será una capa de asistencia sobre una aplicación narrativa estructurada ya usable. El core de creación, edición, consulta, persistencia y organización deberá existir independientemente de los proveedores de IA.
 
+## 9. Principio de interfaz progresiva
+
+La aplicación podrá exponer funcionalidades mediante CLI, scripts o interfaces técnicas provisionales durante los bloques de implementación. Estas interfaces tendrán como finalidad principal validar contratos internos, servicios de aplicación, persistencia, trazabilidad y flujos manuales de prueba.
+
+La existencia de un comando CLI no implicará, por sí misma, que la experiencia final de usuario esté completada. Salvo que un bloque indique explícitamente "UI final", "interfaz visual de producto" o "experiencia de usuario final", las funcionalidades de interfaz podrán considerarse cumplidas mediante una interfaz técnica provisional.
+
+A efectos del contrato, se distinguen tres niveles:
+
+1. **CLI técnica de validación**: interfaz de línea de comandos usada para pruebas manuales, automatización, smoke tests y operación técnica. Debe consumir servicios de aplicación y no acceder directamente a persistencia.
+2. **UI provisional**: interfaz mínima que permite usar una funcionalidad de forma operativa antes de construir la experiencia definitiva. Puede ser CLI, TUI, web mínima o panel local.
+3. **UI final o interfaz de producto**: interfaz diseñada para uso continuo por el usuario final, con navegación, edición, revisión, protección de visibilidad, ergonomía y flujos completos.
+
+Todo cierre de bloque que incluya interfaz deberá especificar qué nivel se ha entregado, qué validación manual o automatizada se ha ejecutado, y qué deuda UX queda pendiente.
+
+La UI final deberá reutilizar los servicios de aplicación existentes, no duplicar modelos de dominio, no reconstruir lógica de consulta y no escribir directamente en persistencia.
+
 ---
 
 # Bloque 1 — Fundación de proyecto y arquitectura base
@@ -710,6 +726,12 @@ Implementar una primera interfaz funcional que permita usar el core sin depender
 
 Este bloque tiene como objetivo validar el flujo fundamental de creación y edición.
 
+## 7.1.1 Aclaración de interfaz
+
+La interfaz de este bloque es una interfaz mínima y provisional. Puede implementarse como CLI técnica de validación si consume los servicios de aplicación y permite probar el flujo fundamental de proyecto, entidades y relaciones.
+
+Este bloque no define la UI final del producto. La experiencia visual definitiva queda fuera de alcance salvo que un bloque posterior lo indique explícitamente.
+
 ## 7.2 Funcionalidades requeridas
 
 La interfaz deberá permitir:
@@ -860,6 +882,12 @@ Quedan fuera:
 ## 9.1 Objetivo
 
 Construir la capa de organización visual de la base narrativa. Este bloque convierte el core en una herramienta cómoda para revisar y mantener corpus grandes.
+
+## 9.1.1 Aclaración de vistas
+
+Las vistas de organización de este bloque pueden validarse inicialmente mediante CLI técnica o UI provisional. Su objetivo contractual es demostrar que el corpus puede navegarse, filtrarse, agruparse y revisarse mediante servicios de consulta.
+
+La implementación CLI no equivale a la galería visual final del producto. Una UI visual definitiva de galerías, fichas y navegación podrá implementarse posteriormente reutilizando los mismos servicios.
 
 ## 9.2 Vistas requeridas
 
@@ -1054,6 +1082,12 @@ Quedan fuera:
 ## 11.1 Objetivo
 
 Implementar el grafo como vista interactiva del modelo de entidades y relaciones ya existente. El grafo deberá consumir el core y no definir su propio modelo paralelo.
+
+## 11.1.1 Aclaración de grafo inicial
+
+El grafo inicial podrá implementarse como modelo de vista, servicio de grafo, layout básico y preview CLI/textual/JSON para validar entidades, relaciones, filtros, vecindad y caminos.
+
+La visualización gráfica interactiva final del grafo no se considera obligatoria en este bloque salvo que se cree un ticket específico de UI visual. El objetivo mínimo es que el grafo consuma el core, no duplique modelo y pueda reconstruirse desde datos persistidos.
 
 ## 11.2 Capacidades iniciales
 
@@ -1487,6 +1521,7 @@ El bloque se considerará cerrado cuando:
 7. La aplicación siga siendo funcional sin IA.
 8. Los errores de IA no corrompan el proyecto.
 
+
 ## 15.7 Queda fuera de este bloque
 
 Quedan fuera:
@@ -1497,6 +1532,50 @@ Quedan fuera:
 4. Análisis causal profundo.
 5. Simulación de consecuencias.
 6. Memoria vectorial avanzada si no es estrictamente necesaria.
+
+
+## 15.8.1 Objetivo
+
+Consolidar la interfaz técnica existente, normalizar la experiencia CLI, cerrar deuda crítica de cobertura y preparar los contratos necesarios para una futura UI final de producto.
+
+Este bloque no añade funcionalidad narrativa nueva. Su función es estabilizar lo construido antes de continuar con IA avanzada, importación documental o interfaces visuales complejas.
+
+## 15.8.2 Responsabilidades
+
+Este bloque deberá abordar:
+
+1. Normalización de comandos CLI.
+2. Unificación de nombres de flags (`--type`, `--etype`, etc.).
+3. Definición de política de IDs en salida y entrada.
+4. Smoke manual completo desde Bloque 1 hasta Bloque 15.
+5. Tests dedicados para servicios y CLI con deuda de cobertura.
+6. Validación de que la CLI sigue consumiendo servicios de aplicación.
+7. Documento ADR sobre el rol de la CLI.
+8. Identificación de requisitos de UI final.
+9. Separación explícita entre UI provisional y UI de producto.
+10. Revisión de flujos críticos: proyecto, entidad, relación, fuente, historial, issue, candidate, framework, graph e IA.
+
+## 15.8.3 Criterios de aceptación
+
+El bloque se considerará cerrado cuando:
+
+1. Exista una guía clara de uso de la CLI técnica.
+2. Los comandos principales sean consistentes.
+3. Los IDs mostrados por la CLI puedan reutilizarse en comandos posteriores sin ambigüedad.
+4. Exista un smoke manual completo documentado con output real.
+5. La deuda crítica de tests de CandidateService, OrchestratorService, cli_candidate y cli_ai esté cerrada o formalmente priorizada.
+6. Exista una decisión arquitectónica sobre el rol de la CLI.
+7. Quede definido qué partes requieren UI final y cuáles son solo validación técnica.
+
+## 15.8.4 Queda fuera de este bloque
+
+Quedan fuera:
+
+1. UI visual final.
+2. IA avanzada.
+3. Importación documental.
+4. Rediseño de dominio.
+5. Nuevas funcionalidades narrativas.
 
 ---
 
