@@ -40,19 +40,11 @@ def register_graph_commands(subparsers: Any) -> None:
     p_e.add_argument("--json", action="store_true", help="Output as JSON")
     _add_filter_flags(p_e)
 
-    # --- B11-T03: entity <id> + B11-T06: entity create ---
-    p_ent = gs.add_parser("entity", help="Entity neighborhood or create")
-    p_ent.add_argument("id_or_create", nargs="?", default=None,
-                       help="Entity ID, or 'create' for interactive create")
+    # --- B11-T03: entity <id> ---
+    p_ent = gs.add_parser("entity", help="Entity neighborhood")
+    p_ent.add_argument("id", nargs="?", default=None, help="Entity ID")
     p_ent.add_argument("--depth", type=int, default=1)
     _add_filter_flags(p_ent)
-    # entity create extra args (filters already added by _add_filter_flags)
-    p_ent.add_argument("--name", default=None, help="Entity name (for create)")
-    p_ent.add_argument("--etype", default=None, dest="create_type",
-                       help="Entity type (for create)")
-    p_ent.add_argument("--brief", default="")
-    p_ent.add_argument("--extended", default="")
-    p_ent.add_argument("--domain", default=None)
 
     # --- B11-T03: path ---
     p_path = gs.add_parser("path", help="Find path between entities")
@@ -61,11 +53,19 @@ def register_graph_commands(subparsers: Any) -> None:
     p_path.add_argument("--max-depth", type=int, default=5)
     _add_filter_flags(p_path)
 
-    # --- B11-T06: node show ---
+    # --- B11-T06: node show/create ---
     p_node = gs.add_parser("node", help="Node commands")
     node_subs = p_node.add_subparsers(dest="node_command", required=True)
     p_ns = node_subs.add_parser("show", help="Show entity ficha from graph")
     p_ns.add_argument("id", help="Entity ID")
+    p_nc = node_subs.add_parser("create", help="Create entity from graph")
+    p_nc.add_argument("name", help="Entity name")
+    p_nc.add_argument("--etype", required=True, dest="create_type",
+                      help="Entity type (e.g., personaje, objeto)")
+    p_nc.add_argument("--brief", default="", help="Brief description")
+    p_nc.add_argument("--extended", default="", help="Extended description")
+    p_nc.add_argument("--domain-id", default=None, help="Domain ID")
+    p_nc.add_argument("--layer-id", default=None, help="Layer ID")
 
     # --- B11-T06: edge show ---
     p_edge = gs.add_parser("edge", help="Edge commands")
@@ -248,15 +248,10 @@ def _cmd_export(args, project_path):
 
 
 def _cmd_entity(args, project_path, session):
-    # B11-T06: entity create
-    if args.id_or_create == "create":
-        _create_entity(args, project_path)
-        return
-    # B11-T03: entity <id> (legacy)
-    entity_id = args.id_or_create
+    # B11-T03: entity <id>
+    entity_id = args.id
     if not entity_id:
-        print("error: graph entity requires <id> or 'create' "
-              "(with --name and --etype)", file=sys.stderr)
+        print("error: graph entity requires <id>", file=sys.stderr)
         sys.exit(1)
     ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
