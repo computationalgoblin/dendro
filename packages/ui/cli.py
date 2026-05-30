@@ -246,6 +246,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_framework import register_framework_commands
     register_framework_commands(sub)
 
+    # candidate
+    from packages.ui.cli_candidate import register_candidate_commands
+    register_candidate_commands(sub)
+
     return parser
 
 
