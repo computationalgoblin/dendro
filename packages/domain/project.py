@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import TypeVar
 
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
+from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.custom_types import (
     CustomEntityType,
     CustomFieldDefinition,
@@ -109,6 +110,8 @@ class Project:
     sources: list[Source] = field(default_factory=list)
     history: list[HistoryEntry] = field(default_factory=list)
     issues: list[StructuredIssue] = field(default_factory=list)
+    narrative_frameworks: list[NarrativeFramework] = field(default_factory=list)
+    framework_templates: list[NarrativeFramework] = field(default_factory=list)
     candidates: list[Candidate] = field(default_factory=list)
 
     # Custom types and taxonomies (Bloque 8)
@@ -195,6 +198,8 @@ class Project:
             "history": [h.to_dict() for h in self.history],
             "issues": [i.to_dict() for i in self.issues],
             "structured_issues": [i.to_dict() for i in self.issues],
+            "narrative_frameworks": [f.to_dict() for f in self.narrative_frameworks],
+            "framework_templates": [f.to_dict() for f in self.framework_templates],
             "candidates": [c.to_dict() for c in self.candidates],
             # Custom types (Bloque 8)
             "custom_entity_types": [ct.to_dict() for ct in self.custom_entity_types],
@@ -281,6 +286,16 @@ class Project:
                 StructuredIssue.from_dict(i)
                 for i in data.get("structured_issues", data.get("issues", []))
                 if isinstance(i, dict)
+            ],
+            narrative_frameworks=[
+                NarrativeFramework.from_dict(f)
+                for f in data.get("narrative_frameworks", [])
+                if isinstance(f, dict)
+            ],
+            framework_templates=[
+                NarrativeFramework.from_dict(f)
+                for f in data.get("framework_templates", [])
+                if isinstance(f, dict)
             ],
             candidates=[Candidate.from_dict(c) for c in data.get("candidates", []) if isinstance(c, dict)],
             # Custom types (Bloque 8)

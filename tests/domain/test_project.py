@@ -267,6 +267,8 @@ class TestToDict:
             "entities", "relations", "sources", "history", "issues",
             "candidates",
             "structured_issues",
+            "narrative_frameworks",
+            "framework_templates",
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
         }

@@ -69,11 +69,11 @@ def _v6_minimal(**overrides) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 class TestSchemaVersionV7:
-    def test_current_schema_is_v7(self):
-        assert CURRENT_SCHEMA_VERSION == 8
+    def test_current_schema_is_v9(self):
+        assert CURRENT_SCHEMA_VERSION == 9
 
-    def test_max_supported_is_v7(self):
-        assert MAX_SUPPORTED_VERSION == 8
+    def test_max_supported_is_v9(self):
+        assert MAX_SUPPORTED_VERSION == 9
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -366,7 +366,7 @@ class TestProjectStoreRoundtripV7:
 # Migration chain: v1 → v7 (accumulative)
 # ══════════════════════════════════════════════════════════════════
 
-class TestMigrationChainV1ToV8:
+class TestMigrationChainV1ToV9:
     """A project that starts at v1 should migrate all the way to v8."""
 
     def _v1_data(self) -> dict:
@@ -378,7 +378,7 @@ class TestMigrationChainV1ToV8:
             "updated_at": "2025-01-01T00:00:00+00:00",
         }
 
-    def test_v1_migrates_to_v7_via_load_project_data(self, tmp_path: Path):
+    def test_v1_migrates_to_v9_via_load_project_data(self, tmp_path: Path):
         path = tmp_path / "legacy.json"
         v1 = self._v1_data()
         path.write_text(json.dumps(v1, indent=2), encoding="utf-8")
@@ -388,7 +388,7 @@ class TestMigrationChainV1ToV8:
         data = result.value
 
         # Verify the result is v7
-        assert data["schema_version"] == 8
+        assert data["schema_version"] == 9
 
         # All v7 fields present
         assert data["domains"] == [
@@ -403,7 +403,7 @@ class TestMigrationChainV1ToV8:
         assert "relations" in data  # v4
         assert "custom_entity_types" in data  # v6
 
-    def test_v6_migrates_to_v7_via_load_project_data(self, tmp_path: Path):
+    def test_v6_migrates_to_v9_via_load_project_data(self, tmp_path: Path):
         path = tmp_path / "v6proj.json"
         v6 = _v6_minimal()
         v6["schema_version"] = 6
@@ -412,7 +412,7 @@ class TestMigrationChainV1ToV8:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 8
+        assert data["schema_version"] == 9
 
         # Legacy data preserved
         assert data["id"] == "proj-001"
@@ -421,7 +421,7 @@ class TestMigrationChainV1ToV8:
         # New fields added
         assert len(data["domains"]) == 5
 
-    def test_v8_project_loads_directly_no_migration(self, tmp_path: Path):
+    def test_v9_project_loads_directly_no_migration(self, tmp_path: Path):
         path = tmp_path / "v7proj.json"
         v7 = _v6_minimal()
         v7["schema_version"] = 7
@@ -443,7 +443,7 @@ class TestMigrationChainV1ToV8:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 8
+        assert data["schema_version"] == 9
         assert data["domains"] == ["mundo", "historia"]
         assert len(data["world_layers"]) == 1
         assert data["world_layers"][0]["name"] == "Custom"
@@ -454,9 +454,9 @@ class TestMigrationChainV1ToV8:
 # ══════════════════════════════════════════════════════════════════
 
 class TestFutureVersionRejection:
-    def test_v9_rejected(self, tmp_path: Path):
+    def test_v10_rejected(self, tmp_path: Path):
         path = tmp_path / "future.json"
-        future = {"schema_version": 9, "id": "x", "name": "Future",
+        future = {"schema_version": 10, "id": "x", "name": "Future",
                    "created_at": "2026-01-01T00:00:00+00:00",
                    "updated_at": "2026-01-01T00:00:00+00:00"}
         path.write_text(json.dumps(future), encoding="utf-8")

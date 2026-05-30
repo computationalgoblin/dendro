@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B12-T03: upgraded to v8)
-CURRENT_SCHEMA_VERSION: int = 8
+CURRENT_SCHEMA_VERSION: int = 9
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 8
+MAX_SUPPORTED_VERSION: int = 9
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +532,15 @@ def _apply_migration_v7_to_v8(data):
 
 
 
+
+def _apply_migration_v8_to_v9(data):
+    migrated = dict(data)
+    migrated.setdefault('narrative_frameworks', [])
+    migrated.setdefault('framework_templates', [])
+    migrated['schema_version'] = 9
+    return migrated
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -568,7 +577,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
 
     # Collections must be lists when present
     collection_fields = (
-        "entities", "relations", "sources", "history", "issues", "structured_issues",
+        "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers",
     )
