@@ -207,8 +207,10 @@ class TestDomainDependencies:
                 "enum",
                 "json",
                 "logging",
+                "math",
                 "os",
                 "pathlib",
+                "re",
                 "typing",
                 "uuid",
             }
