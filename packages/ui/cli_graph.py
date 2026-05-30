@@ -9,6 +9,7 @@ import argparse
 import json
 import subprocess as sp
 import sys
+from pathlib import Path
 from typing import Any
 
 from packages.application.graph_models import GraphFilters
@@ -151,11 +152,11 @@ def _build_filters(args: argparse.Namespace) -> GraphFilters:
 def _load_preset(name: str, args: argparse.Namespace) -> GraphFilters:
     project_path = require_project_path(args, SessionContext())
     ps, *_ = _bootstrap_services(project_path)
-    proj = ps._active_project()
-    if isinstance(proj, Error):
-        print(f"error: {proj.error}", file=sys.stderr)
+    proj = ps.active_project
+    if proj is None:
+        print("error: No active project", file=sys.stderr)
         sys.exit(1)
-    views = proj.value.metadata.get("graph_views", {})
+    views = proj.metadata.get("graph_views", {})
     preset = views.get(name)
     if not preset:
         print(f"error: View preset '{name}' not found", file=sys.stderr)
@@ -252,8 +253,7 @@ def _cmd_export(args, project_path):
 def _cmd_entity(args, project_path, session):
     # B11-T06: entity create
     if getattr(args, "entity_command", None) == "create":
-        ps, gs = _build_graph_service(project_path)
-        _create_entity(args, ps)
+        _create_entity(args, project_path)
         return
     # B11-T03: entity <id> (legacy)
     entity_id = getattr(args, "id", None)
@@ -284,20 +284,20 @@ def _cmd_entity(args, project_path, session):
     print(f"Use 'graph node show {entity_id}' for full entity ficha.")
 
 
-def _create_entity(args, ps) -> None:
-    es = ps._entity_service
-    proj = ps._active_project()
-    if isinstance(proj, Error):
-        print(f"error: {proj.error}", file=sys.stderr)
+def _create_entity(args, project_path) -> None:
+    ps, es, *_ = _bootstrap_services(project_path)
+    proj = ps.active_project
+    if proj is None:
+        print("error: No active project", file=sys.stderr)
         sys.exit(1)
     # Validate domain/layer before creation
     domain_id = getattr(args, "domain_id", None)
     layer_id = getattr(args, "layer_id", None)
-    if domain_id and domain_id not in proj.value.domains:
+    if domain_id and domain_id not in proj.domains:
         print(f"error: Domain '{domain_id}' not found", file=sys.stderr)
         sys.exit(1)
     if layer_id:
-        found = any(wl.id == layer_id for wl in proj.value.world_layers)
+        found = any(wl.id == layer_id for wl in proj.world_layers)
         if not found:
             print(f"error: Layer '{layer_id}' not found", file=sys.stderr)
             sys.exit(1)
@@ -322,7 +322,7 @@ def _create_entity(args, ps) -> None:
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
     entity = result.value
-    save_result = ps.save()
+    save_result = ps.save(Path(project_path))
     if isinstance(save_result, Error):
         print(f"error: Entity created but save failed: {save_result.error}",
               file=sys.stderr)
@@ -399,7 +399,7 @@ def _cmd_relation(args, project_path):
             print(f"error: {result.error}", file=sys.stderr)
             sys.exit(1)
         rel = result.value
-        save_result = ps.save()
+        save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: Relation created but save failed: {save_result.error}",
                   file=sys.stderr)
@@ -413,7 +413,7 @@ def _cmd_relation(args, project_path):
         if isinstance(result, Error):
             print(f"error: {result.error}", file=sys.stderr)
             sys.exit(1)
-        save_result = ps.save()
+        save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: Relation edited but save failed: {save_result.error}",
                   file=sys.stderr)
@@ -424,11 +424,10 @@ def _cmd_relation(args, project_path):
 def _cmd_view(args, project_path):
     ps, _ = _build_graph_service(project_path)
     cmd = args.view_command
-    proj_result = ps._active_project()
-    if isinstance(proj_result, Error):
-        print(f"error: {proj_result.error}", file=sys.stderr)
+    proj = ps.active_project
+    if proj is None:
+        print("error: No active project", file=sys.stderr)
         sys.exit(1)
-    proj = proj_result.value
     views = proj.metadata.setdefault("graph_views", {})
     if cmd == "save":
         if args.name in views and not getattr(args, "force", False):
@@ -453,7 +452,7 @@ def _cmd_view(args, project_path):
             "max_edges": 500,
         }
         views[args.name] = preset
-        save_result = ps.save()
+        save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: {save_result.error}", file=sys.stderr)
             sys.exit(1)
@@ -478,7 +477,7 @@ def _cmd_view(args, project_path):
             print(f"error: View '{args.name}' not found", file=sys.stderr)
             sys.exit(1)
         del views[args.name]
-        save_result = ps.save()
+        save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: {save_result.error}", file=sys.stderr)
             sys.exit(1)
