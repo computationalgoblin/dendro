@@ -232,6 +232,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_layer_commands(sub)
 
+    # ── graph ─────────────────────────────────────────────────────────
+    from packages.ui.cli_graph import register_graph_commands
+
+    register_graph_commands(sub)
+
     return parser
 
 
@@ -319,6 +324,12 @@ def main() -> None:
         from packages.ui.cli_layer import handle_layer_command
 
         handle_layer_command(args, session)
+        return
+
+        # ── Graph commands ──────────────────────────────────────────────
+    if args.command == "graph":
+        from packages.ui.cli_graph import handle_graph_command
+        handle_graph_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
