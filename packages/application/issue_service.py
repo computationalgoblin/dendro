@@ -426,7 +426,7 @@ def run_validators(
     # 10. Secret visibility
     for e in project.entities:
         if e.entity_type == EntityType.SECRETO:
-            if e.visibility_state.value in ("publico", "exportable"):
+            if e.visibility_state.value in ("visible_jugadores", "revelado"):
                 results.append(_make_issue(
                     StructuredIssueType.SECRET_VISIBILITY,
                     StructuredIssueSeverity.MEDIA,
@@ -489,7 +489,7 @@ def run_validators(
     # 14. Pending import
     for s in project.sources:
         stype = getattr(s, "source_type", None)
-        if stype and stype.value in ("importado", "documental", "pdf", "importado_pendiente"):
+        if stype and stype.value in ("documento_importado", "fragmento_documental", "generacion_ia"):
             meta = getattr(s, "metadata", {}) or {}
             reviewed = meta.get("reviewed")
             if reviewed is not True:
