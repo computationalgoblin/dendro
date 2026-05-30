@@ -309,8 +309,6 @@ def _create_entity(args, project_path) -> None:
         data["brief_description"] = args.brief
     if args.extended:
         data["extended_description"] = args.extended
-    if args.domain:
-        data["domain"] = args.domain
     if domain_id:
         data["domain_ids"] = [domain_id]
     if layer_id:
@@ -355,7 +353,7 @@ def _cmd_path(args, project_path):
 # ---------------------------------------------------------------------------
 
 def _cmd_node(args, project_path):
-    """graph node show <id> — shortcut to entity show --extended."""
+    """graph node show <id> / graph node create <name> ..."""
     if args.node_command == "show":
         r = sp.run([sys.executable, "-m", "narrative_architect",
                      "entity", "show", args.id, "--extended"],
@@ -364,6 +362,8 @@ def _cmd_node(args, project_path):
             print(r.stderr, file=sys.stderr, end="")
             sys.exit(r.returncode)
         print(r.stdout)
+    elif args.node_command == "create":
+        _create_entity(args, project_path)
 
 
 def _cmd_edge(args, project_path):
