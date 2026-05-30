@@ -17,6 +17,7 @@ from packages.domain.candidate_issue import (
     is_valid_transition,
 )
 from packages.domain.entity import CanonState, EntityType
+from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok, Result
 
 CONTRADICTORY_PAIRS: set[tuple[str, str]] = {
@@ -372,6 +373,133 @@ def run_validators(
                     relation_ids=[r.id for r in rels],
                 ))
                 break
+
+    # 3. Invalid entity types
+    for e in project.entities:
+        if not isinstance(e.entity_type, EntityType):
+            # This shouldn't happen with enums, but catch manual mutations
+            results.append(_make_issue(
+                StructuredIssueType.INVALID_ENTITY_TYPE,
+                StructuredIssueSeverity.ALTA,
+                f"Entity '{e.name}' has invalid type",
+                entity_ids=[e.id],
+            ))
+
+    # 4. Invalid relation types
+    for r in project.relations:
+        if not isinstance(r.relation_type, type(list(RelationType)[0])):
+            results.append(_make_issue(
+                StructuredIssueType.INVALID_RELATION_TYPE,
+                StructuredIssueSeverity.ALTA,
+                f"Relation {r.id[:8]} has invalid type",
+                relation_ids=[r.id],
+            ))
+
+    # 5. Circular relations in hierarchical types
+    HIERARCHICAL = {r.value for r in [
+        RelationType.PERTENECE_A, RelationType.CONTIENE,
+    ]}
+    for r in project.relations:
+        if r.relation_type.value in HIERARCHICAL:
+            if r.source_id == r.target_id:
+                results.append(_make_issue(
+                    StructuredIssueType.CIRCULAR_RELATION,
+                    StructuredIssueSeverity.ALTA,
+                    f"Self-referential hierarchical relation {r.id[:8]}",
+                    entity_ids=[r.source_id, r.target_id],
+                    relation_ids=[r.id],
+                ))
+
+    # 9. Exportable with private markers
+    PRIVATE_MARKERS = ["[privado]", "[gm]", "[director]", "[no mostrar]"]
+    for e in project.entities:
+        exportable = getattr(e, "exportable_notes", "") or ""
+        if any(m in exportable.lower() for m in PRIVATE_MARKERS):
+            results.append(_make_issue(
+                StructuredIssueType.EXPORTABLE_PRIVATE,
+                StructuredIssueSeverity.MEDIA,
+                f"Entity '{e.name}' has private markers in exportable notes",
+                entity_ids=[e.id],
+                evidence="exportable_notes contains private markers",
+            ))
+
+    # 10. Secret visibility
+    for e in project.entities:
+        if e.entity_type == EntityType.SECRETO:
+            if e.visibility_state.value in ("publico", "exportable"):
+                results.append(_make_issue(
+                    StructuredIssueType.SECRET_VISIBILITY,
+                    StructuredIssueSeverity.MEDIA,
+                    f"Secret '{e.name}' has incoherent visibility",
+                    entity_ids=[e.id],
+                    evidence=f"visibility={e.visibility_state.value}",
+                ))
+
+    # 11. Clue without secret
+    for e in project.entities:
+        if e.entity_type == EntityType.PISTA:
+            has_secret = any(
+                r.relation_type == RelationType.REVELA and
+                (r.source_id == e.id or r.target_id == e.id)
+                for r in project.relations
+            )
+            if not has_secret:
+                results.append(_make_issue(
+                    StructuredIssueType.CLUE_WITHOUT_SECRET,
+                    StructuredIssueSeverity.MEDIA,
+                    f"Clue '{e.name}' has no associated secret",
+                    entity_ids=[e.id],
+                ))
+
+    # 12. Secret without clue
+    for e in project.entities:
+        if e.entity_type == EntityType.SECRETO:
+            has_clue = any(
+                r.relation_type == RelationType.REVELA and
+                (r.source_id == e.id or r.target_id == e.id)
+                for r in project.relations
+            )
+            if not has_clue:
+                results.append(_make_issue(
+                    StructuredIssueType.SECRET_WITHOUT_CLUE,
+                    StructuredIssueSeverity.MEDIA,
+                    f"Secret '{e.name}' has no associated clue",
+                    entity_ids=[e.id],
+                ))
+
+    # 13. Event without temporality
+    for e in project.entities:
+        if e.entity_type == EntityType.EVENTO:
+            cm = e.custom_metadata
+            has_temp = (
+                cm.get("temporality")
+                or cm.get("date")
+                or any("temporal" in k for k in cm)
+                or any("fecha" in k for k in cm)
+                or any(t.startswith("temp:") for t in e.tags)
+            )
+            if not has_temp:
+                results.append(_make_issue(
+                    StructuredIssueType.EVENT_NO_TEMPORALITY,
+                    StructuredIssueSeverity.MEDIA,
+                    f"Event '{e.name}' has no temporality",
+                    entity_ids=[e.id],
+                ))
+
+    # 14. Pending import
+    for s in project.sources:
+        stype = getattr(s, "source_type", None)
+        if stype and stype.value in ("importado", "documental", "pdf", "importado_pendiente"):
+            meta = getattr(s, "metadata", {}) or {}
+            reviewed = meta.get("reviewed")
+            if reviewed is not True:
+                results.append(_make_issue(
+                    StructuredIssueType.PENDING_IMPORT,
+                    StructuredIssueSeverity.MEDIA,
+                    f"Source '{s.name}' not reviewed",
+                    source_ids=[s.id],
+                    evidence=f"reviewed={reviewed}",
+                ))
 
     # Filter by entity_id if specified
     if entity_id:

@@ -79,8 +79,8 @@ class TestPersistenceV5:
         p = ps.active_project
 
         from packages.domain.candidate_issue import IssueType, IssueSeverity
-        p.issues.append(StructuredStructuredIssue(description="Bug", type=StructuredIssueType.ERROR,
-                               severity=IssueSeverity.ALTA, state=StructuredIssueState.ABIERTA))
+        p.issues.append(StructuredIssue(description="Bug", type=StructuredIssueType.ERROR,
+                               severity=StructuredIssueSeverity.ALTA, state=StructuredIssueState.ABIERTA))
         path = tmp_path / "issue.json"
         store.save(p, path)
 
