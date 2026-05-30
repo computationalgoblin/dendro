@@ -250,6 +250,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_candidate import register_candidate_commands
     register_candidate_commands(sub)
 
+    # ai
+    from packages.ui.cli_ai import register_ai_commands
+    register_ai_commands(sub)
+
     return parser
 
 
@@ -361,6 +365,11 @@ def main() -> None:
     if args.command == "candidate":
         from packages.ui.cli_candidate import handle_candidate_command
         handle_candidate_command(args, session)
+        return
+
+    if args.command == "ai":
+        from packages.ui.cli_ai import handle_ai_command
+        handle_ai_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
