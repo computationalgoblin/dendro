@@ -135,7 +135,7 @@ class CandidateService:
             found_t = any(e.id == tid for e in proj.value.entities)
             if not found_s or not found_t:
                 return Error(
-                    f"Relation endpoints not found in project"
+                    "Relation endpoints not found in project"
                 )
             result = self.relation_service.create_relation(
                 source_id=sid, target_id=tid,
