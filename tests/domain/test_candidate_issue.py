@@ -29,13 +29,13 @@ class TestIssueState:
 
 
 class TestCandidateType:
-    def test_has_3_values(self):
-        assert len(CandidateType) == 3
+    def test_has_10_values(self):
+        assert len(CandidateType) == 10
 
 
 class TestCandidateState:
-    def test_has_3_values(self):
-        assert len(CandidateState) == 3
+    def test_has_9_values(self):
+        assert len(CandidateState) == 9
 
 
 class TestIssue:
@@ -105,10 +105,10 @@ class TestCandidate:
         c2 = Candidate()
         assert c1.id != c2.id
 
-    def test_11_fields(self):
+    def test_18_fields(self):
         c = Candidate(title="Test")
         d = c.to_dict()
-        assert len(d) == 11, f"Expected 11, got {len(d)}: {list(d.keys())}"
+        assert len(d) == 18, f"Expected 11, got {len(d)}: {list(d.keys())}"
 
     def test_full_construction(self):
         now = datetime.now(timezone.utc)

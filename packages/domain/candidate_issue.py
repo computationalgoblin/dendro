@@ -43,12 +43,25 @@ class CandidateType(str, Enum):
     ENTIDAD = "entidad"
     RELACION = "relacion"
     FUENTE = "fuente"
+    CAMBIO = "cambio"
+    FUSION = "fusion"
+    CORRECCION = "correccion"
+    INCIDENCIA = "incidencia"
+    FRAGMENTO_IMPORTADO = "fragmento_importado"
+    SUGERENCIA_IA = "sugerencia_ia"
+    PROPUESTA_POST_SESION = "propuesta_post_sesion"
 
 
 class CandidateState(str, Enum):
     PENDIENTE = "pendiente"
     ACEPTADO = "aceptado"
     RECHAZADO = "rechazado"
+    EDITADO_ACEPTADO = "editado_aceptado"
+    FUSIONADO = "fusionado"
+    POSPUESTO = "pospuesto"
+    ARCHIVADO = "archivado"
+    REQUIERE_REVISION = "requiere_revision"
+    PARCIALMENTE_ACEPTADO = "parcialmente_aceptado"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -183,11 +196,18 @@ class Candidate:
     state: CandidateState = CandidateState.PENDIENTE
     title: str = ""
     proposed_data: dict[str, Any] = field(default_factory=dict)
+    affected_entity_ids: list[str] = field(default_factory=list)
+    affected_relation_ids: list[str] = field(default_factory=list)
     source: str = ""
     source_id: str | None = None
+    confidence: float = 0.5
+    justification: str = ""
+    expected_impact: str = ""
+    possible_contradictions: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=_now)
-    resolved_at: datetime | None = None
+    reviewed_at: datetime | None = None
     resolution_note: str = ""
+    final_action: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def touch(self) -> None:
@@ -200,18 +220,25 @@ class Candidate:
             "state": self.state.value,
             "title": self.title,
             "proposed_data": dict(self.proposed_data),
+            "affected_entity_ids": list(self.affected_entity_ids),
+            "affected_relation_ids": list(self.affected_relation_ids),
             "source": self.source,
             "source_id": self.source_id,
+            "confidence": self.confidence,
+            "justification": self.justification,
+            "expected_impact": self.expected_impact,
+            "possible_contradictions": list(self.possible_contradictions),
             "created_at": self.created_at.isoformat(),
-            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
             "resolution_note": self.resolution_note,
+            "final_action": self.final_action,
             "metadata": dict(self.metadata),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Candidate:
-        raw_resolved = data.get("resolved_at")
-        resolved = _parse_datetime(raw_resolved) if raw_resolved else None
+        raw_reviewed = data.get("reviewed_at")
+        reviewed = _parse_datetime(raw_reviewed) if raw_reviewed else None
         return cls(
             id=data.get("id") or str(uuid.uuid4()),
             candidate_type=_parse_enum(
@@ -222,11 +249,18 @@ class Candidate:
             ),
             title=data.get("title", ""),
             proposed_data=_parse_dict(data.get("proposed_data")),
+            affected_entity_ids=_parse_list(data.get("affected_entity_ids")),
+            affected_relation_ids=_parse_list(data.get("affected_relation_ids")),
             source=data.get("source", ""),
             source_id=data.get("source_id"),
+            confidence=float(data.get("confidence", 0.5)),
+            justification=data.get("justification", ""),
+            expected_impact=data.get("expected_impact", ""),
+            possible_contradictions=_parse_list(data.get("possible_contradictions")),
             created_at=_parse_datetime(data.get("created_at")),
-            resolved_at=resolved,
+            reviewed_at=reviewed,
             resolution_note=data.get("resolution_note", ""),
+            final_action=data.get("final_action", ""),
             metadata=_parse_dict(data.get("metadata")),
         )
 
