@@ -51,6 +51,7 @@ def register_entity_commands(subparsers: Any) -> None:
 
     # entity list [--type <t>] [--canon <c>] [--visibility <v>] [--tag <t>] [--domain ...] [--limit <n>]
     p_list = entity_subs.add_parser("list", help="List/filter entities")
+    p_list.add_argument("--json", action="store_true", help="Output as JSON")
     p_list.add_argument("--type", default=None, metavar="TYPE", help="Filter by entity type")
     p_list.add_argument("--canon", default=None, metavar="STATE", help="Filter by canon state")
     p_list.add_argument(

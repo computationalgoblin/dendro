@@ -22,6 +22,7 @@ def register_issue_commands(subparsers: Any) -> None:
     iss = ip.add_subparsers(dest="issue_command", required=True)
 
     p_list = iss.add_parser("list", help="List issues")
+    p_list.add_argument("--json", action="store_true")
     p_list.add_argument("--state", default=None)
     p_list.add_argument("--type", default=None, dest="itype")
     p_list.add_argument("--severity", default=None)

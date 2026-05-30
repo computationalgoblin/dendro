@@ -25,6 +25,7 @@ def register_framework_commands(subparsers: Any) -> None:
     fs = fp.add_subparsers(dest="framework_command", required=True)
 
     p = fs.add_parser("list", help="List frameworks")
+    p.add_argument("--json", action="store_true")
     p.add_argument("--active", action="store_true")
 
     p = fs.add_parser("show", help="Show framework detail")

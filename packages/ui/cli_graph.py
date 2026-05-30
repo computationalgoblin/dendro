@@ -60,7 +60,7 @@ def register_graph_commands(subparsers: Any) -> None:
     p_ns.add_argument("id", help="Entity ID")
     p_nc = node_subs.add_parser("create", help="Create entity from graph")
     p_nc.add_argument("name", help="Entity name")
-    p_nc.add_argument("--etype", required=True, dest="create_type",
+    p_nc.add_argument("--type", "--etype", required=True, dest="create_type",
                       help="Entity type (e.g., personaje, objeto)")
     p_nc.add_argument("--brief", default="", help="Brief description")
     p_nc.add_argument("--extended", default="", help="Extended description")
