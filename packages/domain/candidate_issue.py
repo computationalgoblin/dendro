@@ -232,11 +232,188 @@ class Candidate:
         )
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# StructuredIssue — Bloque 12 (15 fields, 8 states, 15 issue types)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class StructuredIssueType(str, Enum):
+    """§12.2 / §12.3 — 15 issue types for deterministic validators."""
+    BROKEN_RELATION = "broken_relation"
+    DUPLICATE_ENTITY = "duplicate_entity"
+    INVALID_ENTITY_TYPE = "invalid_entity_type"
+    INVALID_RELATION_TYPE = "invalid_relation_type"
+    CIRCULAR_RELATION = "circular_relation"
+    ORPHAN_ENTITY = "orphan_entity"
+    NO_DESCRIPTION = "no_description"
+    CANON_LOW_CERTAINTY = "canon_low_certainty"
+    EXPORTABLE_PRIVATE = "exportable_private"
+    SECRET_VISIBILITY = "secret_visibility"
+    CLUE_WITHOUT_SECRET = "clue_without_secret"
+    SECRET_WITHOUT_CLUE = "secret_without_clue"
+    EVENT_NO_TEMPORALITY = "event_no_temporality"
+    PENDING_IMPORT = "pending_import"
+    CONTRADICTORY_RELATION = "contradictory_relation"
+
+
+class StructuredIssueSeverity(str, Enum):
+    """§12.2 — 4 severity levels."""
+    BAJA = "baja"
+    MEDIA = "media"
+    ALTA = "alta"
+    CRITICA = "critica"
+
+
+class StructuredIssueState(str, Enum):
+    """§12.2 — 8 states for issue lifecycle."""
+    ABIERTA = "abierta"
+    REVISADA = "revisada"
+    ACEPTADA = "aceptada"
+    DESCARTADA = "descartada"
+    RESUELTA = "resuelta"
+    INTENCIONAL = "intencional"
+    PENDIENTE_INFO = "pendiente_info"
+    POSPUESTA = "pospuesta"
+
+
+# ── Transition matrix ───────────────────────────────────────────────
+
+
+_TRANSITIONS: dict[StructuredIssueState, set[StructuredIssueState]] = {
+    StructuredIssueState.ABIERTA: {
+        StructuredIssueState.REVISADA,
+        StructuredIssueState.DESCARTADA,
+        StructuredIssueState.INTENCIONAL,
+    },
+    StructuredIssueState.REVISADA: {
+        StructuredIssueState.ACEPTADA,
+        StructuredIssueState.DESCARTADA,
+        StructuredIssueState.PENDIENTE_INFO,
+        StructuredIssueState.POSPUESTA,
+    },
+    StructuredIssueState.ACEPTADA: {
+        StructuredIssueState.RESUELTA,
+        StructuredIssueState.POSPUESTA,
+    },
+    StructuredIssueState.PENDIENTE_INFO: {
+        StructuredIssueState.REVISADA,
+        StructuredIssueState.DESCARTADA,
+    },
+    StructuredIssueState.POSPUESTA: {
+        StructuredIssueState.ABIERTA,
+        StructuredIssueState.REVISADA,
+    },
+    StructuredIssueState.DESCARTADA: {
+        StructuredIssueState.ABIERTA,
+    },
+    StructuredIssueState.INTENCIONAL: {
+        StructuredIssueState.ABIERTA,
+    },
+    StructuredIssueState.RESUELTA: set(),
+}
+
+
+def is_valid_transition(
+    from_state: StructuredIssueState,
+    to_state: StructuredIssueState,
+) -> bool:
+    """Check if *to_state* is reachable from *from_state*."""
+    allowed = _TRANSITIONS.get(from_state, set())
+    return to_state in allowed
+
+
+# ── Dataclass ────────────────────────────────────────────────────────
+
+
+def _parse_list(value: Any) -> list:
+    if isinstance(value, list):
+        return list(value)
+    return []
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class StructuredIssue:
+    """§12.2 — Full structured incidence with 15 fields and 8 states."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    type: StructuredIssueType = StructuredIssueType.BROKEN_RELATION
+    severity: StructuredIssueSeverity = StructuredIssueSeverity.MEDIA
+    state: StructuredIssueState = StructuredIssueState.ABIERTA
+    affected_entity_ids: list[str] = field(default_factory=list)
+    affected_relation_ids: list[str] = field(default_factory=list)
+    affected_source_ids: list[str] = field(default_factory=list)
+    description: str = ""
+    evidence: str = ""
+    possible_solutions: list[str] = field(default_factory=list)
+    detected_at: str = field(default_factory=_now_iso)
+    reviewed_at: str | None = None
+    resolution: str = ""
+    is_intentional: bool = False
+    metadata: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.type.value,
+            "severity": self.severity.value,
+            "state": self.state.value,
+            "affected_entity_ids": list(self.affected_entity_ids),
+            "affected_relation_ids": list(self.affected_relation_ids),
+            "affected_source_ids": list(self.affected_source_ids),
+            "description": self.description,
+            "evidence": self.evidence,
+            "possible_solutions": list(self.possible_solutions),
+            "detected_at": self.detected_at,
+            "reviewed_at": self.reviewed_at,
+            "resolution": self.resolution,
+            "is_intentional": self.is_intentional,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StructuredIssue:
+        return cls(
+            id=data.get("id") or str(uuid.uuid4()),
+            type=_parse_enum(
+                StructuredIssueType, data.get("type"),
+                StructuredIssueType.BROKEN_RELATION,
+            ),
+            severity=_parse_enum(
+                StructuredIssueSeverity, data.get("severity"),
+                StructuredIssueSeverity.MEDIA,
+            ),
+            state=_parse_enum(
+                StructuredIssueState, data.get("state"),
+                StructuredIssueState.ABIERTA,
+            ),
+            affected_entity_ids=_parse_list(data.get("affected_entity_ids")),
+            affected_relation_ids=_parse_list(data.get("affected_relation_ids")),
+            affected_source_ids=_parse_list(data.get("affected_source_ids")),
+            description=data.get("description", ""),
+            evidence=data.get("evidence", ""),
+            possible_solutions=_parse_list(data.get("possible_solutions")),
+            detected_at=data.get("detected_at", "") or _now_iso(),
+            reviewed_at=data.get("reviewed_at"),
+            resolution=data.get("resolution", ""),
+            is_intentional=data.get("is_intentional", False),
+            metadata=_parse_dict(data.get("metadata")),
+        )
+
+
 __all__ = [
     "Issue",
     "IssueType",
     "IssueSeverity",
     "IssueState",
+    "StructuredIssue",
+    "StructuredIssueType",
+    "StructuredIssueSeverity",
+    "StructuredIssueState",
+    "is_valid_transition",
     "Candidate",
     "CandidateType",
     "CandidateState",
