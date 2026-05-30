@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B12-T03: upgraded to v8)
-CURRENT_SCHEMA_VERSION: int = 9
+CURRENT_SCHEMA_VERSION: int = 10
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 9
+MAX_SUPPORTED_VERSION: int = 10
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +540,27 @@ def _apply_migration_v8_to_v9(data):
     migrated['schema_version'] = 9
     return migrated
 
+
+
+def _apply_migration_v9_to_v10(data):
+    migrated = dict(data)
+    candidates = migrated.get('candidates', [])
+    for item in candidates:
+        if isinstance(item, dict):
+            item.setdefault('affected_entity_ids', [])
+            item.setdefault('affected_relation_ids', [])
+            item.setdefault('confidence', 0.5)
+            item.setdefault('justification', '')
+            item.setdefault('expected_impact', '')
+            item.setdefault('possible_contradictions', [])
+            item.setdefault('reviewed_at', None)
+            item.setdefault('final_action', '')
+            # Clamp confidence
+            conf = item.get('confidence', 0.5)
+            if isinstance(conf, (int, float)) and (conf < 0.0 or conf > 1.0):
+                item['confidence'] = max(0.0, min(1.0, conf))
+    migrated['schema_version'] = 10
+    return migrated
 
 # Structural validation
 # ---------------------------------------------------------------------------
