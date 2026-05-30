@@ -13,3 +13,4 @@ coverage
 !.env.example
 ai_outputs/*
 !ai_outputs/.gitkeep
+.narrative-session.json
