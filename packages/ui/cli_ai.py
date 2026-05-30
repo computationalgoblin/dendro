@@ -85,6 +85,21 @@ def register_ai_commands(subparsers: Any) -> None:
     p.add_argument("question")
     _add_common_flags(p)
 
+    # B16: analysis commands
+    p = ais.add_parser("analyze", help="Critical analysis of entity")
+    p.add_argument("entity_id")
+    _add_common_flags(p)
+    p = ais.add_parser("analyze-group", help="Critical analysis of group")
+    p.add_argument("entity_ids", nargs="+")
+    _add_common_flags(p)
+    p = ais.add_parser("causal", help="Causal analysis")
+    p.add_argument("entity_id")
+    _add_common_flags(p)
+    p = ais.add_parser("consistency", help="Consistency analysis")
+    p.add_argument("--scope")
+    
+    _add_common_flags(p)
+
 
 def handle_ai_command(args, session):
     project_path = require_project_path(args, session)
@@ -140,3 +155,30 @@ def handle_ai_command(args, session):
         r = orch.invoke(AIMode.CONTINUITY_QUESTION, prompt_hint=args.question, filters=filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         print(r.value.raw_text)
+
+    elif cmd in ("analyze", "analyze-group", "causal", "consistency"):
+        from packages.application.analysis_service import AnalysisService
+        analysis = AnalysisService(orch, ts, ss)
+        if cmd == "analyze":
+            r = analysis.analyze_entity(args.entity_id, filters)
+            if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            res = r.value
+            ps.save(Path(project_path))
+            print(f"Critical analysis: {len(res.observations)} observations, {len(res.candidate_issues)} issues, {len(res.correction_proposals)} proposals")
+        elif cmd == "analyze-group":
+            for eid in args.entity_ids:
+                r = analysis.analyze_entity(eid, filters)
+                if isinstance(r, Error): print(f"  {eid[:8]}: error"); continue
+                print(f"  {eid[:8]}: {len(r.value.observations)} observations")
+            ps.save(Path(project_path))
+        elif cmd == "causal":
+            r = analysis.analyze_causal(args.entity_id, filters)
+            if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            print(f"Causal: {len(r.value.direct_consequences)} consequences, {len(r.value.causal_relation_candidates)} relation candidates")
+            ps.save(Path(project_path))
+        elif cmd == "consistency":
+            r = analysis.analyze_consistency(getattr(args, "scope", None), filters)
+            if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+            total = len(r.value.narrative_contradictions) + len(r.value.causal_gaps)
+            print(f"Consistency: {total} issues found")
+            ps.save(Path(project_path))

@@ -25,7 +25,6 @@ def register_candidate_commands(subparsers: Any) -> None:
     p = cs.add_parser("list", help="List candidates")
     p.add_argument("--json", action="store_true")
     p.add_argument("--state", help="List candidates")
-    p.add_argument("--state")
     p.add_argument("--type", dest="ctype")
 
     p = cs.add_parser("show", help="Show candidate detail")

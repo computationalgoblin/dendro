@@ -3,7 +3,7 @@ from packages.domain.ai_models import AIMode, AuthorizedContext, AIOperation, AI
 
 class TestAIMode:
     def test_8_values(self):
-        assert len(AIMode) == 8
+        assert len(AIMode) == 11
         assert AIMode.GENERATE_ENTITY.value == "generate_entity"
 
 class TestAuthorizedContext:

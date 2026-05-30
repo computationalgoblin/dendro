@@ -54,6 +54,28 @@ class SimulatedAIProvider(AIProvider):
             candidates = [
                 {"source_id": "", "target_id": "", "relation_type": "es_aliado_de"},
             ]
+
+        elif mode == AIMode.CRITICAL_ANALYSIS:
+            raw = "Simulated critical analysis"
+            candidates = [
+                {"type": "invalid_entity_type", "description": "Entity may lack description", "severity": "MEDIA"},
+                {"title": "Add description to entity", "proposed_data": {"brief_description": "Suggested brief"}},
+            ]
+            obs = ["Entity has limited faction interactions"]
+        elif mode == AIMode.CAUSAL_ANALYSIS:
+            raw = "Simulated causal analysis"
+            candidates = [
+                {"name": "Consequence X", "entity_type": "evento"},
+                {"source_id": "", "target_id": "", "relation_type": "causo"},
+            ]
+            obs = ["Event has no documented cause"]
+        elif mode == AIMode.CONSISTENCY_ANALYSIS:
+            raw = "Simulated consistency analysis"
+            candidates = [
+                {"type": "narrative", "description": "Character motivation contradicts earlier behavior"},
+                {"type": "causal_gap", "description": "Missing cause for major event"},
+            ]
+            obs = []
         elif mode == AIMode.CONTINUITY_QUESTION:
             raw = "Simulated answer to continuity question."
             obs = ["Consider checking historical timeline for consistency."]

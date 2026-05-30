@@ -24,6 +24,9 @@ class AIMode(str, Enum):
     SUGGEST_TAGS = "suggest_tags"
     SUGGEST_RELATIONS = "suggest_relations"
     CONTINUITY_QUESTION = "continuity_question"
+    CRITICAL_ANALYSIS = "critical_analysis"
+    CAUSAL_ANALYSIS = "causal_analysis"
+    CONSISTENCY_ANALYSIS = "consistency_analysis"
 
 
 @dataclass
