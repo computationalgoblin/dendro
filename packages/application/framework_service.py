@@ -112,6 +112,8 @@ _register(FrameworkType.CONSPIRACION, "Estructura de conspiración", [
     {"name": "Consecuencias", "expected_entity_types": ["evento"], "is_optional": False},
 ])
 
+_register(FrameworkType.PERSONALIZADA, "Marco personalizado vacío", [])
+
 # ── FrameworkService ─────────────────────────────────────────────────
 
 

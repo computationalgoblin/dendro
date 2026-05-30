@@ -137,7 +137,7 @@ class TestTemplates:
     def test_list_templates(self) -> None:
         ps, svc = _setup()
         tmpls = svc.list_templates().value
-        assert len(tmpls) == 13  # 14 types minus PERSONALIZADA (no template)  # all builtin types
+        assert len(tmpls) == 14  # all 14 FrameworkTypes have a template  # all builtin types
 
     def test_save_and_create_from_template(self) -> None:
         ps, svc = _setup()
