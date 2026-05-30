@@ -271,6 +271,7 @@ class TestToDict:
             "framework_templates",
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
+            "import_baskets",
         }
         assert set(d.keys()) == expected_keys
 

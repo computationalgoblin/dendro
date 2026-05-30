@@ -15,6 +15,7 @@ from typing import TypeVar
 
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.narrative_framework import NarrativeFramework
+from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
     CustomFieldDefinition,
@@ -130,6 +131,9 @@ class Project:
     world_layers: list[WorldLayer] = field(default_factory=default_world_layers)
     advanced_config: AdvancedProjectConfig = field(default_factory=AdvancedProjectConfig)
 
+    # ── Import baskets (Bloque 17) ──
+    import_baskets: list[ImportBasket] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -213,6 +217,8 @@ class Project:
             "domains": list(self.domains),
             "world_layers": [wl.to_dict() for wl in self.world_layers],
             "advanced_config": self.advanced_config.to_dict(),
+            # ── Import baskets (Bloque 17) ──
+            "import_baskets": [b.to_dict() for b in self.import_baskets],
         }
 
     @classmethod
@@ -332,6 +338,15 @@ class Project:
                     data.get("advanced_config", {})
                 )}
                 if "advanced_config" in data else {}
+            ),
+            # ── Import baskets (Bloque 17) ──
+            **(
+                {"import_baskets": [
+                    ImportBasket.from_dict(b)
+                    for b in data.get("import_baskets", [])
+                    if isinstance(b, dict)
+                ]}
+                if "import_baskets" in data else {}
             ),
         )
 

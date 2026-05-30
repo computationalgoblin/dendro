@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B12-T03: upgraded to v8)
-CURRENT_SCHEMA_VERSION: int = 10
+CURRENT_SCHEMA_VERSION: int = 11
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 10
+MAX_SUPPORTED_VERSION: int = 11
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +562,20 @@ def _apply_migration_v9_to_v10(data):
     migrated['schema_version'] = 10
     return migrated
 
+
+# ---------------------------------------------------------------------------
+# Migration: v10 -> v11
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v10_to_v11(data):
+    """v10 → v11: adds import_baskets collection."""
+    migrated = dict(data)
+    migrated.setdefault('import_baskets', [])
+    migrated['schema_version'] = 11
+    return migrated
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -600,7 +614,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     collection_fields = (
         "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
-        "domains", "world_layers",
+        "domains", "world_layers", "import_baskets",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
