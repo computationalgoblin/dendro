@@ -21,15 +21,10 @@ def register_issue_commands(subparsers: Any) -> None:
     ip = subparsers.add_parser("issue", help="Issue commands")
     iss = ip.add_subparsers(dest="issue_command", required=True)
 
-    iss.add_parser("list", help="List issues").add_argument(
-        "--state", default=None,
-    )
-    iss.add_parser("list", help="List issues").add_argument(
-        "--type", default=None, dest="itype",
-    )
-    iss.add_parser("list", help="List issues").add_argument(
-        "--severity", default=None,
-    )
+    p_list = iss.add_parser("list", help="List issues")
+    p_list.add_argument("--state", default=None)
+    p_list.add_argument("--type", default=None, dest="itype")
+    p_list.add_argument("--severity", default=None)
 
     p_show = iss.add_parser("show", help="Show issue detail")
     p_show.add_argument("id", help="Issue ID")
