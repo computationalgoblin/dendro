@@ -42,21 +42,17 @@ def register_graph_commands(subparsers: Any) -> None:
 
     # --- B11-T03: entity <id> + B11-T06: entity create ---
     p_ent = gs.add_parser("entity", help="Entity neighborhood or create")
-    ent_subs = p_ent.add_subparsers(dest="entity_command")
-    p_ent_show = ent_subs.add_parser("show", help="Show entity neighborhood")
-    p_ent_show.add_argument("id", help="Entity ID")
-    p_ent_show.add_argument("--depth", type=int, default=1)
-    _add_filter_flags(p_ent_show)
-    p_ent_cr = ent_subs.add_parser("create", help="Create entity from graph")
-    p_ent_cr.add_argument("name", help="Entity name")
-    p_ent_cr.add_argument("--type", required=True, help="Entity type")
-    p_ent_cr.add_argument("--brief", default="", help="Brief description")
-    p_ent_cr.add_argument("--extended", default="", help="Extended description")
-    p_ent_cr.add_argument("--domain", default=None, help="Legacy domain")
-    p_ent_cr.add_argument("--domain-id", default=None, help="Domain ID")
-    p_ent_cr.add_argument("--layer-id", default=None, help="Layer ID")
-    # legacy: entity <id> without subcommand
-    p_ent.add_argument("id", nargs="?", default=None, help="Entity ID (legacy)")
+    p_ent.add_argument("id_or_create", nargs="?", default=None,
+                       help="Entity ID, or 'create' for interactive create")
+    p_ent.add_argument("--depth", type=int, default=1)
+    _add_filter_flags(p_ent)
+    # entity create extra args (filters already added by _add_filter_flags)
+    p_ent.add_argument("--name", default=None, help="Entity name (for create)")
+    p_ent.add_argument("--etype", default=None, dest="create_type",
+                       help="Entity type (for create)")
+    p_ent.add_argument("--brief", default="")
+    p_ent.add_argument("--extended", default="")
+    p_ent.add_argument("--domain", default=None)
 
     # --- B11-T03: path ---
     p_path = gs.add_parser("path", help="Find path between entities")
@@ -179,7 +175,8 @@ def _load_preset(name: str, args: argparse.Namespace) -> GraphFilters:
 
 def _build_graph_service(project_path):
     ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
-    return ps, GraphService(query_service=qs, relation_service=rs, entity_service=es)
+    gs = GraphService(query_service=qs, relation_service=rs, entity_service=es)
+    return ps, es, rs, gs
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +212,7 @@ def handle_graph_command(args: argparse.Namespace, session: SessionContext) -> N
 # ---------------------------------------------------------------------------
 
 def _cmd_summary(args, project_path):
-    ps, gs = _build_graph_service(project_path)
+    ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
     result = gs.get_graph_stats(filters)
     if isinstance(result, Error):
@@ -230,7 +227,7 @@ def _cmd_summary(args, project_path):
 
 
 def _cmd_export(args, project_path):
-    ps, gs = _build_graph_service(project_path)
+    ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
     result = gs.build_graph(filters)
     if isinstance(result, Error):
@@ -252,16 +249,16 @@ def _cmd_export(args, project_path):
 
 def _cmd_entity(args, project_path, session):
     # B11-T06: entity create
-    if getattr(args, "entity_command", None) == "create":
+    if args.id_or_create == "create":
         _create_entity(args, project_path)
         return
     # B11-T03: entity <id> (legacy)
-    entity_id = getattr(args, "id", None)
+    entity_id = args.id_or_create
     if not entity_id:
-        print("error: graph entity requires <id> or 'create' subcommand",
-              file=sys.stderr)
+        print("error: graph entity requires <id> or 'create' "
+              "(with --name and --etype)", file=sys.stderr)
         sys.exit(1)
-    ps, gs = _build_graph_service(project_path)
+    ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
     result = gs.build_entity_neighborhood(entity_id, depth=args.depth,
                                            filters=filters)
@@ -285,7 +282,7 @@ def _cmd_entity(args, project_path, session):
 
 
 def _create_entity(args, project_path) -> None:
-    ps, es, *_ = _bootstrap_services(project_path)
+    ps, es, rs, _ = _build_graph_service(project_path)
     proj = ps.active_project
     if proj is None:
         print("error: No active project", file=sys.stderr)
@@ -301,12 +298,18 @@ def _create_entity(args, project_path) -> None:
         if not found:
             print(f"error: Layer '{layer_id}' not found", file=sys.stderr)
             sys.exit(1)
-    try:
-        etype = EntityType(args.type)
-    except (ValueError, KeyError):
-        print(f"error: Invalid entity type '{args.type}'", file=sys.stderr)
+    entity_name = args.name
+    entity_type_raw = args.create_type
+    if not entity_name or not entity_type_raw:
+        print("error: --name and --etype are required for entity create",
+              file=sys.stderr)
         sys.exit(1)
-    data = {"name": args.name, "entity_type": etype}
+    try:
+        etype = EntityType(entity_type_raw)
+    except (ValueError, KeyError):
+        print(f"error: Invalid entity type '{entity_type_raw}'", file=sys.stderr)
+        sys.exit(1)
+    data = {"name": entity_name, "entity_type": etype}
     if args.brief:
         data["brief_description"] = args.brief
     if args.extended:
@@ -331,7 +334,7 @@ def _create_entity(args, project_path) -> None:
 
 
 def _cmd_path(args, project_path):
-    ps, gs = _build_graph_service(project_path)
+    ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
     result = gs.build_path_between(args.source_id, args.target_id,
                                     max_depth=args.max_depth, filters=filters)
@@ -381,8 +384,7 @@ def _cmd_edge(args, project_path):
 
 
 def _cmd_relation(args, project_path):
-    ps, _ = _build_graph_service(project_path)
-    _, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
+    ps, es, rs, _ = _build_graph_service(project_path)
     cmd = args.relation_command
     if cmd == "create":
         from packages.domain.relation import RelationType
@@ -393,7 +395,8 @@ def _cmd_relation(args, project_path):
             sys.exit(1)
         result = rs.create_relation(
             source_id=args.source_id, target_id=args.target_id,
-            relation_type=rtype, description=args.desc,
+            relation_type=rtype,
+            data={"description": args.desc} if args.desc else None,
         )
         if isinstance(result, Error):
             print(f"error: {result.error}", file=sys.stderr)
@@ -422,7 +425,7 @@ def _cmd_relation(args, project_path):
 
 
 def _cmd_view(args, project_path):
-    ps, _ = _build_graph_service(project_path)
+    ps, es, rs, _ = _build_graph_service(project_path)
     cmd = args.view_command
     proj = ps.active_project
     if proj is None:
