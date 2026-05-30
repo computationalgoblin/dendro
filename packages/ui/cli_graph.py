@@ -364,7 +364,7 @@ def _cmd_node(args, project_path):
     if args.node_command == "show":
         r = sp.run([sys.executable, "-m", "narrative_architect",
                      "entity", "show", args.id, "--extended"],
-                    capture_output=True, text=True, cwd=project_path)
+                    capture_output=True, text=True, cwd=project_path.parent)
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr, end="")
             sys.exit(r.returncode)
@@ -376,7 +376,7 @@ def _cmd_edge(args, project_path):
     if args.edge_command == "show":
         r = sp.run([sys.executable, "-m", "narrative_architect",
                      "relation", "show", args.id, "--extended"],
-                    capture_output=True, text=True, cwd=project_path)
+                    capture_output=True, text=True, cwd=project_path.parent)
         if r.returncode != 0:
             print(r.stderr, file=sys.stderr, end="")
             sys.exit(r.returncode)
