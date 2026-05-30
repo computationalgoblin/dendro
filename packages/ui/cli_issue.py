@@ -5,7 +5,6 @@ discard, intentional, note, validate (B12-T04).
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,6 @@ from typing import Any
 from packages.application.issue_service import IssueService
 from packages.domain.result import Error
 from packages.ui.cli import (
-    SessionContext,
     _bootstrap_services,
     require_project_path,
 )

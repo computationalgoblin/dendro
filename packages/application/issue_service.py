@@ -19,7 +19,6 @@ from packages.domain.candidate_issue import (
 from packages.domain.entity import CanonState, EntityType
 from packages.domain.result import Error, Ok, Result
 
-
 CONTRADICTORY_PAIRS: set[tuple[str, str]] = {
     ("es_aliado_de", "es_enemigo_de"),
     ("conoce", "desconoce"),
