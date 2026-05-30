@@ -319,7 +319,11 @@ class QueryService:
 
         issues_result = self.get_open_issues()
         all_issues = issues_result.value if isinstance(issues_result, Ok) else []
-        open_issues = [i for i in all_issues if i.affected_entity_id == entity_id]
+        open_issues = [
+            i for i in all_issues
+            if entity_id in getattr(i, "affected_entity_ids", [])
+            or getattr(i, "affected_entity_id", None) == entity_id
+        ]
 
         return Ok(EntityCard(
             entity=entity,
