@@ -21,6 +21,7 @@ from packages.persistence.schema import (
     _apply_migration_v8_to_v9,
     _apply_migration_v9_to_v10,
     _apply_migration_v10_to_v11,
+    _apply_migration_v11_to_v12,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -266,6 +267,10 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
         data = _apply_migration_v6_to_v7(data)
         data["schema_version"] = 7
         version = 7
+
+    if version == 11:
+        data = _apply_migration_v11_to_v12(data)
+        data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     if version == 10:
         data = _apply_migration_v10_to_v11(data)

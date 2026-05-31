@@ -258,6 +258,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_import import register_import_commands
     register_import_commands(sub)
 
+    # timeline
+    from packages.ui.cli_timeline import register_timeline_commands
+    register_timeline_commands(sub)
+
     return parser
 
 

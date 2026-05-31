@@ -15,6 +15,7 @@ from typing import TypeVar
 
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.narrative_framework import NarrativeFramework
+from packages.domain.temporal_models import TimelineEvent
 from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
@@ -113,6 +114,7 @@ class Project:
     issues: list[StructuredIssue] = field(default_factory=list)
     narrative_frameworks: list[NarrativeFramework] = field(default_factory=list)
     framework_templates: list[NarrativeFramework] = field(default_factory=list)
+    timeline_events: list[TimelineEvent] = field(default_factory=list)
     candidates: list[Candidate] = field(default_factory=list)
 
     # Custom types and taxonomies (Bloque 8)
@@ -204,6 +206,7 @@ class Project:
             "structured_issues": [i.to_dict() for i in self.issues],
             "narrative_frameworks": [f.to_dict() for f in self.narrative_frameworks],
             "framework_templates": [f.to_dict() for f in self.framework_templates],
+            "timeline_events": [e.to_dict() for e in self.timeline_events],
             "candidates": [c.to_dict() for c in self.candidates],
             # Custom types (Bloque 8)
             "custom_entity_types": [ct.to_dict() for ct in self.custom_entity_types],
@@ -302,6 +305,11 @@ class Project:
                 NarrativeFramework.from_dict(f)
                 for f in data.get("framework_templates", [])
                 if isinstance(f, dict)
+            ],
+            timeline_events=[
+                TimelineEvent.from_dict(e)
+                for e in data.get("timeline_events", [])
+                if isinstance(e, dict)
             ],
             candidates=[Candidate.from_dict(c) for c in data.get("candidates", []) if isinstance(c, dict)],
             # Custom types (Bloque 8)

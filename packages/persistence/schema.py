@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B12-T03: upgraded to v8)
-CURRENT_SCHEMA_VERSION: int = 11
+CURRENT_SCHEMA_VERSION: int = 12
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 11
+MAX_SUPPORTED_VERSION: int = 12
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +576,13 @@ def _apply_migration_v10_to_v11(data):
     return migrated
 
 
+
+def _apply_migration_v11_to_v12(data):
+    migrated = dict(data)
+    migrated.setdefault('timeline_events', [])
+    migrated['schema_version'] = 12
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -612,7 +619,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
 
     # Collections must be lists when present
     collection_fields = (
-        "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates",
+        "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates", "timeline_events",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers", "import_baskets",
     )

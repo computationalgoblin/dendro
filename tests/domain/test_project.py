@@ -269,6 +269,7 @@ class TestToDict:
             "structured_issues",
             "narrative_frameworks",
             "framework_templates",
+            "timeline_events",
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
             "import_baskets",
