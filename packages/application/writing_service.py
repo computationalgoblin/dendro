@@ -132,8 +132,8 @@ class WritingService:
             pr = self.get_unit(new_parent_id)
             if isinstance(pr, Error):
                 return Error(f"parent_id '{new_parent_id}' does not exist")
-            # Cycle detection: new parent must not be a descendant
-            if self._is_descendant(new_parent_id, unit_id):
+            # Cycle detection: new parent must not be a descendant of this unit
+            if self._is_descendant(unit_id, new_parent_id):
                 return Error(f"Cannot reparent: '{new_parent_id}' is a descendant of '{unit_id}'")
         unit.parent_id = new_parent_id
         unit.touch()
@@ -182,7 +182,7 @@ class WritingService:
             return r
         unit = r.value
         if self.entity_service:
-            er = self.entity_service.get_entity(entity_id)
+            er = self.entity_service.get_by_id(entity_id)
             if isinstance(er, Error):
                 return Error(f"entity_id '{entity_id}' does not exist")
         if entity_id not in unit.entity_ids:
@@ -210,7 +210,7 @@ class WritingService:
             return []
         result = []
         for eid in unit.entity_ids:
-            er = self.entity_service.get_entity(eid)
+            er = self.entity_service.get_by_id(eid)
             if not isinstance(er, Error):
                 result.append(er.value)
         return result
@@ -349,15 +349,15 @@ class WritingService:
         issues = []
 
         def _make_issue(desc, subtype, unit_id=None):
-            meta = {"validator": "writing", "subtype": subtype}
+            from packages.domain.candidate_issue import StructuredIssueType
+            meta = {"validator": "writing", "source": "deterministic", "subtype": subtype}
             if unit_id:
                 meta["writing_unit_id"] = unit_id
             return StructuredIssue(
                 description=desc,
                 affected_entity_ids=[],
-                source="deterministic",
                 metadata=meta,
-                type="inconsistencia",
+                type=StructuredIssueType.INVALID_ENTITY_TYPE,
             )
 
         all_units = [u for u in proj.writing_units
