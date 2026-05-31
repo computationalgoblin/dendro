@@ -356,6 +356,16 @@ def _cmd_list(args: argparse.Namespace, session: SessionContext) -> None:
         _print_grouped(entities, args.group_by, es, ss)
         return
 
+    # ── json ──
+    if args.json:
+        import json
+        data = {
+            "total": len(entities),
+            "entities": [e.to_dict() for e in entities],
+        }
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+
     active = sum(1 for e in entities if e.canon_state != CanonState.ARCHIVADO)
     archived = len(entities) - active
     print(f"Entities: {len(entities)} total ({active} active, {archived} archived)")

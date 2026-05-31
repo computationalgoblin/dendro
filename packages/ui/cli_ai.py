@@ -18,7 +18,7 @@ def _get_svc(project_path):
     from packages.application.candidate_service import CandidateService
     cs = CandidateService(ps, es, rs, hs)
     orch = OrchestratorService(ps, cs, ss, hs)
-    return ps, orch
+    return ps, orch, ss
 
 
 def _get_filters(args):
@@ -104,7 +104,7 @@ def register_ai_commands(subparsers: Any) -> None:
 def handle_ai_command(args, session):
     project_path = require_project_path(args, session)
     cmd = args.ai_command
-    ps, orch = _get_svc(project_path)
+    ps, orch, ss = _get_svc(project_path)
     filters = _get_filters(args)
 
     if cmd == "generate-entity":
@@ -158,7 +158,7 @@ def handle_ai_command(args, session):
 
     elif cmd in ("analyze", "analyze-group", "causal", "consistency"):
         from packages.application.analysis_service import AnalysisService
-        analysis = AnalysisService(orch, ts, ss)
+        analysis = AnalysisService(orch, source_service=ss)
         if cmd == "analyze":
             r = analysis.analyze_entity(args.entity_id, filters)
             if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
