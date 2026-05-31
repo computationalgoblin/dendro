@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B12-T03: upgraded to v8)
-CURRENT_SCHEMA_VERSION: int = 12
+# Current schema version for new projects (B19-T03: upgraded to v13)
+CURRENT_SCHEMA_VERSION: int = 13
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 12
+MAX_SUPPORTED_VERSION: int = 13
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +220,7 @@ def validate_project_entities(entities: Any) -> str | None:
             )
         seen_ids.add(eid)
 
+
     return None
 
 
@@ -261,6 +262,7 @@ def validate_relation_structure(relation_data: Any) -> str | None:
     for key in _REQUIRED_RELATION_KEYS:
         if key not in relation_data or not relation_data[key]:
             return f"Relation is missing required key: '{key}'"
+
     return None
 
 
@@ -281,6 +283,7 @@ def validate_project_relations(relations: Any) -> str | None:
                 f"(relation at index {idx})"
             )
         seen_ids.add(rid)
+
 
     return None
 
@@ -583,6 +586,12 @@ def _apply_migration_v11_to_v12(data):
     migrated['schema_version'] = 12
     return migrated
 
+def _apply_migration_v12_to_v13(data):
+    migrated = dict(data)
+    migrated.setdefault('writing_units', [])
+    migrated['schema_version'] = 13
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -619,7 +628,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
 
     # Collections must be lists when present
     collection_fields = (
-        "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates", "timeline_events",
+        "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates", "timeline_events", "writing_units",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers", "import_baskets",
     )
@@ -630,4 +639,57 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
                 f"got {type(data[field]).__name__}"
             )
 
+
     return None
+
+
+# --- Writing units structural validation (B19-T03) ---
+
+
+def _validate_writing_units(units):
+    """Validate structural integrity of writing_units list.
+
+    Returns list of error messages (empty = OK).
+    """
+    errors = []
+    if not isinstance(units, list):
+        return [f"writing_units must be a list, got {type(units).__name__}"]
+
+    ids = set()
+    for i, u in enumerate(units):
+        if not isinstance(u, dict):
+            errors.append(f"writing_units[{i}] is not a dict")
+            continue
+        uid = u.get("id")
+        if uid is None:
+            errors.append(f"writing_units[{i}] missing id")
+            continue
+        if uid in ids:
+            errors.append(f"writing_units[{i}] duplicate id '{uid}'")
+        ids.add(uid)
+
+    # Validate parent_id references and cycles
+    unit_ids = {u.get("id") for u in units if isinstance(u, dict) and u.get("id")}
+    for i, u in enumerate(units):
+        if not isinstance(u, dict):
+            continue
+        pid = u.get("parent_id")
+        if pid is not None and pid not in unit_ids:
+            errors.append(f"writing_units[{i}] parent_id '{pid}' does not exist")
+
+    # Cycle detection via DFS
+    parent_map = {}
+    for u in units:
+        if isinstance(u, dict) and u.get("id"):
+            parent_map[u["id"]] = u.get("parent_id")
+    for uid in unit_ids:
+        visited = set()
+        current = uid
+        while current in parent_map and parent_map[current] is not None:
+            current = parent_map[current]
+            if current in visited:
+                errors.append(f"writing_units cycle detected involving '{current}'")
+                break
+            visited.add(current)
+
+    return errors

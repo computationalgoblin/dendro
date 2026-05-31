@@ -22,6 +22,7 @@ from packages.persistence.schema import (
     _apply_migration_v9_to_v10,
     _apply_migration_v10_to_v11,
     _apply_migration_v11_to_v12,
+    _apply_migration_v12_to_v13,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -33,6 +34,7 @@ from packages.persistence.schema import (
     CATEGORY_TO_TYPE,
     detect_schema_version,
     validate_project_structure,
+    _validate_writing_units,
     validate_schema_version,
 )
 
@@ -268,30 +270,43 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
         data["schema_version"] = 7
         version = 7
 
-    if version == 11:
-        data = _apply_migration_v11_to_v12(data)
-        data["schema_version"] = CURRENT_SCHEMA_VERSION
-
-    if version == 10:
-        data = _apply_migration_v10_to_v11(data)
-        data["schema_version"] = CURRENT_SCHEMA_VERSION
-
-    if version == 9:
-        data = _apply_migration_v9_to_v10(data)
-        data["schema_version"] = CURRENT_SCHEMA_VERSION
+    if version == 7:
+        data = _apply_migration_v7_to_v8(data)
+        data["schema_version"] = 8
+        version = 8
 
     if version == 8:
         data = _apply_migration_v8_to_v9(data)
-        data["schema_version"] = CURRENT_SCHEMA_VERSION
+        data["schema_version"] = 9
+        version = 9
 
-    if version == 7:
-        data = _apply_migration_v7_to_v8(data)
+    if version == 9:
+        data = _apply_migration_v9_to_v10(data)
+        data["schema_version"] = 10
+        version = 10
+
+    if version == 10:
+        data = _apply_migration_v10_to_v11(data)
+        data["schema_version"] = 11
+        version = 11
+
+    if version == 11:
+        data = _apply_migration_v11_to_v12(data)
+        data["schema_version"] = 12
+        version = 12
+
+    if version == 12:
+        data = _apply_migration_v12_to_v13(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
     structure_error = validate_project_structure(data)
     if structure_error is not None:
         return Error(structure_error)
+
+    wu_errors = _validate_writing_units(data.get("writing_units", []))
+    if wu_errors:
+        return Error(" ".join(wu_errors))
 
     return Ok(data)
 

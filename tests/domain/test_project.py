@@ -270,6 +270,7 @@ class TestToDict:
             "narrative_frameworks",
             "framework_templates",
             "timeline_events",
+            "writing_units",
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
             "import_baskets",

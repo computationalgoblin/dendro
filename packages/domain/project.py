@@ -16,6 +16,7 @@ from typing import TypeVar
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.temporal_models import TimelineEvent
+from packages.domain.writing_models import WritingUnit
 from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
@@ -136,6 +137,9 @@ class Project:
     # ── Import baskets (Bloque 17) ──
     import_baskets: list[ImportBasket] = field(default_factory=list)
 
+    # ── Writing units (Bloque 19) ──
+    writing_units: list[WritingUnit] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -222,6 +226,8 @@ class Project:
             "advanced_config": self.advanced_config.to_dict(),
             # ── Import baskets (Bloque 17) ──
             "import_baskets": [b.to_dict() for b in self.import_baskets],
+            # ── Writing units (Bloque 19) ──
+            "writing_units": [wu.to_dict() for wu in self.writing_units],
         }
 
     @classmethod
@@ -355,6 +361,15 @@ class Project:
                     if isinstance(b, dict)
                 ]}
                 if "import_baskets" in data else {}
+            ),
+            # ── Writing units (Bloque 19) ──
+            **(
+                {"writing_units": [
+                    WritingUnit.from_dict(wu)
+                    for wu in data.get("writing_units", [])
+                    if isinstance(wu, dict)
+                ]}
+                if "writing_units" in data else {}
             ),
         )
 

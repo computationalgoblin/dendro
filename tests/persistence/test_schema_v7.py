@@ -70,10 +70,10 @@ def _v6_minimal(**overrides) -> dict:
 
 class TestSchemaVersionV7:
     def test_current_schema_is_v9(self):
-        assert CURRENT_SCHEMA_VERSION == 12
+        assert CURRENT_SCHEMA_VERSION == 13
 
     def test_max_supported_is_v9(self):
-        assert MAX_SUPPORTED_VERSION == 12
+        assert MAX_SUPPORTED_VERSION == 13
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -388,7 +388,7 @@ class TestMigrationChainV1ToV9:
         data = result.value
 
         # Verify the result is v7
-        assert data["schema_version"] == 12
+        assert data["schema_version"] == 13
 
         # All v7 fields present
         assert data["domains"] == [
@@ -412,7 +412,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 12
+        assert data["schema_version"] == 13
 
         # Legacy data preserved
         assert data["id"] == "proj-001"
@@ -443,7 +443,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 12
+        assert data["schema_version"] == 13
         assert data["domains"] == ["mundo", "historia"]
         assert len(data["world_layers"]) == 1
         assert data["world_layers"][0]["name"] == "Custom"
@@ -454,16 +454,16 @@ class TestMigrationChainV1ToV9:
 # ══════════════════════════════════════════════════════════════════
 
 class TestFutureVersionRejection:
-    def test_v13_rejected(self, tmp_path: Path):
+    def test_v14_rejected(self, tmp_path: Path):
         path = tmp_path / "future.json"
-        future = {"schema_version": 13, "id": "x", "name": "Future",
+        future = {"schema_version": 14, "id": "x", "name": "Future",
                    "created_at": "2026-01-01T00:00:00+00:00",
                    "updated_at": "2026-01-01T00:00:00+00:00"}
         path.write_text(json.dumps(future), encoding="utf-8")
 
         result = load_project_data(path)
         assert isinstance(result, Error)
-        assert "v11" in result.error or "schema" in result.error.lower()
+        assert "v13" in result.error or "schema" in result.error.lower()
         assert "update" in result.error.lower() or "actuali" in result.error.lower()
 
     def test_v7_passes_validation(self, tmp_path: Path):
