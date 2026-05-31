@@ -406,11 +406,13 @@ class ImportService:
         ct = _map_to_candidate_type(import_cand.candidate_type)
 
         # Create Candidate B14 PENDIENTE
+        proposed = dict(import_cand.proposed_data)
+        if import_cand.proposed_relations:
+            proposed["proposed_relations"] = list(import_cand.proposed_relations)
         cand_data = {
             "candidate_type": ct.value,
             "state": CandidateState.PENDIENTE.value,
-            "proposed_data": import_cand.proposed_data,
-            "proposed_relations": import_cand.proposed_relations,
+            "proposed_data": proposed,
             "confidence": import_cand.confidence,
             "source_id": basket.source_id,
             "metadata": {
@@ -453,6 +455,14 @@ class ImportService:
                 break
         if import_cand is None:
             return Error(f"Import candidate '{cand_id[:8]}' not found")
+
+        if import_cand.review_state not in (
+            ImportReviewState.PENDIENTE, ImportReviewState.EDITADO, ImportReviewState.PARCIAL,
+        ):
+            return Error(
+                f"Cannot reject candidate in state '{import_cand.review_state.value}'. "
+                f"Only PENDIENTE, EDITADO, or PARCIAL can be rejected."
+            )
 
         import_cand.review_state = ImportReviewState.RECHAZADO
         basket.updated_at = _now_iso()
