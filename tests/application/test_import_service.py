@@ -10,6 +10,7 @@ import pytest
 from packages.application.import_service import ImportService
 from packages.domain.candidate_issue import Candidate, CandidateState
 from packages.domain.import_models import ImportFormat
+import uuid
 from packages.domain.project import Project
 from packages.domain.result import is_ok, is_error, unwrap
 
@@ -292,3 +293,28 @@ class TestPartialImport:
         assert is_ok(result)
         filtered = unwrap(result)
         assert len(filtered.import_candidates) >= 1
+
+class TestImportBasketPersistence:
+    def test_save_load_basket_with_segments_and_candidates(self, tmp_path):
+        from packages.persistence.store import ProjectStore
+        from packages.application.project_service import ProjectService
+        store = ProjectStore()
+        ps = ProjectService(store=store)
+        ps.create(name="PersistTest")
+        from packages.domain.import_models import ImportBasket, DocumentSegment, ImportCandidate
+        seg = DocumentSegment(source_id="s1", section="Intro", raw_text="Hello world", start_offset=0, end_offset=11)
+        cand = ImportCandidate(segment_id=seg.id, candidate_type="entidad", proposed_data={"name": "Test"}, confidence=0.8)
+        import uuid; basket = ImportBasket(id=str(uuid.uuid4()), source_id="s1", segments=[seg], import_candidates=[cand])
+        ps.active_project.import_baskets.append(basket)
+        path = tmp_path / "test.json"
+        ps.save(path)
+        store2 = ProjectStore()
+        ps2 = ProjectService(store=store2)
+        ps2.open(path)
+        loaded = ps2.active_project.import_baskets
+        assert len(loaded) == 1
+        assert loaded[0].id == basket.id
+        assert len(loaded[0].segments) == 1
+        assert loaded[0].segments[0].raw_text == "Hello world"
+        assert len(loaded[0].import_candidates) == 1
+        assert loaded[0].import_candidates[0].confidence == 0.8
