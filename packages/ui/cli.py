@@ -262,6 +262,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_timeline import register_timeline_commands
     register_timeline_commands(sub)
 
+    from packages.ui.cli_writing import register_writing_commands
+    register_writing_commands(sub)
+
     return parser
 
 
@@ -383,6 +386,11 @@ def main() -> None:
     if args.command == "import":
         from packages.ui.cli_import import handle_import_command
         print(handle_import_command(args, session))
+        return
+
+    if args.command == "writing":
+        from packages.ui.cli_writing import handle_writing_command
+        handle_writing_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)

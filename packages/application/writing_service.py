@@ -406,7 +406,10 @@ class WritingService:
     # ── Internal ───────────────────────────────────────────────────
 
     def _active_project(self) -> Project:
-        return self.project_service._active_project()
+        proj = self.project_service.active_project
+        if proj is None:
+            raise RuntimeError("No active project")
+        return proj
 
 
 __all__ = ["WritingService"]
