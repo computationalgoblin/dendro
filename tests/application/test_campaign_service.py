@@ -59,7 +59,7 @@ def _make_project_with_entities() -> tuple[Project, CampaignService]:
             if e.id == eid:
                 return Ok(e)
         return Error(f"Entity '{eid}' not found")
-    es.get_entity = get_entity
+    es.get_by_id = get_entity
 
     svc = CampaignService(project_service=ps, entity_service=es)
     return project, svc

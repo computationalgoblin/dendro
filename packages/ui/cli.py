@@ -265,6 +265,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_writing import register_writing_commands
     register_writing_commands(sub)
 
+    from packages.ui.cli_campaign import register_campaign_commands
+    register_campaign_commands(sub)
+
     return parser
 
 
@@ -391,6 +394,11 @@ def main() -> None:
     if args.command == "writing":
         from packages.ui.cli_writing import handle_writing_command
         handle_writing_command(args, session)
+        return
+
+    if args.command == "campaign":
+        from packages.ui.cli_campaign import handle_campaign
+        handle_campaign(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)

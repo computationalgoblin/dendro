@@ -171,7 +171,7 @@ class CampaignService:
 
         # Validate entity exists
         if self.entity_service is not None:
-            entity_result = self.entity_service.get_entity(entity_id)
+            entity_result = self.entity_service.get_by_id(entity_id)
             if isinstance(entity_result, Error):
                 return Error(f"Entity '{entity_id}' not found")
 
@@ -203,7 +203,7 @@ class CampaignService:
 
         entity_name = entity_id
         if self.entity_service is not None:
-            ent_result = self.entity_service.get_entity(entity_id)
+            ent_result = self.entity_service.get_by_id(entity_id)
             if isinstance(ent_result, Ok):
                 entity_name = ent_result.value.name
 
@@ -288,7 +288,7 @@ class CampaignService:
 
         # Validate entity exists
         if self.entity_service is not None:
-            ent_result = self.entity_service.get_entity(entity_id)
+            ent_result = self.entity_service.get_by_id(entity_id)
             if isinstance(ent_result, Error):
                 return Error(f"Entity '{entity_id}' not found")
 
@@ -319,7 +319,7 @@ class CampaignService:
 
         entity_name = entity_id
         if self.entity_service is not None:
-            ent2 = self.entity_service.get_entity(entity_id)
+            ent2 = self.entity_service.get_by_id(entity_id)
             if isinstance(ent2, Ok):
                 entity_name = ent2.value.name
 
@@ -462,14 +462,14 @@ class CampaignService:
             es = self.entity_service
             # World
             if campaign.world_entity_id:
-                wr = es.get_entity(campaign.world_entity_id)
+                wr = es.get_by_id(campaign.world_entity_id)
                 if isinstance(wr, Ok):
                     overview["world_name"] = wr.value.name
 
             # Player characters
             pcs = []
             for eid in campaign.player_character_entity_ids:
-                er = es.get_entity(eid)
+                er = es.get_by_id(eid)
                 name = er.value.name if isinstance(er, Ok) else eid
                 # Find profile
                 profile_id = None
@@ -494,7 +494,7 @@ class CampaignService:
             # Active factions
             factions = []
             for fid in campaign.active_faction_entity_ids:
-                fr = es.get_entity(fid)
+                fr = es.get_by_id(fid)
                 factions.append({
                     "id": fid,
                     "name": fr.value.name if isinstance(fr, Ok) else fid,
@@ -504,7 +504,7 @@ class CampaignService:
             # Active locations
             locations = []
             for lid in campaign.active_location_entity_ids:
-                lr = es.get_entity(lid)
+                lr = es.get_by_id(lid)
                 locations.append({
                     "id": lid,
                     "name": lr.value.name if isinstance(lr, Ok) else lid,
