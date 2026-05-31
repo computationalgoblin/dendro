@@ -23,6 +23,7 @@ from packages.persistence.schema import (
     _apply_migration_v10_to_v11,
     _apply_migration_v11_to_v12,
     _apply_migration_v12_to_v13,
+    _apply_migration_v13_to_v14,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -35,6 +36,9 @@ from packages.persistence.schema import (
     detect_schema_version,
     validate_project_structure,
     _validate_writing_units,
+    _validate_campaigns,
+    _validate_player_character_profiles,
+    _validate_campaign_clocks,
     validate_schema_version,
 )
 
@@ -297,6 +301,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 12:
         data = _apply_migration_v12_to_v13(data)
+        data["schema_version"] = 13
+        version = 13
+
+    if version == 13:
+        data = _apply_migration_v13_to_v14(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -307,6 +316,19 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     wu_errors = _validate_writing_units(data.get("writing_units", []))
     if wu_errors:
         return Error(" ".join(wu_errors))
+
+    # Campaign validations
+    camp_errors = _validate_campaigns(data.get("campaigns", []))
+    if camp_errors:
+        return Error(" ".join(camp_errors))
+
+    pcp_errors = _validate_player_character_profiles(data.get("player_character_profiles", []))
+    if pcp_errors:
+        return Error(" ".join(pcp_errors))
+
+    clock_errors = _validate_campaign_clocks(data.get("campaign_clocks", []))
+    if clock_errors:
+        return Error(" ".join(clock_errors))
 
     return Ok(data)
 

@@ -423,7 +423,7 @@ class TestSchemaV13:
                "entities": [], "relations": [], "sources": [], "history": [],
                "issues": []}
         result = _apply_migration_v12_to_v13(v12)
-        assert result["schema_version"] == 13
+        assert result["schema_version"] == 14
         assert "writing_units" in result
         assert result["writing_units"] == []
 

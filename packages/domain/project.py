@@ -17,6 +17,7 @@ from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
+from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
 from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
@@ -140,6 +141,11 @@ class Project:
     # ── Writing units (Bloque 19) ──
     writing_units: list[WritingUnit] = field(default_factory=list)
 
+    # ── Campaign collections (Bloque 20) ──
+    campaigns: list[Campaign] = field(default_factory=list)
+    player_character_profiles: list[PlayerCharacterProfile] = field(default_factory=list)
+    campaign_clocks: list[CampaignClock] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -228,6 +234,10 @@ class Project:
             "import_baskets": [b.to_dict() for b in self.import_baskets],
             # ── Writing units (Bloque 19) ──
             "writing_units": [wu.to_dict() for wu in self.writing_units],
+            # ── Campaign collections (Bloque 20) ──
+            "campaigns": [c.to_dict() for c in self.campaigns],
+            "player_character_profiles": [p.to_dict() for p in self.player_character_profiles],
+            "campaign_clocks": [c.to_dict() for c in self.campaign_clocks],
         }
 
     @classmethod
@@ -370,6 +380,31 @@ class Project:
                     if isinstance(wu, dict)
                 ]}
                 if "writing_units" in data else {}
+            ),
+            # ── Campaign collections (Bloque 20) ──
+            **(
+                {"campaigns": [
+                    Campaign.from_dict(c)
+                    for c in data.get("campaigns", [])
+                    if isinstance(c, dict)
+                ]}
+                if "campaigns" in data else {}
+            ),
+            **(
+                {"player_character_profiles": [
+                    PlayerCharacterProfile.from_dict(p)
+                    for p in data.get("player_character_profiles", [])
+                    if isinstance(p, dict)
+                ]}
+                if "player_character_profiles" in data else {}
+            ),
+            **(
+                {"campaign_clocks": [
+                    CampaignClock.from_dict(c)
+                    for c in data.get("campaign_clocks", [])
+                    if isinstance(c, dict)
+                ]}
+                if "campaign_clocks" in data else {}
             ),
         )
 

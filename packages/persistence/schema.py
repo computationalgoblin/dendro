@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B19-T03: upgraded to v13)
-CURRENT_SCHEMA_VERSION: int = 13
+# Current schema version for new projects (B20-T02: upgraded to v14)
+CURRENT_SCHEMA_VERSION: int = 14
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 13
+MAX_SUPPORTED_VERSION: int = 14
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +592,15 @@ def _apply_migration_v12_to_v13(data):
     migrated['schema_version'] = 13
     return migrated
 
+def _apply_migration_v13_to_v14(data):
+    """v13 → v14: adds campaign collections (B20-T02)."""
+    migrated = dict(data)
+    migrated.setdefault('campaigns', [])
+    migrated.setdefault('player_character_profiles', [])
+    migrated.setdefault('campaign_clocks', [])
+    migrated['schema_version'] = 14
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -631,6 +640,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates", "timeline_events", "writing_units",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers", "import_baskets",
+        "campaigns", "player_character_profiles", "campaign_clocks",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
@@ -691,5 +701,102 @@ def _validate_writing_units(units):
                 errors.append(f"writing_units cycle detected involving '{current}'")
                 break
             visited.add(current)
+
+    return errors
+
+# --- Campaign collections structural validation (B20-T02) ---
+
+
+def _validate_campaigns(campaigns):
+    """Validate structural integrity of campaigns list.
+
+    Checks: is a list, unique IDs.
+    Returns list of error messages (empty = OK).
+    """
+    errors = []
+    if not isinstance(campaigns, list):
+        return [f"campaigns must be a list, got {type(campaigns).__name__}"]
+
+    ids = set()
+    for i, c in enumerate(campaigns):
+        if not isinstance(c, dict):
+            errors.append(f"campaigns[{i}] is not a dict")
+            continue
+        cid = c.get("id")
+        if cid is None:
+            errors.append(f"campaigns[{i}] missing id")
+            continue
+        if cid in ids:
+            errors.append(f"campaigns[{i}] duplicate id '{cid}'")
+        ids.add(cid)
+
+    return errors
+
+
+def _validate_player_character_profiles(profiles):
+    """Validate structural integrity of player_character_profiles list.
+
+    Checks: is a list, unique IDs, entity_id mandatory (non-empty string).
+    Returns list of error messages (empty = OK).
+    """
+    errors = []
+    if not isinstance(profiles, list):
+        return [f"player_character_profiles must be a list, got {type(profiles).__name__}"]
+
+    ids = set()
+    for i, p in enumerate(profiles):
+        if not isinstance(p, dict):
+            errors.append(f"player_character_profiles[{i}] is not a dict")
+            continue
+        pid = p.get("id")
+        if pid is None:
+            errors.append(f"player_character_profiles[{i}] missing id")
+            continue
+        if pid in ids:
+            errors.append(f"player_character_profiles[{i}] duplicate id '{pid}'")
+        ids.add(pid)
+
+        # entity_id mandatory
+        entity_id = p.get("entity_id")
+        if not entity_id or not isinstance(entity_id, str) or not entity_id.strip():
+            errors.append(
+                f"player_character_profiles[{i}] entity_id is required "
+                f"and must be a non-empty string"
+            )
+
+    return errors
+
+
+def _validate_campaign_clocks(clocks, all_campaign_clock_ids=None):
+    """Validate structural integrity of campaign_clocks list.
+
+    Checks: is a list, unique IDs.
+    If all_campaign_clock_ids is provided (set of clock IDs referenced from campaigns),
+    also validates that campaign.clock_ids reference existing clocks.
+
+    Returns list of error messages (empty = OK).
+    """
+    errors = []
+    if not isinstance(clocks, list):
+        return [f"campaign_clocks must be a list, got {type(clocks).__name__}"]
+
+    clock_ids = set()
+    for i, c in enumerate(clocks):
+        if not isinstance(c, dict):
+            errors.append(f"campaign_clocks[{i}] is not a dict")
+            continue
+        cid = c.get("id")
+        if cid is None:
+            errors.append(f"campaign_clocks[{i}] missing id")
+            continue
+        if cid in clock_ids:
+            errors.append(f"campaign_clocks[{i}] duplicate id '{cid}'")
+        clock_ids.add(cid)
+
+    # Cross-reference: campaign.clock_ids must exist in campaign_clocks
+    if all_campaign_clock_ids is not None:
+        missing = all_campaign_clock_ids - clock_ids
+        for m in sorted(missing):
+            errors.append(f"campaign references clock_id '{m}' which does not exist in campaign_clocks")
 
     return errors

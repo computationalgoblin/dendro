@@ -274,6 +274,7 @@ class TestToDict:
             "custom_entity_types", "custom_field_definitions", "custom_relation_types",
             "domains", "world_layers", "advanced_config",
             "import_baskets",
+            "campaigns", "player_character_profiles", "campaign_clocks",
         }
         assert set(d.keys()) == expected_keys
 
