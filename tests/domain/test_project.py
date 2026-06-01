@@ -255,7 +255,7 @@ class TestProjectCustomConfig:
 
 
 class TestToDict:
-    def test_to_dict_has_all_20_contract_keys(self):
+    def test_to_dict_has_all_contract_keys(self):
         p = Project()
         d = p.to_dict()
         expected_keys = {
@@ -275,6 +275,7 @@ class TestToDict:
             "domains", "world_layers", "advanced_config",
             "import_baskets",
             "campaigns", "player_character_profiles", "campaign_clocks",
+            "secrets", "clues",
         }
         assert set(d.keys()) == expected_keys
 
