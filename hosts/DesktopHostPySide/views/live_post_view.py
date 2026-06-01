@@ -1,199 +1,266 @@
-"""LivePostView — live mode + post-session tabs (B27.1-T04)."""
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton,
-                                QLineEdit, QTextEdit, QLabel, QComboBox)
+"""LivePostView — live mode + post-session actions (B27.3 bugbash)."""
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QComboBox,
+    QInputDialog,
+    QLabel,
+    QPushButton,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
 from packages.domain.result import Error
 
+
 class LivePostView(QWidget):
     def __init__(self, ctx: AppContext, sc: SessionController, lmc=None, psc=None):
-        super().__init__(); self.ctx = ctx; self.sc = sc
-        self.lmc = lmc; self.psc = psc; self._build()
+        super().__init__()
+        self.ctx = ctx
+        self.sc = sc
+        self.lmc = lmc
+        self.psc = psc
+        self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
         self.session_sel = QComboBox()
-        layout.addWidget(QLabel("Sesión:")); layout.addWidget(self.session_sel)
-        btn_r = QPushButton("Refrescar sesiones"); btn_r.clicked.connect(self._refresh_sessions); layout.addWidget(btn_r)
+        layout.addWidget(QLabel("Sesión:"))
+        layout.addWidget(self.session_sel)
+        btn_r = QPushButton("Refrescar sesiones")
+        btn_r.clicked.connect(self.refresh)
+        layout.addWidget(btn_r)
 
         tabs = QTabWidget()
 
-        # Live tab
-        live = QWidget(); ll = QVBoxLayout(live)
-        btns_live = [("Open/Activate", self._live_open), ("Quick Note", self._live_note),
-                     ("Player Decision", self._live_decide), ("Event", self._live_event),
-                     ("Consequence", self._live_consequence), ("Entity (provisional)", self._live_entity),
-                     ("Clue Deliver", self._live_clue), ("Secret Reveal", self._live_secret),
-                     ("Improvise", self._live_improvise), ("Done", self._live_done)]
-        for label, fn in btns_live:
-            b = QPushButton(label); b.clicked.connect(fn); ll.addWidget(b)
-        self.live_output = QTextEdit(); self.live_output.setReadOnly(True); self.live_output.setMaximumHeight(80)
+        live = QWidget()
+        ll = QVBoxLayout(live)
+        for label, handler in [
+            ("Open/Activate", self._live_open),
+            ("Quick Note", self._live_note),
+            ("Player Decision", self._live_decide),
+            ("Event", self._live_event),
+            ("Consequence", self._live_consequence),
+            ("Entity (provisional)", self._live_entity),
+            ("Relation (provisional)", self._live_relation),
+            ("Clue Deliver", self._live_clue),
+            ("Secret Reveal", self._live_secret),
+            ("Improvise", self._live_improvise),
+            ("Done", self._live_done),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(handler)
+            ll.addWidget(btn)
+        self.live_output = QTextEdit()
+        self.live_output.setReadOnly(True)
+        self.live_output.setMaximumHeight(110)
         ll.addWidget(self.live_output)
         tabs.addTab(live, "Live")
 
-        # Post tab
-        post = QWidget(); pl = QVBoxLayout(post)
-        btns_post = [("Close Session", self._post_close), ("Generate Candidates", self._post_candidates),
-                     ("Accept", self._post_accept), ("Reject", self._post_reject),
-                     ("Source", self._post_source), ("Seeds", self._post_seeds)]
-        for label, fn in btns_post:
-            b = QPushButton(label); b.clicked.connect(fn); pl.addWidget(b)
-        self.cand_combo = QComboBox(); pl.addWidget(QLabel("Candidate:")); pl.addWidget(self.cand_combo)
-        self.post_output = QTextEdit(); self.post_output.setReadOnly(True); self.post_output.setMaximumHeight(80)
+        post = QWidget()
+        pl = QVBoxLayout(post)
+        for label, handler in [
+            ("Close Session", self._post_close),
+            ("Private summary", self._post_private_summary),
+            ("Player summary", self._post_public_summary),
+            ("Generate Candidates", self._post_candidates),
+            ("Accept", self._post_accept),
+            ("Reject", self._post_reject),
+            ("Source", self._post_source),
+            ("Seeds", self._post_seeds),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(handler)
+            pl.addWidget(btn)
+        self.cand_combo = QComboBox()
+        pl.addWidget(QLabel("Candidate:"))
+        pl.addWidget(self.cand_combo)
+        self.post_output = QTextEdit()
+        self.post_output.setReadOnly(True)
+        self.post_output.setMaximumHeight(110)
         pl.addWidget(self.post_output)
         tabs.addTab(post, "Post")
 
         layout.addWidget(tabs)
 
-    def _refresh_sessions(self):
-        self.session_sel.clear()
-        for s in self.sc.list_all(): self.session_sel.addItem(f"{s.name} ({s.id[:8]})", s.id)
-        if self.ctx.selected_session_id:
-            idx = self.session_sel.findData(self.ctx.selected_session_id)
-            if idx >= 0: self.session_sel.setCurrentIndex(idx)
+    def _sid(self):
+        return self.session_sel.currentData()
 
-    def _sid(self): return self.session_sel.currentData()
+    def _show_result(self, output, result, success_label):
+        if isinstance(result, Error):
+            output.setText(f"Error: {result.error}")
+            self.ctx.log("error", result.error)
+            return None
+        output.setText(success_label(result.value))
+        return result.value
+
+    def refresh(self):
+        current = self._sid()
+        self.session_sel.clear()
+        for session in self.sc.list_all():
+            self.session_sel.addItem(f"{session.name} ({session.id[:8]})", session.id)
+        target = self.ctx.selected_session_id or current
+        if target:
+            idx = self.session_sel.findData(target)
+            if idx >= 0:
+                self.session_sel.setCurrentIndex(idx)
 
     def _live_open(self):
         sid = self._sid()
         if sid:
-            r = self.lmc.activate(sid)
-            self.live_output.setText(f"Activated: {r.value.name}" if not isinstance(r, Error) else f"Error: {r.error}")
+            self.ctx.selected_session_id = sid
+            self._show_result(self.live_output, self.lmc.activate(sid), lambda session: f"Activated: {session.name}")
 
     def _live_note(self):
         sid = self._sid()
-        if sid:
-            from PySide6.QtWidgets import QInputDialog
-            text, ok = QInputDialog.getText(self, "Quick Note", "Text:")
-            if ok and text:
-                r = self.lmc.note(sid, text)
-                self.live_output.setText("Note added" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Live note added")
+        text, ok = QInputDialog.getText(self, "Quick Note", "Text:")
+        if sid and ok and text:
+            self._show_result(self.live_output, self.lmc.note(sid, text), lambda _: "Note added")
 
     def _live_decide(self):
         sid = self._sid()
-        if sid:
-            from PySide6.QtWidgets import QInputDialog
-            text, ok = QInputDialog.getText(self, "Player Decision", "Text:")
-            if ok and text:
-                method = getattr(self.sc.ls, "register_decide" if cmd != "consequence" else "register_consequence")
-                r = method(sid, text)
-                self.live_output.setText("Player Decision registered" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Live decide: {text[:40]}")
+        text, ok = QInputDialog.getText(self, "Player Decision", "Text:")
+        if sid and ok and text:
+            self._show_result(self.live_output, self.lmc.decision(sid, text), lambda _: "Player decision registered")
+
     def _live_event(self):
         sid = self._sid()
-        if sid:
-            from PySide6.QtWidgets import QInputDialog
-            text, ok = QInputDialog.getText(self, "Event", "Text:")
-            if ok and text:
-                method = getattr(self.sc.ls, "register_event" if cmd != "consequence" else "register_consequence")
-                r = method(sid, text)
-                self.live_output.setText("Event registered" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Live event: {text[:40]}")
+        text, ok = QInputDialog.getText(self, "Event", "Text:")
+        if sid and ok and text:
+            self._show_result(self.live_output, self.lmc.event(sid, text), lambda _: "Event registered")
+
     def _live_consequence(self):
         sid = self._sid()
-        if sid:
-            from PySide6.QtWidgets import QInputDialog
-            text, ok = QInputDialog.getText(self, "Consequence", "Text:")
-            if ok and text:
-                method = getattr(self.sc.ls, "register_consequence" if cmd != "consequence" else "register_consequence")
-                r = method(sid, text)
-                self.live_output.setText("Consequence registered" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Live consequence: {text[:40]}")
+        text, ok = QInputDialog.getText(self, "Consequence", "Text:")
+        if sid and ok and text:
+            self._show_result(self.live_output, self.lmc.consequence(sid, text), lambda _: "Consequence registered")
 
     def _live_entity(self):
         sid = self._sid()
         if sid:
-            r = self.lmc.entity(sid, "Improvised NPC", "personaje")
-            self.live_output.setText(f"Created: {r.value.name} ({r.value.id[:8]})" if not isinstance(r, Error) else f"Error: {r.error}")
-            self.ctx.log("info", f"Provisional entity created")
+            result = self.lmc.entity(sid, "Improvised NPC", "personaje")
+            self._show_result(self.live_output, result, lambda entity: f"Created entity: {entity.name} ({entity.id})")
+
+    def _live_relation(self):
+        sid = self._sid()
+        project = self.sc.ps.active_project
+        if not sid or project is None or len(project.entities) < 2:
+            self.live_output.setText("Need at least two entities")
+            return
+        src = project.entities[0].id
+        tgt = project.entities[1].id
+        result = self.lmc.relation(sid, src, tgt, "es_aliado_de")
+        self._show_result(self.live_output, result, lambda relation: f"Created relation: {relation.id}")
 
     def _live_clue(self):
         sid = self._sid()
-        if sid:
-            clues = self.lmc.query(sid) if hasattr(self.sc.ls, 'query_clues') else []
-            if not clues: self.live_output.setText("No clues linked to session"); return
-            from PySide6.QtWidgets import QInputDialog
-            ids = [f"{c.id[:8]}: {c.content[:40]}" for c in clues]
-            item, ok = QInputDialog.getItem(self, "Deliver Clue", "Clue:", ids, 0, False)
-            if ok and item:
-                cid = item.split(":")[0].strip()
-                r = self.lmc.clue_deliver(sid, cid, "entregada")
-                self.live_output.setText(f"Delivered {cid}" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Clue {cid} delivered")
+        if not sid:
+            return
+        clues = self.lmc.query_clues(sid)
+        if isinstance(clues, Error) or not clues.value:
+            self.live_output.setText("No clues linked to session")
+            return
+        options = [f"{clue.content[:50]} ({clue.id})" for clue in clues.value]
+        item, ok = QInputDialog.getItem(self, "Deliver Clue", "Clue:", options, 0, False)
+        if ok and item:
+            clue_id = item[item.rfind("(") + 1 : -1]
+            result = self.lmc.clue_deliver(sid, clue_id, "entregada")
+            self._show_result(self.live_output, result, lambda _: f"Delivered {clue_id}")
 
     def _live_secret(self):
         sid = self._sid()
-        if sid:
-            secrets = self.lmc.query(sid) if hasattr(self.sc.ls, 'query_secrets') else []
-            if not secrets: self.live_output.setText("No secrets linked to session"); return
-            from PySide6.QtWidgets import QInputDialog
-            ids = [f"{s.id[:8]}: {s.content[:40]}" for s in secrets]
-            item, ok = QInputDialog.getItem(self, "Reveal Secret", "Secret:", ids, 0, False)
-            if ok and item:
-                sid2 = item.split(":")[0].strip()
-                r = self.lmc.secret_reveal(sid, sid2, "parcialmente_revelado")
-                self.live_output.setText(f"Revealed {sid2}" if not isinstance(r, Error) else f"Error: {r.error}")
-                self.ctx.log("info", f"Secret {sid2} revealed")
+        if not sid:
+            return
+        secrets = self.lmc.query_secrets(sid)
+        if isinstance(secrets, Error) or not secrets.value:
+            self.live_output.setText("No secrets linked to session")
+            return
+        options = [f"{secret.content[:50]} ({secret.id})" for secret in secrets.value]
+        item, ok = QInputDialog.getItem(self, "Reveal Secret", "Secret:", options, 0, False)
+        if ok and item:
+            secret_id = item[item.rfind("(") + 1 : -1]
+            result = self.lmc.secret_reveal(sid, secret_id, "parcialmente_revelado")
+            self._show_result(self.live_output, result, lambda _: f"Revealed {secret_id}")
 
     def _live_improvise(self):
         sid = self._sid()
         if sid:
-            r = self.lmc.improvise(sid, "fantasy scene")
-            if isinstance(r, Error): self.live_output.setText(f"Error: {r.error}")
-            else:
-                v = r.value; self.live_output.setText(f"Name: {v.get('name','?')}\nDesc: {v.get('description','?')}")
+            result = self.lmc.improvise(sid, "fantasy scene", True)
+            self._show_result(self.live_output, result, lambda data: f"{data.get('name', '?')}\n{data.get('description', '?')}")
 
     def _live_done(self):
         sid = self._sid()
         if sid:
-            r = self.lmc.done(sid)
-            if isinstance(r, Error): self.live_output.setText(f"Error: {r.error}")
-            else:
-                v = r.value
-                self.live_output.setText(f"Post material: {len(v.get('quick_notes',[]))} notes, {len(v.get('events',[]))} events, {len(v.get('clues_delivered',[]))} clues, {len(v.get('secrets_revealed',[]))} secrets")
+            result = self.lmc.done(sid)
+            self._show_result(
+                self.live_output,
+                result,
+                lambda data: f"Post material: notes={len(data.get('quick_notes', []))}, events={len(data.get('events', []))}, clues={len(data.get('clues_delivered', []))}, secrets={len(data.get('secrets_revealed', []))}",
+            )
 
     def _post_close(self):
         sid = self._sid()
         if sid:
-            r = self.psc.close(sid)
-            self.post_output.setText(f"Closed: {r.value.state.value}" if not isinstance(r, Error) else f"Error: {r.error}")
+            self._show_result(self.post_output, self.psc.close(sid), lambda session: f"Closed: {session.state.value}")
+
+    def _post_private_summary(self):
+        sid = self._sid()
+        if sid:
+            self._show_result(self.post_output, self.psc.private_summary(sid), lambda text: text)
+
+    def _post_public_summary(self):
+        sid = self._sid()
+        if sid:
+            self._show_result(self.post_output, self.psc.public_summary(sid), lambda text: text)
 
     def _post_candidates(self):
         sid = self._sid()
-        if sid:
-            r = self.psc.candidates(sid)
-            if isinstance(r, Error): self.post_output.setText(f"Error: {r.error}")
-            else:
-                self.cand_combo.clear()
-                for c in r.value: self.cand_combo.addItem(f"{c.title} ({c.id[:8]})", c.id)
-                existing = len(r.value)
-                # Second run: check for new candidates
-                r2 = self.psc.candidates(sid)
-                new_count = len(r2.value) if not isinstance(r2, Error) and hasattr(r2, 'value') else 0
-                self.post_output.setText(f"Generated {existing} candidates (new: {new_count}, existing: {existing - new_count})")
+        if not sid:
+            return
+        first = self.psc.generate_candidates(sid)
+        if isinstance(first, Error):
+            self.post_output.setText(f"Error: {first.error}")
+            self.ctx.log("error", first.error)
+            return
+        second = self.psc.generate_candidates(sid)
+        self.cand_combo.clear()
+        for candidate in first.value:
+            self.cand_combo.addItem(f"{candidate.title} ({candidate.id[:8]})", candidate.id)
+        second_count = len(second.value) if not isinstance(second, Error) else 0
+        self.post_output.setText(f"Generated {len(first.value)} candidates; second run generated {second_count} new candidates")
 
     def _post_accept(self):
         cid = self.cand_combo.currentData()
-        if cid and hasattr(self.sc.ps, 'candidate_service'):
-            self.sc.ps.candidate_service.accept_candidate(cid)
-            self.post_output.setText(f"Accepted {cid}")
-        else: self.post_output.setText("No candidate selected or service unavailable")
+        if cid:
+            result = self.psc.accept_candidate(cid)
+            if isinstance(result, Error):
+                self.post_output.setText(f"Error: {result.error}")
+            else:
+                self.post_output.setText(f"Accepted {cid}")
 
     def _post_reject(self):
         cid = self.cand_combo.currentData()
-        if cid and hasattr(self.sc.ps, 'candidate_service'):
-            self.sc.ps.candidate_service.reject_candidate(cid)
-            self.post_output.setText(f"Rejected {cid}")
+        if cid:
+            result = self.psc.reject_candidate(cid)
+            if isinstance(result, Error):
+                self.post_output.setText(f"Error: {result.error}")
+            else:
+                self.post_output.setText(f"Rejected {cid}")
 
     def _post_source(self):
         sid = self._sid()
         if sid:
-            r = self.psc.source(sid)
-            self.post_output.setText(f"Source created" if not isinstance(r, Error) else f"Error: {r.error}")
+            self._show_result(self.post_output, self.psc.source(sid), lambda source: f"Source created: {getattr(source, 'id', source)}")
 
     def _post_seeds(self):
         sid = self._sid()
         if sid:
             seeds = self.psc.seeds(sid)
-            self.post_output.setText("\n".join(seeds[:5]))
+            if isinstance(seeds, Error):
+                self.post_output.setText(f"Error: {seeds.error}")
+            else:
+                self.post_output.setText("\n".join(seeds[:5]))

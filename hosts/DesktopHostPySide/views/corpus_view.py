@@ -1,122 +1,235 @@
-"""CorpusView — entity table with filters, detail, create/edit (B27.1-T02)."""
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-                                QLineEdit, QComboBox, QPushButton, QLabel, QDialog, QFormLayout, QDialogButtonBox)
+"""CorpusView — entity table with filters, detail, create/edit (B27.3 bugbash)."""
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
 from packages.domain.result import Error
 
+
 class CorpusView(QWidget):
     def __init__(self, ctx: AppContext, ec: EntityController):
-        super().__init__(); self.ctx = ctx; self.ec = ec; self._build()
+        super().__init__()
+        self.ctx = ctx
+        self.ec = ec
+        self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
-        # Filters
+
         flt = QHBoxLayout()
-        self.filter_text = QLineEdit(); self.filter_text.setPlaceholderText("Filtrar..."); self.filter_text.textChanged.connect(self.refresh)
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText("Filtrar...")
+        self.filter_text.textChanged.connect(self.refresh)
         flt.addWidget(self.filter_text)
-        self.filter_type = QComboBox(); self.filter_type.addItems(["Todos","personaje","localizacion","faccion","objeto","evento","secreto","pista","sesion","nota"])
-        self.filter_type.currentTextChanged.connect(self.refresh); flt.addWidget(self.filter_type)
-        self.filter_canon = QComboBox(); self.filter_canon.addItems(["Todos","borrador","canonico"]); self.filter_canon.currentTextChanged.connect(self.refresh)
+        self.filter_type = QComboBox()
+        self.filter_type.addItems(["Todos", "personaje", "localizacion", "faccion", "objeto", "evento", "secreto", "pista", "sesion", "nota"])
+        self.filter_type.currentTextChanged.connect(self.refresh)
+        flt.addWidget(self.filter_type)
+        self.filter_canon = QComboBox()
+        self.filter_canon.addItems(["Todos", "borrador", "canonico", "archivado"])
+        self.filter_canon.currentTextChanged.connect(self.refresh)
         flt.addWidget(self.filter_canon)
         layout.addLayout(flt)
 
-        # Actions
         act = QHBoxLayout()
-        btn_create = QPushButton("Crear entidad"); btn_create.clicked.connect(self._create); act.addWidget(btn_create)
-        btn_refresh = QPushButton("Refrescar"); btn_refresh.clicked.connect(self.refresh); act.addWidget(btn_refresh)
+        btn_create = QPushButton("Crear entidad")
+        btn_create.clicked.connect(self._create)
+        act.addWidget(btn_create)
+        btn_refresh = QPushButton("Refrescar")
+        btn_refresh.clicked.connect(self.refresh)
+        act.addWidget(btn_refresh)
         layout.addLayout(act)
 
-        # Table
-        self.table = QTableWidget(); self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID","Name","Type","Canon","Visibility"])
-        self.table.itemSelectionChanged.connect(self._show_detail); self.table.doubleClicked.connect(self._detail_dialog); layout.addWidget(self.table)
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Canon", "Visibility"])
+        self.table.itemSelectionChanged.connect(self._show_detail)
+        self.table.doubleClicked.connect(self._detail_dialog)
+        layout.addWidget(self.table)
 
-        # Detail
-        self.detail = QLabel("Selecciona una entidad"); layout.addWidget(self.detail)
-        btn_edit = QPushButton("Editar seleccionada"); btn_edit.clicked.connect(self._edit); layout.addWidget(btn_edit)
-        btn_archive = QPushButton("Archivar/Restaurar"); btn_archive.clicked.connect(self._archive); layout.addWidget(btn_archive)
+        self.detail = QLabel("Selecciona una entidad")
+        layout.addWidget(self.detail)
+        btn_edit = QPushButton("Editar seleccionada")
+        btn_edit.clicked.connect(self._edit)
+        layout.addWidget(btn_edit)
+        btn_archive = QPushButton("Archivar/Restaurar")
+        btn_archive.clicked.connect(self._archive)
+        layout.addWidget(btn_archive)
 
     def refresh(self):
         entities = self.ec.list_all()
-        ft = self.filter_text.text().lower()
+        ft = self.filter_text.text().lower().strip()
         ftype = self.filter_type.currentText()
         fcanon = self.filter_canon.currentText()
-        if ftype != "Todos": entities = [e for e in entities if e.entity_type.value == ftype]
-        if fcanon != "Todos": entities = [e for e in entities if e.canon_state.value == fcanon]
-        if ft: entities = [e for e in entities if ft in e.name.lower()]
+        if ftype != "Todos":
+            entities = [e for e in entities if e.entity_type.value == ftype]
+        if fcanon != "Todos":
+            entities = [e for e in entities if e.canon_state.value == fcanon]
+        if ft:
+            entities = [e for e in entities if ft in e.name.lower() or ft in e.id.lower()]
+
         self.table.setRowCount(len(entities))
-        for i, e in enumerate(entities):
-            self.table.setItem(i, 0, QTableWidgetItem(e.id[:12])); self.table.setItem(i, 1, QTableWidgetItem(e.name))
-            self.table.setItem(i, 2, QTableWidgetItem(e.entity_type.value)); self.table.setItem(i, 3, QTableWidgetItem(e.canon_state.value))
-            self.table.setItem(i, 4, QTableWidgetItem(e.visibility_state.value))
+        for i, entity in enumerate(entities):
+            id_item = QTableWidgetItem(entity.id[:12])
+            id_item.setData(Qt.UserRole, entity.id)
+            self.table.setItem(i, 0, id_item)
+            self.table.setItem(i, 1, QTableWidgetItem(entity.name))
+            self.table.setItem(i, 2, QTableWidgetItem(entity.entity_type.value))
+            self.table.setItem(i, 3, QTableWidgetItem(entity.canon_state.value))
+            self.table.setItem(i, 4, QTableWidgetItem(entity.visibility_state.value))
         self.table.resizeColumnsToContents()
 
+    def _selected_entity_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.UserRole) if item is not None else None
+
     def _archive(self):
-        if not self.ctx.selected_entity_id: return
-        from PySide6.QtWidgets import QMessageBox
-        r = self.ec.update(self.ctx.selected_entity_id, {"canon_state": "archivado"})
-        if isinstance(r, Error): self.ctx.log("error", r.error)
-        else: self.ctx.log("info", f"Archived {self.ctx.selected_entity_id[:8]}"); self.refresh()
+        entity_id = self._selected_entity_id() or self.ctx.selected_entity_id
+        if not entity_id:
+            self.ctx.log("error", "No hay entidad seleccionada")
+            return
+        entity_result = self.ec.get(entity_id)
+        if isinstance(entity_result, Error):
+            self.ctx.log("error", entity_result.error)
+            return
+        entity = entity_result.value
+        if entity.canon_state.value == "archivado":
+            result = self.ec.restore(entity_id)
+            action = "restored"
+        else:
+            result = self.ec.archive(entity_id)
+            action = "archived"
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Entity {action}: {entity_id}")
+            self.refresh()
 
     def _detail_dialog(self, index):
-        """Full entity detail card on double-click."""
-        row = index.row()
-        eid = self.table.item(row, 0).text()
-        r = self.ec.get(eid)
-        if isinstance(r, Error): return
-        e = r.value
-        from PySide6.QtWidgets import QDialog, QTextEdit, QVBoxLayout, QDialogButtonBox
-        dlg = QDialog(self); dlg.setWindowTitle(f"Entity: {e.name}"); dlg.setMinimumSize(500, 400)
+        entity_id = self.table.item(index.row(), 0).data(Qt.UserRole)
+        result = self.ec.get(entity_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        entity = result.value
+        relations = self.ec.relations_for(entity.id)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Entity: {entity.name}")
+        dlg.setMinimumSize(700, 500)
         lo = QVBoxLayout(dlg)
-        txt = QTextEdit(); txt.setReadOnly(True)
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        relation_lines = []
+        for relation in relations:
+            rel_type = relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
+            relation_lines.append(f"- {relation.id} :: {relation.source_id} --{rel_type}--> {relation.target_id}")
         lines = [
-            f"ID: {e.id}", f"Name: {e.name}", f"Type: {e.entity_type.value}",
-            f"Canon: {e.canon_state.value} | Visibility: {e.visibility_state.value}",
-            f"Desc: {e.brief_description or '—'}",
-            f"Extended: {getattr(e, 'extended_description', None) or '—'}",
-            f"Domain: {getattr(e, 'domain_id', None) or '—'} | Layer: {getattr(e, 'layer_id', None) or '—'}",
-            f"Tags: {', '.join(getattr(e, 'tags', []))} | Custom: {getattr(e, 'custom_fields', {})}",
-            f"Sources: {len(getattr(e, 'source_ids', []))} | Metadata: {getattr(e, 'custom_metadata', {})}",
+            f"ID: {entity.id}",
+            f"Name: {entity.name}",
+            f"Type: {entity.entity_type.value}",
+            f"Canon: {entity.canon_state.value}",
+            f"Visibility: {entity.visibility_state.value}",
+            f"Description: {entity.brief_description or '—'}",
+            f"Extended: {getattr(entity, 'extended_description', None) or '—'}",
+            f"Domain: {getattr(entity, 'domain_id', None) or '—'}",
+            f"Layer: {getattr(entity, 'layer_id', None) or '—'}",
+            f"Tags: {', '.join(getattr(entity, 'tags', [])) or '—'}",
+            f"Metadata: {getattr(entity, 'custom_metadata', {})}",
+            "",
+            "Linked relations:",
+            *(relation_lines or ["- (none)"]),
         ]
-        txt.setPlainText('\n'.join(lines))
+        txt.setPlainText("\n".join(lines))
         lo.addWidget(txt)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok); btns.accepted.connect(dlg.accept); lo.addWidget(btns)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok)
+        btns.accepted.connect(dlg.accept)
+        lo.addWidget(btns)
         dlg.exec()
 
     def _show_detail(self):
-        row = self.table.currentRow()
-        if row >= 0:
-            eid = self.table.item(row, 0).text()
-            r = self.ec.get(eid)
-            if isinstance(r, Error): self.detail.setText(f"Error: {r.error}"); return
-            e = r.value
-            self.detail.setText(f"{e.entity_type.value}: {e.name}\nDesc: {e.brief_description or '(sin desc)'}\nCanon: {e.canon_state.value} | Vis: {e.visibility_state.value}")
-            self.ctx.selected_entity_id = e.id
+        entity_id = self._selected_entity_id()
+        if not entity_id:
+            return
+        result = self.ec.get(entity_id)
+        if isinstance(result, Error):
+            self.detail.setText(f"Error: {result.error}")
+            self.ctx.log("error", result.error)
+            return
+        entity = result.value
+        rel_count = len(self.ec.relations_for(entity.id))
+        self.detail.setText(
+            f"{entity.entity_type.value}: {entity.name}\n"
+            f"ID: {entity.id}\n"
+            f"Desc: {entity.brief_description or '(sin desc)'}\n"
+            f"Canon: {entity.canon_state.value} | Vis: {entity.visibility_state.value} | Relaciones: {rel_count}"
+        )
+        self.ctx.selected_entity_id = entity.id
 
     def _create(self):
-        dlg = QDialog(self); dlg.setWindowTitle("Crear entidad")
-        form = QFormLayout(dlg); name = QLineEdit(); type_cb = QComboBox()
-        type_cb.addItems(["personaje","localizacion","faccion","objeto","evento","nota"])
-        form.addRow("Nombre:", name); form.addRow("Tipo:", type_cb)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel); btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Crear entidad")
+        form = QFormLayout(dlg)
+        name = QLineEdit()
+        type_cb = QComboBox()
+        type_cb.addItems(["personaje", "localizacion", "faccion", "objeto", "evento", "nota"])
+        form.addRow("Nombre:", name)
+        form.addRow("Tipo:", type_cb)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
         form.addRow(btns)
         if dlg.exec():
-            r = self.ec.create({"name": name.text(), "entity_type": type_cb.currentText()})
-            if isinstance(r, Error): self.ctx.log("error", r.error)
-            else: self.ctx.log("info", f"Created {name.text()}"); self.refresh()
+            result = self.ec.create({"name": name.text(), "entity_type": type_cb.currentText()})
+            if isinstance(result, Error):
+                self.ctx.log("error", result.error)
+            else:
+                self.ctx.log("info", f"Created entity {result.value.id}")
+                self.refresh()
 
     def _edit(self):
-        if not self.ctx.selected_entity_id: return
-        r = self.ec.get(self.ctx.selected_entity_id)
-        if isinstance(r, Error): return
-        e = r.value
-        dlg = QDialog(self); form = QFormLayout(dlg)
-        name_ed = QLineEdit(e.name); brief_ed = QLineEdit(e.brief_description or "")
-        form.addRow("Nombre:", name_ed); form.addRow("Descripción:", brief_ed)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel); btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        entity_id = self._selected_entity_id() or self.ctx.selected_entity_id
+        if not entity_id:
+            self.ctx.log("error", "No hay entidad seleccionada")
+            return
+        result = self.ec.get(entity_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        entity = result.value
+        dlg = QDialog(self)
+        form = QFormLayout(dlg)
+        name_ed = QLineEdit(entity.name)
+        brief_ed = QLineEdit(entity.brief_description or "")
+        form.addRow("Nombre:", name_ed)
+        form.addRow("Descripción:", brief_ed)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
         form.addRow(btns)
         if dlg.exec():
-            r = self.ec.update(e.id, {"name": name_ed.text(), "brief_description": brief_ed.text()})
-            self.ctx.log("info" if not isinstance(r, Error) else "error", f"Updated {e.id[:8]}" if not isinstance(r, Error) else r.error)
-            self.refresh()
+            update_result = self.ec.update(entity.id, {"name": name_ed.text(), "brief_description": brief_ed.text()})
+            if isinstance(update_result, Error):
+                self.ctx.log("error", update_result.error)
+            else:
+                self.ctx.log("info", f"Updated entity {entity.id}")
+                self.refresh()
