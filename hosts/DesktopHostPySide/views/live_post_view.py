@@ -60,14 +60,45 @@ class LivePostView(QWidget):
             self.live_output.setText(f"Activated: {r.value.name}" if not isinstance(r, Error) else f"Error: {r.error}")
 
     def _live_note(self):
-        sid = self._sid(); text = "Quick note"
+        sid = self._sid()
         if sid:
-            r = self.sc.ls.quick_note(sid, text)
-            self.live_output.setText("Note added" if not isinstance(r, Error) else f"Error: {r.error}")
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "Quick Note", "Text:")
+            if ok and text:
+                r = self.sc.ls.quick_note(sid, text)
+                self.live_output.setText("Note added" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Live note added")
 
-    def _live_decide(self): self.live_output.setText("TODO: dialog for text input")
-    def _live_event(self): self.live_output.setText("TODO: dialog for text input")
-    def _live_consequence(self): self.live_output.setText("TODO: dialog for text input")
+    def _live_decide(self):
+        sid = self._sid()
+        if sid:
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "Player Decision", "Text:")
+            if ok and text:
+                method = getattr(self.sc.ls, "register_decide" if cmd != "consequence" else "register_consequence")
+                r = method(sid, text)
+                self.live_output.setText("Player Decision registered" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Live decide: {text[:40]}")
+    def _live_event(self):
+        sid = self._sid()
+        if sid:
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "Event", "Text:")
+            if ok and text:
+                method = getattr(self.sc.ls, "register_event" if cmd != "consequence" else "register_consequence")
+                r = method(sid, text)
+                self.live_output.setText("Event registered" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Live event: {text[:40]}")
+    def _live_consequence(self):
+        sid = self._sid()
+        if sid:
+            from PySide6.QtWidgets import QInputDialog
+            text, ok = QInputDialog.getText(self, "Consequence", "Text:")
+            if ok and text:
+                method = getattr(self.sc.ls, "register_consequence" if cmd != "consequence" else "register_consequence")
+                r = method(sid, text)
+                self.live_output.setText("Consequence registered" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Live consequence: {text[:40]}")
 
     def _live_entity(self):
         sid = self._sid()
@@ -79,10 +110,30 @@ class LivePostView(QWidget):
     def _live_clue(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ls.mark_clue_delivered(sid, "any_clue", "entregada") if hasattr(self.sc.ls, 'mark_clue_delivered') else Error("TODO: clue selector")
-            self.live_output.setText("Delivered" if not isinstance(r, Error) else f"Error/TODO: {r.error if isinstance(r, Error) else 'ok'}")
+            clues = self.sc.ls.query_clues(sid) if hasattr(self.sc.ls, 'query_clues') else []
+            if not clues: self.live_output.setText("No clues linked to session"); return
+            from PySide6.QtWidgets import QInputDialog
+            ids = [f"{c.id[:8]}: {c.content[:40]}" for c in clues]
+            item, ok = QInputDialog.getItem(self, "Deliver Clue", "Clue:", ids, 0, False)
+            if ok and item:
+                cid = item.split(":")[0].strip()
+                r = self.sc.ls.mark_clue_delivered(sid, cid, "entregada")
+                self.live_output.setText(f"Delivered {cid}" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Clue {cid} delivered")
 
-    def _live_secret(self): self.live_output.setText("TODO: secret selector")
+    def _live_secret(self):
+        sid = self._sid()
+        if sid:
+            secrets = self.sc.ls.query_secrets(sid) if hasattr(self.sc.ls, 'query_secrets') else []
+            if not secrets: self.live_output.setText("No secrets linked to session"); return
+            from PySide6.QtWidgets import QInputDialog
+            ids = [f"{s.id[:8]}: {s.content[:40]}" for s in secrets]
+            item, ok = QInputDialog.getItem(self, "Reveal Secret", "Secret:", ids, 0, False)
+            if ok and item:
+                sid2 = item.split(":")[0].strip()
+                r = self.sc.ls.mark_secret_revealed(sid, sid2, "parcialmente_revelado")
+                self.live_output.setText(f"Revealed {sid2}" if not isinstance(r, Error) else f"Error: {r.error}")
+                self.ctx.log("info", f"Secret {sid2} revealed")
 
     def _live_improvise(self):
         sid = self._sid()
@@ -96,7 +147,10 @@ class LivePostView(QWidget):
         sid = self._sid()
         if sid:
             r = self.sc.ls.prepare_post_session(sid)
-            self.live_output.setText(f"Post material prepared" if not isinstance(r, Error) else f"Error: {r.error}")
+            if isinstance(r, Error): self.live_output.setText(f"Error: {r.error}")
+            else:
+                v = r.value
+                self.live_output.setText(f"Post material: {len(v.get('quick_notes',[]))} notes, {len(v.get('events',[]))} events, {len(v.get('clues_delivered',[]))} clues, {len(v.get('secrets_revealed',[]))} secrets")
 
     def _post_close(self):
         sid = self._sid()
@@ -112,7 +166,11 @@ class LivePostView(QWidget):
             else:
                 self.cand_combo.clear()
                 for c in r.value: self.cand_combo.addItem(f"{c.title} ({c.id[:8]})", c.id)
-                self.post_output.setText(f"Generated {len(r.value)} candidates")
+                existing = len(r.value)
+                # Second run: check for new candidates
+                r2 = self.sc.ps2.convert_live_to_candidates(sid)
+                new_count = len(r2.value) if not isinstance(r2, Error) and hasattr(r2, 'value') else 0
+                self.post_output.setText(f"Generated {existing} candidates (new: {new_count}, existing: {existing - new_count})")
 
     def _post_accept(self):
         cid = self.cand_combo.currentData()
