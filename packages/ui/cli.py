@@ -269,7 +269,13 @@ def _build_parser() -> argparse.ArgumentParser:
     register_campaign_commands(sub)
 
     from packages.ui.cli_secrets import register_secrets_commands
+    from packages.ui.cli_faction import register_faction_commands
+    register_faction_commands(sub)
+
     register_secrets_commands(sub)
+    from packages.ui.cli_faction import register_faction_commands
+    register_faction_commands(sub)
+
 
     return parser
 
@@ -407,6 +413,16 @@ def main() -> None:
     if args.command == "clue":
         from packages.ui.cli_secrets import handle_clue
         handle_clue(args, session)
+    if args.command == "faction":
+        from packages.ui.cli_faction import handle_faction
+        handle_faction(args, session)
+        return
+
+    if args.command == "front":
+        from packages.ui.cli_faction import handle_front
+        handle_front(args, session)
+        return
+
         return
 
     if args.command == "campaign":
