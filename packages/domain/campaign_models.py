@@ -136,6 +136,8 @@ class Campaign:
     players: list[CampaignPlayer] = field(default_factory=list)
     player_character_entity_ids: list[str] = field(default_factory=list)
     session_entity_ids: list[str] = field(default_factory=list)
+    # B23: Session IDs (distinct from session_entity_ids which are NarrativeEntity SESION)
+    session_ids: list[str] = field(default_factory=list)
     active_plot_entity_ids: list[str] = field(default_factory=list)
     active_faction_entity_ids: list[str] = field(default_factory=list)
     active_location_entity_ids: list[str] = field(default_factory=list)
@@ -172,6 +174,7 @@ class Campaign:
             "players": [p.to_dict() for p in self.players],
             "player_character_entity_ids": self.player_character_entity_ids,
             "session_entity_ids": self.session_entity_ids,
+            "session_ids": self.session_ids,
             "active_plot_entity_ids": self.active_plot_entity_ids,
             "active_faction_entity_ids": self.active_faction_entity_ids,
             "active_location_entity_ids": self.active_location_entity_ids,
@@ -205,6 +208,7 @@ class Campaign:
             players=players,
             player_character_entity_ids=_parse_list(data.get("player_character_entity_ids")),
             session_entity_ids=_parse_list(data.get("session_entity_ids")),
+            session_ids=_parse_list(data.get("session_ids")),
             active_plot_entity_ids=_parse_list(data.get("active_plot_entity_ids")),
             active_faction_entity_ids=_parse_list(data.get("active_faction_entity_ids")),
             active_location_entity_ids=_parse_list(data.get("active_location_entity_ids")),
