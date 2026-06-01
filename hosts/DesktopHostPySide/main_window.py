@@ -37,8 +37,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self.sidebar = QListWidget(); self.sidebar.setMaximumWidth(160)
         for label in ["Dashboard", "Corpus", "Relations", "Candidates", "Issues/History",
+                      "Campaign", "Secrets/Clues", "Factions/Fronts",
                       "Sessions", "Live/Post", "Import/Export",
-                      "Campaign", "Secrets/Clues", "Factions/Fronts", "Writing"]:
+                      "Writing", "Timeline", "Frameworks", "Sources", "Layers"]:
             self.sidebar.addItem(QListWidgetItem(label))
         self.sidebar.currentRowChanged.connect(self._navigate)
         splitter.addWidget(self.sidebar)
@@ -68,7 +69,11 @@ class MainWindow(QMainWindow):
         from hosts.DesktopHostPySide.views.live_post_view import LivePostView
         self.sc = SessionController(project_service=self.controller.ps)
         self.stack.addWidget(SessionView(self.ctx, self.sc))
-        self.stack.addWidget(LivePostView(self.ctx, self.sc))
+        from hosts.DesktopHostPySide.controllers.live_mode_controller import LiveModeController
+        from hosts.DesktopHostPySide.controllers.post_session_controller import PostSessionController
+        self.lmc = LiveModeController(project_service=self.controller.ps, session_service=self.sc.ss)
+        self.psc = PostSessionController(project_service=self.controller.ps, session_service=self.sc.ss)
+        self.stack.addWidget(LivePostView(self.ctx, self.sc, lmc=self.lmc, psc=self.psc))
         # T05: Import/Export
         from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
         self.stack.addWidget(ImportExportView(self.ctx, self.controller))
@@ -84,6 +89,26 @@ class MainWindow(QMainWindow):
         from hosts.DesktopHostPySide.views.writing_view import WritingView
         self.wc = WritingController(project_service=self.controller.ps)
         self.stack.addWidget(WritingView(self.ctx, self.wc))
+        # P1: Timeline
+        from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineController
+        from hosts.DesktopHostPySide.views.timeline_view import TimelineView
+        self.tlc = TimelineController(project_service=self.controller.ps)
+        self.stack.addWidget(TimelineView(self.ctx, self.tlc))
+        # P1: Frameworks
+        from hosts.DesktopHostPySide.controllers.framework_controller import FrameworkController
+        from hosts.DesktopHostPySide.views.framework_view import FrameworkView
+        self.fwc = FrameworkController(project_service=self.controller.ps)
+        self.stack.addWidget(FrameworkView(self.ctx, self.fwc))
+        # P1: Sources
+        from hosts.DesktopHostPySide.controllers.source_controller import SourceController
+        from hosts.DesktopHostPySide.views.source_view import SourceView
+        self.src = SourceController(project_service=self.controller.ps)
+        self.stack.addWidget(SourceView(self.ctx, self.src))
+        # P1: Layers
+        from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
+        from hosts.DesktopHostPySide.views.layer_view import LayerView
+        self.lc = LayerController(project_service=self.controller.ps)
+        self.stack.addWidget(LayerView(self.ctx, self.lc))
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 

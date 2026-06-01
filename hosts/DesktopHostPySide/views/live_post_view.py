@@ -6,8 +6,9 @@ from hosts.DesktopHostPySide.controllers.session_controller import SessionContro
 from packages.domain.result import Error
 
 class LivePostView(QWidget):
-    def __init__(self, ctx: AppContext, sc: SessionController):
-        super().__init__(); self.ctx = ctx; self.sc = sc; self._build()
+    def __init__(self, ctx: AppContext, sc: SessionController, lmc=None, psc=None):
+        super().__init__(); self.ctx = ctx; self.sc = sc
+        self.lmc = lmc; self.psc = psc; self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -56,7 +57,7 @@ class LivePostView(QWidget):
     def _live_open(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ls.activate_session(sid)
+            r = self.lmc.activate(sid)
             self.live_output.setText(f"Activated: {r.value.name}" if not isinstance(r, Error) else f"Error: {r.error}")
 
     def _live_note(self):
@@ -65,7 +66,7 @@ class LivePostView(QWidget):
             from PySide6.QtWidgets import QInputDialog
             text, ok = QInputDialog.getText(self, "Quick Note", "Text:")
             if ok and text:
-                r = self.sc.ls.quick_note(sid, text)
+                r = self.lmc.note(sid, text)
                 self.live_output.setText("Note added" if not isinstance(r, Error) else f"Error: {r.error}")
                 self.ctx.log("info", f"Live note added")
 
@@ -103,42 +104,42 @@ class LivePostView(QWidget):
     def _live_entity(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ls.create_provisional_entity(sid, "Improvised NPC", "personaje")
+            r = self.lmc.entity(sid, "Improvised NPC", "personaje")
             self.live_output.setText(f"Created: {r.value.name} ({r.value.id[:8]})" if not isinstance(r, Error) else f"Error: {r.error}")
             self.ctx.log("info", f"Provisional entity created")
 
     def _live_clue(self):
         sid = self._sid()
         if sid:
-            clues = self.sc.ls.query_clues(sid) if hasattr(self.sc.ls, 'query_clues') else []
+            clues = self.lmc.query(sid) if hasattr(self.sc.ls, 'query_clues') else []
             if not clues: self.live_output.setText("No clues linked to session"); return
             from PySide6.QtWidgets import QInputDialog
             ids = [f"{c.id[:8]}: {c.content[:40]}" for c in clues]
             item, ok = QInputDialog.getItem(self, "Deliver Clue", "Clue:", ids, 0, False)
             if ok and item:
                 cid = item.split(":")[0].strip()
-                r = self.sc.ls.mark_clue_delivered(sid, cid, "entregada")
+                r = self.lmc.clue_deliver(sid, cid, "entregada")
                 self.live_output.setText(f"Delivered {cid}" if not isinstance(r, Error) else f"Error: {r.error}")
                 self.ctx.log("info", f"Clue {cid} delivered")
 
     def _live_secret(self):
         sid = self._sid()
         if sid:
-            secrets = self.sc.ls.query_secrets(sid) if hasattr(self.sc.ls, 'query_secrets') else []
+            secrets = self.lmc.query(sid) if hasattr(self.sc.ls, 'query_secrets') else []
             if not secrets: self.live_output.setText("No secrets linked to session"); return
             from PySide6.QtWidgets import QInputDialog
             ids = [f"{s.id[:8]}: {s.content[:40]}" for s in secrets]
             item, ok = QInputDialog.getItem(self, "Reveal Secret", "Secret:", ids, 0, False)
             if ok and item:
                 sid2 = item.split(":")[0].strip()
-                r = self.sc.ls.mark_secret_revealed(sid, sid2, "parcialmente_revelado")
+                r = self.lmc.secret_reveal(sid, sid2, "parcialmente_revelado")
                 self.live_output.setText(f"Revealed {sid2}" if not isinstance(r, Error) else f"Error: {r.error}")
                 self.ctx.log("info", f"Secret {sid2} revealed")
 
     def _live_improvise(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ls.improvise(sid, "fantasy scene")
+            r = self.lmc.improvise(sid, "fantasy scene")
             if isinstance(r, Error): self.live_output.setText(f"Error: {r.error}")
             else:
                 v = r.value; self.live_output.setText(f"Name: {v.get('name','?')}\nDesc: {v.get('description','?')}")
@@ -146,7 +147,7 @@ class LivePostView(QWidget):
     def _live_done(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ls.prepare_post_session(sid)
+            r = self.lmc.done(sid)
             if isinstance(r, Error): self.live_output.setText(f"Error: {r.error}")
             else:
                 v = r.value
@@ -155,20 +156,20 @@ class LivePostView(QWidget):
     def _post_close(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ps2.close_session(sid)
+            r = self.psc.close(sid)
             self.post_output.setText(f"Closed: {r.value.state.value}" if not isinstance(r, Error) else f"Error: {r.error}")
 
     def _post_candidates(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ps2.convert_live_to_candidates(sid)
+            r = self.psc.candidates(sid)
             if isinstance(r, Error): self.post_output.setText(f"Error: {r.error}")
             else:
                 self.cand_combo.clear()
                 for c in r.value: self.cand_combo.addItem(f"{c.title} ({c.id[:8]})", c.id)
                 existing = len(r.value)
                 # Second run: check for new candidates
-                r2 = self.sc.ps2.convert_live_to_candidates(sid)
+                r2 = self.psc.candidates(sid)
                 new_count = len(r2.value) if not isinstance(r2, Error) and hasattr(r2, 'value') else 0
                 self.post_output.setText(f"Generated {existing} candidates (new: {new_count}, existing: {existing - new_count})")
 
@@ -188,11 +189,11 @@ class LivePostView(QWidget):
     def _post_source(self):
         sid = self._sid()
         if sid:
-            r = self.sc.ps2.create_session_source(sid)
+            r = self.psc.source(sid)
             self.post_output.setText(f"Source created" if not isinstance(r, Error) else f"Error: {r.error}")
 
     def _post_seeds(self):
         sid = self._sid()
         if sid:
-            seeds = self.sc.ps2.generate_next_session_seeds(sid)
+            seeds = self.psc.seeds(sid)
             self.post_output.setText("\n".join(seeds[:5]))
