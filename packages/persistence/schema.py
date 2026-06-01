@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B20-T02: upgraded to v14)
-CURRENT_SCHEMA_VERSION: int = 14
+# Current schema version for new projects (B21-T02: upgraded to v15)
+CURRENT_SCHEMA_VERSION: int = 15
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 14
+MAX_SUPPORTED_VERSION: int = 15
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +601,14 @@ def _apply_migration_v13_to_v14(data):
     migrated['schema_version'] = 14
     return migrated
 
+def _apply_migration_v14_to_v15(data):
+    """v14 → v15: adds secrets and clues collections (B21-T02)."""
+    migrated = dict(data)
+    migrated.setdefault('secrets', [])
+    migrated.setdefault('clues', [])
+    migrated['schema_version'] = 15
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -641,6 +649,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
         "domains", "world_layers", "import_baskets",
         "campaigns", "player_character_profiles", "campaign_clocks",
+        "secrets", "clues",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
@@ -798,5 +807,90 @@ def _validate_campaign_clocks(clocks, all_campaign_clock_ids=None):
         missing = all_campaign_clock_ids - clock_ids
         for m in sorted(missing):
             errors.append(f"campaign references clock_id '{m}' which does not exist in campaign_clocks")
+
+    return errors
+
+# --- Secrets and clues structural validation (B21-T02) ---
+
+
+def _validate_secrets(secrets):
+    """Validate structural integrity of secrets list."""
+    errors = []
+    if not isinstance(secrets, list):
+        return [f"secrets must be a list, got {type(secrets).__name__}"]
+
+    ids = set()
+    for i, s in enumerate(secrets):
+        if not isinstance(s, dict):
+            errors.append(f"secrets[{i}] is not a dict")
+            continue
+        sid = s.get("id")
+        if sid is None:
+            errors.append(f"secrets[{i}] missing id")
+            continue
+        if sid in ids:
+            errors.append(f"secrets[{i}] duplicate id '{sid}'")
+        ids.add(sid)
+
+        content = s.get("content")
+        if not content or not isinstance(content, str) or not content.strip():
+            errors.append(f"secrets[{i}] content is required and must be a non-empty string")
+
+        entity_id = s.get("entity_id")
+        if entity_id is not None and (not isinstance(entity_id, str) or not entity_id.strip()):
+            errors.append(f"secrets[{i}] entity_id must be a non-empty string or null")
+
+        importance = s.get("importance")
+        if importance is not None and isinstance(importance, (int, float)) and not isinstance(importance, bool):
+            if importance < 1 or importance > 5:
+                errors.append(f"secrets[{i}] importance must be 1-5, got {importance}")
+
+    return errors
+
+
+def _validate_clues(clues, all_secret_ids=None):
+    """Validate structural integrity of clues list."""
+    errors = []
+    if not isinstance(clues, list):
+        return [f"clues must be a list, got {type(clues).__name__}"]
+
+    ids = set()
+    for i, c in enumerate(clues):
+        if not isinstance(c, dict):
+            errors.append(f"clues[{i}] is not a dict")
+            continue
+        cid = c.get("id")
+        if cid is None:
+            errors.append(f"clues[{i}] missing id")
+            continue
+        if cid in ids:
+            errors.append(f"clues[{i}] duplicate id '{cid}'")
+        ids.add(cid)
+
+        content = c.get("content")
+        if not content or not isinstance(content, str) or not content.strip():
+            errors.append(f"clues[{i}] content is required and must be a non-empty string")
+
+        entity_id = c.get("entity_id")
+        if entity_id is not None and (not isinstance(entity_id, str) or not entity_id.strip()):
+            errors.append(f"clues[{i}] entity_id must be a non-empty string or null")
+
+        for field, name in [("clarity", "clarity"), ("redundancy", "redundancy"), ("loss_risk", "loss_risk")]:
+            val = c.get(field)
+            if val is not None and isinstance(val, (int, float)) and not isinstance(val, bool):
+                if val < 1 or val > 5:
+                    errors.append(f"clues[{i}] {name} must be 1-5, got {val}")
+
+    if all_secret_ids is not None:
+        for i, c in enumerate(clues):
+            if not isinstance(c, dict):
+                continue
+            secret_id = c.get("associated_secret_id")
+            if secret_id and isinstance(secret_id, str) and secret_id.strip():
+                if secret_id not in all_secret_ids:
+                    errors.append(
+                        f"clues[{i}] associated_secret_id '{secret_id}' "
+                        f"does not exist in secrets"
+                    )
 
     return errors

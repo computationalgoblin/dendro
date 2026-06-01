@@ -24,6 +24,7 @@ from packages.persistence.schema import (
     _apply_migration_v11_to_v12,
     _apply_migration_v12_to_v13,
     _apply_migration_v13_to_v14,
+    _apply_migration_v14_to_v15,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -39,6 +40,8 @@ from packages.persistence.schema import (
     _validate_campaigns,
     _validate_player_character_profiles,
     _validate_campaign_clocks,
+    _validate_secrets,
+    _validate_clues,
     validate_schema_version,
 )
 
@@ -306,6 +309,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 13:
         data = _apply_migration_v13_to_v14(data)
+        data["schema_version"] = 14
+        version = 14
+
+    if version == 14:
+        data = _apply_migration_v14_to_v15(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -329,6 +337,14 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     clock_errors = _validate_campaign_clocks(data.get("campaign_clocks", []))
     if clock_errors:
         return Error(" ".join(clock_errors))
+
+    secret_errors = _validate_secrets(data.get("secrets", []))
+    if secret_errors:
+        return Error(" ".join(secret_errors))
+
+    clues_errors = _validate_clues(data.get("clues", []))
+    if clues_errors:
+        return Error(" ".join(clues_errors))
 
     return Ok(data)
 

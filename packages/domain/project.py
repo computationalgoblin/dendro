@@ -18,6 +18,7 @@ from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
 from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
+from packages.domain.secrets_models import Secreto, Pista
 from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
@@ -146,6 +147,10 @@ class Project:
     player_character_profiles: list[PlayerCharacterProfile] = field(default_factory=list)
     campaign_clocks: list[CampaignClock] = field(default_factory=list)
 
+    # ── Secrets and clues (Bloque 21) ──
+    secrets: list[Secreto] = field(default_factory=list)
+    clues: list[Pista] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -238,6 +243,9 @@ class Project:
             "campaigns": [c.to_dict() for c in self.campaigns],
             "player_character_profiles": [p.to_dict() for p in self.player_character_profiles],
             "campaign_clocks": [c.to_dict() for c in self.campaign_clocks],
+            # ── Secrets and clues (Bloque 21) ──
+            "secrets": [s.to_dict() for s in self.secrets],
+            "clues": [c.to_dict() for c in self.clues],
         }
 
     @classmethod
@@ -405,6 +413,23 @@ class Project:
                     if isinstance(c, dict)
                 ]}
                 if "campaign_clocks" in data else {}
+            ),
+            # ── Secrets and clues (Bloque 21) ──
+            **(
+                {"secrets": [
+                    Secreto.from_dict(s)
+                    for s in data.get("secrets", [])
+                    if isinstance(s, dict)
+                ]}
+                if "secrets" in data else {}
+            ),
+            **(
+                {"clues": [
+                    Pista.from_dict(c)
+                    for c in data.get("clues", [])
+                    if isinstance(c, dict)
+                ]}
+                if "clues" in data else {}
             ),
         )
 
