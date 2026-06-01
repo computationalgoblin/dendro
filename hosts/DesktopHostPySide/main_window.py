@@ -66,8 +66,10 @@ class MainWindow(QMainWindow):
         self.sc = SessionController(project_service=self.controller.ps)
         self.stack.addWidget(SessionView(self.ctx, self.sc))
         self.stack.addWidget(LivePostView(self.ctx, self.sc))
-        # Placeholders for remaining views
-        for _ in range(2): self.stack.addWidget(QLabel("Coming soon..."))
+        # T05: Import/Export
+        from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
+        self.stack.addWidget(ImportExportView(self.ctx, self.controller))
+        # Placeholders
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 
