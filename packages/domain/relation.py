@@ -54,6 +54,18 @@ class RelationType(str, Enum):
     ESTA_EN_CONFLICTO_CON = "esta_en_conflicto_con"
     TIENE_DEUDA_CON = "tiene_deuda_con"
     ESTA_RELACIONADO_CON = "esta_relacionado_con"
+    # ── Knowledge types (B25-T00, DC-039) ──
+    SABE = "sabe"
+    CREE = "cree"
+    IGNORA = "ignora"
+    MALINTERPRETA = "malinterpreta"
+    HA_OIDO = "ha_oido"
+    HA_VISTO = "ha_visto"
+    HA_RECIBIDO_PISTA = "ha_recibido_pista"
+    CONOCE_PARCIALMENTE = "conoce_parcialmente"
+    CONOCE_FALSAMENTE = "conoce_falsamente"
+    POSEE_CONOCIMIENTO = "posee_conocimiento"
+    REVELA_CONOCIMIENTO = "revela_conocimiento"
 
 
 class Direction(str, Enum):

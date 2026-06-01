@@ -27,6 +27,7 @@ class LiveModeService:
     project_service: Any; session_service: Any = None; secrets_service: Any = None
     faction_service: Any = None; entity_service: Any = None; relation_service: Any = None
     orchestrator: Any = None
+    history_service: Any = None
 
     def _proj(self): return self.project_service.active_project
     def _get_session(self, sid):
@@ -38,7 +39,10 @@ class LiveModeService:
         r = self._get_session(sid)
         if isinstance(r, Error): return r
         from packages.domain.session_models import SessionState
-        r.value.state = SessionState.activa; self._proj().touch()
+        r.value.state = SessionState.activa
+        if self.history_service:
+            self.history_service.record("session_activated", f"Session '{r.value.name}' activated for live mode", metadata={"object_type":"session","object_id":r.value.id})
+        self._proj().touch()
         return Ok(r.value)
 
     # ── Queries ───────────────────────────────────────────────────
@@ -132,7 +136,10 @@ class LiveModeService:
         if self.secrets_service:
             result = self.secrets_service.deliver_clue(cid, state=state)
             if isinstance(result, Error): return result
-        _ensure_live_meta(s); s.metadata["live"]["clues_delivered"].append(cid); self._proj().touch()
+        _ensure_live_meta(s); s.metadata["live"]["clues_delivered"].append(cid)
+        if self.history_service:
+            self.history_service.record("clue_delivered_live", f"Clue {cid} delivered during live session {sid}", metadata={"object_type":"pista","object_id":cid,"session_id":sid})
+        self._proj().touch()
         return Ok(s)
 
     def mark_secret_revealed(self, sid: str, sid2: str, state: str):
@@ -142,7 +149,10 @@ class LiveModeService:
         if self.secrets_service:
             result = self.secrets_service.reveal_secret(sid2, state)
             if isinstance(result, Error): return result
-        _ensure_live_meta(s); s.metadata["live"]["secrets_revealed"].append(sid2); self._proj().touch()
+        _ensure_live_meta(s); s.metadata["live"]["secrets_revealed"].append(sid2)
+        if self.history_service:
+            self.history_service.record("secret_revealed_live", f"Secret {sid2} revealed during live session {sid}", metadata={"object_type":"secreto","object_id":sid2,"session_id":sid})
+        self._proj().touch()
         return Ok(s)
 
     # ── Continuity ────────────────────────────────────────────────

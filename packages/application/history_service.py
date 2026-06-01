@@ -1,100 +1,51 @@
-"""
-History service — application-layer audit trail.
-
-Provides ``HistoryService`` for recording traceability events.
-Integration with EntityService and RelationService is optional:
-pass ``history_service`` to any mutating method and a
-``HistoryEntry`` will be appended on success.
-"""
+"""HistoryService — centralized history recording (B25-T00). No schema bump. Uses existing project history structure."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
-
 from packages.domain.result import Error, Ok, Result
-from packages.domain.source_history import HistoryEntry, HistoryEventType
 
+def _ts(): return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+@dataclass
+class HistoryEntry:
+    timestamp: str
+    event_type: str
+    description: str
+    affected_entity_ids: list[str]
+    metadata: dict[str, Any]
+
+    def to_dict(self): return {"timestamp": self.timestamp, "event_type": self.event_type, "description": self.description, "affected_entity_ids": self.affected_entity_ids, "metadata": self.metadata}
+    @classmethod
+    def from_dict(cls, d): return cls(timestamp=d.get("timestamp",""), event_type=d.get("event_type",""), description=d.get("description",""), affected_entity_ids=d.get("affected_entity_ids",[]), metadata=d.get("metadata",{}))
 
 @dataclass
 class HistoryService:
-    """Records audit events in the active project.
+    project_service: Any
 
-    Injected into EntityService and RelationService as an optional
-    parameter.  When present, each successful mutation produces a
-    ``HistoryEntry``.  When absent (None), existing behaviour is
-    unchanged.
-    """
+    def _proj(self): return self.project_service.active_project
 
-    project_service: Any  # ProjectService
+    def _ensure_history(self):
+        proj = self._proj()
+        if not hasattr(proj, 'history_entries') or not isinstance(proj.history_entries, list):
+            proj.history_entries = []
+        return proj.history_entries
 
-    def _active_project(self):
-        ps = self.project_service
-        if ps.active_project is None:
-            return Error("No active project")
-        return Ok(ps.active_project)
+    def record(self, event_type, description, affected_entity_ids=None, metadata=None):
+        entry = HistoryEntry(timestamp=_ts(), event_type=event_type, description=description,
+                            affected_entity_ids=affected_entity_ids or [], metadata=metadata or {})
+        self._ensure_history().append(entry)
+        self._proj().touch()
+        return entry
 
-    # ------------------------------------------------------------------
-    # Recording
-    # ------------------------------------------------------------------
-
-    def record(self, entry: HistoryEntry) -> Result[None, str]:
-        """Append a HistoryEntry to the active project."""
-        proj = self._active_project()
-        if isinstance(proj, Error):
-            return Error(proj.error)
-        proj.value.history.append(entry)
-        return Ok(None)
-
-    @staticmethod
-    def make_entry(
-        event_type: HistoryEventType,
-        affected_entity_id: str | None = None,
-        affected_relation_id: str | None = None,
-        affected_source_id: str | None = None,
-        previous_value: Any | None = None,
-        new_value: Any | None = None,
-        change_origin: str = "",
-        reason: str = "",
-        operation: str = "",
-    ) -> HistoryEntry:
-        """Factory for a HistoryEntry with mandatory fields."""
-        return HistoryEntry(
-            event_type=event_type,
-            affected_entity_id=affected_entity_id,
-            affected_relation_id=affected_relation_id,
-            affected_source_id=affected_source_id,
-            previous_value=previous_value,
-            new_value=new_value,
-            change_origin=change_origin,
-            reason=reason,
-            operation=operation,
-        )
-
-    # ------------------------------------------------------------------
-    # Querying
-    # ------------------------------------------------------------------
-
-    def get_for_entity(self, entity_id: str) -> Result[list[HistoryEntry], str]:
-        proj = self._active_project()
-        if isinstance(proj, Error):
-            return Error(proj.error)
-        return Ok([h for h in proj.value.history if h.affected_entity_id == entity_id])
-
-    def get_for_relation(self, relation_id: str) -> Result[list[HistoryEntry], str]:
-        proj = self._active_project()
-        if isinstance(proj, Error):
-            return Error(proj.error)
-        return Ok([h for h in proj.value.history if h.affected_relation_id == relation_id])
-
-    def get_recent(self, limit: int = 20) -> Result[list[HistoryEntry], str]:
-        proj = self._active_project()
-        if isinstance(proj, Error):
-            return Error(proj.error)
-        sorted_entries = sorted(
-            proj.value.history, key=lambda h: h.timestamp, reverse=True
-        )
-        return Ok(sorted_entries[:limit])
-
-
-__all__ = ["HistoryService"]
+    def get_history(self, entity_id=None, object_type=None, object_id=None, session_id=None, event_type=None, limit=50):
+        entries = []
+        for e in reversed(self._ensure_history()):
+            if entity_id and entity_id not in e.affected_entity_ids: continue
+            if object_type and e.metadata.get("object_type") != object_type: continue
+            if object_id and e.metadata.get("object_id") != object_id: continue
+            if event_type and e.event_type != event_type: continue
+            entries.append(e)
+            if len(entries) >= limit: break
+        return entries

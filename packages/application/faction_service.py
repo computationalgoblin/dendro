@@ -22,6 +22,7 @@ class FactionService:
     project_service: Any
     entity_service: Any = None
     campaign_service: Any = None
+    history_service: Any = None
 
     def _active_project(self) -> Project:
         return self.project_service.active_project
@@ -43,6 +44,8 @@ class FactionService:
             if f.entity_id == entity_id: return Error(f"Faction with entity_id '{entity_id}' already exists")
         faction = Faction.from_dict(data)
         proj.factions.append(faction)
+        if self.history_service:
+            self.history_service.record("faction_created", f"Faction '{faction.name}' created", metadata={"object_type":"faction","object_id":faction.id})
         proj.touch()
         return Ok(faction)
 
@@ -79,6 +82,8 @@ class FactionService:
         if isinstance(r, Error): return r
         r.value.state = FactionState.inactiva
         r.value.updated_at = _ts()
+        if self.history_service:
+            self.history_service.record("faction_archived", f"Faction {r.value.name} archived", metadata={"object_type":"faction","object_id":r.value.id})
         self._active_project().touch()
         return Ok(r.value)
 
@@ -106,6 +111,8 @@ class FactionService:
         f = r.value
         if entity_id not in f.leader_entity_ids: f.leader_entity_ids.append(entity_id)
         f.updated_at = _ts(); self._active_project().touch()
+        if self.history_service:
+            self.history_service.record("faction_leader_added", f"Leader {entity_id} added to faction {f.id}", metadata={"object_type":"faction","object_id":f.id})
         return Ok(f)
 
     def remove_leader(self, fid: str, entity_id: str) -> Result[Faction, str]:

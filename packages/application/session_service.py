@@ -16,6 +16,7 @@ class SessionService:
     entity_service: Any = None
     campaign_service: Any = None
     orchestrator: Any = None
+    history_service: Any = None
 
     def _active_project(self) -> Project: return self.project_service.active_project
 
@@ -36,6 +37,8 @@ class SessionService:
             if er.value.entity_type != EntityType.SESION: return Error(f"Entity '{eid}' is not SESION")
         session = Session.from_dict(data)
         proj.sessions.append(session)
+        if self.history_service:
+            self.history_service.record("session_created", f"Session '{session.name}' created", metadata={"object_type":"session","object_id":session.id})
         if self.campaign_service is not None:
             cr = self.campaign_service.get_campaign(cid)
             if isinstance(cr, Ok):

@@ -26,7 +26,8 @@ def _timestamp() -> str:
 @dataclass
 class CampaignService:
     project_service: Any  # ProjectService
-    entity_service: Any = None  # EntityService (optional)
+    entity_service: Any = None
+    history_service: Any = None  # EntityService (optional)
 
     def _active_project(self) -> Project:
         return self.project_service.active_project

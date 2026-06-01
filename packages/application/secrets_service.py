@@ -1,6 +1,6 @@
 """SecretsService — CRUD, revelation, clues, knowledge queries, issue detection (B21-T03).
 
-Knowledge is modeled via RelationService + KnowledgeRelationType.
+Knowledge is modeled via RelationService + RelationType.
 who_knows_* fields are manual auxiliary lists, NOT auto-synced.
 """
 
@@ -314,17 +314,17 @@ class SecretsService:
                 # Check if target is a secret
                 for s in proj.secrets:
                     if rel.target_id == s.id and rel.relation_type in (
-                        KnowledgeRelationType.SABE.value,
-                        KnowledgeRelationType.CONOCE_PARCIALMENTE.value,
-                        KnowledgeRelationType.CREE.value,
-                        KnowledgeRelationType.SOSPECHA.value,
-                        KnowledgeRelationType.HA_OIDO.value,
-                        KnowledgeRelationType.HA_VISTO.value,
+                        RelationType.SABE.value,
+                        RelationType.CONOCE_PARCIALMENTE.value,
+                        RelationType.CREE.value,
+                        RelationType.SOSPECHA.value,
+                        RelationType.HA_OIDO.value,
+                        RelationType.HA_VISTO.value,
                     ):
                         secrets_known.append({"secret_id": s.id, "content": s.content, "type": rel.relation_type})
                 # Check if target is a clue
                 for c in proj.clues:
-                    if rel.target_id == c.id and rel.relation_type == KnowledgeRelationType.HA_RECIBIDO_PISTA.value:
+                    if rel.target_id == c.id and rel.relation_type == RelationType.HA_RECIBIDO_PISTA.value:
                         clues_received.append({"clue_id": c.id, "content": c.content})
 
         # Also check manual lists
