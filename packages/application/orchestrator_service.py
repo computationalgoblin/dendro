@@ -132,7 +132,23 @@ class OrchestratorService:
             return Ok(resp)
         except Exception as exc:
             self._log_error(f"Provider invoke failed: {exc}")
-            return Error(f"AI provider error: {exc}")
+            return Error(f"Provider error: {exc}")
+
+    def improvise(self, context: str) -> dict | None:
+        """Generate improvisation output for LiveModeService (B27)."""
+        try:
+            from packages.domain.ai_models import AIOperation, AIMode
+            op = AIOperation(mode=AIMode.GENERATE_ENTITY, context=context, prompt_hint="improvise", max_candidates=3)
+            resp = self._provider.invoke(op)
+            lines = [l.strip("- *") for l in resp.raw_text.split("\n") if len(l.strip()) > 3]
+            return {
+                "name": lines[0] if len(lines) > 0 else "Improvised element",
+                "description": lines[1] if len(lines) > 1 else "Quick improvisation",
+                "complication": lines[2] if len(lines) > 2 else "Raise the stakes",
+                "consequence": lines[3] if len(lines) > 3 else "Unexpected outcome"
+            }
+        except Exception:
+            return None
 
     # ── Generate candidates ───────────────────────────────────────────
 

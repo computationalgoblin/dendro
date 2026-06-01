@@ -92,6 +92,9 @@ class SimulatedAIProvider(AIProvider):
 
 
 def create_provider(name: str = "simulated", config: dict | None = None) -> AIProvider:
+    """Preferred entry point. Delegates to get_provider() for env-configurable selection."""
+    from packages.infrastructure.openai_compatible_provider import get_provider
+    return get_provider()
     if name == "simulated":
         return SimulatedAIProvider()
     raise ValueError(f"Unknown AI provider: {name}")
