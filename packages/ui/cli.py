@@ -270,11 +270,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     from packages.ui.cli_secrets import register_secrets_commands
     from packages.ui.cli_faction import register_faction_commands
+    from packages.ui.cli_session import register_session_commands
+    register_session_commands(sub)
+
     register_faction_commands(sub)
+    from packages.ui.cli_session import register_session_commands
+    register_session_commands(sub)
+
 
     register_secrets_commands(sub)
     from packages.ui.cli_faction import register_faction_commands
+    from packages.ui.cli_session import register_session_commands
+    register_session_commands(sub)
+
     register_faction_commands(sub)
+    from packages.ui.cli_session import register_session_commands
+    register_session_commands(sub)
+
 
 
     return parser
@@ -421,6 +433,11 @@ def main() -> None:
     if args.command == "front":
         from packages.ui.cli_faction import handle_front
         handle_front(args, session)
+    if args.command == "session":
+        from packages.ui.cli_session import handle_session
+        handle_session(args, session)
+        return
+
         return
 
         return
