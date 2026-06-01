@@ -48,10 +48,21 @@ function Run-Command {
     $script:CurrentStep = $Name
     Write-Logged ""
     Write-Logged (">>> {0}" -f $Name)
-    Write-Logged (("CMD> python {0}" -f ($Args -join ' ')))
-    & python @Args 2>&1 | Tee-Object -FilePath $LogPath -Append
-    if ($LASTEXITCODE -ne 0) {
-        throw "Step failed: $Name"
+    Write-Logged ("CMD> python {0}" -f ($Args -join ' '))
+
+    $output = & python @Args 2>&1
+    $exitCode = $LASTEXITCODE
+
+    if ($null -ne $output) {
+        foreach ($line in @($output)) {
+            Write-Logged ([string]$line)
+        }
+    }
+
+    Write-Logged ("ExitCode={0}" -f $exitCode)
+
+    if ($exitCode -ne 0) {
+        throw "Step failed: $Name exit=$exitCode"
     }
 }
 
@@ -117,6 +128,8 @@ function Get-FirstId {
 
 try {
     Run-Command -Name 'python version' -Args @('--version')
+    Run-Command -Name 'python executable' -Args @('-c', 'import sys; print(sys.executable)')
+    Run-Command -Name 'install desktop smoke deps' -Args @('-m', 'pip', 'install', '-e', '.', 'pytest', 'PySide6')
     Run-Command -Name 'compileall DesktopHostPySide' -Args @('-m', 'compileall', 'hosts/DesktopHostPySide')
     Run-Command -Name 'pytest architecture' -Args @('-m', 'pytest', 'tests/architecture/', '-q')
 
