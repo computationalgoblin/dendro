@@ -25,10 +25,10 @@ from packages.persistence.store import ProjectStore
 
 class TestSchemaV5:
     def test_current_is_5(self):
-        assert CURRENT_SCHEMA_VERSION == 15
+        assert CURRENT_SCHEMA_VERSION == 16
 
     def test_max_supported_is_5(self):
-        assert MAX_SUPPORTED_VERSION == 15
+        assert MAX_SUPPORTED_VERSION == 16
 
 
 # ═══════════════════════════════════════════════════════════════════════

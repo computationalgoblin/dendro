@@ -150,7 +150,7 @@ class TestCLIClues:
 # ── Regression ────────────────────────────────────────────────
 
 class TestRegression:
-    def test_schema_is_v15(self): assert CURRENT_SCHEMA_VERSION == 15
+    def test_schema_is_v15(self): assert CURRENT_SCHEMA_VERSION == 16
     def test_campaign_still_works(self, svc):
         ps, es, ssvc, path = svc
         assert ps.active_project.campaigns is not None

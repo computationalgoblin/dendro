@@ -20,7 +20,7 @@ from packages.domain.secrets_models import Secreto, Pista
 
 class TestSchemaV15:
     def test_current_version_is_15(self):
-        assert CURRENT_SCHEMA_VERSION == 15
+        assert CURRENT_SCHEMA_VERSION == 16
 
     def test_migration_adds_empty_lists(self):
         data = {"schema_version": 14, "campaigns": [], "writing_units": []}
@@ -78,7 +78,7 @@ class TestSecretsPersistence:
         load_result = load_project_data(path)
         assert isinstance(load_result, Ok)
         data = load_result.value
-        assert data["schema_version"] == 15
+        assert data["schema_version"] == 16
         assert len(data["secrets"]) == 1
         assert data["secrets"][0]["content"] == "El secreto"
         assert data["secrets"][0]["importance"] == 5

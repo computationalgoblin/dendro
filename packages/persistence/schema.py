@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B21-T02: upgraded to v15)
-CURRENT_SCHEMA_VERSION: int = 15
+CURRENT_SCHEMA_VERSION: int = 16
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 15
+MAX_SUPPORTED_VERSION: int = 16
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +609,14 @@ def _apply_migration_v14_to_v15(data):
     migrated['schema_version'] = 15
     return migrated
 
+def _apply_migration_v15_to_v16(data):
+    """v15 → v16: adds factions and fronts collections (B22-T02)."""
+    migrated = dict(data)
+    migrated.setdefault('factions', [])
+    migrated.setdefault('fronts', [])
+    migrated['schema_version'] = 16
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -650,6 +658,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "domains", "world_layers", "import_baskets",
         "campaigns", "player_character_profiles", "campaign_clocks",
         "secrets", "clues",
+        "factions", "fronts",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
@@ -893,4 +902,66 @@ def _validate_clues(clues, all_secret_ids=None):
                         f"does not exist in secrets"
                     )
 
+    return errors
+
+
+def _validate_factions(factions):
+    """Validate structural integrity of factions list."""
+    errors = []
+    if not isinstance(factions, list):
+        return [f"factions must be a list, got {type(factions).__name__}"]
+    valid_states = {"activa", "debilitada", "destruida", "inactiva"}
+    ids = set()
+    for i, f in enumerate(factions):
+        if not isinstance(f, dict): errors.append(f"factions[{i}] is not a dict"); continue
+        fid = f.get("id")
+        if fid is None: errors.append(f"factions[{i}] missing id"); continue
+        if fid in ids: errors.append(f"factions[{i}] duplicate id '{fid}'"); continue
+        ids.add(fid)
+        entity_id = f.get("entity_id")
+        if not entity_id or not isinstance(entity_id, str) or not entity_id.strip():
+            errors.append(f"factions[{i}] entity_id is required")
+        state = f.get("state")
+        if state is not None and isinstance(state, str) and state not in valid_states:
+            errors.append(f"factions[{i}] invalid state '{state}'")
+    return errors
+
+def _validate_fronts(fronts):
+    """Validate structural integrity of fronts list."""
+    errors = []
+    if not isinstance(fronts, list):
+        return [f"fronts must be a list, got {type(fronts).__name__}"]
+    valid_front_types = {"frente", "amenaza", "inminente"}
+    valid_front_states = {"latente", "activo", "contenido", "resuelto"}
+    ids = set()
+    for i, f in enumerate(fronts):
+        if not isinstance(f, dict): errors.append(f"fronts[{i}] is not a dict"); continue
+        fid = f.get("id")
+        if fid is None: errors.append(f"fronts[{i}] missing id"); continue
+        if fid in ids: errors.append(f"fronts[{i}] duplicate id '{fid}'"); continue
+        ids.add(fid)
+        name = f.get("name")
+        if not name or not isinstance(name, str) or not name.strip():
+            errors.append(f"fronts[{i}] name is required")
+        ft = f.get("front_type")
+        if ft is not None and isinstance(ft, str) and ft not in valid_front_types:
+            errors.append(f"fronts[{i}] invalid front_type '{ft}'")
+        fs = f.get("state")
+        if fs is not None and isinstance(fs, str) and fs not in valid_front_states:
+            errors.append(f"fronts[{i}] invalid state '{fs}'")
+        stages = f.get("stages")
+        if isinstance(stages, list):
+            stage_index = f.get("current_stage_index", 0)
+            if isinstance(stage_index, (int, float)) and not isinstance(stage_index, bool):
+                si = int(stage_index)
+                if si < 0 or (len(stages) > 0 and si >= len(stages)):
+                    errors.append(f"fronts[{i}] current_stage_index {si} out of range for {len(stages)} stages")
+            for si, stage in enumerate(stages):
+                if isinstance(stage, dict):
+                    sn = stage.get("name")
+                    if not sn or not isinstance(sn, str) or not sn.strip():
+                        errors.append(f"fronts[{i}].stages[{si}] name is required")
+                    st = stage.get("threshold")
+                    if st is not None and isinstance(st, (int, float)) and not isinstance(st, bool) and st < 0:
+                        errors.append(f"fronts[{i}].stages[{si}] threshold must be >= 0")
     return errors
