@@ -364,4 +364,4 @@ class TestModifySaveReloadRoundtrip:
 class TestGetSchemaVersion:
     def test_returns_nine(self):
         svc = ProjectService()
-        assert svc.get_schema_version() == 16
+        assert svc.get_schema_version() == 17
