@@ -52,8 +52,15 @@ class MainWindow(QMainWindow):
         self.rc = RelationController(project_service=self.controller.ps)
         self.stack.addWidget(CorpusView(self.ctx, self.ec))
         self.stack.addWidget(RelationView(self.ctx, self.rc))
+        # T03: Candidates + Issues/History
+        from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
+        from hosts.DesktopHostPySide.views.candidate_view import CandidateView
+        from hosts.DesktopHostPySide.views.issues_history_view import IssuesHistoryView
+        self.cc = CandidateController(project_service=self.controller.ps)
+        self.stack.addWidget(CandidateView(self.ctx, self.cc))
+        self.stack.addWidget(IssuesHistoryView(self.ctx, self.controller))
         # Placeholders for remaining views
-        for _ in range(5): self.stack.addWidget(QLabel("Coming soon..."))
+        for _ in range(4): self.stack.addWidget(QLabel("Coming soon..."))
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 
