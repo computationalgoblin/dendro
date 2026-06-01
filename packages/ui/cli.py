@@ -272,23 +272,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     from packages.ui.cli_secrets import register_secrets_commands
     from packages.ui.cli_faction import register_faction_commands
-    from packages.ui.cli_session import register_session_commands
-    from packages.ui.cli_session import register_live_commands
-    register_session_commands(sub)
-
-    register_faction_commands(sub)
-    from packages.ui.cli_session import register_session_commands
-    register_session_commands(sub)
 
 
-    register_secrets_commands(sub)
-    from packages.ui.cli_faction import register_faction_commands
     from packages.ui.cli_session import register_session_commands
     register_session_commands(sub)
 
     register_faction_commands(sub)
-    from packages.ui.cli_session import register_session_commands
-    register_session_commands(sub)
 
 
 
