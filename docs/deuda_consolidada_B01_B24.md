@@ -48,7 +48,7 @@
 | DC-031 | cerrada | media | B17 | B17.1 (cierre B17 §6.3) | `proposed_relations` se pierde al aceptar — Candidate no tiene ese campo. | B17 cierre líneas 208-210, 236. Cerrada en B17.1. | cerrada | — |
 | DC-032 | cerrada | media | B17 | B17.1 (cierre B17 §6.5) | Sin test de persistencia real de `import_baskets` (save/load roundtrip). | B17 cierre líneas 216-218, 237. Cerrada en B17.1. | cerrada | — |
 | DC-033 | abierta | baja | B18 | B24 cierre | `get_ordered_events` no maneja `partial_order` real ni ciclos; usa orden simple por `absolute_date`. | B18 cierre línea 79. | B29 | — |
-| DC-034 | abierta | baja | B18 | B24 cierre | `TimelineEvent` sin relación automática con `NarrativeEntity(EVENTO)`; `entity_id` es manual. | B18 cierre línea 80. | B25+ | — |
+| DC-034 | abierta | baja | B18 | B24 cierre | `TimelineEvent` sin relación automática con `NarrativeEntity(EVENTO)` | Se queda en B29. NO abordado en B25. | B29 | — |
 | DC-035 | abierta | baja | B19 | B24 cierre | IA writing usa provider simulado; falta integración con proveedor IA real y validación de outputs writing. | B19 cierre línea 77. | B27 | — |
 | DC-036 | abierta | baja | B19 | B24 cierre | `get_tree` no escala para >1000 unidades (recursivo). | B19 cierre línea 78. | B29 | — |
 | DC-037 | abierta | baja | B20 | B24 cierre | CampaignService sin integración con HistoryService formal (usa campaign.history textual). | B20 cierre línea 87. | B25 | — |
