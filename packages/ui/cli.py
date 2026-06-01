@@ -268,6 +268,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_campaign import register_campaign_commands
     register_campaign_commands(sub)
 
+    from packages.ui.cli_secrets import register_secrets_commands
+    register_secrets_commands(sub)
+
     return parser
 
 
@@ -394,6 +397,16 @@ def main() -> None:
     if args.command == "writing":
         from packages.ui.cli_writing import handle_writing_command
         handle_writing_command(args, session)
+        return
+
+    if args.command == "secret":
+        from packages.ui.cli_secrets import handle_secret
+        handle_secret(args, session)
+        return
+
+    if args.command == "clue":
+        from packages.ui.cli_secrets import handle_clue
+        handle_clue(args, session)
         return
 
     if args.command == "campaign":
