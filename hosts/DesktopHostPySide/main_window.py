@@ -43,7 +43,17 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.dashboard = DashboardView(self.ctx, self.controller)
         self.stack.addWidget(self.dashboard)
-        for _ in range(7): self.stack.addWidget(QLabel("Coming soon..."))  # placeholder views
+        # T02: Corpus + Relations
+        from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
+        from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
+        from hosts.DesktopHostPySide.views.corpus_view import CorpusView
+        from hosts.DesktopHostPySide.views.relation_view import RelationView
+        self.ec = EntityController(project_service=self.controller.ps)
+        self.rc = RelationController(project_service=self.controller.ps)
+        self.stack.addWidget(CorpusView(self.ctx, self.ec))
+        self.stack.addWidget(RelationView(self.ctx, self.rc))
+        # Placeholders for remaining views
+        for _ in range(5): self.stack.addWidget(QLabel("Coming soon..."))
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 
