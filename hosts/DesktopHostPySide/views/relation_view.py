@@ -50,3 +50,29 @@ class RelationView(QWidget):
             r = self.rc.create(src.currentData(), tgt.currentData(), type_cb.currentText())
             self.ctx.log("info" if not isinstance(r, Error) else "error", f"Relation created" if not isinstance(r, Error) else r.error)
             self.refresh()
+
+    def _detail_dialog(self, index):
+        row = index.row()
+        r_id = self.table.item(row, 3).text()
+        rels = self.rc.list_all()
+        rel = None
+        for r in rels:
+            if r.id.startswith(r_id): rel = r; break
+        if rel is None: return
+        dlg = QDialog(self); dlg.setWindowTitle("Relation Detail"); dlg.setMinimumSize(500, 300)
+        lo = QVBoxLayout(dlg)
+        txt = QTextEdit(); txt.setReadOnly(True)
+        lines = [
+            f"ID: {rel.id}",
+            f"Source: {self._entity_name(rel.source_id)} ({rel.source_id[:16]})",
+            f"Type: {rel.relation_type.value if hasattr(rel.relation_type, 'value') else str(rel.relation_type)}",
+            f"Target: {self._entity_name(rel.target_id)} ({rel.target_id[:16]})",
+            f"Canon: {rel.canon_state.value if hasattr(rel.canon_state, 'value') else str(rel.canon_state)}",
+            f"Visibility: {getattr(rel, 'visibility_state', '—')}",
+            f"Desc: {getattr(rel, 'description', '—')}",
+            f"Metadata: {getattr(rel, 'metadata', {})}",
+        ]
+        txt.setPlainText('\n'.join(lines))
+        lo.addWidget(txt)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok); btns.accepted.connect(dlg.accept); lo.addWidget(btns)
+        dlg.exec()
