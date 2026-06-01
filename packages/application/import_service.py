@@ -469,6 +469,66 @@ class ImportService:
 
         return Ok(None)
 
+    # ── Edit / Merge (B26-T00, DC-026, DC-027) ─────────────────────────
+
+    def edit_import_candidate(self, basket_id, cand_id, data) -> Result[None, str]:
+        proj_r = self._proj()
+        if isinstance(proj_r, Error): return proj_r
+        proj = proj_r.value
+        basket, import_cand = self._find_basket_cand(proj, basket_id, cand_id)
+        if basket is None: return Error(f"Import basket '{basket_id[:8]}' not found")
+        if import_cand is None: return Error(f"Import candidate '{cand_id[:8]}' not found")
+        if import_cand.review_state not in (ImportReviewState.PENDIENTE, ImportReviewState.EDITADO):
+            return Error(f"Cannot edit candidate in state '{import_cand.review_state.value}'")
+        if import_cand.proposed_data is None or not isinstance(import_cand.proposed_data, dict):
+            import_cand.proposed_data = {}
+        if "name" in data: import_cand.proposed_data["entity_name"] = data["name"]
+        if "desc" in data: import_cand.proposed_data["entity_description"] = data["desc"]
+        if "type" in data: import_cand.candidate_type = data["type"]
+        if import_cand.review_state == ImportReviewState.PENDIENTE:
+            import_cand.review_state = ImportReviewState.EDITADO
+        basket.updated_at = _now_iso()
+        return Ok(None)
+
+    def merge_import_candidates(self, basket_id, cand_ids) -> Result[ImportBasket, str]:
+        proj_r = self._proj()
+        if isinstance(proj_r, Error): return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id: basket = b; break
+        if basket is None: return Error(f"Import basket '{basket_id[:8]}' not found")
+        sources = []
+        for cid in cand_ids:
+            for ic in basket.import_candidates:
+                if ic.id == cid and ic.review_state in (ImportReviewState.PENDIENTE, ImportReviewState.EDITADO, ImportReviewState.PARCIAL):
+                    sources.append(ic); break
+        if len(sources) < 2: return Error("Need at least 2 mergeable candidates")
+        names = []
+        descs = []
+        for c in sources:
+            names.append(c.proposed_data.get("entity_name", c.id[:8]) if isinstance(c.proposed_data, dict) else c.id[:8])
+            descs.append(c.proposed_data.get("entity_description", "") if isinstance(c.proposed_data, dict) else "")
+        merged_name = " + ".join(n for n in names if n)[:80]
+        merged_desc = ". ".join(d for d in descs if d)[:200]
+        merged = ImportCandidate(
+            proposed_data={"entity_name": merged_name, "entity_description": merged_desc, "merged_from": [s.id for s in sources]},
+            candidate_type=sources[0].candidate_type, review_state=ImportReviewState.FUSIONADO,
+            confidence=max(s.confidence for s in sources))
+        for s in sources: s.review_state = ImportReviewState.FUSIONADO
+        basket.import_candidates.append(merged)
+        basket.updated_at = _now_iso()
+        return Ok(basket)
+
+    def _find_basket_cand(self, proj, basket_id, cand_id):
+        basket = None; import_cand = None
+        for b in proj.import_baskets:
+            if b.id == basket_id: basket = b; break
+        if basket:
+            for ic in basket.import_candidates:
+                if ic.id == cand_id: import_cand = ic; break
+        return basket, import_cand
+
     # ── Partial / Filtered view ──────────────────────────────────────────
 
     def partial_import(

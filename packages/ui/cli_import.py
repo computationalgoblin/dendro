@@ -69,6 +69,15 @@ def register_import_commands(sub: argparse._SubParsersAction) -> None:
     reject.add_argument("basket_id", help="Basket ID")
     reject.add_argument("cand_id", help="Import Candidate ID")
 
+    edit = review_subs.add_parser("edit", help="Edit import candidate")
+    edit.add_argument("basket_id"); edit.add_argument("cand_id")
+    edit.add_argument("--name"); edit.add_argument("--desc"); edit.add_argument("--type")
+
+    merge = review_subs.add_parser("merge", help="Merge import candidates")
+    merge.add_argument("basket_id"); merge.add_argument("cand_id1")
+    merge.add_argument("--cand-id2", dest="cand_id2", required=True)
+    merge.add_argument("--cand-ids", nargs="+", help="Additional candidate IDs")
+
     # import partial
     partial = imp_subs.add_parser("partial", help="Filtered view of basket")
     partial.add_argument("basket_id", help="Basket ID")
@@ -212,8 +221,39 @@ def _cmd_review(args: argparse.Namespace, session_ctx, project_path: Path) -> st
         ps.save(project_path)
         return f"Import candidate {args.cand_id[:8]} rejected."
 
-    return "Error: unknown review action. Use: import review accept|reject"
+    elif r_action == "edit":
+        return _cmd_edit(args, session_ctx, project_path)
 
+    elif r_action == "merge":
+        return _cmd_merge(args, session_ctx, project_path)
+
+    return "Error: unknown review action. Use: import review accept|reject|edit|merge"
+
+
+
+def _cmd_edit(args, session_ctx, project_path):
+    svc = _import_service(project_path)
+    data = {}
+    if getattr(args, "name", None): data["name"] = args.name
+    if getattr(args, "desc", None): data["desc"] = args.desc
+    if getattr(args, "type", None): data["type"] = args.type
+    result = svc.edit_import_candidate(args.basket_id, args.cand_id, data)
+    if isinstance(result, Error): return f"Error: {result.error}"
+    from packages.application.project_service import ProjectService
+    ps = ProjectService(store=svc._proj()._store if hasattr(svc._proj(), "_store") else None)
+    try: ps.save(project_path)
+    except: pass
+    return f"Import candidate {args.cand_id[:8]} edited."
+
+def _cmd_merge(args, session_ctx, project_path):
+    svc = _import_service(project_path)
+    cand_ids = [args.cand_id1, args.cand_id2]
+    if hasattr(args, "cand_ids") and args.cand_ids:
+        cand_ids = args.cand_ids
+    result = svc.merge_import_candidates(args.basket_id, cand_ids)
+    if isinstance(result, Error): return f"Error: {result.error}"
+    b = result.value
+    return f"Merged {len(cand_ids)} candidates into {b.import_candidates[-1].id} (state=FUSIONADO)."
 
 def _cmd_partial(args: argparse.Namespace, session_ctx, project_path: Path) -> str:
     svc = _import_service(project_path)
