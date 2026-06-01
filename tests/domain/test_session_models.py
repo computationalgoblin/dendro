@@ -28,7 +28,7 @@ class TestSession:
         assert s.id.startswith("ses_"); assert s.state == SessionState.preparacion
     def test_34_fields(self):
         s = Session(name="X", campaign_id="c1"); d = s.to_dict()
-        assert len(d) == 34, f"Expected 34, got {len(d)}"
+        assert len(d) == 36, f"Expected 34, got {len(d)}"
     def test_with_scenes(self):
         sc = SessionScene(name="S1"); s = Session(name="X", campaign_id="c1", planned_scenes=[sc], optional_scenes=[SessionScene(name="O1")], clock_ids=["clk1"])
         d = s.to_dict(); assert len(d["planned_scenes"]) == 1; assert len(d["optional_scenes"]) == 1; assert d["clock_ids"] == ["clk1"]

@@ -98,6 +98,9 @@ class Session:
     continuity_checklist: list[str] = field(default_factory=list)
     ia_suggestion_candidate_ids: list[str] = field(default_factory=list)
     state: SessionState = SessionState.preparacion
+    # ── Post-session (B25-T02) ──
+    post_session_summary: str = ""
+    source_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
@@ -129,7 +132,7 @@ class Session:
                 "private_notes": self.private_notes, "player_safe_summary": self.player_safe_summary,
                 "continuity_checklist": self.continuity_checklist,
                 "ia_suggestion_candidate_ids": self.ia_suggestion_candidate_ids,
-                "state": self.state.value, "metadata": self.metadata,
+                "state": self.state.value, "post_session_summary": self.post_session_summary, "source_id": self.source_id, "metadata": self.metadata,
                 "created_at": self.created_at, "updated_at": self.updated_at}
 
     @classmethod
@@ -162,5 +165,7 @@ class Session:
                    continuity_checklist=_parse_list(data.get("continuity_checklist")),
                    ia_suggestion_candidate_ids=_parse_list(data.get("ia_suggestion_candidate_ids")),
                    state=_parse_enum(SessionState, data.get("state"), SessionState.preparacion),
+                   post_session_summary=_parse_str(data.get("post_session_summary")),
+                   source_id=data.get("source_id") if isinstance(data.get("source_id"), str) else None,
                    metadata=_parse_dict(data.get("metadata")),
                    created_at=_parse_str(data.get("created_at")), updated_at=_parse_str(data.get("updated_at")))

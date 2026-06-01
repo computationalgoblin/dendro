@@ -27,10 +27,10 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 class TestSchemaVersionB02T03:
     def test_current_schema_is_v8(self):
-        assert CURRENT_SCHEMA_VERSION == 17
+        assert CURRENT_SCHEMA_VERSION == 18
 
     def test_max_supported_is_v8(self):
-        assert MAX_SUPPORTED_VERSION == 17
+        assert MAX_SUPPORTED_VERSION == 18
 
 
 class TestMigrationV1ToV2:
@@ -147,7 +147,7 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 17
+        assert raw.get("schema_version") == 18
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
         from packages.domain.entity import NarrativeEntity, EntityType

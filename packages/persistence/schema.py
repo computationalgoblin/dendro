@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B21-T02: upgraded to v15)
-CURRENT_SCHEMA_VERSION: int = 17
+CURRENT_SCHEMA_VERSION: int = 18
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 17
+MAX_SUPPORTED_VERSION: int = 18
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +622,16 @@ def _apply_migration_v16_to_v17(data):
     migrated = dict(data)
     migrated.setdefault('sessions', [])
     migrated['schema_version'] = 17
+    return migrated
+
+def _apply_migration_v17_to_v18(data):
+    """v17 → v18: adds post_session_summary and source_id to sessions (B25-T02)."""
+    migrated = dict(data)
+    for s in migrated.get('sessions', []):
+        if isinstance(s, dict):
+            s.setdefault('post_session_summary', '')
+            s.setdefault('source_id', None)
+    migrated['schema_version'] = 18
     return migrated
 
 # Structural validation

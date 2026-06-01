@@ -26,7 +26,7 @@ from packages.domain.campaign_models import Campaign, CampaignPlayer, PlayerChar
 
 class TestSchemaV14Basics:
     def test_current_version_is_14(self):
-        assert CURRENT_SCHEMA_VERSION == 17
+        assert CURRENT_SCHEMA_VERSION == 18
 
     def test_migration_adds_empty_lists(self):
         data = {"schema_version": 13, "writing_units": [], "entities": []}
@@ -204,7 +204,7 @@ class TestCampaignPersistenceRoundtrip:
         assert isinstance(load_result, Ok), f"Load failed: {load_result}"
         data = load_result.value
 
-        assert data["schema_version"] == 17
+        assert data["schema_version"] == 18
         assert len(data["campaigns"]) == 1
         assert data["campaigns"][0]["name"] == "La Sombra"
         assert len(data["campaigns"][0]["players"]) == 1
@@ -287,7 +287,7 @@ class TestCampaignPersistenceRoundtrip:
         assert isinstance(load_result, Ok), f"Load failed: {load_result}"
         data = load_result.value
 
-        assert data["schema_version"] == 17
+        assert data["schema_version"] == 18
         assert "entities" in data
         assert len(data["entities"]) == 1
         # Migration v13→v14 adds the three campaign collections
