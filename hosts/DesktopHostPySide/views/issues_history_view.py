@@ -1,5 +1,13 @@
 """IssuesHistoryView — open issues + recent history (B27.1-T03)."""
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTabWidget, QTableWidget, QTableWidgetItem, QPushButton)
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget
+)
 from hosts.DesktopHostPySide.app_context import AppContext
 
 class IssuesHistoryView(QWidget):
