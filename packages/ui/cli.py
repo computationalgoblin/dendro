@@ -437,20 +437,14 @@ def main() -> None:
     if args.command == "session":
         from packages.ui.cli_session import handle_session
         handle_session(args, session)
-    if hasattr(args, "live_command") and args.live_command:
-    if getattr(args, "session_command", None) in ("close", "post-summary", "post-candidates", "post-accept", "post-reject", "post-source", "post-seeds"):
-        from packages.ui.cli_session import handle_post
-        handle_post(args, session)
         return
-
+    if hasattr(args, "live_command") and args.live_command:
         from packages.ui.cli_session import handle_live
         handle_live(args, session)
         return
-
-        return
-
-        return
-
+    if getattr(args, "session_command", None) in ("close", "post-summary", "post-candidates", "post-accept", "post-reject", "post-source", "post-seeds"):
+        from packages.ui.cli_session import handle_post
+        handle_post(args, session)
         return
 
     if args.command == "campaign":
