@@ -24,6 +24,10 @@ class ProjectController:
         if self.current_path:
             self.ps.save(Path(self.current_path))
 
+    def close(self):
+        self.ps.close()
+        self.current_path = None
+
     @property
     def _proj(self):
         return self.ps.active_project

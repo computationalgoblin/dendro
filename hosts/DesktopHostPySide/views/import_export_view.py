@@ -1,4 +1,4 @@
-"""ImportExportView — import baskets + controlled export (B27.3 bugbash)."""
+"""ImportExportView — visual import cards + advanced export/debug (B27.5-T07)."""
 from __future__ import annotations
 
 import json
@@ -8,8 +8,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -20,14 +22,40 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.import_controller import ImportController
-from packages.application.export_service import ExportService
+from hosts.DesktopHostPySide.widgets.design_system import (
+    AdvancedSection,
+    Badge,
+    Card,
+    EmptyState,
+    SectionHeader,
+    enum_human,
+    make_scroll_area,
+)
 from packages.application.entity_service import EntityService
+from packages.application.export_service import ExportService
 from packages.application.session_service import SessionService
 from packages.domain.result import Error
 
 
 def _enum_text(value) -> str:
     return str(value.value) if isinstance(value, Enum) else str(value or "")
+
+
+def _candidate_title(candidate) -> str:
+    payload = getattr(candidate, "proposed_data", {}) or {}
+    name = payload.get("name") or payload.get("title") or getattr(candidate, "title", "") or "Propuesta sin nombre"
+    ctype = enum_human(getattr(candidate, "candidate_type", "candidato"))
+    return f"Posible {ctype.lower()}: {name}"
+
+
+def _source_excerpt(candidate) -> str:
+    payload = getattr(candidate, "proposed_data", {}) or {}
+    for key in ["brief", "description", "text", "summary", "content"]:
+        value = payload.get(key)
+        if value:
+            text = str(value).replace("\n", " ").strip()
+            return text[:220] + ("…" if len(text) > 220 else "")
+    return "Sin extracto visible. Activa Modo avanzado para ver datos técnicos."
 
 
 class ImportExportView(QWidget):
@@ -41,16 +69,49 @@ class ImportExportView(QWidget):
             entity_service=EntityService(controller.ps),
             session_service=SessionService(controller.ps),
         )
+        self.selected_basket_id: str | None = None
+        self.selected_candidate_id: str | None = None
         self._build()
 
     def _build(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+        layout.addWidget(SectionHeader(
+            "Importación documental",
+            "Revisa candidatos como tarjetas. IDs, segmentos y JSON quedan en Datos técnicos."
+        ))
+
         act = QHBoxLayout()
+        for label, handler, primary in [
+            ("Seleccionar TXT/PDF", self._pick, True),
+            ("Aceptar", self._accept, False),
+            ("Rechazar", self._reject, False),
+            ("Refrescar", self.refresh, False),
+        ]:
+            btn = QPushButton(label)
+            if primary:
+                btn.setObjectName("primaryButton")
+            btn.clicked.connect(handler)
+            act.addWidget(btn)
+        act.addStretch()
+        layout.addLayout(act)
+
+        self.cards_container = QWidget()
+        self.cards_grid = QGridLayout(self.cards_container)
+        self.cards_grid.setContentsMargins(0, 0, 0, 0)
+        self.cards_grid.setSpacing(12)
+        layout.addWidget(make_scroll_area(self.cards_container), stretch=1)
+
+        self.detail = QTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setMaximumHeight(150)
+        layout.addWidget(self.detail)
+
+        self.advanced = AdvancedSection("Datos técnicos / export")
+        layout.addWidget(self.advanced)
+        adv_actions = QHBoxLayout()
         for label, handler in [
-            ("Seleccionar TXT/PDF", self._pick),
-            ("Aceptar candidate", self._accept),
-            ("Rechazar candidate", self._reject),
-            ("Refrescar", self.refresh),
             ("Export GM", lambda: self._export_all("gm")),
             ("Export Player", lambda: self._export_all("player")),
             ("Export Public", lambda: self._export_all("public")),
@@ -58,22 +119,22 @@ class ImportExportView(QWidget):
         ]:
             btn = QPushButton(label)
             btn.clicked.connect(handler)
-            act.addWidget(btn)
-        layout.addLayout(act)
-
+            adv_actions.addWidget(btn)
+        self.advanced.body_layout.addLayout(adv_actions)
         self.table = QTableWidget()
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "Basket", "Source", "Segments", "Candidate", "Segment", "Type",
             "State", "Confidence", "Dup/Contr"
         ])
-        self.table.itemSelectionChanged.connect(self._show_detail)
-        layout.addWidget(self.table)
+        self.table.itemSelectionChanged.connect(self._show_detail_from_table)
+        self.advanced.body_layout.addWidget(self.table)
+        self.set_advanced_mode(self.ctx.advanced_mode)
 
-        self.detail = QTextEdit()
-        self.detail.setReadOnly(True)
-        self.detail.setMaximumHeight(220)
-        layout.addWidget(self.detail)
+    def set_advanced_mode(self, enabled: bool):
+        self.advanced.setVisible(bool(enabled))
+        if not enabled and self.detail.toPlainText().startswith("Datos técnicos"):
+            self.detail.clear()
 
     def _project(self):
         return self.controller.ps.active_project
@@ -85,9 +146,10 @@ class ImportExportView(QWidget):
         result = self.ic.import_document(path)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
-            self.detail.setPlainText(f"Error: {result.error}")
+            self.detail.setPlainText(f"No se pudo importar el documento: {result.error}")
         else:
             self.ctx.log("info", f"Import basket created: {result.value.id} ({Path(path).suffix.lower()})")
+            self.detail.setPlainText("Documento importado. Revisa las tarjetas de candidatos detectados.")
             self.refresh()
 
     def _basket_candidates(self, basket):
@@ -103,18 +165,69 @@ class ImportExportView(QWidget):
             baskets = baskets.value
         rows = []
         for basket in baskets:
-            for candidate in self._basket_candidates(basket):
+            candidates = self._basket_candidates(basket)
+            if not candidates:
+                rows.append((basket, None))
+            for candidate in candidates:
                 rows.append((basket, candidate))
         return rows
 
+    def _clear_cards(self):
+        while self.cards_grid.count():
+            item = self.cards_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
     def refresh(self):
         rows = self._rows()
-        self.table.setRowCount(len(rows))
-        for i, (basket, candidate) in enumerate(rows):
+        self._refresh_cards(rows)
+        self._refresh_table(rows)
+
+    def _refresh_cards(self, rows):
+        self._clear_cards()
+        if not rows:
+            self.cards_grid.addWidget(EmptyState(
+                "Sin importaciones",
+                "Selecciona un TXT/PDF para detectar candidatos narrativos."
+            ), 0, 0)
+            return
+        visible_idx = 0
+        for basket, candidate in rows:
+            if candidate is None:
+                card = Card("Documento importado", "No hay candidatos detectados todavía.")
+                card.add_text("La importación existe y se refresca usando el campo real de candidatos.", muted=True)
+                self.cards_grid.addWidget(card, visible_idx // 2, visible_idx % 2)
+                visible_idx += 1
+                continue
+            card = Card(_candidate_title(candidate), _source_excerpt(candidate))
+            state_text = enum_human(getattr(candidate, "review_state", "pendiente"))
+            confidence = float(getattr(candidate, "confidence", 0.0) or 0.0)
+            row = card.add_row()
+            row.addWidget(Badge(state_text, "info"))
+            row.addWidget(Badge(f"Confianza {confidence:.0%}", "success" if confidence >= 0.7 else "warning"))
+            row.addStretch()
+            actions = card.add_row()
+            btn_select = QPushButton("Ver")
+            btn_select.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._select_card(b, c))
+            btn_accept = QPushButton("Aceptar")
+            btn_accept.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._accept_ids(b, c))
+            btn_reject = QPushButton("Descartar")
+            btn_reject.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._reject_ids(b, c))
+            for btn in [btn_select, btn_accept, btn_reject]:
+                actions.addWidget(btn)
+            actions.addStretch()
+            self.cards_grid.addWidget(card, visible_idx // 2, visible_idx % 2)
+            visible_idx += 1
+
+    def _refresh_table(self, rows):
+        real_rows = [(b, c) for b, c in rows if c is not None]
+        self.table.setRowCount(len(real_rows))
+        for i, (basket, candidate) in enumerate(real_rows):
             basket_item = QTableWidgetItem(basket.id[:12])
-            basket_item.setData(Qt.UserRole, basket.id)
+            basket_item.setData(Qt.ItemDataRole.UserRole, basket.id)
             cand_item = QTableWidgetItem(candidate.id[:12])
-            cand_item.setData(Qt.UserRole, candidate.id)
+            cand_item.setData(Qt.ItemDataRole.UserRole, candidate.id)
             segment_id = getattr(candidate, "segment_id", "") or ""
             review_state = getattr(candidate, "review_state", "")
             state_text = _enum_text(review_state)
@@ -125,18 +238,27 @@ class ImportExportView(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(str(len(getattr(basket, "segments", []) or []))))
             self.table.setItem(i, 3, cand_item)
             self.table.setItem(i, 4, QTableWidgetItem(segment_id))
-            self.table.setItem(i, 5, QTableWidgetItem(str(getattr(candidate, "candidate_type", "") or "")))
+            self.table.setItem(i, 5, QTableWidgetItem(enum_human(getattr(candidate, "candidate_type", ""))))
             self.table.setItem(i, 6, QTableWidgetItem(state_text))
             self.table.setItem(i, 7, QTableWidgetItem(f"{float(getattr(candidate, 'confidence', 0.0) or 0.0):.2f}"))
             self.table.setItem(i, 8, QTableWidgetItem(f"D:{dup_count} C:{contradiction_count}"))
         self.table.resizeColumnsToContents()
 
+    def _select_card(self, basket_id: str, candidate_id: str):
+        self.selected_basket_id = basket_id
+        self.selected_candidate_id = candidate_id
+        _, _, candidate = self._selected_candidate()
+        if candidate:
+            self._show_clean_detail(candidate)
+
     def _selected_ids(self):
+        if self.selected_basket_id and self.selected_candidate_id:
+            return self.selected_basket_id, self.selected_candidate_id
         row = self.table.currentRow()
         if row < 0:
             return None, None
-        basket_id = self.table.item(row, 0).data(Qt.UserRole)
-        candidate_id = self.table.item(row, 3).data(Qt.UserRole)
+        basket_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        candidate_id = self.table.item(row, 3).data(Qt.ItemDataRole.UserRole)
         return basket_id, candidate_id
 
     def _selected_candidate(self):
@@ -153,14 +275,31 @@ class ImportExportView(QWidget):
                 return basket_id, candidate_id, candidate
         return basket_id, candidate_id, None
 
-    def _show_detail(self):
+    def _show_clean_detail(self, candidate):
+        lines = [
+            _candidate_title(candidate),
+            "",
+            _source_excerpt(candidate),
+            "",
+            f"Estado: {enum_human(getattr(candidate, 'review_state', 'pendiente'))}",
+            f"Confianza: {float(getattr(candidate, 'confidence', 0.0) or 0.0):.0%}",
+            "",
+            "Usa Aceptar o Descartar. Los datos técnicos están ocultos salvo en Modo avanzado.",
+        ]
+        self.detail.setPlainText("\n".join(lines))
+
+    def _show_detail_from_table(self):
         basket_id, candidate_id, candidate = self._selected_candidate()
         if not candidate:
+            return
+        if not self.ctx.advanced_mode:
+            self._show_clean_detail(candidate)
             return
         review_state = getattr(candidate, "review_state", "")
         state_text = _enum_text(review_state)
         payload = getattr(candidate, "proposed_data", {}) or {}
         lines = [
+            "Datos técnicos — Modo avanzado",
             f"Basket: {basket_id}",
             f"Candidate: {candidate_id}",
             f"Type: {getattr(candidate, 'candidate_type', '')}",
@@ -177,27 +316,39 @@ class ImportExportView(QWidget):
     def _accept(self):
         basket_id, candidate_id, _ = self._selected_candidate()
         if not basket_id or not candidate_id:
-            self.ctx.log("error", "Selecciona un import candidate")
+            self.ctx.log("error", "Selecciona un candidato")
             return
-        result = self.ic.accept(basket_id, candidate_id)
-        if isinstance(result, Error):
-            self.ctx.log("error", result.error)
-            self.detail.setPlainText(f"Error: {result.error}")
-        else:
-            self.ctx.log("info", f"Import candidate accepted: {candidate_id}")
-            self.refresh()
+        self._accept_ids(basket_id, candidate_id)
 
     def _reject(self):
         basket_id, candidate_id, _ = self._selected_candidate()
         if not basket_id or not candidate_id:
-            self.ctx.log("error", "Selecciona un import candidate")
+            self.ctx.log("error", "Selecciona un candidato")
             return
+        self._reject_ids(basket_id, candidate_id)
+
+    def _accept_ids(self, basket_id: str, candidate_id: str):
+        self.selected_basket_id = basket_id
+        self.selected_candidate_id = candidate_id
+        result = self.ic.accept(basket_id, candidate_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            self.detail.setPlainText(f"No se pudo aceptar: {result.error}")
+        else:
+            self.ctx.log("info", "Candidato de importación aceptado")
+            self.detail.setPlainText("Candidato aceptado.")
+            self.refresh()
+
+    def _reject_ids(self, basket_id: str, candidate_id: str):
+        self.selected_basket_id = basket_id
+        self.selected_candidate_id = candidate_id
         result = self.ic.reject(basket_id, candidate_id)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
-            self.detail.setPlainText(f"Error: {result.error}")
+            self.detail.setPlainText(f"No se pudo descartar: {result.error}")
         else:
-            self.ctx.log("info", f"Import candidate rejected: {candidate_id}")
+            self.ctx.log("info", "Candidato de importación descartado")
+            self.detail.setPlainText("Candidato descartado.")
             self.refresh()
 
     def _export_all(self, audience):

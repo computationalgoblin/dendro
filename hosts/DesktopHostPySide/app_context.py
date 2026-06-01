@@ -16,6 +16,7 @@ class AppContext:
     current_audience: str = "gm"
     log_messages: list[str] = field(default_factory=list)
     log_sink: Callable[[str], None] | None = None
+    advanced_mode: bool = False
 
     def log(self, level: str, msg: str):
         entry = f"[{level.upper()}] {msg}"
