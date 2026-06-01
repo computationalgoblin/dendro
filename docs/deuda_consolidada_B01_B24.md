@@ -152,13 +152,15 @@ HANDOFF.md (líneas 59-63) usa DC-025 a DC-032 con significados distintos a los 
 
 ## 6. Bloques recomendados para resolver deuda
 
-### B25 — HistoryService transversal + post-sesión (7 DC)
-Agrupar las 6 DC de HistoryService (DC-037, 038, 039, 041, 042, 043) + TimelineEvent sync (DC-034).
-- T01: HistoryService unificado con registro centralizado
-- T02: Migrar CampaignService.history textual → HistoryService
-- T03: Migrar SecretsService, FactionService, SessionService, LiveModeService
-- T04: Integrar KnowledgeRelationType con RelationType core (DC-039)
-- T05: TimelineEvent sync con NarrativeEntity(EVENTO) (DC-034)
+### B25 — HistoryService transversal + post-sesión (7 DC ✅ asignadas → B25-T00)
+Agrupadas en **B25-T00** — HistoryService unificado + KnowledgeRelationType → RelationType + TimelineEvent sync.
+- DC-034: TimelineEvent sync con NarrativeEntity(EVENTO)
+- DC-037: CampaignService → HistoryService
+- DC-038: SecretsService → HistoryService
+- DC-039: KnowledgeRelationType → RelationType core
+- DC-041: FactionService → HistoryService
+- DC-042: SessionService → HistoryService
+- DC-043: LiveModeService → HistoryService
 
 ### hardening — Consolidación pre-B26 (2 DC)
 - T01: CLI flakes secrets/clues (DC-040)
