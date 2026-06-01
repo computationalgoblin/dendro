@@ -121,6 +121,66 @@ class TestJsonIO:
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         assert not path.with_suffix(path.suffix + ".tmp").exists()
 
+    def test_write_json_atomic_retry_permissionerror(self, tmp_path: Path, monkeypatch):
+        """Retry on PermissionError — succeeds on 3rd try, target exists after."""
+        path = tmp_path / "retry.json"
+        data = {"id": "retry-me", "name": "Retry Test"}
+
+        call_count = [0]
+
+        def mock_replace_succeed_3rd(src, dst):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise PermissionError("Simulated AV scan lock")
+            # Actually replace on 3rd attempt
+            original_replace(src, dst)
+
+        # Save the real os.replace before we mock it
+        import os as os_mod
+        original_replace = os_mod.replace
+
+        monkeypatch.setattr(os_mod, "replace", mock_replace_succeed_3rd)
+
+        result = _write_json_atomic(data, path)
+        assert isinstance(result, Ok), f"Expected Ok, got {result}"
+        assert path.exists()
+        assert call_count[0] == 3
+
+    def test_write_json_atomic_retry_exhausted(self, tmp_path: Path, monkeypatch):
+        """After 5 PermissionErrors, returns Error and cleans up .tmp."""
+        path = tmp_path / "fail.json"
+        data = {"id": "fail-me"}
+
+        import os as os_mod
+
+        def mock_replace_always_fails(src, dst):
+            raise PermissionError("AV lock never released")
+
+        monkeypatch.setattr(os_mod, "replace", mock_replace_always_fails)
+
+        result = _write_json_atomic(data, path)
+        assert isinstance(result, Error), f"Expected Error, got {result}"
+        assert "AV lock never released" in result.error
+        assert "fail.json" in result.error
+        # tmp file should be cleaned up
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
+        # target should NOT exist (we never succeeded)
+        assert not path.exists()
+
+    def test_write_json_atomic_multi_save_loop(self, tmp_path: Path):
+        """Multiple sequential saves should all succeed without .tmp leak."""
+        path = tmp_path / "loop.json"
+        for i in range(10):
+            data = {"id": f"loop-{i:03d}", "name": f"Loop {i}"}
+            result = _write_json_atomic(data, path)
+            assert isinstance(result, Ok), f"Save {i} failed: {result}"
+            assert path.exists()
+        # No .tmp residue
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
+        # Last write is what we expect
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        assert loaded["id"] == "loop-009"
+
 
 # =========================================================================
 # Atomic save tests
@@ -209,6 +269,24 @@ class TestAtomicSave:
         assert raw["schema_version"] == CURRENT_SCHEMA_VERSION
         assert raw["id"] == sample_project.id
         assert raw["name"] == sample_project.name
+
+    def test_save_reload_repeated(self, project_file: Path):
+        """Multiple save→reload cycles preserve data integrity."""
+        store = ProjectStore()
+        for i in range(10):
+            p = Project(id=f"rrr-{i:03d}", name=f"Roundtrip {i}")
+            result = store.save(p, project_file)
+            assert isinstance(result, Ok), f"Save {i} failed: {result}"
+
+            loaded = store.load(project_file)
+            assert isinstance(loaded, Ok), f"Load {i} failed: {loaded}"
+            assert loaded.value.id == p.id
+            assert loaded.value.name == p.name
+
+        # No .tmp residue
+        assert not project_file.with_suffix(
+            project_file.suffix + ".tmp"
+        ).exists()
 
     def test_save_atomicity_partial_write(self, tmp_path: Path, sample_project: Project):
         """Simulate a write failure by making the .tmp destination unwritable.

@@ -99,6 +99,10 @@ def _write_json_atomic(data: dict[str, Any], path: Path) -> Result[None, str]:
     Writes to a temporary file first, fsyncs, then renames to target.
     This prevents partial writes from corrupting the project file.
 
+    On Windows, retries the rename step when PermissionError (WinError 32)
+    is raised — common with antivirus scanners temporarily holding the
+    .tmp file handle.
+
     Args:
         data: Data to serialize as JSON.
         path: Final output path.
@@ -110,31 +114,81 @@ def _write_json_atomic(data: dict[str, Any], path: Path) -> Result[None, str]:
 
     try:
         serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-        tmp_path.write_text(serialized, encoding="utf-8")
-
-        # On Unix: fsync the file, then the directory
-        try:
-            fd = os.open(tmp_path, os.O_RDONLY)
-            os.fsync(fd)
-            os.close(fd)
-        except OSError:
-            pass  # best-effort fsync
-
-        # Atomic rename (POSIX guarantees this on same filesystem)
-        tmp_path.rename(path)
-
-        # fsync parent directory to ensure metadata is flushed
-        try:
-            fd = os.open(str(path.parent), os.O_RDONLY)
-            os.fsync(fd)
-            os.close(fd)
-        except OSError:
-            pass  # best-effort directory sync
-
-    except OSError as e:
-        return Error(f"I/O error writing project file: {e}")
     except (TypeError, ValueError) as e:
         return Error(f"Serialization error: {e}")
+
+    # Step 1 — write .tmp inside a with block so the handle is closed
+    # BEFORE we attempt the rename
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(serialized)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass  # best-effort
+    except OSError as e:
+        return Error(f"I/O error writing temporary file {tmp_path}: {e}")
+
+    # Step 2 — fsync directory entry (best-effort)
+    try:
+        fd = os.open(str(tmp_path.parent), os.O_RDONLY)
+        os.fsync(fd)
+        os.close(fd)
+    except OSError:
+        pass
+
+    # Step 3 — atomic rename with Windows retry
+    # os.replace is preferred: it is atomic on POSIX and also replaces
+    # an existing target on Windows (unlike os.rename which fails with
+    # FileExistsError)
+    src = str(tmp_path)
+    dst = str(path)
+
+    max_retries = 5
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            os.replace(src, dst)
+            last_error = None
+            break
+        except PermissionError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.1 * (attempt + 1))
+        except OSError as e:
+            # WinError 32: "process cannot access the file because it is
+            # being used by another process"
+            if getattr(e, "winerror", None) == 32:
+                last_error = e
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(0.1 * (attempt + 1))
+            else:
+                last_error = e
+                break  # non-WinError-32 OSError → don't retry
+
+    if last_error is not None:
+        # Clean up temporary file on failure
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return Error(
+            f"I/O error writing project file: {last_error}\n"
+            f"  source: {src}\n"
+            f"  target: {dst}"
+        )
+
+    # Step 4 — fsync parent directory to ensure metadata is flushed
+    try:
+        fd = os.open(str(path.parent), os.O_RDONLY)
+        os.fsync(fd)
+        os.close(fd)
+    except OSError:
+        pass  # best-effort directory sync
 
     return Ok(None)
 
