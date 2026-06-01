@@ -28,14 +28,16 @@ class MainWindow(QMainWindow):
         top.addStretch()
         self.schema_label = QLabel(""); top.addWidget(self.schema_label)
         top.addWidget(QLabel("| AI:"))
-        self.ai_label = QLabel("simulated"); top.addWidget(self.ai_label)
+        self.ai_label = QLabel(self._provider_info()); top.addWidget(self.ai_label)
         btn_save = QPushButton("Guardar"); btn_save.clicked.connect(self._save); top.addWidget(btn_save)
         layout.addLayout(top)
 
         # Body: sidebar + stack
         splitter = QSplitter(Qt.Horizontal)
         self.sidebar = QListWidget(); self.sidebar.setMaximumWidth(160)
-        for label in ["Dashboard", "Corpus", "Relations", "Candidates", "Issues/History", "Sessions", "Live/Post", "Import/Export"]:
+        for label in ["Dashboard", "Corpus", "Relations", "Candidates", "Issues/History",
+                      "Sessions", "Live/Post", "Import/Export",
+                      "Campaign", "Secrets/Clues", "Factions/Fronts", "Writing"]:
             self.sidebar.addItem(QListWidgetItem(label))
         self.sidebar.currentRowChanged.connect(self._navigate)
         splitter.addWidget(self.sidebar)
@@ -69,7 +71,18 @@ class MainWindow(QMainWindow):
         # T05: Import/Export
         from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
         self.stack.addWidget(ImportExportView(self.ctx, self.controller))
-        # Placeholders
+        # T06: Campaign + Secrets/Clues + Factions/Fronts
+        from hosts.DesktopHostPySide.controllers.campaign_controller import CampaignController
+        from hosts.DesktopHostPySide.views.campaign_view import CampaignView, SecretsCluesView, FactionFrontView
+        self.ccamp = CampaignController(project_service=self.controller.ps)
+        self.stack.addWidget(CampaignView(self.ctx, self.ccamp))
+        self.stack.addWidget(SecretsCluesView(self.ctx, self.controller))
+        self.stack.addWidget(FactionFrontView(self.ctx, self.controller))
+        # T09: Writing
+        from hosts.DesktopHostPySide.controllers.writing_controller import WritingController
+        from hosts.DesktopHostPySide.views.writing_view import WritingView
+        self.wc = WritingController(project_service=self.controller.ps)
+        self.stack.addWidget(WritingView(self.ctx, self.wc))
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 
@@ -91,6 +104,12 @@ class MainWindow(QMainWindow):
             if c: self.project_label.setText(f"Proyecto: {c['name']}")
             self.schema_label.setText(f"Schema v{c.get('schema','?')}")
         except Exception: pass
+
+    def _provider_info(self):
+        import os
+        p = os.environ.get("NARRATIVE_AI_PROVIDER", "simulated")
+        m = os.environ.get("NARRATIVE_AI_MODEL", "")
+        return f"{p}/{m}" if p != "simulated" and m else p
 
     def log_msg(self, msg): self.log.append(msg)
 

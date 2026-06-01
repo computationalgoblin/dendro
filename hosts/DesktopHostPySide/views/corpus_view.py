@@ -35,6 +35,7 @@ class CorpusView(QWidget):
         # Detail
         self.detail = QLabel("Selecciona una entidad"); layout.addWidget(self.detail)
         btn_edit = QPushButton("Editar seleccionada"); btn_edit.clicked.connect(self._edit); layout.addWidget(btn_edit)
+        btn_archive = QPushButton("Archivar/Restaurar"); btn_archive.clicked.connect(self._archive); layout.addWidget(btn_archive)
 
     def refresh(self):
         entities = self.ec.list_all()
@@ -50,6 +51,13 @@ class CorpusView(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(e.entity_type.value)); self.table.setItem(i, 3, QTableWidgetItem(e.canon_state.value))
             self.table.setItem(i, 4, QTableWidgetItem(e.visibility_state.value))
         self.table.resizeColumnsToContents()
+
+    def _archive(self):
+        if not self.ctx.selected_entity_id: return
+        from PySide6.QtWidgets import QMessageBox
+        r = self.ec.update(self.ctx.selected_entity_id, {"canon_state": "archivado"})
+        if isinstance(r, Error): self.ctx.log("error", r.error)
+        else: self.ctx.log("info", f"Archived {self.ctx.selected_entity_id[:8]}"); self.refresh()
 
     def _show_detail(self):
         row = self.table.currentRow()
