@@ -20,6 +20,7 @@ from packages.domain.writing_models import WritingUnit
 from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
 from packages.domain.secrets_models import Secreto, Pista
 from packages.domain.faction_models import Faction, Front
+from packages.domain.session_models import Session
 from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
@@ -156,6 +157,9 @@ class Project:
     factions: list[Faction] = field(default_factory=list)
     fronts: list[Front] = field(default_factory=list)
 
+    # ── Sessions (Bloque 23) ──
+    sessions: list[Session] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -254,6 +258,8 @@ class Project:
             # ── Factions and fronts (Bloque 22) ──
             "factions": [f.to_dict() for f in self.factions],
             "fronts": [f.to_dict() for f in self.fronts],
+            # ── Sessions (Bloque 23) ──
+            "sessions": [s.to_dict() for s in self.sessions],
         }
 
     @classmethod
@@ -447,6 +453,11 @@ class Project:
             **(
                 {"fronts": [Front.from_dict(f) for f in data.get("fronts", []) if isinstance(f, dict)]}
                 if "fronts" in data else {}
+            ),
+            # ── Sessions (Bloque 23) ──
+            **(
+                {"sessions": [Session.from_dict(s) for s in data.get("sessions", []) if isinstance(s, dict)]}
+                if "sessions" in data else {}
             ),
         )
 

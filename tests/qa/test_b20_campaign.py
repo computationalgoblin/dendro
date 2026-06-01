@@ -203,7 +203,7 @@ class TestCampaignOverview:
 
 class TestCampaignSchema:
     def test_schema_is_v14(self):
-        assert CURRENT_SCHEMA_VERSION == 16
+        assert CURRENT_SCHEMA_VERSION == 17
 
     def test_migration_roundtrip(self, tmp_path):
         """v13 data migrates to v14 with empty campaign collections."""

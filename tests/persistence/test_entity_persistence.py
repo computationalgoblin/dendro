@@ -37,10 +37,10 @@ from packages.persistence.store import ProjectStore
 
 class TestSchemaV3:
     def test_current_is_3(self):
-        assert CURRENT_SCHEMA_VERSION == 16
+        assert CURRENT_SCHEMA_VERSION == 17
 
     def test_max_supported_is_9(self):
-        assert MAX_SUPPORTED_VERSION == 16
+        assert MAX_SUPPORTED_VERSION == 17
 
     def test_migration_v2_to_v3_ensures_entities_is_list(self):
         data = {"id": "x", "name": "test", "entities": None}
@@ -262,4 +262,4 @@ class TestEntityPersistence:
 
         store.save(p, path)
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 16
+        assert raw.get("schema_version") == 17

@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects (B21-T02: upgraded to v15)
-CURRENT_SCHEMA_VERSION: int = 16
+CURRENT_SCHEMA_VERSION: int = 17
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 16
+MAX_SUPPORTED_VERSION: int = 17
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +617,13 @@ def _apply_migration_v15_to_v16(data):
     migrated['schema_version'] = 16
     return migrated
 
+def _apply_migration_v16_to_v17(data):
+    """v16 → v17: adds sessions collection (B23-T02)."""
+    migrated = dict(data)
+    migrated.setdefault('sessions', [])
+    migrated['schema_version'] = 17
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -659,6 +666,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "campaigns", "player_character_profiles", "campaign_clocks",
         "secrets", "clues",
         "factions", "fronts",
+        "sessions",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
@@ -964,4 +972,33 @@ def _validate_fronts(fronts):
                     st = stage.get("threshold")
                     if st is not None and isinstance(st, (int, float)) and not isinstance(st, bool) and st < 0:
                         errors.append(f"fronts[{i}].stages[{si}] threshold must be >= 0")
+    return errors
+
+def _validate_sessions(sessions):
+    errors = []
+    if not isinstance(sessions, list): return [f"sessions must be a list, got {type(sessions).__name__}"]
+    valid_states = {"preparacion", "activa", "completada", "archivada"}
+    valid_scene_types = {"prevista", "opcional", "improvisada"}
+    ids = set()
+    for i, s in enumerate(sessions):
+        if not isinstance(s, dict): errors.append(f"sessions[{i}] is not a dict"); continue
+        sid = s.get("id")
+        if sid is None: errors.append(f"sessions[{i}] missing id"); continue
+        if sid in ids: errors.append(f"sessions[{i}] duplicate id '{sid}'"); continue
+        ids.add(sid)
+        if not isinstance(s.get("campaign_id"), str) or not s["campaign_id"].strip(): errors.append(f"sessions[{i}] campaign_id is required")
+        if not isinstance(s.get("name"), str) or not s["name"].strip(): errors.append(f"sessions[{i}] name is required")
+        st = s.get("state")
+        if st is not None and isinstance(st, str) and st not in valid_states: errors.append(f"sessions[{i}] invalid state '{st}'")
+        for list_name in ("clock_ids", "available_clue_ids", "revealable_secret_ids", "relevant_faction_ids", "planned_location_ids", "planned_npc_ids", "active_conflict_ids"):
+            if list_name in s and not isinstance(s[list_name], list): errors.append(f"sessions[{i}] {list_name} must be a list")
+        for scene_list in ("planned_scenes", "optional_scenes"):
+            scenes = s.get(scene_list)
+            if isinstance(scenes, list):
+                for si, sc in enumerate(scenes):
+                    if isinstance(sc, dict):
+                        if not isinstance(sc.get("name"), str) or not sc["name"].strip(): errors.append(f"sessions[{i}].{scene_list}[{si}] name is required")
+                        if not isinstance(sc.get("id"), str) or not sc["id"].strip(): errors.append(f"sessions[{i}].{scene_list}[{si}] id is required")
+                        sct = sc.get("scene_type")
+                        if sct is not None and isinstance(sct, str) and sct not in valid_scene_types: errors.append(f"sessions[{i}].{scene_list}[{si}] invalid scene_type '{sct}'")
     return errors

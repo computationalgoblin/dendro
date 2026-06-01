@@ -26,6 +26,7 @@ from packages.persistence.schema import (
     _apply_migration_v13_to_v14,
     _apply_migration_v14_to_v15,
     _apply_migration_v15_to_v16,
+    _apply_migration_v16_to_v17,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -45,6 +46,7 @@ from packages.persistence.schema import (
     _validate_clues,
     _validate_factions,
     _validate_fronts,
+    _validate_sessions,
     validate_schema_version,
 )
 
@@ -322,6 +324,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 15:
         data = _apply_migration_v15_to_v16(data)
+        data["schema_version"] = 16
+        version = 16
+
+    if version == 16:
+        data = _apply_migration_v16_to_v17(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -361,6 +368,10 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     front_errors = _validate_fronts(data.get("fronts", []))
     if front_errors:
         return Error(" ".join(front_errors))
+
+    session_errors = _validate_sessions(data.get("sessions", []))
+    if session_errors:
+        return Error(" ".join(session_errors))
 
     return Ok(data)
 
