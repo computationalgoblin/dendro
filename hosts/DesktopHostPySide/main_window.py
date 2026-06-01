@@ -59,8 +59,15 @@ class MainWindow(QMainWindow):
         self.cc = CandidateController(project_service=self.controller.ps)
         self.stack.addWidget(CandidateView(self.ctx, self.cc))
         self.stack.addWidget(IssuesHistoryView(self.ctx, self.controller))
+        # T04: Sessions + Live/Post
+        from hosts.DesktopHostPySide.controllers.session_controller import SessionController
+        from hosts.DesktopHostPySide.views.session_view import SessionView
+        from hosts.DesktopHostPySide.views.live_post_view import LivePostView
+        self.sc = SessionController(project_service=self.controller.ps)
+        self.stack.addWidget(SessionView(self.ctx, self.sc))
+        self.stack.addWidget(LivePostView(self.ctx, self.sc))
         # Placeholders for remaining views
-        for _ in range(4): self.stack.addWidget(QLabel("Coming soon..."))
+        for _ in range(2): self.stack.addWidget(QLabel("Coming soon..."))
         splitter.addWidget(self.stack)
         layout.addWidget(splitter)
 
