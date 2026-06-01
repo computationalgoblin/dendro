@@ -19,7 +19,7 @@ class OpenAICompatibleProvider(AIProvider):
         if not self.base_url or not self.api_key:
             return self._fallback(operation, "Missing API key or base URL", t0)
         try:
-            url = f"{self.base_url.rstrip('/')}/v1/chat/completions"
+            url = f"{self.base_url.rstrip('/')}/chat/completions"
             prompt = self._build_prompt(operation)
             data = json.dumps({"model": self.model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 500, "temperature": 0.7}).encode()
             req = urllib.request.Request(url, data=data, headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST")
