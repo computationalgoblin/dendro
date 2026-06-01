@@ -39,6 +39,9 @@ class HistoryService:
         self._proj().touch()
         return entry
 
+    def get_for_entity(self, entity_id):
+        return self.get_history(entity_id=entity_id)
+
     def get_history(self, entity_id=None, object_type=None, object_id=None, session_id=None, event_type=None, limit=50):
         entries = []
         for e in reversed(self._ensure_history()):
