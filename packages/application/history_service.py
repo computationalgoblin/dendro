@@ -32,7 +32,25 @@ class HistoryService:
             proj.history_entries = []
         return proj.history_entries
 
-    def record(self, event_type, description, affected_entity_ids=None, metadata=None):
+    def make_entry(self, event_type, affected_entity_id=None, new_value=None, old_value=None,
+                    change_origin=None, operation=None, description=None, metadata=None):
+        """Create a history entry dict for EntityService backward compatibility."""
+        return {"event_type": event_type.value if hasattr(event_type, 'value') else str(event_type),
+                "affected_entity_ids": [affected_entity_id] if affected_entity_id else [],
+                "description": description or f"{operation or ''}: {new_value or ''}",
+                "metadata": metadata or {"origin": change_origin, "operation": operation}}
+
+    def record(self, event_type=None, description=None, affected_entity_ids=None, metadata=None):
+        """Record a history entry. Accepts either flat params or a dict from make_entry."""
+        if isinstance(event_type, dict):
+            entry = event_type
+            event_type = entry.get("event_type", "unknown")
+            description = entry.get("description", "")
+            affected_entity_ids = entry.get("affected_entity_ids", [])
+            metadata = entry.get("metadata", {})
+        return self._record_flat(event_type, description, affected_entity_ids, metadata)
+
+    def _record_flat(self, event_type, description, affected_entity_ids, metadata):
         entry = HistoryEntry(timestamp=_ts(), event_type=event_type, description=description,
                             affected_entity_ids=affected_entity_ids or [], metadata=metadata or {})
         self._ensure_history().append(entry)
@@ -41,6 +59,14 @@ class HistoryService:
 
     def get_for_entity(self, entity_id):
         return self.get_history(entity_id=entity_id)
+
+    def make_entry(self, *args, **kwargs):
+        """Alias for EntityService backward compatibility."""
+        event_type = kwargs.get("event_type") or (args[0] if args else "unknown")
+        description = kwargs.get("description") or (args[1] if len(args) > 1 else "")
+        affected = kwargs.get("affected_entity_ids", [])
+        metadata = kwargs.get("metadata", {})
+        return self.record(event_type, description, affected_entity_ids=affected, metadata=metadata)
 
     def get_history(self, entity_id=None, object_type=None, object_id=None, session_id=None, event_type=None, limit=50):
         entries = []
