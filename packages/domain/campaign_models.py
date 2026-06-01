@@ -340,6 +340,15 @@ class CampaignClock:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+    # ── B22 extension: front/threat fields ──
+    faction_id: str | None = None
+    front_id: str | None = None
+    advance_conditions: list[str] = field(default_factory=list)
+    retreat_conditions: list[str] = field(default_factory=list)
+    stage_consequences: list[str] = field(default_factory=list)
+    session_ids: list[str] = field(default_factory=list)
+    affected_entity_ids: list[str] = field(default_factory=list)
+    history: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.id:
@@ -363,6 +372,15 @@ class CampaignClock:
             "metadata": self.metadata,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            # B22 extension
+            "faction_id": self.faction_id,
+            "front_id": self.front_id,
+            "advance_conditions": self.advance_conditions,
+            "retreat_conditions": self.retreat_conditions,
+            "stage_consequences": self.stage_consequences,
+            "session_ids": self.session_ids,
+            "affected_entity_ids": self.affected_entity_ids,
+            "history": self.history,
         }
 
     @classmethod
@@ -381,4 +399,13 @@ class CampaignClock:
             metadata=_parse_dict(data.get("metadata")),
             created_at=_parse_str(data.get("created_at"), ""),
             updated_at=_parse_str(data.get("updated_at"), ""),
+            # B22 extension
+            faction_id=data.get("faction_id") if isinstance(data.get("faction_id"), str) and data.get("faction_id") else None,
+            front_id=data.get("front_id") if isinstance(data.get("front_id"), str) and data.get("front_id") else None,
+            advance_conditions=_parse_list(data.get("advance_conditions")),
+            retreat_conditions=_parse_list(data.get("retreat_conditions")),
+            stage_consequences=_parse_list(data.get("stage_consequences")),
+            session_ids=_parse_list(data.get("session_ids")),
+            affected_entity_ids=_parse_list(data.get("affected_entity_ids")),
+            history=_parse_list(data.get("history")),
         )
