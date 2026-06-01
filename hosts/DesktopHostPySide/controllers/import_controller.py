@@ -1,15 +1,13 @@
 """ImportController — wraps ImportService for UI (B27.2-T01)."""
 from packages.application.import_service import ImportService
 from packages.application.project_service import ProjectService
-from packages.persistence.store import ProjectStore
 
 class ImportController:
-    def __init__(self, project_service=None, store=None):
-        store = store or ProjectStore()
-        self.ps = project_service or ProjectService(store=store)
+    def __init__(self, project_service=None):
+        self.ps = project_service
         self.svc = ImportService(project_service=self.ps)
 
-    def import_document(self, path): self.svc.import_document(path)
+    def import_document(self, path):
         return self.svc.import_document(path)
 
     def list_baskets(self):

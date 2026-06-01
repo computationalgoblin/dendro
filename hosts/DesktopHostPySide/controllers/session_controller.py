@@ -3,11 +3,9 @@ from packages.application.session_service import SessionService
 from packages.application.live_mode_service import LiveModeService
 from packages.application.post_session_service import PostSessionService
 from packages.application.project_service import ProjectService
-from packages.persistence.store import ProjectStore
 
 class SessionController:
-    def __init__(self, project_service=None, store=None):
-        store = store or ProjectStore()
+    def __init__(self, project_service=None):
         self.ps = project_service or ProjectService(store=store)
         self.ss = SessionService(project_service=self.ps)
         self.ls = LiveModeService(project_service=self.ps, session_service=self.ss)

@@ -1,11 +1,9 @@
 """RelationController — wraps RelationService for UI (B27.1-T02)."""
 from packages.application.relation_service import RelationService
 from packages.application.project_service import ProjectService
-from packages.persistence.store import ProjectStore
 
 class RelationController:
-    def __init__(self, project_service=None, store=None):
-        store = store or ProjectStore()
+    def __init__(self, project_service=None):
         self.ps = project_service or ProjectService(store=store)
         self.rs = RelationService(self.ps)
 

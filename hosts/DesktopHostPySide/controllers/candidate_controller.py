@@ -1,11 +1,9 @@
 """CandidateController — wraps CandidateService (B27.1-T03)."""
 from packages.application.candidate_service import CandidateService
 from packages.application.project_service import ProjectService
-from packages.persistence.store import ProjectStore
 
 class CandidateController:
-    def __init__(self, project_service=None, store=None):
-        store = store or ProjectStore()
+    def __init__(self, project_service=None):
         self.ps = project_service or ProjectService(store=store)
         self.cs = CandidateService(project_service=self.ps)
 
