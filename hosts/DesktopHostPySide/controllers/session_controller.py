@@ -25,6 +25,12 @@ class SessionController:
     def create(self, data):
         return self.ss.create_session(data)
 
+    def get(self, sid):
+        return self.ss.get_session(sid)
+
+    def update(self, sid, data):
+        return self.ss.update_session(sid, data)
+
     def add_scene(self, sid, data, target="planned"):
         return self.ss.add_scene(sid, data, target=target)
 

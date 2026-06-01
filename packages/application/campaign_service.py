@@ -67,14 +67,22 @@ class CampaignService:
         campaign = result.value
 
         changed = []
-        for field in ("name", "description", "world_entity_id", "game_system", "tone", "genre"):
+        editable_fields = {
+            "name", "description", "world_entity_id", "game_system", "tone", "genre",
+            "state", "players", "player_character_entity_ids", "session_entity_ids",
+            "session_ids", "active_plot_entity_ids", "active_faction_entity_ids",
+            "active_location_entity_ids", "secret_entity_ids", "clue_entity_ids",
+            "clock_ids", "private_notes", "public_summaries", "visibility_rules",
+            "history", "metadata",
+        }
+        merged = campaign.to_dict()
+        for field in editable_fields:
             if field in data:
-                setattr(campaign, field, data[field])
+                merged[field] = data[field]
                 changed.append(field)
-        if "state" in data:
-            from packages.domain.campaign_models import _parse_enum
-            campaign.state = _parse_enum(CampaignState, data["state"], campaign.state)
-            changed.append("state")
+        updated = Campaign.from_dict(merged)
+        for field in editable_fields:
+            setattr(campaign, field, getattr(updated, field))
 
         if changed:
             self._add_history(campaign, f"updated campaign fields: {', '.join(changed)}")

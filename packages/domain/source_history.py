@@ -213,6 +213,15 @@ class HistoryEntry:
     reversible: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def description(self) -> str:
+        """Backward-compatible alias used by HistoryService callers."""
+        return self.reason
+
+    @description.setter
+    def description(self, value: str) -> None:
+        self.reason = value
+
     def touch(self) -> None:
         pass
 

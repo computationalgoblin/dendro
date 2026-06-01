@@ -237,7 +237,7 @@ class TestRegression:
         data = ps.active_project.to_dict()
         ps.save(path)
         raw = json.loads(path.read_text())
-        assert raw["schema_version"] == 14
+        assert raw["schema_version"] == CURRENT_SCHEMA_VERSION
 
     def test_writing_units_unaffected(self, svc):
         ps, es, cs, path = svc

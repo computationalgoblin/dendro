@@ -19,7 +19,27 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
+from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
 from packages.domain.result import Error
+from packages.domain.session_models import SceneType, SessionState
+
+
+def _enum_values(enum_cls):
+    return [item.value for item in enum_cls]
+
+
+def _split_csv(value):
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
+def _as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
 
 
 class SessionView(QWidget):
@@ -45,16 +65,23 @@ class SessionView(QWidget):
             act.addWidget(btn)
         layout.addLayout(act)
 
+        body = QHBoxLayout()
+        left = QVBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "State", "Campaign"])
         self.table.itemSelectionChanged.connect(self._select)
-        layout.addWidget(self.table)
+        left.addWidget(self.table)
 
         self.scene_table = QTableWidget()
         self.scene_table.setColumnCount(4)
         self.scene_table.setHorizontalHeaderLabels(["Scene ID", "Name", "Type", "Order"])
-        layout.addWidget(self.scene_table)
+        self.scene_table.itemSelectionChanged.connect(self._bind_selected_scene)
+        left.addWidget(self.scene_table)
+        body.addLayout(left, 3)
+        self.inspector = InspectorPanel("Session Inspector")
+        body.addWidget(self.inspector, 1)
+        layout.addLayout(body)
 
     def _selected_session_id(self):
         row = self.table.currentRow()
@@ -68,6 +95,152 @@ class SessionView(QWidget):
         if session_id:
             self.ctx.selected_session_id = session_id
             self._show_scenes()
+            self._bind_session(session_id)
+
+    def _session_fields(self, session):
+        return [
+            {"name": "name", "label": "Nombre", "value": session.name},
+            {"name": "campaign_id", "label": "Campaign ID", "value": session.campaign_id},
+            {"name": "entity_id", "label": "Entity ID", "value": session.entity_id or ""},
+            {"name": "session_number", "label": "Número", "value": session.session_number},
+            {"name": "real_date", "label": "Fecha real", "value": session.real_date},
+            {"name": "internal_date", "label": "Fecha interna", "value": session.internal_date},
+            {"name": "context_summary", "label": "Contexto", "kind": "multiline", "value": session.context_summary},
+            {"name": "gm_objectives", "label": "Objetivos GM JSON", "kind": "json", "value": session.gm_objectives},
+            {"name": "player_known_objectives", "label": "Objetivos jugadores JSON", "kind": "json", "value": session.player_known_objectives},
+            {"name": "planned_scenes", "label": "Escenas previstas JSON", "kind": "json", "value": [s.to_dict() for s in session.planned_scenes]},
+            {"name": "optional_scenes", "label": "Escenas opcionales JSON", "kind": "json", "value": [s.to_dict() for s in session.optional_scenes]},
+            {"name": "planned_location_ids", "label": "Location IDs (csv)", "value": session.planned_location_ids},
+            {"name": "planned_npc_ids", "label": "NPC IDs (csv)", "value": session.planned_npc_ids},
+            {"name": "relevant_faction_ids", "label": "Faction IDs (csv)", "value": session.relevant_faction_ids},
+            {"name": "active_conflict_ids", "label": "Conflict IDs (csv)", "value": session.active_conflict_ids},
+            {"name": "available_clue_ids", "label": "Clue IDs (csv)", "value": session.available_clue_ids},
+            {"name": "revealable_secret_ids", "label": "Secret IDs (csv)", "value": session.revealable_secret_ids},
+            {"name": "clock_ids", "label": "Clock IDs (csv)", "value": session.clock_ids},
+            {"name": "rumors", "label": "Rumores JSON", "kind": "json", "value": session.rumors},
+            {"name": "encounters", "label": "Encuentros JSON", "kind": "json", "value": session.encounters},
+            {"name": "rewards", "label": "Recompensas JSON", "kind": "json", "value": session.rewards},
+            {"name": "complications", "label": "Complicaciones JSON", "kind": "json", "value": session.complications},
+            {"name": "expected_consequences", "label": "Consecuencias JSON", "kind": "json", "value": session.expected_consequences},
+            {"name": "open_questions", "label": "Preguntas JSON", "kind": "json", "value": session.open_questions},
+            {"name": "improvised_material", "label": "Improvisado JSON", "kind": "json", "value": session.improvised_material},
+            {"name": "private_notes", "label": "Notas privadas JSON", "kind": "json", "value": session.private_notes},
+            {"name": "player_safe_summary", "label": "Resumen jugadores", "kind": "multiline", "value": session.player_safe_summary},
+            {"name": "continuity_checklist", "label": "Continuidad JSON", "kind": "json", "value": session.continuity_checklist},
+            {"name": "ia_suggestion_candidate_ids", "label": "IA candidate IDs (csv)", "value": session.ia_suggestion_candidate_ids},
+            {"name": "state", "label": "Estado", "kind": "combo", "value": session.state, "options": _enum_values(SessionState)},
+            {"name": "post_session_summary", "label": "Post-session", "kind": "multiline", "value": session.post_session_summary},
+            {"name": "source_id", "label": "Source ID", "value": session.source_id or ""},
+            {"name": "metadata", "label": "Metadata JSON", "kind": "json", "value": session.metadata},
+        ]
+
+    def _session_payload(self, values):
+        payload = dict(values)
+        for key in ("planned_location_ids", "planned_npc_ids", "relevant_faction_ids", "active_conflict_ids", "available_clue_ids", "revealable_secret_ids", "clock_ids", "ia_suggestion_candidate_ids"):
+            payload[key] = _split_csv(payload.get(key))
+        for key in ("gm_objectives", "player_known_objectives", "planned_scenes", "optional_scenes", "rumors", "encounters", "rewards", "complications", "expected_consequences", "open_questions", "improvised_material", "private_notes", "continuity_checklist"):
+            payload[key] = _as_list(payload.get(key))
+        payload["metadata"] = _as_dict(payload.get("metadata"))
+        try:
+            payload["session_number"] = int(payload.get("session_number") or 0)
+        except (TypeError, ValueError):
+            payload["session_number"] = 0
+        return payload
+
+    def _bind_session(self, session_id):
+        result = self.sc.get(session_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        session = result.value
+        self.inspector.bind(
+            title=f"Session · {session.name}",
+            object_id=session.id,
+            fields=self._session_fields(session),
+            on_save=lambda values, sid=session.id: self._save_session(sid, values),
+            on_revert=lambda sid=session.id: self._bind_session(sid),
+        )
+
+    def _save_session(self, session_id, values):
+        result = self.sc.update(session_id, self._session_payload(values))
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        self.ctx.log("info", f"Session updated: {session_id}")
+        self.refresh()
+        self._select_session_row(session_id)
+
+    def _select_session_row(self, session_id):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == session_id:
+                self.table.selectRow(row)
+                return
+
+    def _selected_scene_ref(self):
+        row = self.scene_table.currentRow()
+        if row < 0:
+            return None
+        item = self.scene_table.item(row, 0)
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _scene_fields(self, scene):
+        return [
+            {"name": "name", "label": "Nombre", "value": scene.name},
+            {"name": "description", "label": "Descripción", "kind": "multiline", "value": scene.description},
+            {"name": "scene_type", "label": "Tipo", "kind": "combo", "value": scene.scene_type, "options": _enum_values(SceneType)},
+            {"name": "order", "label": "Orden", "value": scene.order},
+            {"name": "location_id", "label": "Location ID", "value": scene.location_id or ""},
+            {"name": "npc_ids", "label": "NPC IDs (csv)", "value": scene.npc_ids},
+            {"name": "notes", "label": "Notas", "kind": "multiline", "value": scene.notes},
+        ]
+
+    def _bind_selected_scene(self):
+        ref = self._selected_scene_ref()
+        session = self._session_obj()
+        if ref is None or session is None:
+            return
+        scene_id, target = ref
+        scenes = session.optional_scenes if target == "optional" else session.planned_scenes
+        for scene in scenes:
+            if scene.id == scene_id:
+                self.inspector.bind(
+                    title=f"Scene · {scene.name}",
+                    object_id=scene.id,
+                    fields=self._scene_fields(scene),
+                    on_save=lambda values, sid=session.id, scid=scene.id, tgt=target: self._save_scene(sid, scid, tgt, values),
+                    on_revert=self._bind_selected_scene,
+                )
+                return
+
+    def _save_scene(self, session_id, scene_id, target, values):
+        result = self.sc.get(session_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        session = result.value
+        planned = [scene.to_dict() for scene in session.planned_scenes]
+        optional = [scene.to_dict() for scene in session.optional_scenes]
+        scenes = optional if target == "optional" else planned
+        for idx, scene in enumerate(scenes):
+            if scene.get("id") == scene_id:
+                payload = dict(values)
+                payload["id"] = scene_id
+                payload["npc_ids"] = _split_csv(payload.get("npc_ids"))
+                try:
+                    payload["order"] = int(payload.get("order") or 0)
+                except (TypeError, ValueError):
+                    payload["order"] = 0
+                scenes[idx] = payload
+                update = self.sc.update(session_id, {"planned_scenes": planned, "optional_scenes": optional})
+                if isinstance(update, Error):
+                    self.ctx.log("error", update.error)
+                    raise RuntimeError(update.error)
+                self.ctx.log("info", f"Scene updated: {scene_id}")
+                self.refresh()
+                self._select_session_row(session_id)
+                return
+        raise RuntimeError(f"Scene '{scene_id}' not found")
 
     def refresh(self):
         sessions = self.sc.list_all()
@@ -124,12 +297,12 @@ class SessionView(QWidget):
             return
         scenes = [(scene, "planned") for scene in session.planned_scenes] + [(scene, "optional") for scene in session.optional_scenes]
         self.scene_table.setRowCount(len(scenes))
-        for i, (scene, scene_type) in enumerate(scenes):
+        for i, (scene, scene_target) in enumerate(scenes):
             id_item = QTableWidgetItem(scene.id[:12])
-            id_item.setData(Qt.UserRole, (scene.id, scene_type))
+            id_item.setData(Qt.UserRole, (scene.id, scene_target))
             self.scene_table.setItem(i, 0, id_item)
             self.scene_table.setItem(i, 1, QTableWidgetItem(scene.name))
-            self.scene_table.setItem(i, 2, QTableWidgetItem(scene_type))
+            self.scene_table.setItem(i, 2, QTableWidgetItem(scene.scene_type.value if hasattr(scene.scene_type, "value") else str(scene.scene_type)))
             self.scene_table.setItem(i, 3, QTableWidgetItem(str(scene.order)))
         self.scene_table.resizeColumnsToContents()
 
@@ -138,9 +311,41 @@ class SessionView(QWidget):
         if not sid:
             self.ctx.log("error", "Selecciona una sesión")
             return
-        name, ok = QInputDialog.getText(self, "Añadir escena", "Nombre:")
-        if ok and name:
-            result = self.sc.add_scene(sid, {"name": name})
+        dlg = QDialog(self)
+        form = QFormLayout(dlg)
+        name = QLineEdit()
+        target = QComboBox(); target.addItem("planned", "planned"); target.addItem("optional", "optional")
+        scene_type = QComboBox(); scene_type.addItems(_enum_values(SceneType))
+        order = QLineEdit("0")
+        location_id = QLineEdit()
+        npc_ids = QLineEdit()
+        description = QLineEdit()
+        notes = QLineEdit()
+        form.addRow("Nombre:", name)
+        form.addRow("Lista:", target)
+        form.addRow("Tipo:", scene_type)
+        form.addRow("Orden:", order)
+        form.addRow("Location ID:", location_id)
+        form.addRow("NPC IDs (csv):", npc_ids)
+        form.addRow("Descripción:", description)
+        form.addRow("Notas:", notes)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec():
+            try:
+                order_value = int(order.text() or "0")
+            except ValueError:
+                order_value = 0
+            result = self.sc.add_scene(sid, {
+                "name": name.text(),
+                "description": description.text(),
+                "scene_type": scene_type.currentText(),
+                "order": order_value,
+                "location_id": location_id.text() or None,
+                "npc_ids": _split_csv(npc_ids.text()),
+                "notes": notes.text(),
+            }, target=target.currentData())
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:

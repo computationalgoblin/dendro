@@ -21,7 +21,28 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
+from packages.domain.campaign_models import CampaignState
+from packages.domain.faction_models import FactionState, FrontState, FrontType
 from packages.domain.result import Error
+
+
+def _enum_values(enum_cls):
+    return [item.value for item in enum_cls]
+
+
+def _split_csv(value):
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
+def _as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def _as_dict(value):
+    return value if isinstance(value, dict) else {}
 
 
 class CampaignView(QWidget):
@@ -45,11 +66,15 @@ class CampaignView(QWidget):
             btn.clicked.connect(handler)
             act.addWidget(btn)
         l.addLayout(act)
+        body = QHBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Name", "System", "State"])
         self.table.itemSelectionChanged.connect(self._select)
-        l.addWidget(self.table)
+        body.addWidget(self.table, 3)
+        self.inspector = InspectorPanel("Campaign Inspector")
+        body.addWidget(self.inspector, 1)
+        l.addLayout(body)
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         self.output.setMaximumHeight(160)
@@ -66,22 +91,105 @@ class CampaignView(QWidget):
         campaign_id = self._selected_campaign_id()
         if campaign_id:
             self.ctx.selected_campaign_id = campaign_id
+            self._bind_campaign(campaign_id)
+
+    def _campaign_fields(self, campaign):
+        return [
+            {"name": "name", "label": "Nombre", "value": campaign.name},
+            {"name": "description", "label": "Descripción", "kind": "multiline", "value": campaign.description},
+            {"name": "world_entity_id", "label": "World entity ID", "value": campaign.world_entity_id or ""},
+            {"name": "game_system", "label": "Sistema", "value": campaign.game_system},
+            {"name": "tone", "label": "Tono", "value": campaign.tone},
+            {"name": "genre", "label": "Género", "value": campaign.genre},
+            {"name": "state", "label": "Estado", "kind": "combo", "value": campaign.state, "options": _enum_values(CampaignState)},
+            {"name": "players", "label": "Players JSON", "kind": "json", "value": [p.to_dict() if hasattr(p, "to_dict") else p for p in campaign.players]},
+            {"name": "player_character_entity_ids", "label": "PC entity IDs (csv)", "value": campaign.player_character_entity_ids},
+            {"name": "session_entity_ids", "label": "Session entity IDs (csv)", "value": campaign.session_entity_ids},
+            {"name": "session_ids", "label": "Session IDs (csv)", "value": campaign.session_ids},
+            {"name": "active_plot_entity_ids", "label": "Plot IDs (csv)", "value": campaign.active_plot_entity_ids},
+            {"name": "active_faction_entity_ids", "label": "Faction entity IDs (csv)", "value": campaign.active_faction_entity_ids},
+            {"name": "active_location_entity_ids", "label": "Location IDs (csv)", "value": campaign.active_location_entity_ids},
+            {"name": "secret_entity_ids", "label": "Secret IDs (csv)", "value": campaign.secret_entity_ids},
+            {"name": "clue_entity_ids", "label": "Clue IDs (csv)", "value": campaign.clue_entity_ids},
+            {"name": "clock_ids", "label": "Clock IDs (csv)", "value": campaign.clock_ids},
+            {"name": "private_notes", "label": "Private notes JSON", "kind": "json", "value": campaign.private_notes},
+            {"name": "public_summaries", "label": "Public summaries JSON", "kind": "json", "value": campaign.public_summaries},
+            {"name": "visibility_rules", "label": "Visibility rules JSON", "kind": "json", "value": campaign.visibility_rules},
+            {"name": "history", "label": "History JSON", "kind": "json", "value": campaign.history},
+            {"name": "metadata", "label": "Metadata JSON", "kind": "json", "value": campaign.metadata},
+        ]
+
+    def _campaign_payload(self, values):
+        payload = dict(values)
+        for key in ("player_character_entity_ids", "session_entity_ids", "session_ids", "active_plot_entity_ids", "active_faction_entity_ids", "active_location_entity_ids", "secret_entity_ids", "clue_entity_ids", "clock_ids"):
+            payload[key] = _split_csv(payload.get(key))
+        for key in ("players", "private_notes", "public_summaries", "history"):
+            payload[key] = _as_list(payload.get(key))
+        payload["visibility_rules"] = _as_dict(payload.get("visibility_rules"))
+        payload["metadata"] = _as_dict(payload.get("metadata"))
+        return payload
+
+    def _bind_campaign(self, campaign_id):
+        result = self.ctrl.get(campaign_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        campaign = result.value
+        self.inspector.bind(
+            title=f"Campaign · {campaign.name}",
+            object_id=campaign.id,
+            fields=self._campaign_fields(campaign),
+            on_save=lambda values, cid=campaign.id: self._save_campaign(cid, values),
+            on_revert=lambda cid=campaign.id: self._bind_campaign(cid),
+        )
+
+    def _save_campaign(self, campaign_id, values):
+        result = self.ctrl.update(campaign_id, self._campaign_payload(values))
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        self.ctx.log("info", f"Campaign updated: {campaign_id}")
+        self.refresh()
+        self._select_campaign_row(campaign_id)
+
+    def _select_campaign_row(self, campaign_id):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == campaign_id:
+                self.table.selectRow(row)
+                return
 
     def _create(self):
         dlg = QDialog(self)
         form = QFormLayout(dlg)
         name = QLineEdit()
         system = QLineEdit()
+        tone = QLineEdit()
+        genre = QLineEdit()
+        world_entity_id = QLineEdit()
+        state = QComboBox(); state.addItems(_enum_values(CampaignState))
         description = QLineEdit()
         form.addRow("Nombre:", name)
         form.addRow("Sistema:", system)
+        form.addRow("Tono:", tone)
+        form.addRow("Género:", genre)
+        form.addRow("World entity ID:", world_entity_id)
+        form.addRow("Estado:", state)
         form.addRow("Descripción:", description)
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         form.addRow(btns)
         if dlg.exec():
-            result = self.ctrl.create({"name": name.text(), "game_system": system.text(), "description": description.text()})
+            result = self.ctrl.create({
+                "name": name.text(),
+                "game_system": system.text(),
+                "tone": tone.text(),
+                "genre": genre.text(),
+                "world_entity_id": world_entity_id.text() or None,
+                "state": state.currentText(),
+                "description": description.text(),
+            })
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
@@ -289,6 +397,7 @@ class FactionFrontView(QWidget):
         for label, handler in [
             ("Crear extensión de facción", self._create_faction_extension),
             ("Crear front", self._create_front),
+            ("Añadir stage", self._add_stage),
             ("Ally", self._ally),
             ("Enemy", self._enemy),
             ("Detect issues", self._detect_issues),
@@ -299,16 +408,27 @@ class FactionFrontView(QWidget):
             act.addWidget(btn)
         l.addLayout(act)
 
+        body = QHBoxLayout()
         tabs = QTabWidget()
         self.faction_table = QTableWidget()
         self.faction_table.setColumnCount(5)
         self.faction_table.setHorizontalHeaderLabels(["ID", "Name", "State", "Entity", "Allies/Enemies"])
+        self.faction_table.itemSelectionChanged.connect(self._bind_selected_faction)
         tabs.addTab(self.faction_table, "Factions")
         self.front_table = QTableWidget()
         self.front_table.setColumnCount(4)
         self.front_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "State"])
+        self.front_table.itemSelectionChanged.connect(self._bind_selected_front)
         tabs.addTab(self.front_table, "Fronts")
-        l.addWidget(tabs)
+        self.stage_table = QTableWidget()
+        self.stage_table.setColumnCount(5)
+        self.stage_table.setHorizontalHeaderLabels(["Front ID", "Stage", "Name", "Threshold", "Terminal"])
+        self.stage_table.itemSelectionChanged.connect(self._bind_selected_stage)
+        tabs.addTab(self.stage_table, "Stages")
+        body.addWidget(tabs, 3)
+        self.inspector = InspectorPanel("Faction/Front Inspector")
+        body.addWidget(self.inspector, 1)
+        l.addLayout(body)
 
     def _selected_faction_id(self):
         row = self.faction_table.currentRow()
@@ -316,6 +436,167 @@ class FactionFrontView(QWidget):
             return None
         item = self.faction_table.item(row, 0)
         return item.data(Qt.UserRole) if item is not None else None
+
+    def _selected_front_id(self):
+        row = self.front_table.currentRow()
+        if row < 0:
+            return None
+        item = self.front_table.item(row, 0)
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _selected_stage_ref(self):
+        row = self.stage_table.currentRow()
+        if row < 0:
+            return None
+        item = self.stage_table.item(row, 0)
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _bind_selected_faction(self):
+        faction_id = self._selected_faction_id()
+        if not faction_id:
+            return
+        result = self.ctrl.get_faction(faction_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        faction = result.value
+        fields = [
+            {"name": "name", "label": "Nombre", "value": faction.name},
+            {"name": "state", "label": "Estado", "kind": "combo", "value": faction.state, "options": _enum_values(FactionState)},
+            {"name": "ideology", "label": "Ideología", "kind": "multiline", "value": faction.ideology},
+            {"name": "methods", "label": "Métodos", "kind": "multiline", "value": faction.methods},
+            {"name": "objectives", "label": "Objetivos JSON", "kind": "json", "value": faction.objectives},
+            {"name": "resources", "label": "Recursos JSON", "kind": "json", "value": faction.resources},
+            {"name": "relation_with_pcs", "label": "Relación PCs", "kind": "multiline", "value": faction.relation_with_pcs},
+            {"name": "relation_with_factions", "label": "Relación facciones", "kind": "multiline", "value": faction.relation_with_factions},
+            {"name": "possible_reactions", "label": "Reacciones JSON", "kind": "json", "value": faction.possible_reactions},
+            {"name": "inaction_consequences", "label": "Inacción JSON", "kind": "json", "value": faction.inaction_consequences},
+            {"name": "intervention_consequences", "label": "Intervención JSON", "kind": "json", "value": faction.intervention_consequences},
+        ]
+        self.inspector.bind(
+            title=f"Faction · {faction.name}",
+            object_id=faction.id,
+            fields=fields,
+            on_save=lambda values, fid=faction.id: self._save_faction(fid, values),
+            on_revert=self._bind_selected_faction,
+        )
+
+    def _save_faction(self, faction_id, values):
+        payload = dict(values)
+        for key in ("objectives", "resources", "possible_reactions", "inaction_consequences", "intervention_consequences"):
+            payload[key] = _as_list(payload.get(key))
+        result = self.ctrl.update_faction(faction_id, payload)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        self.ctx.log("info", f"Faction updated: {faction_id}")
+        self.refresh()
+
+    def _bind_selected_front(self):
+        front_id = self._selected_front_id()
+        if not front_id:
+            return
+        result = self.ctrl.get_front(front_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        front = result.value
+        fields = [
+            {"name": "name", "label": "Nombre", "value": front.name},
+            {"name": "front_type", "label": "Tipo", "kind": "combo", "value": front.front_type, "options": _enum_values(FrontType)},
+            {"name": "description", "label": "Descripción", "kind": "multiline", "value": front.description},
+            {"name": "faction_id", "label": "Faction ID", "value": front.faction_id or ""},
+            {"name": "state", "label": "Estado", "kind": "combo", "value": front.state, "options": _enum_values(FrontState)},
+            {"name": "current_stage_index", "label": "Stage actual", "value": front.current_stage_index},
+            {"name": "entity_id", "label": "Entity ID", "value": front.entity_id or ""},
+            {"name": "clock_id", "label": "Clock ID", "value": front.clock_id or ""},
+            {"name": "advance_conditions", "label": "Avance JSON", "kind": "json", "value": front.advance_conditions},
+            {"name": "retreat_conditions", "label": "Retroceso JSON", "kind": "json", "value": front.retreat_conditions},
+            {"name": "session_ids", "label": "Session IDs (csv)", "value": front.session_ids},
+            {"name": "affected_entity_ids", "label": "Affected IDs (csv)", "value": front.affected_entity_ids},
+            {"name": "visibility_state", "label": "Visibilidad", "value": front.visibility_state},
+            {"name": "stages", "label": "Stages JSON", "kind": "json", "value": [s.to_dict() for s in front.stages]},
+            {"name": "metadata", "label": "Metadata JSON", "kind": "json", "value": front.metadata},
+        ]
+        self.inspector.bind(
+            title=f"Front · {front.name}",
+            object_id=front.id,
+            fields=fields,
+            on_save=lambda values, fid=front.id: self._save_front(fid, values),
+            on_revert=self._bind_selected_front,
+        )
+
+    def _save_front(self, front_id, values):
+        payload = dict(values)
+        for key in ("advance_conditions", "retreat_conditions", "stages"):
+            payload[key] = _as_list(payload.get(key))
+        for key in ("session_ids", "affected_entity_ids"):
+            payload[key] = _split_csv(payload.get(key))
+        payload["metadata"] = _as_dict(payload.get("metadata"))
+        try:
+            payload["current_stage_index"] = int(payload.get("current_stage_index") or 0)
+        except (TypeError, ValueError):
+            payload["current_stage_index"] = 0
+        result = self.ctrl.update_front(front_id, payload)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        self.ctx.log("info", f"Front updated: {front_id}")
+        self.refresh()
+
+    def _bind_selected_stage(self):
+        ref = self._selected_stage_ref()
+        if ref is None:
+            return
+        front_id, stage_index = ref
+        result = self.ctrl.get_front(front_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        front = result.value
+        if stage_index < 0 or stage_index >= len(front.stages):
+            self.ctx.log("error", "Stage fuera de rango")
+            return
+        stage = front.stages[stage_index]
+        fields = [
+            {"name": "name", "label": "Nombre", "value": stage.name},
+            {"name": "threshold", "label": "Threshold", "value": stage.threshold},
+            {"name": "description", "label": "Descripción", "kind": "multiline", "value": stage.description},
+            {"name": "consequences", "label": "Consecuencias JSON", "kind": "json", "value": stage.consequences},
+            {"name": "conditions", "label": "Condiciones JSON", "kind": "json", "value": stage.conditions},
+            {"name": "is_terminal", "label": "Terminal", "kind": "checkbox", "value": stage.is_terminal},
+        ]
+        self.inspector.bind(
+            title=f"Stage · {stage.name}",
+            object_id=f"{front.id}#{stage_index}",
+            fields=fields,
+            on_save=lambda values, fid=front.id, idx=stage_index: self._save_stage(fid, idx, values),
+            on_revert=self._bind_selected_stage,
+        )
+
+    def _save_stage(self, front_id, stage_index, values):
+        result = self.ctrl.get_front(front_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            raise RuntimeError(result.error)
+        front = result.value
+        stages = [stage.to_dict() for stage in front.stages]
+        if stage_index < 0 or stage_index >= len(stages):
+            raise RuntimeError("Stage fuera de rango")
+        payload = dict(values)
+        payload["consequences"] = _as_list(payload.get("consequences"))
+        payload["conditions"] = _as_list(payload.get("conditions"))
+        try:
+            payload["threshold"] = int(payload.get("threshold") or 0)
+        except (TypeError, ValueError):
+            payload["threshold"] = 0
+        stages[stage_index] = payload
+        update = self.ctrl.update_front(front_id, {"stages": stages})
+        if isinstance(update, Error):
+            self.ctx.log("error", update.error)
+            raise RuntimeError(update.error)
+        self.ctx.log("info", f"Stage updated: {front_id}#{stage_index}")
+        self.refresh()
 
     def _pending_entities(self):
         return self.ctrl.pending_faction_entities()
@@ -338,13 +619,61 @@ class FactionFrontView(QWidget):
                 self.refresh()
 
     def _create_front(self):
-        name, ok = QInputDialog.getText(self, "Crear front", "Nombre:")
-        if ok and name:
-            result = self.ctrl.create_front({"name": name})
+        dlg = QDialog(self)
+        form = QFormLayout(dlg)
+        name = QLineEdit()
+        front_type = QComboBox(); front_type.addItems(_enum_values(FrontType))
+        state = QComboBox(); state.addItems(_enum_values(FrontState))
+        description = QLineEdit()
+        faction_id = QLineEdit()
+        form.addRow("Nombre:", name)
+        form.addRow("Tipo:", front_type)
+        form.addRow("Estado:", state)
+        form.addRow("Descripción:", description)
+        form.addRow("Faction ID:", faction_id)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec():
+            result = self.ctrl.create_front({
+                "name": name.text(),
+                "front_type": front_type.currentText(),
+                "state": state.currentText(),
+                "description": description.text(),
+                "faction_id": faction_id.text() or None,
+            })
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
                 self.ctx.log("info", f"Front created: {result.value.id}")
+                self.refresh()
+
+    def _add_stage(self):
+        front_id = self._selected_front_id()
+        if not front_id:
+            self.ctx.log("error", "Selecciona un front")
+            return
+        dlg = QDialog(self)
+        form = QFormLayout(dlg)
+        name = QLineEdit()
+        threshold = QLineEdit("0")
+        description = QLineEdit()
+        form.addRow("Nombre:", name)
+        form.addRow("Threshold:", threshold)
+        form.addRow("Descripción:", description)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec():
+            try:
+                threshold_value = int(threshold.text() or "0")
+            except ValueError:
+                threshold_value = 0
+            result = self.ctrl.add_stage(front_id, {"name": name.text(), "threshold": threshold_value, "description": description.text()})
+            if isinstance(result, Error):
+                self.ctx.log("error", result.error)
+            else:
+                self.ctx.log("info", f"Stage added to front: {front_id}")
                 self.refresh()
 
     def _ally(self):
@@ -400,9 +729,25 @@ class FactionFrontView(QWidget):
 
         fronts = self.ctrl.list_fronts()
         self.front_table.setRowCount(len(fronts))
+        stage_rows = []
         for i, front in enumerate(fronts):
-            self.front_table.setItem(i, 0, QTableWidgetItem(front.id[:12]))
+            id_item = QTableWidgetItem(front.id[:12])
+            id_item.setData(Qt.UserRole, front.id)
+            self.front_table.setItem(i, 0, id_item)
             self.front_table.setItem(i, 1, QTableWidgetItem(front.name))
             self.front_table.setItem(i, 2, QTableWidgetItem(front.front_type.value if hasattr(front.front_type, "value") else str(front.front_type)))
             self.front_table.setItem(i, 3, QTableWidgetItem(front.state.value if hasattr(front.state, "value") else str(front.state)))
+            for idx, stage in enumerate(front.stages):
+                stage_rows.append((front, idx, stage))
         self.front_table.resizeColumnsToContents()
+
+        self.stage_table.setRowCount(len(stage_rows))
+        for i, (front, idx, stage) in enumerate(stage_rows):
+            front_item = QTableWidgetItem(front.id[:12])
+            front_item.setData(Qt.UserRole, (front.id, idx))
+            self.stage_table.setItem(i, 0, front_item)
+            self.stage_table.setItem(i, 1, QTableWidgetItem(str(idx)))
+            self.stage_table.setItem(i, 2, QTableWidgetItem(stage.name))
+            self.stage_table.setItem(i, 3, QTableWidgetItem(str(stage.threshold)))
+            self.stage_table.setItem(i, 4, QTableWidgetItem("yes" if stage.is_terminal else "no"))
+        self.stage_table.resizeColumnsToContents()

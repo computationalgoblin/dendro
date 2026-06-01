@@ -19,11 +19,26 @@ class FactionController:
     def list_fronts(self, state=None):
         return self.svc.list_fronts(state=state)
 
+    def get_faction(self, faction_id):
+        return self.svc.get_faction(faction_id)
+
+    def update_faction(self, faction_id, data):
+        return self.svc.update_faction(faction_id, data)
+
+    def get_front(self, front_id):
+        return self.svc.get_front(front_id)
+
+    def update_front(self, front_id, data):
+        return self.svc.update_front(front_id, data)
+
     def create_faction(self, data):
         return self.svc.create_faction(data)
 
     def create_front(self, data):
         return self.svc.create_front(data)
+
+    def add_stage(self, front_id, data):
+        return self.svc.add_stage(front_id, data)
 
     def add_ally(self, faction_id, other_id):
         return self.svc.add_ally(faction_id, other_id)

@@ -131,14 +131,27 @@ class EntityService:
         if found is None:
             return Error(f"Entity with id '{entity_id}' not found")
 
-        # Merge allowed fields
-        for key in ("name", "brief_description", "extended_description",
-                     "domain", "origin", "private_notes", "exportable_notes"):
+        # Merge all editable NarrativeEntity fields used by the B27.4 inspector.
+        # Use the domain parser instead of ad-hoc UI parsing so enums/lists stay
+        # aligned with the core model and invalid values fall back safely.
+        editable_fields = {
+            "name", "aliases", "entity_type", "brief_description",
+            "extended_description", "canon_state", "visibility_state",
+            "certainty_level", "tags", "domain", "layers", "origin",
+            "domain_ids", "layer_ids", "private_notes", "exportable_notes",
+            "narrative_importance", "development_level", "custom_metadata",
+            "custom_type_id", "custom_fields",
+        }
+        merged = found.to_dict()
+        for key in editable_fields:
             if key in data:
-                setattr(found, key, data[key])
-
-        if "custom_metadata" in data and isinstance(data["custom_metadata"], dict):
-            found.custom_metadata.update(data["custom_metadata"])
+                merged[key] = data[key]
+        updated = NarrativeEntity.from_dict(merged)
+        issues = validate_entity(updated)
+        if issues:
+            return Error(f"Entity validation failed: {'; '.join(issues)}")
+        for key in editable_fields:
+            setattr(found, key, getattr(updated, key))
 
         found.touch()
         proj.value.touch()

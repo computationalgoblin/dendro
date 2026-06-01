@@ -233,11 +233,19 @@ class FactionService:
         r = self.get_front(fid)
         if isinstance(r, Error): return r
         f = r.value
-        for field in ("name", "description"):
-            if field in data: setattr(f, field, data[field])
-        if "state" in data:
-            from packages.domain.faction_models import _parse_enum
-            f.state = _parse_enum(FrontState, data["state"], f.state)
+        editable_fields = {
+            "name", "front_type", "description", "faction_id", "state", "stages",
+            "current_stage_index", "entity_id", "clock_id", "advance_conditions",
+            "retreat_conditions", "session_ids", "affected_entity_ids",
+            "visibility_state", "history", "metadata",
+        }
+        merged = f.to_dict()
+        for field in editable_fields:
+            if field in data:
+                merged[field] = data[field]
+        updated = Front.from_dict(merged)
+        for field in editable_fields:
+            setattr(f, field, getattr(updated, field))
         f.updated_at = _ts(); self._active_project().touch()
         return Ok(f)
 

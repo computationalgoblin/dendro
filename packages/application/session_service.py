@@ -65,13 +65,25 @@ class SessionService:
         r = self.get_session(sid)
         if isinstance(r, Error): return r
         s = r.value
-        for f in ("name", "context_summary", "player_safe_summary", "real_date", "internal_date"): 
-            if f in data: setattr(s, f, data[f])
-        for lf in ("gm_objectives", "player_known_objectives", "private_notes", "continuity_checklist", "rumors", "encounters", "rewards", "complications", "expected_consequences", "open_questions", "improvised_material"):
-            if lf in data and isinstance(data[lf], list): setattr(s, lf, data[lf])
-        if "state" in data:
-            from packages.domain.session_models import _parse_enum
-            s.state = _parse_enum(SessionState, data["state"], s.state)
+        editable_fields = {
+            "name", "campaign_id", "entity_id", "session_number", "real_date",
+            "internal_date", "context_summary", "gm_objectives",
+            "player_known_objectives", "planned_scenes", "optional_scenes",
+            "planned_location_ids", "planned_npc_ids", "relevant_faction_ids",
+            "active_conflict_ids", "available_clue_ids", "revealable_secret_ids",
+            "clock_ids", "rumors", "encounters", "rewards", "complications",
+            "expected_consequences", "open_questions", "improvised_material",
+            "private_notes", "player_safe_summary", "continuity_checklist",
+            "ia_suggestion_candidate_ids", "state", "post_session_summary",
+            "source_id", "metadata",
+        }
+        merged = s.to_dict()
+        for f in editable_fields:
+            if f in data:
+                merged[f] = data[f]
+        updated = Session.from_dict(merged)
+        for f in editable_fields:
+            setattr(s, f, getattr(updated, f))
         s.updated_at = _ts(); self._active_project().touch()
         return Ok(s)
 
