@@ -8,9 +8,23 @@ class CampaignView(QWidget):
     def __init__(self, ctx: AppContext, ctrl): super().__init__(); self.ctx = ctx; self.ctrl = ctrl; self._build()
     def _build(self):
         l = QVBoxLayout(self)
-        btn = QPushButton("Refrescar"); btn.clicked.connect(self.refresh); l.addWidget(btn)
+        act = QHBoxLayout()
+        btn_create = QPushButton("Crear campaña"); btn_create.clicked.connect(self._create); act.addWidget(btn_create)
+        btn = QPushButton("Refrescar"); btn.clicked.connect(self.refresh); act.addWidget(btn)
+        l.addLayout(act)
         self.table = QTableWidget(); self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID","Name","System","State"]); l.addWidget(self.table)
+    def _create(self):
+        dlg = QDialog(self); form = QFormLayout(dlg)
+        name = QLineEdit(); system = QLineEdit()
+        form.addRow("Nombre:", name); form.addRow("Sistema:", system)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel); btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec():
+            r = self.ctrl.create({"name": name.text(), "game_system": system.text()})
+            self.ctx.log("info" if not isinstance(r, Error) else "error", f"Campaign {name.text()} created" if not isinstance(r, Error) else r.error)
+            self.refresh()
+
     def refresh(self):
         camps = self.ctrl.list_all()
         self.table.setRowCount(len(camps))
@@ -49,9 +63,29 @@ class FactionFrontView(QWidget):
         l = QVBoxLayout(self); tabs = QTabWidget()
         self.faction_table = QTableWidget(); self.faction_table.setColumnCount(4)
         self.faction_table.setHorizontalHeaderLabels(["ID","Name","State","Allies/Enemies"]); tabs.addTab(self.faction_table, "Factions")
+        btn_fext = QPushButton("Crear extensión de facción"); btn_fext.clicked.connect(self._create_faction_extension); l.addWidget(btn_fext)
         self.front_table = QTableWidget(); self.front_table.setColumnCount(4)
         self.front_table.setHorizontalHeaderLabels(["ID","Name","Type","State"]); tabs.addTab(self.front_table, "Fronts")
         l.addWidget(tabs); btn = QPushButton("Refrescar"); btn.clicked.connect(self.refresh); l.addWidget(btn)
+    def _create_faction_extension(self):
+        """For FACCION entities without Faction extension, create one."""
+        p = self.ctrl._proj
+        entities = getattr(p, 'entities', [])
+        faction_entities = [e for e in entities if e.entity_type.value == 'faccion']
+        existing_eids = {f.entity_id for f in getattr(p, 'factions', [])}
+        pending = [e for e in faction_entities if e.id not in existing_eids]
+        if not pending: self.ctx.log("info", "No pending FACCION entities"); return
+        from PySide6.QtWidgets import QInputDialog
+        ids = [f"{e.name} ({e.id[:8]})" for e in pending]
+        item, ok = QInputDialog.getItem(self, "Create Faction Extension", "Entity:", ids, 0, False)
+        if ok and item:
+            eid = item.split("(")[1].rstrip(")")
+            from packages.application.faction_service import FactionService
+            fs = FactionService(project_service=self.ctrl.ps)
+            r = fs.create_faction(entity_id=eid, name=item.split(" (")[0])
+            self.ctx.log("info" if not isinstance(r, Error) else "error", f"Faction extension created" if not isinstance(r, Error) else r.error)
+            self.refresh()
+
     def refresh(self):
         p = self.ctrl._proj
         factions = getattr(p, 'factions', [])

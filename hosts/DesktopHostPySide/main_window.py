@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         self.schema_label = QLabel(""); top.addWidget(self.schema_label)
         top.addWidget(QLabel("| AI:"))
         self.ai_label = QLabel(self._provider_info()); top.addWidget(self.ai_label)
+        btn_ai_test = QPushButton("Test AI"); btn_ai_test.clicked.connect(self._test_ai); top.addWidget(btn_ai_test)
         btn_save = QPushButton("Guardar"); btn_save.clicked.connect(self._save); top.addWidget(btn_save)
         layout.addLayout(top)
 
@@ -104,6 +105,14 @@ class MainWindow(QMainWindow):
             if c: self.project_label.setText(f"Proyecto: {c['name']}")
             self.schema_label.setText(f"Schema v{c.get('schema','?')}")
         except Exception: pass
+
+    def _test_ai(self):
+        from packages.infrastructure.openai_compatible_provider import get_provider
+        from packages.domain.ai_models import AIOperation, AIMode
+        provider = get_provider()
+        op = AIOperation(mode=AIMode.GENERATE_ENTITY, context="Test prompt", max_candidates=1)
+        resp = provider.invoke(op)
+        self.log_msg(f"AI test: {resp.provider} — {resp.raw_text[:80]}")
 
     def _provider_info(self):
         import os

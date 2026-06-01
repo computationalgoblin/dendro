@@ -43,12 +43,15 @@ class SessionView(QWidget):
 
     def _create(self):
         dlg = QDialog(self); form = QFormLayout(dlg)
-        name = QLineEdit(); camp = QLineEdit()
-        form.addRow("Nombre:", name); form.addRow("Campaign ID:", camp)
+        name = QLineEdit()
+        camp_cb = QComboBox(); camp_cb.addItem("(none)", "")
+        for c in getattr(self.sc.ps.active_project, 'campaigns', []):
+            camp_cb.addItem(f"{c.name} ({c.id[:8]})", c.id)
+        form.addRow("Nombre:", name); form.addRow("Campaña:", camp_cb)
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel); btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
         form.addRow(btns)
         if dlg.exec():
-            r = self.sc.create({"name": name.text(), "campaign_id": camp.text()})
+            r = self.sc.create({"name": name.text(), "campaign_id": camp_cb.currentData()})
             self.ctx.log("info" if not isinstance(r, Error) else "error", f"Session created" if not isinstance(r, Error) else r.error)
             self.ctx.selected_session_id = r.value.id if not isinstance(r, Error) else None
             self.refresh()

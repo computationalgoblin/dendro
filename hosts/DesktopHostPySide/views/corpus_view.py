@@ -30,7 +30,7 @@ class CorpusView(QWidget):
         # Table
         self.table = QTableWidget(); self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["ID","Name","Type","Canon","Visibility"])
-        self.table.itemSelectionChanged.connect(self._show_detail); layout.addWidget(self.table)
+        self.table.itemSelectionChanged.connect(self._show_detail); self.table.doubleClicked.connect(self._detail_dialog); layout.addWidget(self.table)
 
         # Detail
         self.detail = QLabel("Selecciona una entidad"); layout.addWidget(self.detail)
@@ -58,6 +58,31 @@ class CorpusView(QWidget):
         r = self.ec.update(self.ctx.selected_entity_id, {"canon_state": "archivado"})
         if isinstance(r, Error): self.ctx.log("error", r.error)
         else: self.ctx.log("info", f"Archived {self.ctx.selected_entity_id[:8]}"); self.refresh()
+
+    def _detail_dialog(self, index):
+        """Full entity detail card on double-click."""
+        row = index.row()
+        eid = self.table.item(row, 0).text()
+        r = self.ec.get(eid)
+        if isinstance(r, Error): return
+        e = r.value
+        from PySide6.QtWidgets import QDialog, QTextEdit, QVBoxLayout, QDialogButtonBox
+        dlg = QDialog(self); dlg.setWindowTitle(f"Entity: {e.name}"); dlg.setMinimumSize(500, 400)
+        lo = QVBoxLayout(dlg)
+        txt = QTextEdit(); txt.setReadOnly(True)
+        lines = [
+            f"ID: {e.id}", f"Name: {e.name}", f"Type: {e.entity_type.value}",
+            f"Canon: {e.canon_state.value} | Visibility: {e.visibility_state.value}",
+            f"Desc: {e.brief_description or '—'}",
+            f"Extended: {getattr(e, 'extended_description', None) or '—'}",
+            f"Domain: {getattr(e, 'domain_id', None) or '—'} | Layer: {getattr(e, 'layer_id', None) or '—'}",
+            f"Tags: {', '.join(getattr(e, 'tags', []))} | Custom: {getattr(e, 'custom_fields', {})}",
+            f"Sources: {len(getattr(e, 'source_ids', []))} | Metadata: {getattr(e, 'custom_metadata', {})}",
+        ]
+        txt.setPlainText('\n'.join(lines))
+        lo.addWidget(txt)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok); btns.accepted.connect(dlg.accept); lo.addWidget(btns)
+        dlg.exec()
 
     def _show_detail(self):
         row = self.table.currentRow()

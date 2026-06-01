@@ -17,7 +17,21 @@ class IssuesHistoryView(QWidget):
         self.history_table.setHorizontalHeaderLabels(["Timestamp","Event","Description"])
         tabs.addTab(self.history_table, "History")
         layout.addWidget(tabs)
-        btn = QPushButton("Refrescar"); btn.clicked.connect(self.refresh); layout.addWidget(btn)
+        act = QHBoxLayout()
+        btn_validate = QPushButton("Run Validators"); btn_validate.clicked.connect(self._run_validators); act.addWidget(btn_validate)
+        btn = QPushButton("Refrescar"); btn.clicked.connect(self.refresh); act.addWidget(btn)
+        layout.addLayout(act)
+
+    def _run_validators(self):
+        from packages.application.issue_service import IssueService, run_validators
+        p = self.controller._proj
+        if p is None: return
+        try:
+            svc = IssueService(project_service=self.controller.ps)
+            r = svc.run_validation()
+            self.ctx.log("info", f"Validators complete: {r}")
+            self.refresh()
+        except Exception as e: self.ctx.log("error", f"Validators failed: {e}")
 
     def refresh(self):
         p = self.controller._proj
