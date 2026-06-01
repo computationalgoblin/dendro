@@ -110,15 +110,25 @@ class MainWindow(QMainWindow):
         from packages.infrastructure.openai_compatible_provider import get_provider
         from packages.domain.ai_models import AIOperation, AIMode
         provider = get_provider()
-        op = AIOperation(mode=AIMode.GENERATE_ENTITY, context="Test prompt", max_candidates=1)
+        op = AIOperation(mode=AIMode.GENERATE_ENTITY, context="Test prompt for AI provider check", max_candidates=1)
         resp = provider.invoke(op)
-        self.log_msg(f"AI test: {resp.provider} — {resp.raw_text[:80]}")
+        info = resp.provider
+        if getattr(resp, 'error', None):
+            self.log_msg(f"AI ERROR: {resp.error}")
+            return
+        self.log_msg(f"AI: {info} — {resp.raw_text[:100]}")
 
     def _provider_info(self):
         import os
-        p = os.environ.get("NARRATIVE_AI_PROVIDER", "simulated")
-        m = os.environ.get("NARRATIVE_AI_MODEL", "")
-        return f"{p}/{m}" if p != "simulated" and m else p
+        p = os.environ.get("NARRATIVE_AI_PROVIDER", "")
+        if p == "openai_compatible":
+            base = os.environ.get("NARRATIVE_AI_BASE_URL", "")
+            model = os.environ.get("NARRATIVE_AI_MODEL", "")
+            if os.environ.get("NARRATIVE_AI_API_KEY"):
+                return f"openai_compatible/{model or '?'}"
+            else:
+                return "openai_compatible (missing KEY)"
+        return "simulated"
 
     def log_msg(self, msg): self.log.append(msg)
 

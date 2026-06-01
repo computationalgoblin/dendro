@@ -50,8 +50,9 @@ class OpenAICompatibleProvider(AIProvider):
     def _fallback(self, operation, reason, t0):
         from packages.infrastructure.ai_provider import SimulatedAIProvider
         resp = SimulatedAIProvider().invoke(operation)
-        resp.observations.append(f"[{self.provider_name}] {reason} — fallback to simulated")
+        resp.observations.append(f"[{self.provider_name}/{self.model}] {reason} — fallback to simulated")
         resp.provider = f"{self.provider_name}/{self.model} (fallback)"
+        resp.error = reason
         resp.latency_ms = (time.time()-t0)*1000
         return resp
 
