@@ -188,3 +188,52 @@ def handle_live(args, session):
         data = _ok(lsvc.prepare_post_session(args.session_id))
         if args.json: print(json.dumps(data, indent=2))
         else: print(f"Live session material prepared for post-session review.\nQuick notes: {len(data.get('quick_notes',[]))}\nDecisions: {len(data.get('player_decisions',[]))}\nEvents: {len(data.get('events',[]))}\nClues delivered: {len(data.get('clues_delivered',[]))}\nSecrets revealed: {len(data.get('secrets_revealed',[]))}\nProvisional entities: {len(data.get('provisional_entity_ids',[]))}\nRelations: {len(data.get('provisional_relation_ids',[]))}\nSession state remains activa.")
+
+# ── Post-session commands (B25-T03) ──
+
+def _get_post_svc(pp):
+    ps, es, rs, ss, hs, qs, ts = _bootstrap_services(pp)
+    from packages.application.post_session_service import PostSessionService
+    from packages.application.session_service import SessionService
+    svc = PostSessionService(project_service=ps, session_service=ss, history_service=hs, entity_service=es)
+    return ps, svc
+
+def register_post_commands(subparsers):
+    sp = subparsers.add_parser("session", help="Session management")
+    ss = sp.add_subparsers(dest="session_command")
+    p = ss.add_parser("close", help="Close session (post-session)"); p.add_argument("id"); p.add_argument("--json", action="store_true")
+    p = ss.add_parser("post-summary", help="Post-session summary"); p.add_argument("id"); p.add_argument("--player", action="store_true"); p.add_argument("--json", action="store_true")
+    p = ss.add_parser("post-candidates", help="Convert live to candidates"); p.add_argument("id"); p.add_argument("--json", action="store_true")
+    p = ss.add_parser("post-accept", help="Accept post-session candidate"); p.add_argument("candidate_id")
+    p = ss.add_parser("post-reject", help="Reject post-session candidate"); p.add_argument("candidate_id")
+    p = ss.add_parser("post-source", help="Create session source"); p.add_argument("id"); p.add_argument("--json", action="store_true")
+    p = ss.add_parser("post-seeds", help="Next session seeds"); p.add_argument("id"); p.add_argument("--json", action="store_true")
+
+def handle_post(args, session):
+    pp = require_project_path(args, session); ps, svc = _get_post_svc(pp)
+    def _ok(r):
+        from packages.domain.result import Error
+        if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
+        return r.value
+    def _save(): ps.save(Path(pp))
+    cmd = getattr(args, "session_command", None)
+    if cmd == "close":
+        s = _ok(svc.close_session(args.id)); _save()
+        print(json.dumps({"state": s.state.value, "post_session_summary": s.post_session_summary}) if args.json else f"Session '{s.name}' closed. State: {s.state.value}")
+    elif cmd == "post-summary":
+        s = _ok(svc.generate_player_summary(args.id) if args.player else svc.generate_private_summary(args.id))
+        print(json.dumps({"summary": s}) if args.json else s)
+    elif cmd == "post-candidates":
+        cands = _ok(svc.convert_live_to_candidates(args.id)); _save()
+        if args.json: print(json.dumps({"total": len(cands), "candidates": [{"title": c.title, "id": c.id, "type": c.candidate_type.value} for c in cands]}, indent=2))
+        else: print(f"Generated {len(cands)} candidate(s)"); [print(f"  {c.id}: {c.title}") for c in cands]
+    elif cmd == "post-accept":
+        svc.candidate_service.accept_candidate(args.candidate_id); _save(); print(f"Candidate '{args.candidate_id}' accepted")
+    elif cmd == "post-reject":
+        svc.candidate_service.reject_candidate(args.candidate_id); _save(); print(f"Candidate '{args.candidate_id}' rejected")
+    elif cmd == "post-source":
+        src = _ok(svc.create_session_source(args.id))
+        print(json.dumps({"id": src.id, "title": src.title}) if args.json else f"Source: {src.title} ({src.id})")
+    elif cmd == "post-seeds":
+        seeds = svc.generate_next_session_seeds(args.id)
+        print(json.dumps({"seeds": seeds}) if args.json else "\n".join(f"  - {s}" for s in seeds))
