@@ -61,6 +61,7 @@ from hosts.DesktopHostPySide.views.timeline_view import TimelineView
 from hosts.DesktopHostPySide.views.writing_view import WritingView
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryWorkspace, SessionWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
+from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 
 
 # Index constants for the stack widget
@@ -191,13 +192,24 @@ class MainWindow(QMainWindow):
         topbar = self._build_topbar()
         root.addWidget(topbar)
 
-        # Stack: home + 3 spaces
+        # Stack + Drawer horizontal layout
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
         self.stack = QStackedWidget()
         self.stack.addWidget(self.home_view)        # 0 - home
         self.stack.addWidget(self._wrap_space(self.creation_workspace, "Creación", _IDX_HOME))  # 1
         self.stack.addWidget(self._wrap_space(self.gallery_workspace, "Galería", _IDX_HOME))    # 2
         self.stack.addWidget(self._wrap_space(self.session_workspace, "Sesión", _IDX_HOME))     # 3
-        root.addWidget(self.stack, stretch=1)
+        body.addWidget(self.stack, stretch=1)
+
+        # Right drawer (global, shared via AppContext)
+        self.drawer = RightDrawer(self)
+        self.ctx.drawer = self.drawer
+        body.addWidget(self.drawer)
+
+        root.addLayout(body, stretch=1)
 
         # Diagnostic log (hidden by default)
         self.log = QTextEdit()

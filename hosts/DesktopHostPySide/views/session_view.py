@@ -4,9 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QInputDialog,
     QLineEdit,
@@ -19,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
 from packages.domain.result import Error
 from packages.domain.session_models import SceneType, SessionState
@@ -40,6 +38,80 @@ def _as_list(value):
 
 def _as_dict(value):
     return value if isinstance(value, dict) else {}
+
+
+class CreateSessionForm(DrawerForm):
+    """Drawer form for creating a new session."""
+
+    def __init__(self, ctx, sc, on_created, parent=None):
+        super().__init__(ctx, title="Crear sesión", parent=parent)
+        self.sc = sc
+        self._on_created = on_created
+
+        self.name_input = QLineEdit()
+        self.camp_cb = QComboBox()
+        for campaign in getattr(self.sc.ps.active_project, "campaigns", []):
+            self.camp_cb.addItem(f"{campaign.name} ({campaign.id[:8]})", campaign.id)
+        self.form_layout.addRow("Nombre:", self.name_input)
+        self.form_layout.addRow("Campaña:", self.camp_cb)
+
+    def _on_accept(self):
+        result = self.sc.create({"name": self.name_input.text(), "campaign_id": self.camp_cb.currentData()})
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.selected_session_id = result.value.id
+            self.ctx.log("info", f"Session created: {result.value.id}")
+            self._close_drawer()
+            self._on_created()
+
+
+class AddSceneForm(DrawerForm):
+    """Drawer form for adding a scene to a session."""
+
+    def __init__(self, ctx, sc, session_id, on_added, parent=None):
+        super().__init__(ctx, title="Añadir escena", parent=parent)
+        self.sc = sc
+        self._session_id = session_id
+        self._on_added = on_added
+
+        self.name = QLineEdit()
+        self.target = QComboBox(); self.target.addItem("planned", "planned"); self.target.addItem("optional", "optional")
+        self.scene_type = QComboBox(); self.scene_type.addItems(_enum_values(SceneType))
+        self.order = QLineEdit("0")
+        self.location_id = QLineEdit()
+        self.npc_ids = QLineEdit()
+        self.description = QLineEdit()
+        self.notes = QLineEdit()
+        self.form_layout.addRow("Nombre:", self.name)
+        self.form_layout.addRow("Lista:", self.target)
+        self.form_layout.addRow("Tipo:", self.scene_type)
+        self.form_layout.addRow("Orden:", self.order)
+        self.form_layout.addRow("Location ID:", self.location_id)
+        self.form_layout.addRow("NPC IDs (csv):", self.npc_ids)
+        self.form_layout.addRow("Descripción:", self.description)
+        self.form_layout.addRow("Notas:", self.notes)
+
+    def _on_accept(self):
+        try:
+            order_value = int(self.order.text() or "0")
+        except ValueError:
+            order_value = 0
+        result = self.sc.add_scene(self._session_id, {
+            "name": self.name.text(),
+            "description": self.description.text(),
+            "scene_type": self.scene_type.currentText(),
+            "order": order_value,
+            "location_id": self.location_id.text() or None,
+            "npc_ids": _split_csv(self.npc_ids.text()),
+            "notes": self.notes.text(),
+        }, target=self.target.currentData())
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Scene added: {result.value.id}")
+            self._close_drawer()
+            self._on_added()
 
 
 class SessionView(QWidget):
@@ -260,26 +332,12 @@ class SessionView(QWidget):
         if not getattr(self.sc.ps.active_project, "campaigns", []):
             self.ctx.log("error", "No hay campañas. Crea una campaña antes de una sesión.")
             return
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name_input = QLineEdit()
-        camp_cb = QComboBox()
-        for campaign in getattr(self.sc.ps.active_project, "campaigns", []):
-            camp_cb.addItem(f"{campaign.name} ({campaign.id[:8]})", campaign.id)
-        form.addRow("Nombre:", name_input)
-        form.addRow("Campaña:", camp_cb)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            result = self.sc.create({"name": name_input.text(), "campaign_id": camp_cb.currentData()})
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.selected_session_id = result.value.id
-                self.ctx.log("info", f"Session created: {result.value.id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = CreateSessionForm(self.ctx, self.sc, self.refresh)
+        drawer.set_content(form, title="Crear sesión")
+        drawer.open()
 
     def _session_obj(self):
         sid = self.ctx.selected_session_id
@@ -311,46 +369,12 @@ class SessionView(QWidget):
         if not sid:
             self.ctx.log("error", "Selecciona una sesión")
             return
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        target = QComboBox(); target.addItem("planned", "planned"); target.addItem("optional", "optional")
-        scene_type = QComboBox(); scene_type.addItems(_enum_values(SceneType))
-        order = QLineEdit("0")
-        location_id = QLineEdit()
-        npc_ids = QLineEdit()
-        description = QLineEdit()
-        notes = QLineEdit()
-        form.addRow("Nombre:", name)
-        form.addRow("Lista:", target)
-        form.addRow("Tipo:", scene_type)
-        form.addRow("Orden:", order)
-        form.addRow("Location ID:", location_id)
-        form.addRow("NPC IDs (csv):", npc_ids)
-        form.addRow("Descripción:", description)
-        form.addRow("Notas:", notes)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            try:
-                order_value = int(order.text() or "0")
-            except ValueError:
-                order_value = 0
-            result = self.sc.add_scene(sid, {
-                "name": name.text(),
-                "description": description.text(),
-                "scene_type": scene_type.currentText(),
-                "order": order_value,
-                "location_id": location_id.text() or None,
-                "npc_ids": _split_csv(npc_ids.text()),
-                "notes": notes.text(),
-            }, target=target.currentData())
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Scene added: {result.value.id}")
-                self._show_scenes()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = AddSceneForm(self.ctx, self.sc, sid, self._show_scenes)
+        drawer.set_content(form, title="Añadir escena")
+        drawer.open()
 
     def _remove_scene(self):
         sid = self.ctx.selected_session_id

@@ -4,8 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -20,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
 from packages.domain.entity import (
     CanonState,
@@ -165,10 +164,13 @@ class CorpusView(QWidget):
             return
         entity = result.value
         relations = self.ec.relations_for(entity.id)
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Entity: {entity.name}")
-        dlg.setMinimumSize(700, 500)
-        lo = QVBoxLayout(dlg)
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        w = QWidget()
+        lo = QVBoxLayout(w)
+        lo.setContentsMargins(18, 14, 18, 14)
+        lo.setSpacing(12)
         txt = QTextEdit()
         txt.setReadOnly(True)
         relation_lines = []
@@ -195,10 +197,11 @@ class CorpusView(QWidget):
         ]
         txt.setPlainText("\n".join(lines))
         lo.addWidget(txt)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok)
-        btns.accepted.connect(dlg.accept)
-        lo.addWidget(btns)
-        dlg.exec()
+        btn_close = QPushButton("Cerrar")
+        btn_close.clicked.connect(drawer.close)
+        lo.addWidget(btn_close)
+        drawer.set_content(w, title=f"Entity: {entity.name}")
+        drawer.open()
 
     def _entity_fields(self, entity):
         return [
@@ -291,25 +294,33 @@ class CorpusView(QWidget):
         )
 
     def _create(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Crear entidad")
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        type_cb = QComboBox()
-        type_cb.addItems(["personaje", "localizacion", "faccion", "objeto", "evento", "nota"])
-        form.addRow("Nombre:", name)
-        form.addRow("Tipo:", type_cb)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            result = self.ec.create({"name": name.text(), "entity_type": type_cb.currentText()})
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Created entity {result.value.id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+
+        class _CreateForm(DrawerForm):
+            def __init__(self, ctx, ec, refresh_cb):
+                super().__init__(ctx, title="Crear entidad")
+                self._ec = ec
+                self._refresh = refresh_cb
+                self.name_edit = QLineEdit()
+                self.type_cb = QComboBox()
+                self.type_cb.addItems(["personaje", "localizacion", "faccion", "objeto", "evento", "nota"])
+                self.form_layout.addRow("Nombre:", self.name_edit)
+                self.form_layout.addRow("Tipo:", self.type_cb)
+
+            def _on_accept(self):
+                result = self._ec.create({"name": self.name_edit.text(), "entity_type": self.type_cb.currentText()})
+                if isinstance(result, Error):
+                    self.ctx.log("error", result.error)
+                else:
+                    self.ctx.log("info", f"Created entity {result.value.id}")
+                    self._refresh()
+                self._close_drawer()
+
+        form = _CreateForm(self.ctx, self.ec, self.refresh)
+        drawer.set_content(form, title="Crear entidad")
+        drawer.open()
 
     def _edit(self):
         entity_id = self._selected_entity_id() or self.ctx.selected_entity_id
@@ -321,20 +332,33 @@ class CorpusView(QWidget):
             self.ctx.log("error", result.error)
             return
         entity = result.value
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name_ed = QLineEdit(entity.name)
-        brief_ed = QLineEdit(entity.brief_description or "")
-        form.addRow("Nombre:", name_ed)
-        form.addRow("Descripción:", brief_ed)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            update_result = self.ec.update(entity.id, {"name": name_ed.text(), "brief_description": brief_ed.text()})
-            if isinstance(update_result, Error):
-                self.ctx.log("error", update_result.error)
-            else:
-                self.ctx.log("info", f"Updated entity {entity.id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+
+        class _EditForm(DrawerForm):
+            def __init__(self, ctx, ec, entity_obj, refresh_cb):
+                super().__init__(ctx, title=f"Editar: {entity_obj.name}")
+                self._ec = ec
+                self._entity = entity_obj
+                self._refresh = refresh_cb
+                self.name_ed = QLineEdit(entity_obj.name)
+                self.brief_ed = QLineEdit(entity_obj.brief_description or "")
+                self.form_layout.addRow("Nombre:", self.name_ed)
+                self.form_layout.addRow("Descripción:", self.brief_ed)
+
+            def _on_accept(self):
+                update_result = self._ec.update(
+                    self._entity.id,
+                    {"name": self.name_ed.text(), "brief_description": self.brief_ed.text()},
+                )
+                if isinstance(update_result, Error):
+                    self.ctx.log("error", update_result.error)
+                else:
+                    self.ctx.log("info", f"Updated entity {self._entity.id}")
+                    self._refresh()
+                self._close_drawer()
+
+        form = _EditForm(self.ctx, self.ec, entity, self.refresh)
+        drawer.set_content(form, title=f"Editar: {entity.name}")
+        drawer.open()

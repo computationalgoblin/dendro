@@ -4,8 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -21,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
 from packages.domain.campaign_models import CampaignState
 from packages.domain.faction_models import FactionState, FrontState, FrontType
@@ -44,6 +43,141 @@ def _as_list(value):
 def _as_dict(value):
     return value if isinstance(value, dict) else {}
 
+
+# ---------------------------------------------------------------------------
+# DrawerForm subclasses for the RightDrawer pattern
+# ---------------------------------------------------------------------------
+
+class CreateCampaignForm(DrawerForm):
+    def __init__(self, ctx, ctrl, refresh_cb, parent=None):
+        super().__init__(ctx, title="Crear campaña", parent=parent)
+        self.ctrl = ctrl
+        self._refresh_cb = refresh_cb
+        self.name = QLineEdit()
+        self.system = QLineEdit()
+        self.tone = QLineEdit()
+        self.genre = QLineEdit()
+        self.world_entity_id = QLineEdit()
+        self.state = QComboBox()
+        self.state.addItems(_enum_values(CampaignState))
+        self.description = QLineEdit()
+        self.form_layout.addRow("Nombre:", self.name)
+        self.form_layout.addRow("Sistema:", self.system)
+        self.form_layout.addRow("Tono:", self.tone)
+        self.form_layout.addRow("Género:", self.genre)
+        self.form_layout.addRow("World entity ID:", self.world_entity_id)
+        self.form_layout.addRow("Estado:", self.state)
+        self.form_layout.addRow("Descripción:", self.description)
+
+    def _on_accept(self):
+        result = self.ctrl.create({
+            "name": self.name.text(),
+            "game_system": self.system.text(),
+            "tone": self.tone.text(),
+            "genre": self.genre.text(),
+            "world_entity_id": self.world_entity_id.text() or None,
+            "state": self.state.currentText(),
+            "description": self.description.text(),
+        })
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Campaign created: {result.value.id}")
+            self._close_drawer()
+            self._refresh_cb()
+
+
+class CreateClockForm(DrawerForm):
+    def __init__(self, ctx, ctrl, campaign_id, refresh_cb, parent=None):
+        super().__init__(ctx, title="Crear clock", parent=parent)
+        self.ctrl = ctrl
+        self._campaign_id = campaign_id
+        self._refresh_cb = refresh_cb
+        self.name = QLineEdit()
+        self.max_value = QLineEdit("4")
+        self.form_layout.addRow("Nombre:", self.name)
+        self.form_layout.addRow("Max value:", self.max_value)
+
+    def _on_accept(self):
+        result = self.ctrl.create_clock(
+            self._campaign_id,
+            {"name": self.name.text(), "max_value": int(self.max_value.text() or "4")},
+        )
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Clock created: {result.value.id}")
+            self._close_drawer()
+            self._refresh_cb()
+
+
+class CreateFrontForm(DrawerForm):
+    def __init__(self, ctx, ctrl, refresh_cb, parent=None):
+        super().__init__(ctx, title="Crear front", parent=parent)
+        self.ctrl = ctrl
+        self._refresh_cb = refresh_cb
+        self.name = QLineEdit()
+        self.front_type = QComboBox()
+        self.front_type.addItems(_enum_values(FrontType))
+        self.state = QComboBox()
+        self.state.addItems(_enum_values(FrontState))
+        self.description = QLineEdit()
+        self.faction_id = QLineEdit()
+        self.form_layout.addRow("Nombre:", self.name)
+        self.form_layout.addRow("Tipo:", self.front_type)
+        self.form_layout.addRow("Estado:", self.state)
+        self.form_layout.addRow("Descripción:", self.description)
+        self.form_layout.addRow("Faction ID:", self.faction_id)
+
+    def _on_accept(self):
+        result = self.ctrl.create_front({
+            "name": self.name.text(),
+            "front_type": self.front_type.currentText(),
+            "state": self.state.currentText(),
+            "description": self.description.text(),
+            "faction_id": self.faction_id.text() or None,
+        })
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Front created: {result.value.id}")
+            self._close_drawer()
+            self._refresh_cb()
+
+
+class AddStageForm(DrawerForm):
+    def __init__(self, ctx, ctrl, front_id, refresh_cb, parent=None):
+        super().__init__(ctx, title="Añadir stage", parent=parent)
+        self.ctrl = ctrl
+        self._front_id = front_id
+        self._refresh_cb = refresh_cb
+        self.name = QLineEdit()
+        self.threshold = QLineEdit("0")
+        self.description = QLineEdit()
+        self.form_layout.addRow("Nombre:", self.name)
+        self.form_layout.addRow("Threshold:", self.threshold)
+        self.form_layout.addRow("Descripción:", self.description)
+
+    def _on_accept(self):
+        try:
+            threshold_value = int(self.threshold.text() or "0")
+        except ValueError:
+            threshold_value = 0
+        result = self.ctrl.add_stage(
+            self._front_id,
+            {"name": self.name.text(), "threshold": threshold_value, "description": self.description.text()},
+        )
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", f"Stage added to front: {self._front_id}")
+            self._close_drawer()
+            self._refresh_cb()
+
+
+# ---------------------------------------------------------------------------
+# View classes
+# ---------------------------------------------------------------------------
 
 class CampaignView(QWidget):
     def __init__(self, ctx: AppContext, ctrl):
@@ -160,41 +294,12 @@ class CampaignView(QWidget):
                 return
 
     def _create(self):
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        system = QLineEdit()
-        tone = QLineEdit()
-        genre = QLineEdit()
-        world_entity_id = QLineEdit()
-        state = QComboBox(); state.addItems(_enum_values(CampaignState))
-        description = QLineEdit()
-        form.addRow("Nombre:", name)
-        form.addRow("Sistema:", system)
-        form.addRow("Tono:", tone)
-        form.addRow("Género:", genre)
-        form.addRow("World entity ID:", world_entity_id)
-        form.addRow("Estado:", state)
-        form.addRow("Descripción:", description)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            result = self.ctrl.create({
-                "name": name.text(),
-                "game_system": system.text(),
-                "tone": tone.text(),
-                "genre": genre.text(),
-                "world_entity_id": world_entity_id.text() or None,
-                "state": state.currentText(),
-                "description": description.text(),
-            })
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Campaign created: {result.value.id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = CreateCampaignForm(self.ctx, self.ctrl, self.refresh)
+        drawer.set_content(form, title="Crear campaña")
+        drawer.open()
 
     def _add_player(self):
         campaign_id = self._selected_campaign_id() or self.ctx.selected_campaign_id
@@ -215,23 +320,12 @@ class CampaignView(QWidget):
         if not campaign_id:
             self.ctx.log("error", "Selecciona una campaña")
             return
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        max_value = QLineEdit("4")
-        form.addRow("Nombre:", name)
-        form.addRow("Max value:", max_value)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            result = self.ctrl.create_clock(campaign_id, {"name": name.text(), "max_value": int(max_value.text() or "4")})
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Clock created: {result.value.id}")
-                self._overview()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = CreateClockForm(self.ctx, self.ctrl, campaign_id, self._overview)
+        drawer.set_content(form, title="Crear clock")
+        drawer.open()
 
     def _overview(self):
         campaign_id = self._selected_campaign_id() or self.ctx.selected_campaign_id
@@ -619,62 +713,24 @@ class FactionFrontView(QWidget):
                 self.refresh()
 
     def _create_front(self):
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        front_type = QComboBox(); front_type.addItems(_enum_values(FrontType))
-        state = QComboBox(); state.addItems(_enum_values(FrontState))
-        description = QLineEdit()
-        faction_id = QLineEdit()
-        form.addRow("Nombre:", name)
-        form.addRow("Tipo:", front_type)
-        form.addRow("Estado:", state)
-        form.addRow("Descripción:", description)
-        form.addRow("Faction ID:", faction_id)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            result = self.ctrl.create_front({
-                "name": name.text(),
-                "front_type": front_type.currentText(),
-                "state": state.currentText(),
-                "description": description.text(),
-                "faction_id": faction_id.text() or None,
-            })
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Front created: {result.value.id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = CreateFrontForm(self.ctx, self.ctrl, self.refresh)
+        drawer.set_content(form, title="Crear front")
+        drawer.open()
 
     def _add_stage(self):
         front_id = self._selected_front_id()
         if not front_id:
             self.ctx.log("error", "Selecciona un front")
             return
-        dlg = QDialog(self)
-        form = QFormLayout(dlg)
-        name = QLineEdit()
-        threshold = QLineEdit("0")
-        description = QLineEdit()
-        form.addRow("Nombre:", name)
-        form.addRow("Threshold:", threshold)
-        form.addRow("Descripción:", description)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
-        if dlg.exec():
-            try:
-                threshold_value = int(threshold.text() or "0")
-            except ValueError:
-                threshold_value = 0
-            result = self.ctrl.add_stage(front_id, {"name": name.text(), "threshold": threshold_value, "description": description.text()})
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-            else:
-                self.ctx.log("info", f"Stage added to front: {front_id}")
-                self.refresh()
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = AddStageForm(self.ctx, self.ctrl, front_id, self.refresh)
+        drawer.set_content(form, title="Añadir stage")
+        drawer.open()
 
     def _ally(self):
         faction_id = self._selected_faction_id()

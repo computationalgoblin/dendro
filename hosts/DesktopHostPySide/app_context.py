@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 
 @dataclass
@@ -17,6 +17,7 @@ class AppContext:
     log_messages: list[str] = field(default_factory=list)
     log_sink: Callable[[str], None] | None = None
     advanced_mode: bool = False
+    drawer: Any = None  # RightDrawer reference (set by MainWindow)
 
     def log(self, level: str, msg: str):
         entry = f"[{level.upper()}] {msg}"
