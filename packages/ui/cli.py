@@ -280,7 +280,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     register_faction_commands(sub)
 
-
+    from packages.ui.cli_maintenance import register_maintenance_commands
+    register_maintenance_commands(sub)
 
     return parser
 
@@ -449,6 +450,11 @@ def main() -> None:
     if args.command == "campaign":
         from packages.ui.cli_campaign import handle_campaign
         handle_campaign(args, session)
+        return
+
+    if args.command == "maintenance":
+        from packages.ui.cli_maintenance import handle_maintenance_command
+        handle_maintenance_command(args, session)
         return
 
     print(f"error: Unknown command '{args.command}'", file=sys.stderr)
