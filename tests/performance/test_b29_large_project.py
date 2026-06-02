@@ -57,9 +57,11 @@ def test_diagnostic_and_graph_handle_large_corpus_under_documented_threshold() -
 
 
 def test_generate_large_project_help_smoke() -> None:
+    import pathlib
+    workspace = str(pathlib.Path(__file__).resolve().parents[1])
     result = subprocess.run(
         [sys.executable, "scripts/generate_large_project.py", "--help"],
-        cwd="/workspace",
+        cwd=workspace,
         text=True,
         capture_output=True,
         check=False,
