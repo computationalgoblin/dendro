@@ -20,6 +20,7 @@ import pytest
 # On Windows, shlex.split() in POSIX mode treats \ as escape character,
 # which breaks paths like C:\Users\... in f-string CLI arguments.
 # We replace \ with / before splitting (Windows Python accepts forward slashes).
+# Also force UTF-8 for subprocess stdout (cp1252 can't encode box-drawing chars).
 if os.name == "nt":
     _original_shlex_split = shlex.split
 
@@ -27,6 +28,7 @@ if os.name == "nt":
         return _original_shlex_split(s.replace("\\", "/"), **kwargs)
 
     shlex.split = _windows_safe_split
+    os.environ["PYTHONUTF8"] = "1"
 # --- end Windows compat ---
 
 from packages.domain.config import AppConfig, LoggingConfig, reset_settings
