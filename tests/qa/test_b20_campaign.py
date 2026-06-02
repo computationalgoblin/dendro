@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from tests._helpers import _split_cli
 import subprocess
 import sys
 from pathlib import Path
@@ -268,7 +269,7 @@ def _clean_session():
 
 def _cli(args_str: str, cwd: str | None = None):
     """Run narrative-architect CLI as subprocess."""
-    args = shlex.split(args_str)
+    args = _split_cli(args_str)
     env = {**os.environ, "PYTHONPATH": str(WORKSPACE)}
     result = subprocess.run(
         [sys.executable, "-m", "narrative_architect"] + args,

@@ -99,7 +99,7 @@ def _clean_session():
 
 
 def _cli(args_str: str):
-    args = shlex.split(args_str)
+    args = _split_cli(args_str)
     env = {**os.environ, "PYTHONPATH": str(WORKSPACE)}
     return subprocess.run([sys.executable, "-m", "narrative_architect"] + args,
                           capture_output=True, text=True, cwd=str(WORKSPACE), env=env)

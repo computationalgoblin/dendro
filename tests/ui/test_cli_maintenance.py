@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+from tests._helpers import _split_cli
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ def _cli(args: str, *, project: Path | None = None) -> subprocess.CompletedProce
     cmd = [sys.executable, "-m", "narrative_architect"]
     if project is not None:
         cmd.extend(["--project", str(project)])
-    cmd.extend(shlex.split(args))
+    cmd.extend(_split_cli(args))
     return subprocess.run(cmd, cwd=WORKSPACE, env=env, text=True, capture_output=True, check=False)
 
 

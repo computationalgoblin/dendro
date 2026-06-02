@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from tests._helpers import _split_cli
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ WORKSPACE = Path(__file__).resolve().parent.parent.parent
 
 
 def _cli(args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    cmd = [sys.executable, "-m", "narrative_architect"] + shlex.split(args)
+    cmd = [sys.executable, "-m", "narrative_architect"] + _split_cli(args)
     env = {**os.environ, "PYTHONPATH": str(WORKSPACE)}
     return subprocess.run(
         cmd,
