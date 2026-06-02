@@ -198,6 +198,10 @@ class GraphEdgeItem(QGraphicsPathItem):
         self.label_item = QGraphicsSimpleTextItem(_fit_text(edge.label, 28), self)
         self.label_item.setBrush(QBrush(QColor("#6B7280")))
         self.label_item.setScale(0.86)
+        self.handle_item = QGraphicsEllipseItem(-5, -5, 10, 10, self)
+        self.handle_item.setBrush(QBrush(QColor("#D08770")))
+        self.handle_item.setPen(QPen(QColor("#F7F1E8"), 1.2))
+        self.handle_item.setToolTip("Abrir relación")
         self.update_path()
 
     def update_path(self):
@@ -214,6 +218,7 @@ class GraphEdgeItem(QGraphicsPathItem):
         mid = path.pointAtPercent(0.5)
         rect = self.label_item.boundingRect()
         self.label_item.setPos(mid.x() - rect.width() * 0.43, mid.y() - 18)
+        self.handle_item.setPos(mid.x(), mid.y())
 
     def mousePressEvent(self, event):
         self.setPen(self._selected_pen)

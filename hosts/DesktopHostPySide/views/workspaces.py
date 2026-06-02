@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
     Card,
@@ -46,7 +47,9 @@ class CreationWorkspace(QTabWidget):
         self.source_view = source_view
         self.layer_view = layer_view
         self.entity_controller = getattr(corpus_view, "ec", None)
+        self.relation_controller = getattr(relation_view, "rc", None)
         self.graph.entitySelected.connect(self._open_node_panel)
+        self.graph.relationSelected.connect(self._open_relation_panel)
 
         self.addTab(self.graph, "Grafo")
         self.addTab(self.import_export_view, "Importación")
@@ -96,6 +99,19 @@ class CreationWorkspace(QTabWidget):
             on_saved=self.refresh,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
+        self.ctx.drawer.open()
+
+    def _open_relation_panel(self, relation_id: str):
+        if self.relation_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir el panel de relación")
+            return
+        panel = RelationDetailPanel(
+            self.ctx,
+            self.relation_controller,
+            relation_id,
+            on_saved=self.refresh,
+        )
+        self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
 
 
