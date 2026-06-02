@@ -7,14 +7,21 @@ mode while normal mode starts from clean cards/overviews.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
+from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.relation_create_panel import RelationCreatePanel
@@ -194,18 +201,54 @@ class CreationWorkspace(QTabWidget):
 
 
 class GalleryWorkspace(QWidget):
-    """Notion-like clean gallery over existing project data."""
+    """Immersive gallery of narrative material."""
 
     def __init__(self, ctx: AppContext):
         super().__init__()
         self.ctx = ctx
+        self._advanced_mode = bool(ctx.advanced_mode)
         self.container = QWidget()
         self.grid = QGridLayout(self.container)
         self.grid.setContentsMargins(22, 22, 22, 22)
         self.grid.setSpacing(14)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(make_scroll_area(self.container))
+        layout.setSpacing(0)
+
+        header = QWidget()
+        header.setObjectName("cardSurface")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(22, 16, 22, 16)
+        header_layout.setSpacing(10)
+        header_layout.addWidget(SectionHeader(
+            "Galería",
+            "Explora tu material narrativo en tarjetas limpias, sin datos técnicos en modo normal."
+        ))
+        filters = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Buscar por nombre, tipo o descripción…")
+        self.search.textChanged.connect(self.refresh)
+        filters.addWidget(self.search, 2)
+        self.kind_filter = QComboBox()
+        self.kind_filter.addItems(["Todo", "Entidades", "Campañas", "Sesiones", "Facciones", "Secretos/Pistas"])
+        self.kind_filter.currentTextChanged.connect(self.refresh)
+        filters.addWidget(self.kind_filter)
+        self.group_filter = QComboBox()
+        self.group_filter.addItems(["Sin agrupar", "Agrupar por tipo", "Agrupar por estado"])
+        self.group_filter.currentTextChanged.connect(self.refresh)
+        filters.addWidget(self.group_filter)
+        self.toggle_filters = QPushButton("Filtros")
+        self.toggle_filters.clicked.connect(self._toggle_filters)
+        filters.addWidget(self.toggle_filters)
+        header_layout.addLayout(filters)
+        self.filters_hint = QLabel("Secretos y pistas solo se muestran para perfil GM. IDs y JSON permanecen ocultos en modo normal.")
+        self.filters_hint.setObjectName("mutedLabel")
+        self.filters_hint.setWordWrap(True)
+        self.filters_hint.hide()
+        header_layout.addWidget(self.filters_hint)
+        layout.addWidget(header)
+        layout.addWidget(make_scroll_area(self.container), 1)
 
     def _clear(self):
         while self.grid.count():
@@ -218,35 +261,207 @@ class GalleryWorkspace(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
+    def _toggle_filters(self):
+        self.filters_hint.setVisible(not self.filters_hint.isVisible())
+
+    def _is_gm(self) -> bool:
+        return str(getattr(self.ctx, "current_audience", "gm") or "gm").lower() == "gm"
+
+    def _entity_relations(self, project, entity_id: str) -> str:
+        names = []
+        for relation in getattr(project, "relations", []) or []:
+            src = getattr(relation, "source_id", "")
+            tgt = getattr(relation, "target_id", "")
+            if entity_id not in {src, tgt}:
+                continue
+            other_id = tgt if src == entity_id else src
+            for entity in getattr(project, "entities", []) or []:
+                if getattr(entity, "id", "") == other_id:
+                    names.append(getattr(entity, "name", "Entidad"))
+                    break
+            if len(names) >= 2:
+                break
+        return "Relaciones: " + ", ".join(names) if names else "Sin relaciones destacadas"
+
+    def _items(self, project) -> list[dict]:
+        items: list[dict] = []
+        for entity in getattr(project, "entities", []) or []:
+            kind_key = str(getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "entidad")))
+            visibility = str(getattr(getattr(entity, "visibility_state", None), "value", getattr(entity, "visibility_state", "")))
+            if not self._is_gm() and visibility in {"secreto_mundo", "privado_gm", "oculto"}:
+                continue
+            canon = str(getattr(getattr(entity, "canon_state", None), "value", getattr(entity, "canon_state", "")))
+            items.append({
+                "id": getattr(entity, "id", ""),
+                "source": entity,
+                "source_type": "entity",
+                "title": getattr(entity, "name", "Sin nombre"),
+                "kind": enum_human(kind_key),
+                "kind_key": kind_key,
+                "subtitle": getattr(entity, "brief_description", "") or getattr(entity, "brief", "") or getattr(entity, "description", ""),
+                "symbol": "◆",
+                "badges": [(enum_human(canon or "canon"), "success"), (enum_human(visibility or "visible"), "info")],
+                "relation_summary": self._entity_relations(project, getattr(entity, "id", "")),
+                "group_type": enum_human(kind_key),
+                "group_state": enum_human(canon or "canon"),
+            })
+        for campaign in getattr(project, "campaigns", []) or []:
+            items.append({
+                "id": getattr(campaign, "id", ""),
+                "source": campaign,
+                "source_type": "campaign",
+                "title": getattr(campaign, "name", "Sin campaña"),
+                "kind": "Campaña",
+                "kind_key": "campaña",
+                "subtitle": getattr(campaign, "description", "") or "Campaña narrativa",
+                "symbol": "◎",
+                "badges": [("Campaña", "info")],
+                "relation_summary": f"Sesiones: {len(getattr(campaign, 'session_ids', []) or [])}",
+                "group_type": "Campaña",
+                "group_state": "Campaña",
+            })
+        for faction in getattr(project, "factions", []) or []:
+            items.append({
+                "id": getattr(faction, "id", ""),
+                "source": faction,
+                "source_type": "faction",
+                "title": getattr(faction, "name", "Sin facción"),
+                "kind": "Facción",
+                "kind_key": "faccion",
+                "subtitle": getattr(faction, "description", "") or "Facción del mundo",
+                "symbol": "◈",
+                "badges": [("Facción", "warning")],
+                "relation_summary": f"Aliados/enemigos: {len(getattr(faction, 'ally_faction_ids', []) or [])}/{len(getattr(faction, 'enemy_faction_ids', []) or [])}",
+                "group_type": "Facción",
+                "group_state": "Facción",
+            })
+        for session in getattr(project, "sessions", []) or []:
+            items.append({
+                "id": getattr(session, "id", ""),
+                "source": session,
+                "source_type": "session",
+                "title": getattr(session, "title", "") or getattr(session, "name", "Sesión"),
+                "kind": "Sesión",
+                "kind_key": "sesión",
+                "subtitle": getattr(session, "context_summary", "") or getattr(session, "summary", "") or "Sesión preparada",
+                "symbol": "◌",
+                "badges": [("Sesión", "info")],
+                "relation_summary": f"Escenas: {len(getattr(session, 'scenes', []) or [])}",
+                "group_type": "Sesión",
+                "group_state": "Sesión",
+            })
+        if self._is_gm():
+            for secret in getattr(project, "secrets", []) or []:
+                items.append({
+                    "id": getattr(secret, "id", ""),
+                    "source": secret,
+                    "source_type": "secret",
+                    "title": getattr(secret, "title", "") or "Secreto",
+                    "kind": "Secreto",
+                    "kind_key": "secreto",
+                    "subtitle": getattr(secret, "content", "") or getattr(secret, "description", "") or "Secreto narrativo",
+                    "symbol": "✦",
+                    "badges": [("GM", "danger")],
+                    "relation_summary": "Visible solo para dirección",
+                    "group_type": "Secretos/Pistas",
+                    "group_state": "GM",
+                })
+            for clue in getattr(project, "clues", []) or []:
+                items.append({
+                    "id": getattr(clue, "id", ""),
+                    "source": clue,
+                    "source_type": "clue",
+                    "title": getattr(clue, "title", "") or "Pista",
+                    "kind": "Pista",
+                    "kind_key": "pista",
+                    "subtitle": getattr(clue, "content", "") or getattr(clue, "description", "") or "Pista narrativa",
+                    "symbol": "✧",
+                    "badges": [("GM", "success")],
+                    "relation_summary": "Revelación controlada",
+                    "group_type": "Secretos/Pistas",
+                    "group_state": "GM",
+                })
+        return items
+
+    def _filtered_items(self, items: list[dict]) -> list[dict]:
+        text = self.search.text().strip().lower()
+        kind_filter = self.kind_filter.currentText()
+        def matches(item: dict) -> bool:
+            haystack = " ".join(str(item.get(key, "")) for key in ["title", "kind", "subtitle", "relation_summary"]).lower()
+            if text and text not in haystack:
+                return False
+            source_type = item.get("source_type")
+            if kind_filter == "Entidades" and source_type != "entity":
+                return False
+            if kind_filter == "Campañas" and source_type != "campaign":
+                return False
+            if kind_filter == "Sesiones" and source_type != "session":
+                return False
+            if kind_filter == "Facciones" and source_type != "faction":
+                return False
+            if kind_filter == "Secretos/Pistas" and source_type not in {"secret", "clue"}:
+                return False
+            return True
+        return [item for item in items if matches(item)]
+
     def refresh(self):
         self._clear()
-        p = self._project()
-        if p is None:
+        project = self._project()
+        if project is None:
             self.grid.addWidget(EmptyState("Galería", "Abre un proyecto para ver tus elementos como tarjetas."), 0, 0)
             return
-        self.grid.addWidget(SectionHeader("Galería", "Vista limpia de entidades, campañas, facciones y sesiones."), 0, 0, 1, 3)
-        cards = []
-        for entity in getattr(p, "entities", []) or []:
-            kind = enum_human(getattr(entity, "entity_type", "Entidad"))
-            cards.append((human_ref(getattr(entity, "name", ""), kind), getattr(entity, "brief", "") or getattr(entity, "description", ""), kind))
-        for campaign in getattr(p, "campaigns", []) or []:
-            cards.append((human_ref(getattr(campaign, "name", ""), "Campaña"), getattr(campaign, "description", ""), "Campaña"))
-        for faction in getattr(p, "factions", []) or []:
-            cards.append((human_ref(getattr(faction, "name", ""), "Facción"), getattr(faction, "description", ""), "Facción"))
-        for session in getattr(p, "sessions", []) or []:
-            cards.append((human_ref(getattr(session, "name", ""), "Sesión"), getattr(session, "context_summary", ""), "Sesión"))
-        if not cards:
-            self.grid.addWidget(EmptyState("Sin elementos", "Crea nodos, campañas o sesiones para verlos aquí."), 1, 0)
+        items = self._filtered_items(self._items(project))
+        if not items:
+            self.grid.addWidget(EmptyState("Sin elementos", "Crea contenido o ajusta búsqueda/filtros para poblar esta galería."), 0, 0)
             return
-        for idx, (title, subtitle, badge) in enumerate(cards):
-            card = Card(title, subtitle or "Sin descripción breve")
-            row = card.add_row()
-            row.addWidget(Badge(badge, "info"))
-            row.addStretch()
-            self.grid.addWidget(card, 1 + idx // 3, idx % 3)
+        group_mode = self.group_filter.currentText()
+        row = 0
+        col = 0
+        current_group = None
+        for item in sorted(items, key=lambda x: (x.get("group_type", ""), x.get("title", ""))):
+            group = ""
+            if group_mode == "Agrupar por tipo":
+                group = str(item.get("group_type") or item.get("kind") or "Elementos")
+            elif group_mode == "Agrupar por estado":
+                group = str(item.get("group_state") or "Estado")
+            if group and group != current_group:
+                current_group = group
+                col = 0
+                if row > 0:
+                    row += 1
+                self.grid.addWidget(SectionHeader(group, ""), row, 0, 1, 3)
+                row += 1
+            card = EntityCard(item)
+            card.clicked.connect(self._open_detail)
+            self.grid.addWidget(card, row, col)
+            col += 1
+            if col >= 3:
+                col = 0
+                row += 1
+
+    def _open_detail(self, item: dict):
+        if self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir detalle de galería")
+            return
+        detail = QWidget()
+        layout = QVBoxLayout(detail)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
+        layout.addWidget(SectionHeader(str(item.get("title") or "Detalle"), str(item.get("kind") or "Elemento")))
+        layout.addWidget(QLabel(str(item.get("subtitle") or "Sin descripción breve")))
+        layout.addWidget(QLabel(str(item.get("relation_summary") or "")))
+        technical = QTextEdit()
+        technical.setReadOnly(True)
+        technical.setPlainText(f"ID: {item.get('id', '')}\nTipo fuente: {item.get('source_type', '')}")
+        technical.setVisible(self._advanced_mode)
+        layout.addWidget(technical)
+        layout.addStretch()
+        self.ctx.drawer.set_content(detail, title="Detalle")
+        self.ctx.drawer.open()
 
     def set_advanced_mode(self, enabled: bool):
-        return
+        self._advanced_mode = bool(enabled)
+        self.refresh()
 
 
 class SessionWorkspace(QTabWidget):
