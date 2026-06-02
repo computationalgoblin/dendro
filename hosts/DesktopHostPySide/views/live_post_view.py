@@ -1,9 +1,8 @@
-"""LivePostView — live mode + post-session actions (B27.3 bugbash)."""
+"""LivePostView — live mode + post-session actions (B27.3/B31)."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QComboBox,
-    QInputDialog,
     QLabel,
     QPushButton,
     QTabWidget,
@@ -14,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerSelectPrompt, DrawerTextPrompt
 from packages.domain.result import Error
 
 
@@ -36,7 +36,6 @@ class LivePostView(QWidget):
         layout.addWidget(btn_r)
 
         tabs = QTabWidget()
-
         live = QWidget()
         ll = QVBoxLayout(live)
         for label, handler in [
@@ -84,7 +83,6 @@ class LivePostView(QWidget):
         self.post_output.setMaximumHeight(110)
         pl.addWidget(self.post_output)
         tabs.addTab(post, "Post")
-
         layout.addWidget(tabs)
 
     def _sid(self):
@@ -98,11 +96,27 @@ class LivePostView(QWidget):
         output.setText(success_label(result.value))
         return result.value
 
+    def _prompt_text(self, title: str, label: str, callback):
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = DrawerTextPrompt(self.ctx, title, label, callback)
+        drawer.set_content(form, title=title)
+        drawer.open()
+
+    def _prompt_select(self, title: str, label: str, options, callback):
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        form = DrawerSelectPrompt(self.ctx, title, label, options, callback)
+        drawer.set_content(form, title=title)
+        drawer.open()
+
     def refresh(self):
         current = self._sid()
         self.session_sel.clear()
         for session in self.sc.list_all():
-            self.session_sel.addItem(f"{session.name} ({session.id[:8]})", session.id)
+            self.session_sel.addItem(session.name, session.id)
         target = self.ctx.selected_session_id or current
         if target:
             idx = self.session_sel.findData(target)
@@ -117,33 +131,29 @@ class LivePostView(QWidget):
 
     def _live_note(self):
         sid = self._sid()
-        text, ok = QInputDialog.getText(self, "Quick Note", "Text:")
-        if sid and ok and text:
-            self._show_result(self.live_output, self.lmc.note(sid, text), lambda _: "Note added")
+        if sid:
+            self._prompt_text("Quick Note", "Text:", lambda text: self._show_result(self.live_output, self.lmc.note(sid, text), lambda _: "Note added"))
 
     def _live_decide(self):
         sid = self._sid()
-        text, ok = QInputDialog.getText(self, "Player Decision", "Text:")
-        if sid and ok and text:
-            self._show_result(self.live_output, self.lmc.decision(sid, text), lambda _: "Player decision registered")
+        if sid:
+            self._prompt_text("Player Decision", "Text:", lambda text: self._show_result(self.live_output, self.lmc.decision(sid, text), lambda _: "Player decision registered"))
 
     def _live_event(self):
         sid = self._sid()
-        text, ok = QInputDialog.getText(self, "Event", "Text:")
-        if sid and ok and text:
-            self._show_result(self.live_output, self.lmc.event(sid, text), lambda _: "Event registered")
+        if sid:
+            self._prompt_text("Event", "Text:", lambda text: self._show_result(self.live_output, self.lmc.event(sid, text), lambda _: "Event registered"))
 
     def _live_consequence(self):
         sid = self._sid()
-        text, ok = QInputDialog.getText(self, "Consequence", "Text:")
-        if sid and ok and text:
-            self._show_result(self.live_output, self.lmc.consequence(sid, text), lambda _: "Consequence registered")
+        if sid:
+            self._prompt_text("Consequence", "Text:", lambda text: self._show_result(self.live_output, self.lmc.consequence(sid, text), lambda _: "Consequence registered"))
 
     def _live_entity(self):
         sid = self._sid()
         if sid:
             result = self.lmc.entity(sid, "Improvised NPC", "personaje")
-            self._show_result(self.live_output, result, lambda entity: f"Created entity: {entity.name} ({entity.id})")
+            self._show_result(self.live_output, result, lambda entity: f"Created entity: {entity.name}")
 
     def _live_relation(self):
         sid = self._sid()
@@ -154,7 +164,7 @@ class LivePostView(QWidget):
         src = project.entities[0].id
         tgt = project.entities[1].id
         result = self.lmc.relation(sid, src, tgt, "es_aliado_de")
-        self._show_result(self.live_output, result, lambda relation: f"Created relation: {relation.id}")
+        self._show_result(self.live_output, result, lambda _: "Created relation")
 
     def _live_clue(self):
         sid = self._sid()
@@ -164,12 +174,8 @@ class LivePostView(QWidget):
         if isinstance(clues, Error) or not clues.value:
             self.live_output.setText("No clues linked to session")
             return
-        options = [f"{clue.content[:50]} ({clue.id})" for clue in clues.value]
-        item, ok = QInputDialog.getItem(self, "Deliver Clue", "Clue:", options, 0, False)
-        if ok and item:
-            clue_id = item[item.rfind("(") + 1 : -1]
-            result = self.lmc.clue_deliver(sid, clue_id, "entregada")
-            self._show_result(self.live_output, result, lambda _: f"Delivered {clue_id}")
+        options = [(clue.content[:50], clue.id) for clue in clues.value]
+        self._prompt_select("Deliver Clue", "Clue:", options, lambda clue_id: self._show_result(self.live_output, self.lmc.clue_deliver(sid, clue_id, "entregada"), lambda _: "Delivered clue"))
 
     def _live_secret(self):
         sid = self._sid()
@@ -179,12 +185,8 @@ class LivePostView(QWidget):
         if isinstance(secrets, Error) or not secrets.value:
             self.live_output.setText("No secrets linked to session")
             return
-        options = [f"{secret.content[:50]} ({secret.id})" for secret in secrets.value]
-        item, ok = QInputDialog.getItem(self, "Reveal Secret", "Secret:", options, 0, False)
-        if ok and item:
-            secret_id = item[item.rfind("(") + 1 : -1]
-            result = self.lmc.secret_reveal(sid, secret_id, "parcialmente_revelado")
-            self._show_result(self.live_output, result, lambda _: f"Revealed {secret_id}")
+        options = [(secret.content[:50], secret.id) for secret in secrets.value]
+        self._prompt_select("Reveal Secret", "Secret:", options, lambda secret_id: self._show_result(self.live_output, self.lmc.secret_reveal(sid, secret_id, "parcialmente_revelado"), lambda _: "Revealed secret"))
 
     def _live_improvise(self):
         sid = self._sid()
@@ -228,39 +230,27 @@ class LivePostView(QWidget):
             return
         second = self.psc.generate_candidates(sid)
         self.cand_combo.clear()
-        for candidate in first.value:
-            self.cand_combo.addItem(f"{candidate.title} ({candidate.id[:8]})", candidate.id)
-        second_count = len(second.value) if not isinstance(second, Error) else 0
-        self.post_output.setText(f"Generated {len(first.value)} candidates; second run generated {second_count} new candidates")
+        if not isinstance(second, Error):
+            for c in second.value:
+                self.cand_combo.addItem(c.title, c.id)
+        self.post_output.setText("Candidates generated")
 
     def _post_accept(self):
         cid = self.cand_combo.currentData()
         if cid:
-            result = self.psc.accept_candidate(cid)
-            if isinstance(result, Error):
-                self.post_output.setText(f"Error: {result.error}")
-            else:
-                self.post_output.setText(f"Accepted {cid}")
+            self._show_result(self.post_output, self.psc.accept_candidate(cid), lambda entity: f"Accepted: {entity.name}")
 
     def _post_reject(self):
         cid = self.cand_combo.currentData()
         if cid:
-            result = self.psc.reject_candidate(cid)
-            if isinstance(result, Error):
-                self.post_output.setText(f"Error: {result.error}")
-            else:
-                self.post_output.setText(f"Rejected {cid}")
+            self._show_result(self.post_output, self.psc.reject_candidate(cid), lambda _: "Rejected")
 
     def _post_source(self):
         sid = self._sid()
         if sid:
-            self._show_result(self.post_output, self.psc.source(sid), lambda source: f"Source created: {getattr(source, 'id', source)}")
+            self._show_result(self.post_output, self.psc.source(sid), lambda source: f"Source: {source.title}")
 
     def _post_seeds(self):
         sid = self._sid()
         if sid:
-            seeds = self.psc.seeds(sid)
-            if isinstance(seeds, Error):
-                self.post_output.setText(f"Error: {seeds.error}")
-            else:
-                self.post_output.setText("\n".join(seeds[:5]))
+            self._show_result(self.post_output, self.psc.seeds(sid), lambda seeds: str(seeds))

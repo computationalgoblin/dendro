@@ -6,7 +6,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -19,8 +18,9 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
-from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm, DrawerSelectPrompt, DrawerTextPrompt
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
+from hosts.DesktopHostPySide.widgets.technical_visibility import set_columns_visible
 from packages.domain.campaign_models import CampaignState
 from packages.domain.faction_models import FactionState, FrontState, FrontType
 from packages.domain.result import Error
@@ -65,7 +65,7 @@ class CreateCampaignForm(DrawerForm):
         self.form_layout.addRow("Sistema:", self.system)
         self.form_layout.addRow("Tono:", self.tone)
         self.form_layout.addRow("Género:", self.genre)
-        self.form_layout.addRow("World entity ID:", self.world_entity_id)
+        self.form_layout.addRow("Entidad mundo:", self.world_entity_id)
         self.form_layout.addRow("Estado:", self.state)
         self.form_layout.addRow("Descripción:", self.description)
 
@@ -127,7 +127,7 @@ class CreateFrontForm(DrawerForm):
         self.form_layout.addRow("Tipo:", self.front_type)
         self.form_layout.addRow("Estado:", self.state)
         self.form_layout.addRow("Descripción:", self.description)
-        self.form_layout.addRow("Faction ID:", self.faction_id)
+        self.form_layout.addRow("Facción vinculada:", self.faction_id)
 
     def _on_accept(self):
         result = self.ctrl.create_front({
@@ -203,7 +203,7 @@ class CampaignView(QWidget):
         body = QHBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "System", "State"])
+        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Sistema", "Estado"])
         self.table.itemSelectionChanged.connect(self._select)
         body.addWidget(self.table, 3)
         self.inspector = InspectorPanel("Campaign Inspector")
@@ -213,6 +213,11 @@ class CampaignView(QWidget):
         self.output.setReadOnly(True)
         self.output.setMaximumHeight(160)
         l.addWidget(self.output)
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.table, [0], bool(enabled))
+        self.inspector.set_advanced_mode(enabled)
 
     def _selected_campaign_id(self):
         row = self.table.currentRow()
@@ -256,11 +261,15 @@ class CampaignView(QWidget):
     def _campaign_payload(self, values):
         payload = dict(values)
         for key in ("player_character_entity_ids", "session_entity_ids", "session_ids", "active_plot_entity_ids", "active_faction_entity_ids", "active_location_entity_ids", "secret_entity_ids", "clue_entity_ids", "clock_ids"):
-            payload[key] = _split_csv(payload.get(key))
+            if key in payload:
+                payload[key] = _split_csv(payload.get(key))
         for key in ("players", "private_notes", "public_summaries", "history"):
-            payload[key] = _as_list(payload.get(key))
-        payload["visibility_rules"] = _as_dict(payload.get("visibility_rules"))
-        payload["metadata"] = _as_dict(payload.get("metadata"))
+            if key in payload:
+                payload[key] = _as_list(payload.get(key))
+        if "visibility_rules" in payload:
+            payload["visibility_rules"] = _as_dict(payload.get("visibility_rules"))
+        if "metadata" in payload:
+            payload["metadata"] = _as_dict(payload.get("metadata"))
         return payload
 
     def _bind_campaign(self, campaign_id):
@@ -306,14 +315,21 @@ class CampaignView(QWidget):
         if not campaign_id:
             self.ctx.log("error", "Selecciona una campaña")
             return
-        player_name, ok = QInputDialog.getText(self, "Añadir jugador", "Nombre:")
-        if ok and player_name:
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+
+        def add_player_named(player_name: str):
             result = self.ctrl.add_player(campaign_id, player_name)
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
-                self.ctx.log("info", f"Player added: {result.value.id}")
+                self.ctx.log("info", "Player added")
                 self._overview()
+
+        form = DrawerTextPrompt(self.ctx, "Añadir jugador", "Nombre:", add_player_named)
+        drawer.set_content(form, title="Añadir jugador")
+        drawer.open()
 
     def _create_clock(self):
         campaign_id = self._selected_campaign_id() or self.ctx.selected_campaign_id
@@ -350,6 +366,7 @@ class CampaignView(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(campaign.game_system))
             self.table.setItem(i, 3, QTableWidgetItem(campaign.state.value))
         self.table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
 
 
 class SecretsCluesView(QWidget):
@@ -378,13 +395,18 @@ class SecretsCluesView(QWidget):
         tabs = QTabWidget()
         self.secrets_table = QTableWidget()
         self.secrets_table.setColumnCount(4)
-        self.secrets_table.setHorizontalHeaderLabels(["ID", "Content", "Revelation", "Visibility"])
+        self.secrets_table.setHorizontalHeaderLabels(["ID", "Contenido", "Revelación", "Visibilidad"])
         tabs.addTab(self.secrets_table, "Secrets")
         self.clues_table = QTableWidget()
         self.clues_table.setColumnCount(4)
-        self.clues_table.setHorizontalHeaderLabels(["ID", "Content", "Delivery", "Associated Secret"])
+        self.clues_table.setHorizontalHeaderLabels(["ID", "Contenido", "Entrega", "Secreto asociado"])
         tabs.addTab(self.clues_table, "Clues")
         l.addWidget(tabs)
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.secrets_table, [0], bool(enabled))
+        set_columns_visible(self.clues_table, [0, 3], bool(enabled))
 
     def _selected_secret_id(self):
         row = self.secrets_table.currentRow()
@@ -401,29 +423,42 @@ class SecretsCluesView(QWidget):
         return item.data(Qt.UserRole) if item is not None else None
 
     def _create_secret(self):
-        text, ok = QInputDialog.getText(self, "Crear secreto", "Contenido:")
-        if ok and text:
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+
+        def create_secret_text(text: str):
             result = self.ctrl.create_secret({"content": text})
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
-                self.ctx.log("info", f"Secret created: {result.value.id}")
+                self.ctx.log("info", "Secret created")
                 self.refresh()
 
+        form = DrawerTextPrompt(self.ctx, "Crear secreto", "Contenido:", create_secret_text)
+        drawer.set_content(form, title="Crear secreto")
+        drawer.open()
+
     def _create_clue(self):
-        text, ok = QInputDialog.getText(self, "Crear pista", "Contenido:")
-        if not (ok and text):
+        drawer = self.ctx.drawer
+        if drawer is None:
             return
-        data = {"content": text}
-        secret_id = self._selected_secret_id()
-        if secret_id:
-            data["associated_secret_id"] = secret_id
-        result = self.ctrl.create_clue(data)
-        if isinstance(result, Error):
-            self.ctx.log("error", result.error)
-        else:
-            self.ctx.log("info", f"Clue created: {result.value.id}")
-            self.refresh()
+
+        def create_clue_text(text: str):
+            data = {"content": text}
+            secret_id = self._selected_secret_id()
+            if secret_id:
+                data["associated_secret_id"] = secret_id
+            result = self.ctrl.create_clue(data)
+            if isinstance(result, Error):
+                self.ctx.log("error", result.error)
+            else:
+                self.ctx.log("info", "Clue created")
+                self.refresh()
+
+        form = DrawerTextPrompt(self.ctx, "Crear pista", "Contenido:", create_clue_text)
+        drawer.set_content(form, title="Crear pista")
+        drawer.open()
 
     def _reveal_secret(self):
         secret_id = self._selected_secret_id()
@@ -476,6 +511,7 @@ class SecretsCluesView(QWidget):
             self.clues_table.setItem(i, 2, QTableWidgetItem(clue.delivery_state.value))
             self.clues_table.setItem(i, 3, QTableWidgetItem(clue.associated_secret_id[:12] if clue.associated_secret_id else ""))
         self.clues_table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
 
 
 class FactionFrontView(QWidget):
@@ -506,23 +542,30 @@ class FactionFrontView(QWidget):
         tabs = QTabWidget()
         self.faction_table = QTableWidget()
         self.faction_table.setColumnCount(5)
-        self.faction_table.setHorizontalHeaderLabels(["ID", "Name", "State", "Entity", "Allies/Enemies"])
+        self.faction_table.setHorizontalHeaderLabels(["ID", "Nombre", "Estado", "Entidad", "Alianzas/Rivalidades"])
         self.faction_table.itemSelectionChanged.connect(self._bind_selected_faction)
         tabs.addTab(self.faction_table, "Factions")
         self.front_table = QTableWidget()
         self.front_table.setColumnCount(4)
-        self.front_table.setHorizontalHeaderLabels(["ID", "Name", "Type", "State"])
+        self.front_table.setHorizontalHeaderLabels(["ID", "Nombre", "Tipo", "Estado"])
         self.front_table.itemSelectionChanged.connect(self._bind_selected_front)
         tabs.addTab(self.front_table, "Fronts")
         self.stage_table = QTableWidget()
         self.stage_table.setColumnCount(5)
-        self.stage_table.setHorizontalHeaderLabels(["Front ID", "Stage", "Name", "Threshold", "Terminal"])
+        self.stage_table.setHorizontalHeaderLabels(["Front ID", "Stage", "Nombre", "Threshold", "Terminal"])
         self.stage_table.itemSelectionChanged.connect(self._bind_selected_stage)
         tabs.addTab(self.stage_table, "Stages")
         body.addWidget(tabs, 3)
         self.inspector = InspectorPanel("Faction/Front Inspector")
         body.addWidget(self.inspector, 1)
         l.addLayout(body)
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.faction_table, [0, 3], bool(enabled))
+        set_columns_visible(self.front_table, [0], bool(enabled))
+        set_columns_visible(self.stage_table, [0], bool(enabled))
+        self.inspector.set_advanced_mode(enabled)
 
     def _selected_faction_id(self):
         row = self.faction_table.currentRow()
@@ -578,7 +621,8 @@ class FactionFrontView(QWidget):
     def _save_faction(self, faction_id, values):
         payload = dict(values)
         for key in ("objectives", "resources", "possible_reactions", "inaction_consequences", "intervention_consequences"):
-            payload[key] = _as_list(payload.get(key))
+            if key in payload:
+                payload[key] = _as_list(payload.get(key))
         result = self.ctrl.update_faction(faction_id, payload)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
@@ -623,14 +667,18 @@ class FactionFrontView(QWidget):
     def _save_front(self, front_id, values):
         payload = dict(values)
         for key in ("advance_conditions", "retreat_conditions", "stages"):
-            payload[key] = _as_list(payload.get(key))
+            if key in payload:
+                payload[key] = _as_list(payload.get(key))
         for key in ("session_ids", "affected_entity_ids"):
-            payload[key] = _split_csv(payload.get(key))
-        payload["metadata"] = _as_dict(payload.get("metadata"))
-        try:
-            payload["current_stage_index"] = int(payload.get("current_stage_index") or 0)
-        except (TypeError, ValueError):
-            payload["current_stage_index"] = 0
+            if key in payload:
+                payload[key] = _split_csv(payload.get(key))
+        if "metadata" in payload:
+            payload["metadata"] = _as_dict(payload.get("metadata"))
+        if "current_stage_index" in payload:
+            try:
+                payload["current_stage_index"] = int(payload.get("current_stage_index") or 0)
+            except (TypeError, ValueError):
+                payload["current_stage_index"] = 0
         result = self.ctrl.update_front(front_id, payload)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
@@ -700,17 +748,23 @@ class FactionFrontView(QWidget):
         if not pending:
             self.ctx.log("info", "No hay entidades FACCION pendientes")
             return
-        labels = [f"{entity.name} ({entity.id})" for entity in pending]
-        item, ok = QInputDialog.getItem(self, "Create Faction Extension", "Entity:", labels, 0, False)
-        if ok and item:
-            entity_id = item[item.rfind("(") + 1 : -1]
-            name = item[: item.rfind(" (")]
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        options = [(entity.name, (entity.id, entity.name)) for entity in pending]
+
+        def create_from_selection(selection):
+            entity_id, name = selection
             result = self.ctrl.create_faction({"entity_id": entity_id, "name": name})
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
-                self.ctx.log("info", f"Faction extension created: {result.value.id}")
+                self.ctx.log("info", "Faction extension created")
                 self.refresh()
+
+        form = DrawerSelectPrompt(self.ctx, "Crear extensión de facción", "Entidad:", options, create_from_selection)
+        drawer.set_content(form, title="Crear extensión de facción")
+        drawer.open()
 
     def _create_front(self):
         drawer = self.ctx.drawer
@@ -738,16 +792,22 @@ class FactionFrontView(QWidget):
         if not faction_id or len(factions) < 2:
             self.ctx.log("error", "Necesitas al menos dos facciones")
             return
-        options = [f"{f.name} ({f.id})" for f in factions if f.id != faction_id]
-        item, ok = QInputDialog.getItem(self, "Add ally", "Target:", options, 0, False)
-        if ok and item:
-            other_id = item[item.rfind("(") + 1 : -1]
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        options = [(f.name, f.id) for f in factions if f.id != faction_id]
+
+        def add_selected_ally(other_id: str):
             result = self.ctrl.add_ally(faction_id, other_id)
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
-                self.ctx.log("info", f"Faction ally linked: {faction_id} ↔ {other_id}")
+                self.ctx.log("info", "Faction ally linked")
                 self.refresh()
+
+        form = DrawerSelectPrompt(self.ctx, "Añadir aliado", "Facción:", options, add_selected_ally)
+        drawer.set_content(form, title="Añadir aliado")
+        drawer.open()
 
     def _enemy(self):
         faction_id = self._selected_faction_id()
@@ -755,16 +815,22 @@ class FactionFrontView(QWidget):
         if not faction_id or len(factions) < 2:
             self.ctx.log("error", "Necesitas al menos dos facciones")
             return
-        options = [f"{f.name} ({f.id})" for f in factions if f.id != faction_id]
-        item, ok = QInputDialog.getItem(self, "Add enemy", "Target:", options, 0, False)
-        if ok and item:
-            other_id = item[item.rfind("(") + 1 : -1]
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        options = [(f.name, f.id) for f in factions if f.id != faction_id]
+
+        def add_selected_enemy(other_id: str):
             result = self.ctrl.add_enemy(faction_id, other_id)
             if isinstance(result, Error):
                 self.ctx.log("error", result.error)
             else:
-                self.ctx.log("info", f"Faction enemy linked: {faction_id} ↔ {other_id}")
+                self.ctx.log("info", "Faction enemy linked")
                 self.refresh()
+
+        form = DrawerSelectPrompt(self.ctx, "Añadir enemigo", "Facción:", options, add_selected_enemy)
+        drawer.set_content(form, title="Añadir enemigo")
+        drawer.open()
 
     def _detect_issues(self):
         issues = self.ctrl.run_validation()
@@ -807,3 +873,4 @@ class FactionFrontView(QWidget):
             self.stage_table.setItem(i, 3, QTableWidgetItem(str(stage.threshold)))
             self.stage_table.setItem(i, 4, QTableWidgetItem("yes" if stage.is_terminal else "no"))
         self.stage_table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)

@@ -15,11 +15,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QPushButton,
     QStackedWidget,
+    QStatusBar,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -62,6 +62,7 @@ from hosts.DesktopHostPySide.views.writing_view import WritingView
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryWorkspace, SessionWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
 
 
 # Index constants for the stack widget
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         self._build_controllers()
         self._build_views()
         self._build_shell()
+        self._apply_advanced_mode(self.ctx.advanced_mode)
         self._refresh_all_views()
 
     # ── Controllers ──────────────────────────────────────────────────────────
@@ -251,6 +253,14 @@ class MainWindow(QMainWindow):
         self._top_ai.setStyleSheet("font-size: 11px; background: transparent; border: none;")
         layout.addWidget(self._top_ai)
 
+        self._advanced_badge = QLabel("AVANZADO")
+        self._advanced_badge.setStyleSheet(
+            "font-size: 10px; font-weight: 700; color: #7DA4FF; "
+            "background: #1A2744; border: 1px solid #3B6BDF; "
+            "border-radius: 8px; padding: 3px 8px;"
+        )
+        layout.addWidget(self._advanced_badge)
+
         return bar
 
     def _wrap_space(self, workspace: QWidget, title: str, back_idx: int) -> QWidget:
@@ -315,21 +325,27 @@ class MainWindow(QMainWindow):
     # ── Project actions ──────────────────────────────────────────────────────
 
     def _new_project(self):
-        name, ok = QInputDialog.getText(self, "Nuevo proyecto", "Nombre del proyecto:")
-        if not ok or not name.strip():
+        drawer = self.ctx.drawer
+        if drawer is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Guardar proyecto", f"{name.strip()}.json", "JSON (*.json)"
-        )
-        if not path:
-            return
-        try:
-            self.controller.create(name.strip(), path)
-            self.controller.save()
-            self.log_msg(f"Proyecto creado: {Path(path).name}")
-            self._refresh_all_views()
-        except Exception as exc:
-            self.log_msg(f"Error creando proyecto: {exc}")
+
+        def create_named_project(name: str):
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Guardar proyecto", f"{name.strip()}.json", "JSON (*.json)"
+            )
+            if not path:
+                return
+            try:
+                self.controller.create(name.strip(), path)
+                self.controller.save()
+                self.log_msg(f"Proyecto creado: {Path(path).name}")
+                self._refresh_all_views()
+            except Exception as exc:
+                self.log_msg(f"Error creando proyecto: {exc}")
+
+        form = DrawerTextPrompt(self.ctx, "Nuevo proyecto", "Nombre del proyecto:", create_named_project)
+        drawer.set_content(form, title="Nuevo proyecto")
+        drawer.open()
 
     def _open_project(self):
         path, _ = QFileDialog.getOpenFileName(self, "Abrir proyecto", "", "JSON (*.json)")
@@ -371,16 +387,31 @@ class MainWindow(QMainWindow):
 
     def _toggle_advanced(self):
         new_state = not self.ctx.advanced_mode
-        self.ctx.advanced_mode = new_state
+        self.ctx.set_advanced_mode(new_state)
+        self._apply_advanced_mode(new_state)
+        self.log_msg(f"Modo avanzado {'activado' if new_state else 'desactivado'}")
+        self._refresh_all_views()
+
+    def _apply_advanced_mode(self, enabled: bool):
+        """Propagate advanced/debug visibility to every workspace/view."""
         for widget in [
             self.creation_workspace, self.gallery_workspace,
             self.session_workspace, self.import_export_view,
-            self.home_view,
+            self.corpus_view, self.relation_view, self.candidate_view,
+            self.campaign_view, self.secrets_view, self.faction_view,
+            self.session_view, self.live_post_view, self.issues_view,
+            self.writing_view, self.timeline_view, self.framework_view,
+            self.source_view, self.layer_view, self.home_view,
         ]:
             if hasattr(widget, "set_advanced_mode"):
-                widget.set_advanced_mode(new_state)
-        self.log_msg(f"Modo avanzado {'activado' if new_state else 'desactivado'}")
-        self._refresh_all_views()
+                try:
+                    widget.set_advanced_mode(enabled)
+                except Exception as exc:
+                    self.log_msg(f"Error aplicando modo avanzado en {type(widget).__name__}: {exc}")
+        if hasattr(self, "_advanced_badge"):
+            self._advanced_badge.setVisible(bool(enabled))
+        if hasattr(self, "log") and not enabled:
+            self.log.setVisible(False)
 
     def _toggle_diagnostic(self):
         visible = not self.log.isVisible()

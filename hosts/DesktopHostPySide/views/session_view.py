@@ -5,7 +5,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QInputDialog,
     QLineEdit,
     QPushButton,
     QTableWidget,
@@ -18,6 +17,7 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
+from hosts.DesktopHostPySide.widgets.technical_visibility import set_columns_visible
 from packages.domain.result import Error
 from packages.domain.session_models import SceneType, SessionState
 
@@ -51,7 +51,7 @@ class CreateSessionForm(DrawerForm):
         self.name_input = QLineEdit()
         self.camp_cb = QComboBox()
         for campaign in getattr(self.sc.ps.active_project, "campaigns", []):
-            self.camp_cb.addItem(f"{campaign.name} ({campaign.id[:8]})", campaign.id)
+            self.camp_cb.addItem(campaign.name, campaign.id)
         self.form_layout.addRow("Nombre:", self.name_input)
         self.form_layout.addRow("Campaña:", self.camp_cb)
 
@@ -87,8 +87,8 @@ class AddSceneForm(DrawerForm):
         self.form_layout.addRow("Lista:", self.target)
         self.form_layout.addRow("Tipo:", self.scene_type)
         self.form_layout.addRow("Orden:", self.order)
-        self.form_layout.addRow("Location ID:", self.location_id)
-        self.form_layout.addRow("NPC IDs (csv):", self.npc_ids)
+        self.form_layout.addRow("Ubicación:", self.location_id)
+        self.form_layout.addRow("PNJs (csv):", self.npc_ids)
         self.form_layout.addRow("Descripción:", self.description)
         self.form_layout.addRow("Notas:", self.notes)
 
@@ -141,19 +141,25 @@ class SessionView(QWidget):
         left = QVBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "State", "Campaign"])
+        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Estado", "Campaña"])
         self.table.itemSelectionChanged.connect(self._select)
         left.addWidget(self.table)
 
         self.scene_table = QTableWidget()
         self.scene_table.setColumnCount(4)
-        self.scene_table.setHorizontalHeaderLabels(["Scene ID", "Name", "Type", "Order"])
+        self.scene_table.setHorizontalHeaderLabels(["ID", "Nombre", "Tipo", "Orden"])
         self.scene_table.itemSelectionChanged.connect(self._bind_selected_scene)
         left.addWidget(self.scene_table)
         body.addLayout(left, 3)
         self.inspector = InspectorPanel("Session Inspector")
         body.addWidget(self.inspector, 1)
         layout.addLayout(body)
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.table, [0], bool(enabled))
+        set_columns_visible(self.scene_table, [0], bool(enabled))
+        self.inspector.set_advanced_mode(enabled)
 
     def _selected_session_id(self):
         row = self.table.currentRow()
@@ -209,14 +215,18 @@ class SessionView(QWidget):
     def _session_payload(self, values):
         payload = dict(values)
         for key in ("planned_location_ids", "planned_npc_ids", "relevant_faction_ids", "active_conflict_ids", "available_clue_ids", "revealable_secret_ids", "clock_ids", "ia_suggestion_candidate_ids"):
-            payload[key] = _split_csv(payload.get(key))
+            if key in payload:
+                payload[key] = _split_csv(payload.get(key))
         for key in ("gm_objectives", "player_known_objectives", "planned_scenes", "optional_scenes", "rumors", "encounters", "rewards", "complications", "expected_consequences", "open_questions", "improvised_material", "private_notes", "continuity_checklist"):
-            payload[key] = _as_list(payload.get(key))
-        payload["metadata"] = _as_dict(payload.get("metadata"))
-        try:
-            payload["session_number"] = int(payload.get("session_number") or 0)
-        except (TypeError, ValueError):
-            payload["session_number"] = 0
+            if key in payload:
+                payload[key] = _as_list(payload.get(key))
+        if "metadata" in payload:
+            payload["metadata"] = _as_dict(payload.get("metadata"))
+        if "session_number" in payload:
+            try:
+                payload["session_number"] = int(payload.get("session_number") or 0)
+            except (TypeError, ValueError):
+                payload["session_number"] = 0
         return payload
 
     def _bind_session(self, session_id):
@@ -325,6 +335,7 @@ class SessionView(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(session.state.value))
             self.table.setItem(i, 3, QTableWidgetItem(session.campaign_id or ""))
         self.table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
         if self.ctx.selected_session_id:
             self._show_scenes()
 
@@ -363,6 +374,7 @@ class SessionView(QWidget):
             self.scene_table.setItem(i, 2, QTableWidgetItem(scene.scene_type.value if hasattr(scene.scene_type, "value") else str(scene.scene_type)))
             self.scene_table.setItem(i, 3, QTableWidgetItem(str(scene.order)))
         self.scene_table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
 
     def _add_scene(self):
         sid = self.ctx.selected_session_id

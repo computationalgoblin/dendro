@@ -78,3 +78,39 @@ class DrawerForm(QWidget):
     def _close_drawer(self):
         if self.ctx.drawer:
             self.ctx.drawer.close()
+
+
+class DrawerTextPrompt(DrawerForm):
+    """One-field text prompt inside RightDrawer."""
+
+    def __init__(self, ctx, title: str, label: str, on_accept, *, default: str = "", parent: QWidget | None = None):
+        self._callback = on_accept
+        super().__init__(ctx, title=title, parent=parent)
+        self.input = QLineEdit(default)
+        self.form_layout.addRow(label, self.input)
+
+    def _on_accept(self):
+        text = self.input.text().strip()
+        if text:
+            self._callback(text)
+        self._close_drawer()
+
+
+class DrawerSelectPrompt(DrawerForm):
+    """Single select prompt inside RightDrawer.
+
+    options are tuples of (label, value). Labels must be human-readable.
+    """
+
+    def __init__(self, ctx, title: str, label: str, options, on_accept, parent: QWidget | None = None):
+        self._callback = on_accept
+        self._options = list(options)
+        super().__init__(ctx, title=title, parent=parent)
+        self.combo = QComboBox()
+        for option_label, value in self._options:
+            self.combo.addItem(str(option_label), value)
+        self.form_layout.addRow(label, self.combo)
+
+    def _on_accept(self):
+        self._callback(self.combo.currentData())
+        self._close_drawer()

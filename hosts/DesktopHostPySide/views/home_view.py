@@ -217,6 +217,8 @@ class HomeView(QWidget):
         self._btn_settings = ConfigButton("Ajustes IA")
         self._btn_advanced = ConfigButton("Modo avanzado")
         self._btn_diagnostic = ConfigButton("Diagnóstico")
+        self._advanced_indicator = Badge("Modo avanzado activo", "info")
+        self._advanced_indicator.setVisible(False)
 
         self._btn_new.clicked.connect(lambda: self._action("new_project"))
         self._btn_open.clicked.connect(lambda: self._action("open_project"))
@@ -231,6 +233,7 @@ class HomeView(QWidget):
             self._btn_settings, self._btn_advanced, self._btn_diagnostic,
         ]:
             cfg_layout.addWidget(btn)
+        cfg_layout.addWidget(self._advanced_indicator)
         cfg_layout.addStretch()
 
         layout.addWidget(config_zone)
@@ -260,6 +263,9 @@ class HomeView(QWidget):
         self._callbacks[name] = callback
 
     def set_advanced_mode(self, enabled: bool):
+        self._btn_advanced.setText("Modo avanzado: ON" if enabled else "Modo avanzado")
+        self._btn_diagnostic.setVisible(bool(enabled))
+        self._advanced_indicator.setVisible(bool(enabled))
         self._btn_advanced.setStyleSheet(
             "QPushButton { background: #263244; border: 1px solid #5B7CFA; "
             "border-radius: 8px; padding: 6px 12px; color: #7DA4FF; font-size: 12px; } "

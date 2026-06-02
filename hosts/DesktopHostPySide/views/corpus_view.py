@@ -20,6 +20,7 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from hosts.DesktopHostPySide.widgets.inspector_panel import InspectorPanel
+from hosts.DesktopHostPySide.widgets.technical_visibility import set_columns_visible
 from packages.domain.entity import (
     CanonState,
     CertaintyLevel,
@@ -86,7 +87,7 @@ class CorpusView(QWidget):
         body = QHBoxLayout()
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "Type", "Canon", "Visibility"])
+        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Tipo", "Canon", "Visibilidad"])
         self.table.itemSelectionChanged.connect(self._show_detail)
         self.table.doubleClicked.connect(self._detail_dialog)
         body.addWidget(self.table, 3)
@@ -126,6 +127,11 @@ class CorpusView(QWidget):
             self.table.setItem(i, 3, QTableWidgetItem(entity.canon_state.value))
             self.table.setItem(i, 4, QTableWidgetItem(entity.visibility_state.value))
         self.table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.table, [0], bool(enabled))
+        self.inspector.set_advanced_mode(enabled)
 
     def _selected_entity_id(self):
         row = self.table.currentRow()
@@ -176,25 +182,33 @@ class CorpusView(QWidget):
         relation_lines = []
         for relation in relations:
             rel_type = relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
-            relation_lines.append(f"- {relation.id} :: {relation.source_id} --{rel_type}--> {relation.target_id}")
+            if self.ctx.advanced_mode:
+                relation_lines.append(f"- {relation.id} :: {relation.source_id} --{rel_type}--> {relation.target_id}")
+            else:
+                relation_lines.append(f"- {rel_type}")
         lines = [
-            f"ID: {entity.id}",
-            f"Name: {entity.name}",
-            f"Type: {entity.entity_type.value}",
+            f"Nombre: {entity.name}",
+            f"Tipo: {entity.entity_type.value}",
             f"Canon: {entity.canon_state.value}",
-            f"Visibility: {entity.visibility_state.value}",
-            f"Description: {entity.brief_description or '—'}",
-            f"Extended: {getattr(entity, 'extended_description', None) or '—'}",
-            f"Domain: {getattr(entity, 'domain', None) or '—'}",
-            f"Layers: {', '.join(getattr(entity, 'layers', [])) or '—'}",
-            f"Domain IDs: {', '.join(getattr(entity, 'domain_ids', [])) or '—'}",
-            f"Layer IDs: {', '.join(getattr(entity, 'layer_ids', [])) or '—'}",
+            f"Visibilidad: {entity.visibility_state.value}",
+            f"Descripción: {entity.brief_description or '—'}",
+            f"Descripción extendida: {getattr(entity, 'extended_description', None) or '—'}",
+            f"Dominio: {getattr(entity, 'domain', None) or '—'}",
+            f"Capas: {', '.join(getattr(entity, 'layers', [])) or '—'}",
             f"Tags: {', '.join(getattr(entity, 'tags', [])) or '—'}",
-            f"Metadata: {getattr(entity, 'custom_metadata', {})}",
             "",
-            "Linked relations:",
-            *(relation_lines or ["- (none)"]),
+            "Relaciones vinculadas:",
+            *(relation_lines or ["- (ninguna)"]),
         ]
+        if self.ctx.advanced_mode:
+            lines.extend([
+                "",
+                "Datos técnicos — Modo avanzado",
+                f"ID: {entity.id}",
+                f"Domain IDs: {', '.join(getattr(entity, 'domain_ids', [])) or '—'}",
+                f"Layer IDs: {', '.join(getattr(entity, 'layer_ids', [])) or '—'}",
+                f"Metadata: {getattr(entity, 'custom_metadata', {})}",
+            ])
         txt.setPlainText("\n".join(lines))
         lo.addWidget(txt)
         btn_close = QPushButton("Cerrar")
@@ -231,9 +245,12 @@ class CorpusView(QWidget):
     def _inspector_payload(self, values):
         payload = dict(values)
         for key in ("aliases", "tags", "layers", "domain_ids", "layer_ids"):
-            payload[key] = _split_csv(payload.get(key))
-        payload["custom_metadata"] = _as_dict(payload.get("custom_metadata"))
-        payload["custom_fields"] = _as_list(payload.get("custom_fields"))
+            if key in payload:
+                payload[key] = _split_csv(payload.get(key))
+        if "custom_metadata" in payload:
+            payload["custom_metadata"] = _as_dict(payload.get("custom_metadata"))
+        if "custom_fields" in payload:
+            payload["custom_fields"] = _as_list(payload.get("custom_fields"))
         return payload
 
     def _save_inspector(self, entity_id, values):
@@ -266,7 +283,6 @@ class CorpusView(QWidget):
         rel_count = len(self.ec.relations_for(entity.id))
         self.detail.setText(
             f"{entity.entity_type.value}: {entity.name}\n"
-            f"ID: {entity.id}\n"
             f"Desc: {entity.brief_description or '(sin desc)'}\n"
             f"Canon: {entity.canon_state.value} | Vis: {entity.visibility_state.value} | Relaciones: {rel_count}"
         )

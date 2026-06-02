@@ -7,10 +7,10 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -31,6 +31,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     enum_human,
     make_scroll_area,
 )
+from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
 from packages.application.export_service import ExportService
 from packages.domain.result import Error
 
@@ -353,38 +354,63 @@ class ImportExportView(QWidget):
             self.detail.setPlainText(str(result.value))
 
     def _export_single(self):
-        kind, ok = QInputDialog.getItem(self, "Exportar", "Tipo:", ["entity", "session", "campaign"], 0, False)
-        if not ok:
-            return
-        audience, ok = QInputDialog.getItem(self, "Exportar", "Audiencia:", ["gm", "player", "public"], 0, False)
-        if not ok:
-            return
         project = self._project()
+        drawer = self.ctx.drawer
         if project is None:
             self.detail.setPlainText("No active project")
             return
-        if kind == "entity":
-            options = [f"{entity.name} ({entity.id})" for entity in project.entities]
-            item, ok = QInputDialog.getItem(self, "Entidad", "Selecciona:", options, 0, False)
-            if not ok or not item:
-                return
-            entity_id = item[item.rfind("(") + 1 : -1]
-            result = self.export.export_entity_profile(entity_id, audience)
-        elif kind == "session":
-            options = [f"{session.name} ({session.id})" for session in project.sessions]
-            item, ok = QInputDialog.getItem(self, "Sesión", "Selecciona:", options, 0, False)
-            if not ok or not item:
-                return
-            session_id = item[item.rfind("(") + 1 : -1]
-            result = self.export.export_session_player_summary(session_id)
-        else:
-            options = [f"{campaign.name} ({campaign.id})" for campaign in project.campaigns]
-            item, ok = QInputDialog.getItem(self, "Campaña", "Selecciona:", options, 0, False)
-            if not ok or not item:
-                return
-            campaign_id = item[item.rfind("(") + 1 : -1]
-            result = self.export.export_campaign_report(campaign_id, audience)
-        if isinstance(result, Error):
-            self.detail.setPlainText(f"Error: {result.error}")
-        else:
-            self.detail.setPlainText(str(result.value))
+        if drawer is None:
+            return
+
+        view = self
+
+        class _ExportSingleForm(DrawerForm):
+            def __init__(self, ctx):
+                super().__init__(ctx, title="Exportar elemento")
+                self.kind = QComboBox()
+                self.kind.addItems(["entity", "session", "campaign"])
+                self.audience = QComboBox()
+                self.audience.addItems(["gm", "player", "public"])
+                self.item = QComboBox()
+                self.kind.currentTextChanged.connect(self._reload_items)
+                self.form_layout.addRow("Tipo:", self.kind)
+                self.form_layout.addRow("Audiencia:", self.audience)
+                self.form_layout.addRow("Elemento:", self.item)
+                self._reload_items()
+
+            def _reload_items(self):
+                self.item.clear()
+                kind = self.kind.currentText()
+                if kind == "entity":
+                    for entity in project.entities:
+                        self.item.addItem(entity.name, entity.id)
+                elif kind == "session":
+                    for session in project.sessions:
+                        self.item.addItem(session.name, session.id)
+                else:
+                    for campaign in project.campaigns:
+                        self.item.addItem(campaign.name, campaign.id)
+
+            def _on_accept(self):
+                kind = self.kind.currentText()
+                audience = self.audience.currentText()
+                item_id = self.item.currentData()
+                if not item_id:
+                    view.detail.setPlainText("No hay elemento seleccionable")
+                    self._close_drawer()
+                    return
+                if kind == "entity":
+                    result = view.export.export_entity_profile(item_id, audience)
+                elif kind == "session":
+                    result = view.export.export_session_player_summary(item_id)
+                else:
+                    result = view.export.export_campaign_report(item_id, audience)
+                if isinstance(result, Error):
+                    view.detail.setPlainText(f"Error: {result.error}")
+                else:
+                    view.detail.setPlainText(str(result.value))
+                self._close_drawer()
+
+        form = _ExportSingleForm(self.ctx)
+        drawer.set_content(form, title="Exportar elemento")
+        drawer.open()

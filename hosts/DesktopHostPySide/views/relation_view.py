@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerForm
+from hosts.DesktopHostPySide.widgets.technical_visibility import set_columns_visible
 from packages.domain.result import Error
 
 
@@ -34,9 +35,8 @@ class RelationCreateForm(DrawerForm):
         self._src = QComboBox()
         self._tgt = QComboBox()
         for e in entities:
-            label = f"{e.name} ({e.id[:8]})"
-            self._src.addItem(label, e.id)
-            self._tgt.addItem(label, e.id)
+            self._src.addItem(e.name, e.id)
+            self._tgt.addItem(e.name, e.id)
         self._type_cb = QComboBox()
         self._type_cb.addItems([
             "es_aliado_de", "es_enemigo_de", "ubicado_en",
@@ -146,6 +146,10 @@ class RelationView(QWidget):
                 relation.canon_state.value if hasattr(relation.canon_state, "value") else str(relation.canon_state)
             ))
         self.table.resizeColumnsToContents()
+        self.set_advanced_mode(self.ctx.advanced_mode)
+
+    def set_advanced_mode(self, enabled: bool):
+        set_columns_visible(self.table, [3], bool(enabled))
 
     def _entity_name(self, entity_id):
         project = self.rc.ps.active_project

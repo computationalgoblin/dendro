@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hosts.DesktopHostPySide.widgets.technical_visibility import is_technical_field
+
 
 class InspectorPanel(QWidget):
     """Contextual right-side editor with Save/Revert/Copy ID affordances."""
@@ -36,6 +38,7 @@ class InspectorPanel(QWidget):
         self._on_save: Callable[[dict[str, Any]], Any] | None = None
         self._on_revert: Callable[[], None] | None = None
         self._object_id = ""
+        self._advanced_mode = False
 
         layout = QVBoxLayout(self)
         self.title = QLabel(title)
@@ -44,6 +47,7 @@ class InspectorPanel(QWidget):
 
         self.id_label = QLabel("ID: —")
         self.id_label.setTextInteractionFlags(self.id_label.textInteractionFlags() | self.id_label.textInteractionFlags())
+        self.id_label.setVisible(False)
         layout.addWidget(self.id_label)
 
         self.form = QFormLayout()
@@ -56,6 +60,7 @@ class InspectorPanel(QWidget):
         self.revert_button.clicked.connect(self.revert)
         self.copy_id_button = QPushButton("Copiar ID")
         self.copy_id_button.clicked.connect(self.copy_id)
+        self.copy_id_button.setVisible(False)
         buttons.addWidget(self.save_button)
         buttons.addWidget(self.revert_button)
         buttons.addWidget(self.copy_id_button)
@@ -73,9 +78,11 @@ class InspectorPanel(QWidget):
         self._object_id = ""
         self.title.setText("Inspector")
         self.id_label.setText(message)
+        self.id_label.setVisible(False)
         self.save_button.setEnabled(False)
         self.revert_button.setEnabled(False)
         self.copy_id_button.setEnabled(False)
+        self.copy_id_button.setVisible(self._advanced_mode)
 
     def bind(
         self,
@@ -94,8 +101,11 @@ class InspectorPanel(QWidget):
         self._object_id = object_id
         self.title.setText(title)
         self.id_label.setText(f"ID: {object_id}")
+        self.id_label.setVisible(self._advanced_mode)
         for spec in fields:
             name = spec["name"]
+            if not self._advanced_mode and is_technical_field(name, spec.get("label")):
+                continue
             value = spec.get("value", "")
             widget = self._make_widget(spec, value)
             self._fields[name] = widget
@@ -103,13 +113,21 @@ class InspectorPanel(QWidget):
             self.form.addRow(spec.get("label", name), widget)
         self.save_button.setEnabled(True)
         self.revert_button.setEnabled(True)
-        self.copy_id_button.setEnabled(bool(object_id))
+        self.copy_id_button.setEnabled(bool(object_id) and self._advanced_mode)
+        self.copy_id_button.setVisible(self._advanced_mode)
 
     def values(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
         for name, widget in self._fields.items():
             data[name] = self._widget_value(widget)
         return data
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        """Show/hide technical affordances; caller rebinds fields on refresh."""
+        self._advanced_mode = bool(enabled)
+        self.id_label.setVisible(self._advanced_mode and bool(self._object_id))
+        self.copy_id_button.setVisible(self._advanced_mode)
+        self.copy_id_button.setEnabled(self._advanced_mode and bool(self._object_id))
 
     def save(self) -> None:
         if self._on_save is None:
