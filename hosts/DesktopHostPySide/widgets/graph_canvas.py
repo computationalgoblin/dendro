@@ -76,6 +76,7 @@ class _NodeView:
     subtitle: str
     canon: str
     visibility: str
+    proposed: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class _EdgeView:
     target_id: str
     kind: str
     label: str
+    proposed: bool = False
 
 
 def _enum_value(value: Any, default: str = "") -> str:
@@ -126,6 +128,48 @@ def _relation_view(relation: Any) -> _EdgeView:
     )
 
 
+def _candidate_is_pending_ai(candidate: Any) -> bool:
+    source = str(getattr(candidate, "source", "")).lower()
+    state = _enum_value(getattr(candidate, "state", None), "")
+    return source in {"ia", "ai"} and state in {"pendiente", "requiere_revision"}
+
+
+def _candidate_node_view(candidate: Any) -> _NodeView | None:
+    data = dict(getattr(candidate, "proposed_data", {}) or {})
+    name = data.get("name") or getattr(candidate, "title", "")
+    if not name:
+        return None
+    kind = str(data.get("entity_type") or data.get("type") or "concepto")
+    return _NodeView(
+        entity=candidate,
+        entity_id=f"cand_node_{getattr(candidate, 'id', '')}",
+        name=str(name),
+        kind=kind,
+        subtitle="Sugerencia IA · no canon",
+        canon="propuesto",
+        visibility="privado",
+        proposed=True,
+    )
+
+
+def _candidate_edge_view(candidate: Any, known_entity_ids: set[str]) -> _EdgeView | None:
+    data = dict(getattr(candidate, "proposed_data", {}) or {})
+    source_id = str(data.get("source_id") or "")
+    target_id = str(data.get("target_id") or "")
+    if not source_id or not target_id or source_id not in known_entity_ids or target_id not in known_entity_ids:
+        return None
+    kind = str(data.get("relation_type") or "esta_relacionado_con")
+    return _EdgeView(
+        relation=candidate,
+        relation_id=f"cand_rel_{getattr(candidate, 'id', '')}",
+        source_id=source_id,
+        target_id=target_id,
+        kind=kind,
+        label=f"IA · {enum_human(kind)}",
+        proposed=True,
+    )
+
+
 def _fit_text(text: str, max_chars: int) -> str:
     text = (text or "").replace("\n", " ").strip()
     return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
@@ -145,7 +189,9 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setZValue(2)
 
         color = QColor(_NODE_COLORS.get(node.kind.lower(), "#8EA4C8"))
-        self._normal_pen = QPen(QColor("#F7F1E8"), 2.0)
+        self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0)
+        if node.proposed:
+            self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 4.0)
         self.setBrush(QBrush(color.lighter(112)))
         self.setPen(self._normal_pen)
@@ -195,8 +241,10 @@ class GraphEdgeItem(QGraphicsPathItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setZValue(1)
-        color = QColor(_EDGE_COLORS.get(edge.kind.lower(), "#A4AEC0"))
-        self._normal_pen = QPen(color, 2.2)
+        color = QColor("#DCA35F" if edge.proposed else _EDGE_COLORS.get(edge.kind.lower(), "#A4AEC0"))
+        self._normal_pen = QPen(color, 2.6 if edge.proposed else 2.2)
+        if edge.proposed:
+            self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._normal_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         self._selected_pen = QPen(color.lighter(135), 4.0)
         self._selected_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -404,6 +452,7 @@ class GraphCanvasWidget(QWidget):
         super().__init__()
         self.ctx = ctx
         self._advanced_mode = bool(ctx.advanced_mode)
+        self.ai_controller = None
         self._build()
 
     def _build(self):
@@ -424,6 +473,15 @@ class GraphCanvasWidget(QWidget):
         self.stats = QLabel("Sin proyecto")
         self.stats.setObjectName("mutedLabel")
         header_layout.addWidget(self.stats)
+        self.ai_status = QLabel("IA: candidatos revisables")
+        self.ai_status.setObjectName("mutedLabel")
+        header_layout.addWidget(self.ai_status)
+        self.btn_ai_nodes = QPushButton("IA nodos faltantes")
+        self.btn_ai_nodes.clicked.connect(lambda: self.run_graph_ai_action("suggest_missing_nodes"))
+        header_layout.addWidget(self.btn_ai_nodes)
+        self.btn_ai_relations = QPushButton("IA relaciones")
+        self.btn_ai_relations.clicked.connect(lambda: self.run_graph_ai_action("suggest_missing_relations"))
+        header_layout.addWidget(self.btn_ai_relations)
         self.btn_fit = QPushButton("Enfocar todo")
         self.btn_fit.clicked.connect(self._fit_all)
         header_layout.addWidget(self.btn_fit)
@@ -442,6 +500,30 @@ class GraphCanvasWidget(QWidget):
     def _project(self):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
+
+    def set_ai_controller(self, ai_controller):
+        self.ai_controller = ai_controller
+        available = ai_controller is not None
+        self.btn_ai_nodes.setEnabled(available)
+        self.btn_ai_relations.setEnabled(available)
+        if not available:
+            self.ai_status.setText("IA contextual no disponible")
+
+    def run_graph_ai_action(self, action_type: str):
+        if self.ai_controller is None:
+            self.ai_status.setText("IA contextual no disponible")
+            return
+        project = self._project()
+        entity_ids = [getattr(entity, "id", "") for entity in getattr(project, "entities", []) or [] if getattr(entity, "id", "")]
+        relation_ids = [getattr(relation, "id", "") for relation in getattr(project, "relations", []) or [] if getattr(relation, "id", "")]
+        self.btn_ai_nodes.setEnabled(False)
+        self.btn_ai_relations.setEnabled(False)
+        self.ai_status.setText("IA grafo…")
+        result = self.ai_controller.graph_action(action_type, entity_ids=entity_ids, relation_ids=relation_ids)
+        self.ai_status.setText(self.ai_controller.result_summary(result))
+        self.btn_ai_nodes.setEnabled(True)
+        self.btn_ai_relations.setEnabled(True)
+        self.refresh()
 
     def _entity_selected(self, entity_id: str):
         self.ctx.selected_entity_id = entity_id
@@ -474,6 +556,21 @@ class GraphCanvasWidget(QWidget):
             return
         entities = [_entity_view(entity) for entity in (getattr(project, "entities", []) or [])]
         relations = [_relation_view(relation) for relation in (getattr(project, "relations", []) or [])]
+        known_entity_ids = {node.entity_id for node in entities}
+        proposed_nodes = []
+        proposed_edges = []
+        for candidate in getattr(project, "candidates", []) or []:
+            if not _candidate_is_pending_ai(candidate):
+                continue
+            edge = _candidate_edge_view(candidate, known_entity_ids)
+            if edge is not None:
+                proposed_edges.append(edge)
+                continue
+            node = _candidate_node_view(candidate)
+            if node is not None:
+                proposed_nodes.append(node)
+        entities.extend(proposed_nodes)
+        relations.extend(proposed_edges)
         if not entities:
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
@@ -483,7 +580,10 @@ class GraphCanvasWidget(QWidget):
         self.empty.setVisible(False)
         self.canvas.setVisible(True)
         self.canvas.set_graph(entities, relations)
-        self.stats.setText(f"{len(entities)} nodos · {len(relations)} relaciones")
+        suffix = ""
+        if proposed_nodes or proposed_edges:
+            suffix = f" · IA {len(proposed_nodes)} nodos/{len(proposed_edges)} relaciones"
+        self.stats.setText(f"{len(entities) - len(proposed_nodes)} nodos · {len(relations) - len(proposed_edges)} relaciones{suffix}")
 
     def set_advanced_mode(self, enabled: bool):
         self._advanced_mode = bool(enabled)

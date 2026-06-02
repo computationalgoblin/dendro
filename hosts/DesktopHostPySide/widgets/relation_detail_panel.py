@@ -41,12 +41,13 @@ def _split_lines(text: str) -> list[str]:
 class RelationDetailPanel(QWidget):
     """Contextual relation editor shown inside the global RightDrawer."""
 
-    def __init__(self, ctx: AppContext, relation_controller, relation_id: str, *, on_saved=None):
+    def __init__(self, ctx: AppContext, relation_controller, relation_id: str, *, on_saved=None, ai_controller=None):
         super().__init__()
         self.ctx = ctx
         self.relation_controller = relation_controller
         self.relation_id = relation_id
         self.on_saved = on_saved
+        self.ai_controller = ai_controller
         self._relation = None
         self._build()
         self.refresh()
@@ -124,10 +125,24 @@ class RelationDetailPanel(QWidget):
 
         self.ai_box = QGroupBox("IA contextual")
         ai_layout = QVBoxLayout(self.ai_box)
-        for label in ["Profundizar relación", "Sugerir evolución", "Detectar contradicción"]:
-            button = QPushButton(f"{label} · Requiere IA contextual")
-            button.setEnabled(False)
+        self.ai_result_label = QLabel("Las sugerencias IA se guardan como candidatos/previews revisables; no modifican canon.")
+        self.ai_result_label.setObjectName("mutedLabel")
+        self.ai_result_label.setWordWrap(True)
+        ai_layout.addWidget(self.ai_result_label)
+        ai_actions = [
+            ("Profundizar relación", "deepen"),
+            ("Sugerir evolución", "suggest_evolution"),
+            ("Detectar contradicción", "detect_contradiction"),
+        ]
+        self.ai_buttons = []
+        for label, action_type in ai_actions:
+            button = QPushButton(label)
+            button.setEnabled(self.ai_controller is not None)
+            button.clicked.connect(lambda checked=False, action=action_type: self.run_ai_action(action))
+            self.ai_buttons.append(button)
             ai_layout.addWidget(button)
+        if self.ai_controller is None:
+            self.ai_result_label.setText("IA contextual no disponible en esta sesión.")
         layout.addWidget(self.ai_box)
 
         self.technical_box = QGroupBox("Datos técnicos")
@@ -226,6 +241,18 @@ class RelationDetailPanel(QWidget):
 
     def set_advanced_mode(self, enabled: bool):
         self.technical_box.setVisible(bool(enabled))
+
+    def run_ai_action(self, action_type: str):
+        if self.ai_controller is None:
+            self.ai_result_label.setText("IA contextual no disponible.")
+            return
+        for button in getattr(self, "ai_buttons", []):
+            button.setEnabled(False)
+        self.ai_result_label.setText("Ejecutando IA contextual…")
+        result = self.ai_controller.relation_action(self.relation_id, action_type)
+        self.ai_result_label.setText(self.ai_controller.result_summary(result))
+        for button in getattr(self, "ai_buttons", []):
+            button.setEnabled(True)
 
     def save(self):
         if self._relation is None:

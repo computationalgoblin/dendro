@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.relation_create_panel import RelationCreatePanel
@@ -50,6 +51,12 @@ class CreationWorkspace(QTabWidget):
         self.layer_view = layer_view
         self.entity_controller = getattr(corpus_view, "ec", None)
         self.relation_controller = getattr(relation_view, "rc", None)
+        self.ai_context_controller = None
+        project_controller = getattr(ctx, "project_controller", None)
+        project_service = getattr(project_controller, "ps", None)
+        if project_service is not None:
+            self.ai_context_controller = AIContextController(project_service)
+        self.graph.set_ai_controller(self.ai_context_controller)
         self.graph.entitySelected.connect(self._open_node_panel)
         self.graph.relationSelected.connect(self._open_relation_panel)
         self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
@@ -100,6 +107,7 @@ class CreationWorkspace(QTabWidget):
             self.entity_controller,
             entity_id,
             on_saved=self.refresh,
+            ai_controller=self.ai_context_controller,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()
@@ -113,6 +121,7 @@ class CreationWorkspace(QTabWidget):
             self.relation_controller,
             relation_id,
             on_saved=self.refresh,
+            ai_controller=self.ai_context_controller,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
