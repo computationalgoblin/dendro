@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QGridLayout,
-    QLabel,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
     Card,
@@ -34,7 +34,7 @@ class CreationWorkspace(QTabWidget):
                  source_view=None, layer_view=None):
         super().__init__()
         self.ctx = ctx
-        self.graph = GraphPlaceholderView(ctx)
+        self.graph = GraphCanvasWidget(ctx)
         self.import_export_view = import_export_view
         self.writing_view = writing_view
         self.timeline_view = timeline_view
@@ -81,51 +81,6 @@ class CreationWorkspace(QTabWidget):
                        self.source_view, self.layer_view]:
             if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
-
-
-class GraphPlaceholderView(QWidget):
-    """Graph overview — shows entity/relation counts and quick-create actions."""
-
-    def __init__(self, ctx: AppContext):
-        super().__init__()
-        self.ctx = ctx
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(16)
-        layout.addWidget(SectionHeader(
-            "Vista de grafo",
-            "Resumen de entidades y relaciones del proyecto. Usa las acciones para crear nodos."
-        ))
-        self._stats = QLabel("")
-        self._stats.setWordWrap(True)
-        layout.addWidget(self._stats)
-        layout.addStretch()
-
-    def _project(self):
-        pc = self.ctx.project_controller
-        return pc.ps.active_project if pc else None
-
-    def refresh(self):
-        p = self._project()
-        if p is None:
-            self._stats.setText("Abre un proyecto para ver el grafo narrativo.")
-            return
-        entities = getattr(p, "entities", []) or []
-        relations = getattr(p, "relations", []) or []
-        by_type: dict[str, int] = {}
-        for e in entities:
-            key = str(getattr(e, "entity_type", "otro"))
-            by_type[key] = by_type.get(key, 0) + 1
-        lines = [f"Entidades: {len(entities)}  |  Relaciones: {len(relations)}"]
-        if by_type:
-            lines.append("Por tipo: " + ", ".join(f"{k}: {v}" for k, v in sorted(by_type.items())))
-        self._stats.setText("\n".join(lines))
-
-    def set_advanced_mode(self, enabled: bool):
-        return
 
 
 class GalleryWorkspace(QWidget):
