@@ -79,6 +79,23 @@ QTabBar::tab {
     margin-right: 2px;
 }
 QTabBar::tab:selected { background: #263244; color: white; }
+/* B31: subtle scrollbars for studio feel */
+QScrollBar:vertical {
+    background: transparent; width: 8px; margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #2A3344; border-radius: 4px; min-height: 30px;
+}
+QScrollBar::handle:vertical:hover { background: #3A4558; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background: transparent; height: 8px; margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background: #2A3344; border-radius: 4px; min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover { background: #3A4558; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
 

@@ -1,9 +1,15 @@
-"""MainWindow — B27.5 product shell with Creation/Gallery/Session workspaces."""
+"""MainWindow — B31 immersive home + fullscreen navigation.
+
+Architecture:
+  HomeView (portal with 3 cards) → fullscreen Creation/Gallery/Session
+  No permanent sidebar. Return button inside each space.
+  All existing views/controllers preserved and re-homed.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -11,11 +17,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QPushButton,
-    QSplitter,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
@@ -46,6 +49,7 @@ from hosts.DesktopHostPySide.views.campaign_view import CampaignView, FactionFro
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
 from hosts.DesktopHostPySide.views.framework_view import FrameworkView
+from hosts.DesktopHostPySide.views.home_view import HomeView
 from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
 from hosts.DesktopHostPySide.views.issues_history_view import IssuesHistoryView
 from hosts.DesktopHostPySide.views.layer_view import LayerView
@@ -59,8 +63,15 @@ from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryW
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
 
 
+# Index constants for the stack widget
+_IDX_HOME = 0
+_IDX_CREATION = 1
+_IDX_GALLERY = 2
+_IDX_SESSION = 3
+
+
 class MainWindow(QMainWindow):
-    """Three-space product shell: Creación, Galería, Sesión."""
+    """Immersive home + fullscreen space navigation (B31-T01)."""
 
     def __init__(self):
         super().__init__()
@@ -77,6 +88,8 @@ class MainWindow(QMainWindow):
         self._build_views()
         self._build_shell()
         self._refresh_all_views()
+
+    # ── Controllers ──────────────────────────────────────────────────────────
 
     def _build_controllers(self):
         ps = self.controller.ps
@@ -108,8 +121,10 @@ class MainWindow(QMainWindow):
         self.src = SourceController(project_service=ps)
         self.lc = LayerController(project_service=ps)
 
+    # ── Views ────────────────────────────────────────────────────────────────
+
     def _build_views(self):
-        # Existing connected views are preserved and re-homed inside product workspaces.
+        # All existing connected views are preserved.
         self.corpus_view = CorpusView(self.ctx, self.ec)
         self.relation_view = RelationView(self.ctx, self.rc)
         self.candidate_view = CandidateView(self.ctx, self.cc)
@@ -126,6 +141,20 @@ class MainWindow(QMainWindow):
         self.source_view = SourceView(self.ctx, self.src)
         self.layer_view = LayerView(self.ctx, self.lc)
 
+        # Home portal
+        self.home_view = HomeView(self.ctx)
+        self.home_view.register_callback("navigate_creation", lambda: self._go_space(_IDX_CREATION))
+        self.home_view.register_callback("navigate_gallery", lambda: self._go_space(_IDX_GALLERY))
+        self.home_view.register_callback("navigate_session", lambda: self._go_space(_IDX_SESSION))
+        self.home_view.register_callback("new_project", self._new_project)
+        self.home_view.register_callback("open_project", self._open_project)
+        self.home_view.register_callback("save_project", self._save)
+        self.home_view.register_callback("close_project", self._close_project)
+        self.home_view.register_callback("ai_settings", self._test_ai)
+        self.home_view.register_callback("toggle_advanced", self._toggle_advanced)
+        self.home_view.register_callback("toggle_diagnostic", self._toggle_diagnostic)
+
+        # Workspaces (preserve existing views inside them)
         self.creation_workspace = CreationWorkspace(
             self.ctx,
             corpus_view=self.corpus_view,
@@ -149,106 +178,137 @@ class MainWindow(QMainWindow):
             issues_view=self.issues_view,
         )
 
+    # ── Shell ────────────────────────────────────────────────────────────────
+
     def _build_shell(self):
         cw = QWidget()
         self.setCentralWidget(cw)
         root = QVBoxLayout(cw)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        top = QHBoxLayout()
-        self.project_label = QLabel("Sin proyecto")
-        self.project_label.setStyleSheet("font-weight: 700;")
-        self.schema_label = QLabel("")
-        self.schema_label.setObjectName("mutedLabel")
-        self.ai_label = QLabel(self.ai.provider_info())
-        self.ai_label.setObjectName("mutedLabel")
-        top.addWidget(self.project_label)
-        top.addStretch()
-        top.addWidget(self.schema_label)
-        top.addWidget(QLabel("IA:"))
-        top.addWidget(self.ai_label)
-        root.addLayout(top)
+        # Top bar: always visible, minimal
+        topbar = self._build_topbar()
+        root.addWidget(topbar)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_sidebar())
-
+        # Stack: home + 3 spaces
         self.stack = QStackedWidget()
-        for widget in [self.creation_workspace, self.gallery_workspace, self.session_workspace]:
-            self.stack.addWidget(widget)
-        splitter.addWidget(self.stack)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter)
+        self.stack.addWidget(self.home_view)        # 0 - home
+        self.stack.addWidget(self._wrap_space(self.creation_workspace, "Creación", _IDX_HOME))  # 1
+        self.stack.addWidget(self._wrap_space(self.gallery_workspace, "Galería", _IDX_HOME))    # 2
+        self.stack.addWidget(self._wrap_space(self.session_workspace, "Sesión", _IDX_HOME))     # 3
+        root.addWidget(self.stack, stretch=1)
 
+        # Diagnostic log (hidden by default)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(150)
+        self.log.setMaximumHeight(140)
         self.log.setVisible(False)
         root.addWidget(self.log)
 
-        self.sidebar.setCurrentRow(0)
+        # Start at home
+        self.stack.setCurrentIndex(_IDX_HOME)
 
-    def _build_sidebar(self) -> QWidget:
-        shell = QFrame()
-        shell.setMaximumWidth(220)
-        shell.setMinimumWidth(190)
-        layout = QVBoxLayout(shell)
-        layout.setContentsMargins(0, 0, 0, 0)
+    def _build_topbar(self) -> QWidget:
+        bar = QFrame()
+        bar.setObjectName("topbar")
+        bar.setStyleSheet(
+            "QFrame#topbar { background: #0B0E13; border-bottom: 1px solid #1E2530; }"
+        )
+        bar.setFixedHeight(40)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 4, 16, 4)
         layout.setSpacing(10)
 
-        title = QLabel("Narrative\nArchitect")
-        title.setStyleSheet("font-size: 20px; font-weight: 800; padding: 10px;")
-        layout.addWidget(title)
+        self._top_project = QLabel("Narrative Architect")
+        self._top_project.setStyleSheet(
+            "font-weight: 700; font-size: 13px; color: #ECEFF4; "
+            "background: transparent; border: none;"
+        )
+        layout.addWidget(self._top_project)
 
-        self.sidebar = QListWidget()
-        for label in ["Creación", "Galería", "Sesión"]:
-            self.sidebar.addItem(QListWidgetItem(label))
-        self.sidebar.currentRowChanged.connect(self._navigate)
-        layout.addWidget(self.sidebar, stretch=1)
+        self._top_schema = QLabel("")
+        self._top_schema.setObjectName("mutedLabel")
+        self._top_schema.setStyleSheet("font-size: 11px; background: transparent; border: none;")
+        layout.addWidget(self._top_schema)
 
-        config = QFrame()
-        config.setStyleSheet("QFrame { background: #0B0E13; border-radius: 12px; }")
-        cfg = QVBoxLayout(config)
-        cfg.setContentsMargins(10, 10, 10, 10)
-        cfg.setSpacing(8)
-        cfg.addWidget(QLabel("Proyecto / Configuración"))
-        for text, handler in [
-            ("Nuevo proyecto", self._new_project),
-            ("Abrir proyecto", self._open_project),
-            ("Guardar proyecto", self._save),
-            ("Cerrar proyecto", self._close_project),
-            ("Test IA", self._test_ai),
-        ]:
-            btn = QPushButton(text)
-            btn.clicked.connect(handler)
-            cfg.addWidget(btn)
-        self.advanced_toggle = QCheckBox("Modo avanzado")
-        self.advanced_toggle.toggled.connect(self._set_advanced_mode)
-        cfg.addWidget(self.advanced_toggle)
-        self.debug_toggle = QCheckBox("Diagnóstico")
-        self.debug_toggle.toggled.connect(self._set_debug_visible)
-        cfg.addWidget(self.debug_toggle)
-        layout.addWidget(config)
-        return shell
+        layout.addStretch()
 
-    def _navigate(self, idx: int):
-        if idx < 0:
-            return
+        self._top_ai = QLabel(self.ai.provider_info())
+        self._top_ai.setObjectName("mutedLabel")
+        self._top_ai.setStyleSheet("font-size: 11px; background: transparent; border: none;")
+        layout.addWidget(self._top_ai)
+
+        return bar
+
+    def _wrap_space(self, workspace: QWidget, title: str, back_idx: int) -> QWidget:
+        """Wrap a workspace with a return button bar at the top."""
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Navigation bar
+        navbar = QFrame()
+        navbar.setObjectName("spaceNavbar")
+        navbar.setStyleSheet(
+            "QFrame#spaceNavbar { background: #0D1017; border-bottom: 1px solid #1E2530; }"
+        )
+        navbar.setFixedHeight(42)
+        nav_layout = QHBoxLayout(navbar)
+        nav_layout.setContentsMargins(12, 4, 16, 4)
+
+        back_btn = QPushButton("← Inicio")
+        back_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: 1px solid #2B3546; "
+            "border-radius: 8px; padding: 4px 12px; color: #8993A5; font-size: 12px; } "
+            "QPushButton:hover { background: #1A2030; color: #CDD5E0; }"
+        )
+        back_btn.clicked.connect(lambda: self._go_space(back_idx))
+        nav_layout.addWidget(back_btn)
+
+        space_title = QLabel(title)
+        space_title.setStyleSheet(
+            "font-size: 15px; font-weight: 700; color: #ECEFF4; "
+            "background: transparent; border: none;"
+        )
+        nav_layout.addWidget(space_title)
+        nav_layout.addStretch()
+
+        layout.addWidget(navbar)
+        layout.addWidget(workspace, stretch=1)
+        return wrapper
+
+    # ── Navigation ───────────────────────────────────────────────────────────
+
+    def _go_space(self, idx: int):
         self.stack.setCurrentIndex(idx)
         widget = self.stack.widget(idx)
-        if hasattr(widget, "refresh"):
-            try:
-                widget.refresh()
-            except Exception as exc:
-                self.log_msg(f"Error refreshing {type(widget).__name__}: {exc}")
-        self.log_msg(f"Navegación: {self.sidebar.item(idx).text()}")
+        # Refresh the space's content
+        if idx == _IDX_HOME:
+            self.home_view.refresh()
+        else:
+            # The actual workspace is inside the wrapper
+            wrapper = widget
+            if hasattr(wrapper, "layout"):
+                for i in range(wrapper.layout().count()):
+                    child = wrapper.layout().itemAt(i).widget()
+                    if child and hasattr(child, "refresh"):
+                        try:
+                            child.refresh()
+                        except Exception as exc:
+                            self.log_msg(f"Error refreshing: {exc}")
+        self.log_msg(f"Navegación: {'Inicio' if idx == _IDX_HOME else ['','Creación','Galería','Sesión'][idx]}")
+
+    # ── Project actions ──────────────────────────────────────────────────────
 
     def _new_project(self):
         name, ok = QInputDialog.getText(self, "Nuevo proyecto", "Nombre del proyecto:")
         if not ok or not name.strip():
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Guardar proyecto", f"{name.strip()}.json", "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar proyecto", f"{name.strip()}.json", "JSON (*.json)"
+        )
         if not path:
             return
         try:
@@ -286,47 +346,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.log_msg(f"Error guardando proyecto: {exc}")
 
-    def _set_advanced_mode(self, enabled: bool):
-        self.ctx.advanced_mode = bool(enabled)
-        for widget in [self.creation_workspace, self.gallery_workspace, self.session_workspace, self.import_export_view]:
-            if hasattr(widget, "set_advanced_mode"):
-                widget.set_advanced_mode(bool(enabled))
-        if not enabled and self.debug_toggle.isChecked():
-            self.debug_toggle.setChecked(False)
-        self.log_msg(f"Modo avanzado {'activado' if enabled else 'desactivado'}")
-        self._refresh_all_views()
-
-    def _set_debug_visible(self, enabled: bool):
-        self.log.setVisible(bool(enabled) and self.ctx.advanced_mode)
-        if enabled and not self.ctx.advanced_mode:
-            self.log_msg("Activa Modo avanzado para ver Diagnóstico")
-            self.debug_toggle.setChecked(False)
-
-    def _refresh(self):
-        try:
-            c = self.controller.counts()
-            if c:
-                self.project_label.setText(f"Proyecto: {c['name']}")
-                self.schema_label.setText(f"Schema v{c.get('schema', '?')}")
-            else:
-                self.project_label.setText("Sin proyecto")
-                self.schema_label.setText("")
-            self.ai_label.setText(self.ai.provider_info())
-        except Exception as exc:
-            self.log_msg(f"Refresh error: {exc}")
-
-    def _refresh_all_views(self):
-        self._refresh()
-        if not hasattr(self, "stack"):
-            return
-        for i in range(self.stack.count()):
-            widget = self.stack.widget(i)
-            if hasattr(widget, "refresh"):
-                try:
-                    widget.refresh()
-                except Exception as exc:
-                    self.log_msg(f"Error refreshing {type(widget).__name__}: {exc}")
-
     def _test_ai(self):
         result = self.ai.test_provider()
         if hasattr(result, "error"):
@@ -337,6 +356,57 @@ class MainWindow(QMainWindow):
             self.log_msg(f"AI ERROR: {resp.error}")
             return
         self.log_msg(f"AI: {resp.provider} — {resp.raw_text[:100]}")
+
+    def _toggle_advanced(self):
+        new_state = not self.ctx.advanced_mode
+        self.ctx.advanced_mode = new_state
+        for widget in [
+            self.creation_workspace, self.gallery_workspace,
+            self.session_workspace, self.import_export_view,
+            self.home_view,
+        ]:
+            if hasattr(widget, "set_advanced_mode"):
+                widget.set_advanced_mode(new_state)
+        self.log_msg(f"Modo avanzado {'activado' if new_state else 'desactivado'}")
+        self._refresh_all_views()
+
+    def _toggle_diagnostic(self):
+        visible = not self.log.isVisible()
+        self.log.setVisible(visible and self.ctx.advanced_mode)
+        if visible and not self.ctx.advanced_mode:
+            self.log_msg("Activa Modo avanzado para ver Diagnóstico")
+
+    # ── Refresh ──────────────────────────────────────────────────────────────
+
+    def _refresh(self):
+        try:
+            c = self.controller.counts()
+            if c:
+                self._top_project.setText(f"Narrative Architect — {c['name']}")
+                self._top_schema.setText(f"v{c.get('schema', '?')}")
+            else:
+                self._top_project.setText("Narrative Architect")
+                self._top_schema.setText("")
+            self._top_ai.setText(self.ai.provider_info())
+        except Exception as exc:
+            self.log_msg(f"Refresh error: {exc}")
+
+    def _refresh_all_views(self):
+        self._refresh()
+        self.home_view.refresh()
+        if not hasattr(self, "stack"):
+            return
+        for i in range(self.stack.count()):
+            widget = self.stack.widget(i)
+            # Unwrap if it's a space wrapper
+            if hasattr(widget, "layout"):
+                for j in range(widget.layout().count()):
+                    child = widget.layout().itemAt(j).widget()
+                    if child and hasattr(child, "refresh"):
+                        try:
+                            child.refresh()
+                        except Exception as exc:
+                            self.log_msg(f"Error refreshing {type(child).__name__}: {exc}")
 
     def log_msg(self, msg: str):
         if hasattr(self, "log"):
