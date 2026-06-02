@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QTabWidget,
     QTextEdit,
@@ -494,20 +495,45 @@ class SessionWorkspace(QTabWidget):
                 widget.refresh()
 
     def set_advanced_mode(self, enabled: bool):
-        return
+        if hasattr(self.overview, "set_advanced_mode"):
+            self.overview.set_advanced_mode(enabled)
 
 
 class SessionOverview(QWidget):
     def __init__(self, ctx: AppContext):
         super().__init__()
         self.ctx = ctx
+        self._advanced_mode = bool(ctx.advanced_mode)
+        self.selected_campaign_id: str | None = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        header = QWidget()
+        header.setObjectName("cardSurface")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(22, 16, 22, 16)
+        header_layout.setSpacing(10)
+        header_layout.addWidget(SectionHeader(
+            "Sesión",
+            "Estado de campaña para dirigir: relojes, frentes y facciones en una sola superficie tranquila."
+        ))
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Campaña:"))
+        self.campaign_selector = QComboBox()
+        self.campaign_selector.currentIndexChanged.connect(self._campaign_changed)
+        controls.addWidget(self.campaign_selector, 1)
+        self.status_label = QLabel("Sin campaña")
+        self.status_label.setObjectName("mutedLabel")
+        controls.addWidget(self.status_label)
+        header_layout.addLayout(controls)
+        root.addWidget(header)
+
         self.container = QWidget()
         self.layout_cards = QVBoxLayout(self.container)
         self.layout_cards.setContentsMargins(22, 22, 22, 22)
         self.layout_cards.setSpacing(14)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(make_scroll_area(self.container))
+        root.addWidget(make_scroll_area(self.container), 1)
 
     def _project(self):
         pc = self.ctx.project_controller
@@ -520,34 +546,210 @@ class SessionOverview(QWidget):
             if widget:
                 widget.deleteLater()
 
+    def _campaign_changed(self):
+        self.selected_campaign_id = self.campaign_selector.currentData()
+        self.refresh()
+
+    def _campaigns(self, project):
+        return list(getattr(project, "campaigns", []) or [])
+
+    def _selected_campaign(self, project):
+        campaigns = self._campaigns(project)
+        if not campaigns:
+            return None
+        if self.selected_campaign_id:
+            for campaign in campaigns:
+                if getattr(campaign, "id", "") == self.selected_campaign_id:
+                    return campaign
+        self.selected_campaign_id = getattr(campaigns[0], "id", "")
+        return campaigns[0]
+
+    def _populate_campaign_selector(self, project):
+        campaigns = self._campaigns(project)
+        current = self.selected_campaign_id
+        self.campaign_selector.blockSignals(True)
+        self.campaign_selector.clear()
+        for campaign in campaigns:
+            self.campaign_selector.addItem(getattr(campaign, "name", "Campaña"), getattr(campaign, "id", ""))
+        if current:
+            idx = self.campaign_selector.findData(current)
+            if idx >= 0:
+                self.campaign_selector.setCurrentIndex(idx)
+        self.campaign_selector.blockSignals(False)
+
+    def _clocks_for_campaign(self, project, campaign):
+        ids = set(getattr(campaign, "clock_ids", []) or [])
+        clocks = list(getattr(project, "campaign_clocks", []) or [])
+        return [clock for clock in clocks if not ids or getattr(clock, "id", "") in ids]
+
+    def _fronts_for_campaign(self, project, campaign):
+        campaign_clock_ids = set(getattr(campaign, "clock_ids", []) or [])
+        campaign_sessions = set(getattr(campaign, "session_ids", []) or [])
+        fronts = []
+        for front in getattr(project, "fronts", []) or []:
+            if getattr(front, "clock_id", None) in campaign_clock_ids:
+                fronts.append(front)
+                continue
+            if campaign_sessions and set(getattr(front, "session_ids", []) or []) & campaign_sessions:
+                fronts.append(front)
+        return fronts or list(getattr(project, "fronts", []) or [])
+
+    def _factions_for_campaign(self, project, campaign):
+        active_entities = set(getattr(campaign, "active_faction_entity_ids", []) or [])
+        factions = []
+        for faction in getattr(project, "factions", []) or []:
+            if not active_entities or getattr(faction, "entity_id", "") in active_entities or getattr(faction, "id", "") in active_entities:
+                factions.append(faction)
+        return factions
+
+    def _progress_card(self, clock):
+        current = max(0, int(getattr(clock, "current_value", 0) or 0))
+        max_value = max(1, int(getattr(clock, "max_value", 1) or 1))
+        card = Card(getattr(clock, "name", "Clock"), getattr(clock, "description", "") or "Reloj de campaña")
+        row = card.add_row()
+        row.addWidget(Badge(enum_human(str(getattr(getattr(clock, "state", None), "value", getattr(clock, "state", "activo")))), "warning"))
+        row.addStretch()
+        bar = QProgressBar()
+        bar.setRange(0, max_value)
+        bar.setValue(min(current, max_value))
+        bar.setFormat(f"{current}/{max_value}")
+        card.layout().addWidget(bar)
+        btn_row = card.add_row()
+        btn = QPushButton("Detalle")
+        btn.clicked.connect(lambda: self._open_detail("Clock", clock, [
+            ("Estado", enum_human(str(getattr(getattr(clock, "state", None), "value", getattr(clock, "state", ""))))),
+            ("Progreso", f"{current}/{max_value}"),
+            ("Condiciones de avance", ", ".join(getattr(clock, "advance_conditions", []) or []) or "—"),
+        ]))
+        btn_row.addStretch()
+        btn_row.addWidget(btn)
+        return card
+
+    def _simple_card(self, title: str, subtitle: str, badge: str, tone: str, obj, details: list[tuple[str, str]]):
+        card = Card(title, subtitle or "Sin descripción")
+        row = card.add_row()
+        row.addWidget(Badge(badge, tone))
+        row.addStretch()
+        btn = QPushButton("Detalle")
+        btn.clicked.connect(lambda: self._open_detail(badge, obj, details))
+        row.addWidget(btn)
+        return card
+
+    def _open_detail(self, title: str, obj, details: list[tuple[str, str]]):
+        if self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir detalle de sesión")
+            return
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
+        name = getattr(obj, "name", title)
+        layout.addWidget(SectionHeader(str(name), title))
+        description = getattr(obj, "description", "") or getattr(obj, "relation_with_pcs", "") or "Sin descripción"
+        desc = QLabel(str(description))
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        for label, value in details:
+            row = QHBoxLayout()
+            left = QLabel(label)
+            left.setObjectName("mutedLabel")
+            row.addWidget(left)
+            value_label = QLabel(value or "—")
+            value_label.setWordWrap(True)
+            row.addWidget(value_label, 1)
+            layout.addLayout(row)
+        technical = QTextEdit()
+        technical.setReadOnly(True)
+        technical.setPlainText(f"ID: {getattr(obj, 'id', '')}")
+        technical.setVisible(self._advanced_mode)
+        layout.addWidget(technical)
+        layout.addStretch()
+        self.ctx.drawer.set_content(panel, title="Sesión")
+        self.ctx.drawer.open()
+
     def refresh(self):
         self._clear()
-        p = self._project()
-        self.layout_cards.addWidget(SectionHeader(
-            "Sesión",
-            "Flujo dividido en Campaña, Preparación y En vivo/Post para evitar saturación."
-        ))
-        if p is None:
+        project = self._project()
+        if project is None:
+            self.campaign_selector.clear()
+            self.status_label.setText("Sin proyecto")
             self.layout_cards.addWidget(EmptyState("Sin proyecto", "Abre un proyecto desde Configuración."))
             self.layout_cards.addStretch()
             return
-        summary = [
-            ("Campañas", len(getattr(p, "campaigns", []) or []), "info"),
-            ("Sesiones", len(getattr(p, "sessions", []) or []), "info"),
-            ("Facciones", len(getattr(p, "factions", []) or []), "warning"),
-            ("Frentes", len(getattr(p, "fronts", []) or []), "warning"),
-            ("Clocks", len(getattr(p, "campaign_clocks", []) or []), "success"),
-            ("Pistas", len(getattr(p, "clues", []) or []), "success"),
-            ("Secretos", len(getattr(p, "secrets", []) or []), "danger"),
-        ]
-        grid_container = QWidget()
-        grid = QGridLayout(grid_container)
-        grid.setSpacing(12)
-        for idx, (title, count, tone) in enumerate(summary):
-            card = Card(title, f"{count} elementos")
-            row = card.add_row()
-            row.addWidget(Badge(str(count), tone))
-            row.addStretch()
-            grid.addWidget(card, idx // 3, idx % 3)
-        self.layout_cards.addWidget(grid_container)
+        self._populate_campaign_selector(project)
+        campaign = self._selected_campaign(project)
+        if campaign is None:
+            self.status_label.setText("Sin campañas")
+            self.layout_cards.addWidget(EmptyState("Sin campañas", "Crea una campaña para preparar sesiones."))
+            self.layout_cards.addStretch()
+            return
+        self.status_label.setText(enum_human(str(getattr(getattr(campaign, "state", None), "value", getattr(campaign, "state", "activa")))))
+        summary = Card(getattr(campaign, "name", "Campaña"), getattr(campaign, "description", "") or "Campaña activa")
+        row = summary.add_row()
+        for label, value, tone in [
+            ("Sistema", getattr(campaign, "game_system", "") or "—", "info"),
+            ("Tono", getattr(campaign, "tone", "") or "—", "info"),
+            ("Sesiones", str(len(getattr(campaign, "session_ids", []) or [])), "success"),
+            ("Jugadores", str(len(getattr(campaign, "players", []) or [])), "success"),
+        ]:
+            row.addWidget(Badge(f"{label}: {value}", tone))
+        row.addStretch()
+        detail_row = summary.add_row()
+        detail_btn = QPushButton("Detalle campaña")
+        detail_btn.clicked.connect(lambda: self._open_detail("Campaña", campaign, [
+            ("Sistema", getattr(campaign, "game_system", "") or "—"),
+            ("Tono", getattr(campaign, "tone", "") or "—"),
+            ("Género", getattr(campaign, "genre", "") or "—"),
+        ]))
+        detail_row.addStretch()
+        detail_row.addWidget(detail_btn)
+        self.layout_cards.addWidget(summary)
+
+        clocks = self._clocks_for_campaign(project, campaign)
+        self.layout_cards.addWidget(SectionHeader("Clocks", "Progreso visual de amenazas, frentes y cuenta atrás."))
+        if clocks:
+            for clock in clocks:
+                self.layout_cards.addWidget(self._progress_card(clock))
+        else:
+            self.layout_cards.addWidget(EmptyState("Sin clocks", "No hay relojes asociados a esta campaña."))
+
+        fronts = self._fronts_for_campaign(project, campaign)
+        self.layout_cards.addWidget(SectionHeader("Frentes activos", "Procesos dinámicos y amenazas de la campaña."))
+        if fronts:
+            for front in fronts:
+                stage = getattr(front, "current_stage_index", 0)
+                stages = getattr(front, "stages", []) or []
+                subtitle = getattr(front, "description", "") or (stages[stage].description if stages and stage < len(stages) else "Frente narrativo")
+                self.layout_cards.addWidget(self._simple_card(
+                    getattr(front, "name", "Frente"),
+                    subtitle,
+                    enum_human(str(getattr(getattr(front, "state", None), "value", getattr(front, "state", "latente")))),
+                    "warning",
+                    front,
+                    [("Etapa", f"{stage + 1}/{len(stages) or 1}"), ("Tipo", enum_human(str(getattr(getattr(front, "front_type", None), "value", getattr(front, "front_type", "frente")))))]
+                ))
+        else:
+            self.layout_cards.addWidget(EmptyState("Sin frentes", "No hay frentes activos para esta campaña."))
+
+        factions = self._factions_for_campaign(project, campaign)
+        self.layout_cards.addWidget(SectionHeader("Facciones", "Actores activos y relaciones de presión."))
+        if factions:
+            for faction in factions:
+                self.layout_cards.addWidget(self._simple_card(
+                    getattr(faction, "name", "Facción"),
+                    getattr(faction, "relation_with_pcs", "") or getattr(faction, "ideology", "") or "Facción activa",
+                    enum_human(str(getattr(getattr(faction, "state", None), "value", getattr(faction, "state", "activa")))),
+                    "info",
+                    faction,
+                    [("Aliados", str(len(getattr(faction, "ally_faction_ids", []) or []))), ("Enemigos", str(len(getattr(faction, "enemy_faction_ids", []) or []))), ("Recursos", ", ".join(getattr(faction, "resources", []) or []) or "—")]
+                ))
+        else:
+            self.layout_cards.addWidget(EmptyState("Sin facciones", "No hay facciones activas vinculadas."))
+
+        self.layout_cards.addWidget(SectionHeader("Siguientes zonas", "Preparación/escenas y Live/Post se completan en T10B/T10C."))
+        self.layout_cards.addWidget(EmptyState("Preparación y Live/Post", "Placeholder deliberado de T10A; se implementa en los tickets siguientes."))
         self.layout_cards.addStretch()
+
+    def set_advanced_mode(self, enabled: bool):
+        self._advanced_mode = bool(enabled)
+        self.refresh()
