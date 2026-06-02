@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +14,7 @@ from packages.persistence.store import ProjectStore
 class ProjectMaintenanceService:
     """Safe maintenance facade over persistence backup/restore operations."""
 
-    store: ProjectStore
+    store: ProjectStore = field(default_factory=ProjectStore)
 
     def create_backup(self, project_path: Path | str) -> Result[Path, str]:
         """Create a validated backup of a project file."""

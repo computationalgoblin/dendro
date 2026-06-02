@@ -10,8 +10,8 @@ from typing import Any
 
 from packages.application.diagnostic_service import DiagnosticService
 from packages.application.project_maintenance_service import ProjectMaintenanceService
+from packages.application.repair_plan_service import RepairPlanService
 from packages.domain.result import Error
-from packages.persistence.store import ProjectStore
 from packages.ui.cli import SessionContext, _bootstrap_services, require_project_path
 
 
@@ -91,7 +91,7 @@ def _diagnose(project: Any):
 
 
 def _maintenance_service() -> ProjectMaintenanceService:
-    return ProjectMaintenanceService(store=ProjectStore())
+    return ProjectMaintenanceService()
 
 
 def _print_json(data: dict[str, Any]) -> None:
@@ -181,49 +181,15 @@ def _cmd_export_diagnostic(args: argparse.Namespace, project: Any) -> None:
 
 
 def _cmd_repair_plan(args: argparse.Namespace, project: Any) -> None:
-    report = _diagnose(project)
-    actions = []
-    for item in [*report.items, *report.recommendations]:
-        actions.append({
-            "code": item.code,
-            "severity": item.severity.value,
-            "collection": item.collection,
-            "object_id": item.object_id,
-            "reference_id": item.reference_id,
-            "message": item.message,
-            "action": _suggest_action(item.code),
-            "mutates_project": False,
-        })
-    payload = {
-        "project_id": report.project_id,
-        "project_name": report.project_name,
-        "mutates_project": False,
-        "requires_explicit_apply": True,
-        "requires_backup_before_apply": True,
-        "actions": actions,
-    }
+    result = RepairPlanService(diagnostic_service=DiagnosticService()).build_plan(project)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+    plan = result.value
     if args.json:
-        _print_json(payload)
-    print("Repair plan (non-destructive):")
-    if not actions:
-        print("- No actions recommended.")
-    for action in actions:
-        print(f"- {action['code']}: {action['action']}")
+        _print_json(plan.to_dict())
+    print(plan.to_markdown())
     sys.exit(0)
-
-
-def _suggest_action(code: str) -> str:
-    suggestions = {
-        "broken_relation_source": "Review relation and either reconnect source entity or archive relation in a future explicit repair step.",
-        "broken_relation_target": "Review relation and either reconnect target entity or archive relation in a future explicit repair step.",
-        "broken_issue_entity": "Review issue references and remove or replace the missing entity reference in a future explicit repair step.",
-        "broken_issue_relation": "Review issue references and remove or replace the missing relation reference in a future explicit repair step.",
-        "broken_issue_source": "Review issue references and remove or replace the missing source reference in a future explicit repair step.",
-        "obsolete_entity": "Review obsolete entity and decide whether to archive, keep or supersede explicitly.",
-    }
-    if code.startswith("cleanup_") or code.startswith("review_"):
-        return "Review accumulated collection and compact only after explicit approval and backup."
-    return suggestions.get(code, "Review manually; no automatic mutation is performed.")
 
 
 __all__ = ["register_maintenance_commands", "handle_maintenance_command"]
