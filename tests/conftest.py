@@ -8,11 +8,26 @@ Application-specific fixtures should go in tests/application/conftest.py, etc.
 
 from __future__ import annotations
 
+import os
+import shlex
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+# --- Windows compat: monkey-patch shlex.split to handle backslash paths ---
+# On Windows, shlex.split() in POSIX mode treats \ as escape character,
+# which breaks paths like C:\Users\... in f-string CLI arguments.
+# We replace \ with / before splitting (Windows Python accepts forward slashes).
+if os.name == "nt":
+    _original_shlex_split = shlex.split
+
+    def _windows_safe_split(s: str, **kwargs: Any) -> list[str]:
+        return _original_shlex_split(s.replace("\\", "/"), **kwargs)
+
+    shlex.split = _windows_safe_split
+# --- end Windows compat ---
 
 from packages.domain.config import AppConfig, LoggingConfig, reset_settings
 

@@ -615,7 +615,9 @@ class TestOverview:
 
 class TestProjectTouch:
     def test_mutations_update_project_timestamp(self):
+        import time
         project, svc = _make_project_with_entities()
         old_ts = project.updated_at
+        time.sleep(0.001)  # ensure timestamp advances
         _create_test_campaign(svc)
         assert project.updated_at > old_ts

@@ -3,7 +3,6 @@
 import json
 import os
 import shlex
-from tests._helpers import _split_cli
 import subprocess
 import sys
 from pathlib import Path
@@ -17,7 +16,7 @@ def _cli(args: str, project: Path | None = None, cwd: Path | None = None) -> sub
     cmd = [sys.executable, "-m", "narrative_architect"]
     if project is not None:
         cmd += ["--project", str(project)]
-    cmd += _split_cli(args)
+    cmd += shlex.split(args)
     env = {**os.environ, "PYTHONPATH": str(WORKSPACE)}
     return subprocess.run(
         cmd, cwd=cwd or WORKSPACE, capture_output=True, text=True,

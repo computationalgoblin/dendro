@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from tests._helpers import _split_cli
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -76,7 +75,7 @@ def _base_project() -> dict:
 def _cli(project: Path, args: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "PYTHONPATH": str(WORKSPACE)}
     return subprocess.run(
-        [sys.executable, "-m", "narrative_architect", "--project", str(project), *_split_cli(args)],
+        [sys.executable, "-m", "narrative_architect", "--project", str(project), *shlex.split(args)],
         cwd=WORKSPACE,
         env=env,
         text=True,
