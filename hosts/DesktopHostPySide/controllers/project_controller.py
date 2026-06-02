@@ -2,11 +2,13 @@
 from __future__ import annotations
 from pathlib import Path
 from packages.application.project_service import ProjectService
-from packages.persistence.store import ProjectStore
 
 class ProjectController:
     def __init__(self, store=None):
-        self.store = store or ProjectStore()
+        if store is None:
+            from packages.persistence.store import ProjectStore
+            store = ProjectStore()
+        self.store = store
         self.ps = ProjectService(store=self.store)
         self.current_path: str | None = None
 

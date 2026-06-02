@@ -41,6 +41,7 @@ from hosts.DesktopHostPySide.controllers.session_controller import SessionContro
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
 from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineController
 from hosts.DesktopHostPySide.controllers.writing_controller import WritingController
+from packages.application.export_service import ExportService
 from hosts.DesktopHostPySide.views.campaign_view import CampaignView, FactionFrontView, SecretsCluesView
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
@@ -94,6 +95,11 @@ class MainWindow(QMainWindow):
         self.psc = PostSessionController(project_service=ps, session_service=self.sc.ss)
         self.ic = ImportController(project_service=ps)
         self.ccamp = CampaignController(project_service=ps)
+        self.export_service = ExportService(
+            project_service=ps,
+            entity_service=self.ec.es,
+            session_service=self.sc.ss,
+        )
         self.secretsc = SecretsController(project_service=ps)
         self.factionc = FactionController(project_service=ps)
         self.wc = WritingController(project_service=ps)
@@ -113,7 +119,7 @@ class MainWindow(QMainWindow):
         self.faction_view = FactionFrontView(self.ctx, self.factionc)
         self.session_view = SessionView(self.ctx, self.sc)
         self.live_post_view = LivePostView(self.ctx, self.sc, lmc=self.lmc, psc=self.psc)
-        self.import_export_view = ImportExportView(self.ctx, self.controller)
+        self.import_export_view = ImportExportView(self.ctx, self.controller, self.export_service)
         self.writing_view = WritingView(self.ctx, self.wc)
         self.timeline_view = TimelineView(self.ctx, self.tlc)
         self.framework_view = FrameworkView(self.ctx, self.fwc)
@@ -129,6 +135,8 @@ class MainWindow(QMainWindow):
             writing_view=self.writing_view,
             timeline_view=self.timeline_view,
             framework_view=self.framework_view,
+            source_view=self.source_view,
+            layer_view=self.layer_view,
         )
         self.gallery_workspace = GalleryWorkspace(self.ctx)
         self.session_workspace = SessionWorkspace(
@@ -138,6 +146,7 @@ class MainWindow(QMainWindow):
             session_view=self.session_view,
             live_post_view=self.live_post_view,
             secrets_view=self.secrets_view,
+            issues_view=self.issues_view,
         )
 
     def _build_shell(self):

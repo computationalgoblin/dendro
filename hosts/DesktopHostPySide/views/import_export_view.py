@@ -31,9 +31,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     enum_human,
     make_scroll_area,
 )
-from packages.application.entity_service import EntityService
 from packages.application.export_service import ExportService
-from packages.application.session_service import SessionService
 from packages.domain.result import Error
 
 
@@ -59,16 +57,12 @@ def _source_excerpt(candidate) -> str:
 
 
 class ImportExportView(QWidget):
-    def __init__(self, ctx: AppContext, controller):
+    def __init__(self, ctx: AppContext, controller, export_service: ExportService):
         super().__init__()
         self.ctx = ctx
         self.controller = controller
         self.ic = ImportController(project_service=controller.ps)
-        self.export = ExportService(
-            project_service=controller.ps,
-            entity_service=EntityService(controller.ps),
-            session_service=SessionService(controller.ps),
-        )
+        self.export = export_service
         self.selected_basket_id: str | None = None
         self.selected_candidate_id: str | None = None
         self._build()

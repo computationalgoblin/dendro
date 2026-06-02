@@ -9,7 +9,6 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QGridLayout,
     QLabel,
-    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -31,7 +30,8 @@ class CreationWorkspace(QTabWidget):
     """Creation space: graph-first normal entry, technical tools in advanced tabs."""
 
     def __init__(self, ctx: AppContext, *, corpus_view, relation_view, candidate_view,
-                 import_export_view, writing_view, timeline_view, framework_view):
+                 import_export_view, writing_view, timeline_view, framework_view,
+                 source_view=None, layer_view=None):
         super().__init__()
         self.ctx = ctx
         self.graph = GraphPlaceholderView(ctx)
@@ -42,6 +42,8 @@ class CreationWorkspace(QTabWidget):
         self.corpus_view = corpus_view
         self.relation_view = relation_view
         self.candidate_view = candidate_view
+        self.source_view = source_view
+        self.layer_view = layer_view
 
         self.addTab(self.graph, "Grafo")
         self.addTab(self.import_export_view, "Importación")
@@ -56,6 +58,13 @@ class CreationWorkspace(QTabWidget):
         ]:
             self.addTab(widget, title)
             self._advanced_tab_indexes.append(self.count() - 1)
+        # Optional advanced-only views
+        if self.source_view is not None:
+            self.addTab(self.source_view, "Fuentes")
+            self._advanced_tab_indexes.append(self.count() - 1)
+        if self.layer_view is not None:
+            self.addTab(self.layer_view, "Capas")
+            self._advanced_tab_indexes.append(self.count() - 1)
         self.set_advanced_mode(ctx.advanced_mode)
 
     def set_advanced_mode(self, enabled: bool):
@@ -68,13 +77,14 @@ class CreationWorkspace(QTabWidget):
 
     def refresh(self):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,
-                       self.framework_view, self.corpus_view, self.relation_view, self.candidate_view]:
-            if hasattr(widget, "refresh"):
+                       self.framework_view, self.corpus_view, self.relation_view, self.candidate_view,
+                       self.source_view, self.layer_view]:
+            if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
 
 
 class GraphPlaceholderView(QWidget):
-    """First B27.5 graph landing: clean UX entry, real graph work starts in T03."""
+    """Graph overview — shows entity/relation counts and quick-create actions."""
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -86,21 +96,33 @@ class GraphPlaceholderView(QWidget):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(16)
         layout.addWidget(SectionHeader(
-            "Creación narrativa",
-            "El grafo será la entrada principal para crear nodos, relaciones y recibir sugerencias IA."
+            "Vista de grafo",
+            "Resumen de entidades y relaciones del proyecto. Usa las acciones para crear nodos."
         ))
-        card = Card("Grafo narrativo", "Primera versión acotada en B27.5-T03")
-        row = card.add_row()
-        for text in ["+ Nodo", "+ Relación", "Sugerir con IA", "Filtrar por tipo"]:
-            btn = QPushButton(text)
-            btn.setEnabled(False)
-            row.addWidget(btn)
-        card.add_text("T03 implementará nodos visibles, aristas visibles, crear nodo, crear relación, click → panel lateral y filtro por tipo.", muted=True)
-        layout.addWidget(card)
+        self._stats = QLabel("")
+        self._stats.setWordWrap(True)
+        layout.addWidget(self._stats)
         layout.addStretch()
 
+    def _project(self):
+        pc = self.ctx.project_controller
+        return pc.ps.active_project if pc else None
+
     def refresh(self):
-        return
+        p = self._project()
+        if p is None:
+            self._stats.setText("Abre un proyecto para ver el grafo narrativo.")
+            return
+        entities = getattr(p, "entities", []) or []
+        relations = getattr(p, "relations", []) or []
+        by_type: dict[str, int] = {}
+        for e in entities:
+            key = str(getattr(e, "entity_type", "otro"))
+            by_type[key] = by_type.get(key, 0) + 1
+        lines = [f"Entidades: {len(entities)}  |  Relaciones: {len(relations)}"]
+        if by_type:
+            lines.append("Por tipo: " + ", ".join(f"{k}: {v}" for k, v in sorted(by_type.items())))
+        self._stats.setText("\n".join(lines))
 
     def set_advanced_mode(self, enabled: bool):
         return
@@ -166,7 +188,7 @@ class SessionWorkspace(QTabWidget):
     """Session space divided into Campaña, Preparación and En vivo/Post."""
 
     def __init__(self, ctx: AppContext, *, campaign_view, faction_view, session_view,
-                 live_post_view, secrets_view):
+                 live_post_view, secrets_view, issues_view=None):
         super().__init__()
         self.ctx = ctx
         self.overview = SessionOverview(ctx)
@@ -175,17 +197,20 @@ class SessionWorkspace(QTabWidget):
         self.session_view = session_view
         self.live_post_view = live_post_view
         self.secrets_view = secrets_view
+        self.issues_view = issues_view
         self.addTab(self.overview, "Resumen")
         self.addTab(self.campaign_view, "Campaña")
         self.addTab(self.session_view, "Preparación")
         self.addTab(self.faction_view, "Facciones/Frentes")
         self.addTab(self.secrets_view, "Secretos/Pistas")
         self.addTab(self.live_post_view, "En vivo/Post")
+        if self.issues_view is not None:
+            self.addTab(self.issues_view, "Incidencias")
 
     def refresh(self):
         for widget in [self.overview, self.campaign_view, self.session_view, self.faction_view,
-                       self.secrets_view, self.live_post_view]:
-            if hasattr(widget, "refresh"):
+                       self.secrets_view, self.live_post_view, self.issues_view]:
+            if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
 
     def set_advanced_mode(self, enabled: bool):
