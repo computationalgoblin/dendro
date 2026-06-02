@@ -42,8 +42,15 @@ SUITES: dict[str, list[str]] = {
 FAST_SKIP = {"ui", "qa", "integ"}
 
 
+def _clean_env() -> dict[str, str]:
+    """Return os.environ copy suitable for subprocess (all str values)."""
+    import os
+    return dict(os.environ)
+
+
 def run_suite(label: str, paths: list[str], timeout: int = 600) -> tuple[bool, float, int]:
     cmd = [sys.executable, "-m", "pytest", "-q", "--tb=short", *paths]
+    env = {**_clean_env(), "PYTHONPATH": str(WORKSPACE)}
     t0 = time.perf_counter()
     try:
         result = subprocess.run(
@@ -52,6 +59,7 @@ def run_suite(label: str, paths: list[str], timeout: int = 600) -> tuple[bool, f
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.perf_counter() - t0
