@@ -35,8 +35,9 @@ class RightDrawer(QFrame):
         super().__init__(parent)
         self.setObjectName("rightDrawer")
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setMinimumWidth(380)
-        self.setMaximumWidth(520)
+        self._target_width = 440
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(0)
         self.setFixedHeight(parent.height() if parent else 800)
         self.setStyleSheet(
             "QFrame#rightDrawer { "
@@ -87,6 +88,8 @@ class RightDrawer(QFrame):
 
         # Initially hidden
         self._content: QWidget | None = None
+        self._animation: QPropertyAnimation | None = None
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.hide()
 
     def set_content(self, widget: QWidget, title: str = ""):
@@ -105,16 +108,35 @@ class RightDrawer(QFrame):
         """Show the drawer with a slide-in animation."""
         self.show()
         self.raise_()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._animate_width(self.maximumWidth(), self._target_width)
 
     def close(self):
-        """Hide the drawer."""
-        self.hide()
-        # Clean up content
-        if self._content is not None:
-            old = self._scroll.takeWidget()
-            if old:
-                old.deleteLater()
-            self._content = None
+        """Hide the drawer with a slide-out animation."""
+        if not self.isVisible():
+            return
+        self._animate_width(self.maximumWidth(), 0, cleanup=True)
+
+    def _animate_width(self, start: int, end: int, *, cleanup: bool = False):
+        if self._animation is not None:
+            self._animation.stop()
+        animation = QPropertyAnimation(self, b"maximumWidth")
+        animation.setDuration(180)
+        animation.setStartValue(max(0, int(start)))
+        animation.setEndValue(max(0, int(end)))
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation = animation
+
+        if cleanup:
+            def finish_close():
+                self.hide()
+                if self._content is not None:
+                    old = self._scroll.takeWidget()
+                    if old:
+                        old.deleteLater()
+                    self._content = None
+            animation.finished.connect(finish_close)
+        animation.start()
 
     def keyPressEvent(self, event):
         """Close on Escape."""

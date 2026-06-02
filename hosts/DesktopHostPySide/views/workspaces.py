@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
+from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
     Card,
@@ -44,6 +45,8 @@ class CreationWorkspace(QTabWidget):
         self.candidate_view = candidate_view
         self.source_view = source_view
         self.layer_view = layer_view
+        self.entity_controller = getattr(corpus_view, "ec", None)
+        self.graph.entitySelected.connect(self._open_node_panel)
 
         self.addTab(self.graph, "Grafo")
         self.addTab(self.import_export_view, "Importación")
@@ -81,6 +84,19 @@ class CreationWorkspace(QTabWidget):
                        self.source_view, self.layer_view]:
             if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
+
+    def _open_node_panel(self, entity_id: str):
+        if self.entity_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir el panel de nodo")
+            return
+        panel = NodeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            entity_id,
+            on_saved=self.refresh,
+        )
+        self.ctx.drawer.set_content(panel, title="Nodo")
+        self.ctx.drawer.open()
 
 
 class GalleryWorkspace(QWidget):
