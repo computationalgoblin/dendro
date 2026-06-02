@@ -223,14 +223,14 @@ def _rotate_backups(path: Path) -> None:
         p.unlink(missing_ok=True)
 
 
-def _create_backup(path: Path) -> None:
+def _create_backup(path: Path) -> Path | None:
     """Create a numbered backup of an existing file.
 
     Args:
         path: Existing file to back up.
     """
     if not path.exists():
-        return
+        return None
 
     # Find next backup index
     idx = 1
@@ -241,6 +241,7 @@ def _create_backup(path: Path) -> None:
     backup_path = Path(f"{base}{BACKUP_SUFFIX}.{idx}")
     shutil.copy2(path, backup_path)
     _rotate_backups(path)
+    return backup_path
 
 
 # ---------------------------------------------------------------------------
@@ -528,6 +529,47 @@ class ProjectStore:
                 pass
         backups.sort(key=lambda x: x[0], reverse=True)
         return [p for _, p in backups]
+
+    def create_backup(self, path: Path) -> Result[Path, str]:
+        """Create a verified numbered backup of an existing project file."""
+        if not path.exists():
+            return Error(f"Project file not found: {path}")
+        validation = load_project_data(path)
+        if isinstance(validation, Error):
+            return Error(f"Cannot back up invalid project file: {validation.error}")
+        try:
+            backup_path = _create_backup(path)
+        except OSError as e:
+            return Error(f"I/O error creating backup for {path}: {e}")
+        if backup_path is None or not backup_path.exists():
+            return Error(f"Backup was not created for {path}")
+        return Ok(backup_path)
+
+    def restore_backup(self, path: Path, backup_path: Path) -> Result[Path, str]:
+        """Restore a validated backup, preserving current file first.
+
+        Returns the safety backup path created from the current project file.
+        """
+        if not backup_path.exists():
+            return Error(f"Backup file not found: {backup_path}")
+        validation = load_project_data(backup_path)
+        if isinstance(validation, Error):
+            return Error(f"Cannot restore invalid backup: {validation.error}")
+        safety_backup: Path | None = None
+        if path.exists():
+            try:
+                safety_backup = _create_backup(path)
+            except OSError as e:
+                return Error(f"I/O error creating pre-restore backup for {path}: {e}")
+            if safety_backup is None or not safety_backup.exists():
+                return Error(f"Pre-restore backup was not created for {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_result = _write_json_atomic(validation.value, path)
+        if isinstance(write_result, Error):
+            return Error(f"Restore failed; current file preserved in {safety_backup}: {write_result.error}")
+        if safety_backup is None:
+            return Ok(backup_path)
+        return Ok(safety_backup)
 
     # ------------------------------------------------------------------
     # Entity operations
