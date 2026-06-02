@@ -501,7 +501,7 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
                 for s in card.sources
             ],
             "open_issues": [
-                {"id": iss.id, "title": iss.title, "severity": iss.severity}
+                {"id": iss.id, "description": iss.description, "severity": iss.severity.value}
                 for iss in card.open_issues
             ],
             "history": [
@@ -616,7 +616,7 @@ def _cmd_show(args: argparse.Namespace, session: SessionContext) -> None:
     print(f"Issues open ({len(card.open_issues)}):")
     if card.open_issues:
         for iss in card.open_issues:
-            print(f"  {iss.id}  [{iss.severity}] {iss.title or '(no title)'}")
+            print(f"  {iss.id}  [{iss.severity.value}] {iss.description or '(no description)'}")
     else:
         print("  (none)")
     print()
