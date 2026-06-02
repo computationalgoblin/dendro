@@ -1,7 +1,8 @@
-"""Graph canvas for B31-T03.
+"""Graph canvas for B31-T03/B31-T06.
 
-Read-only visual graph derived from the active project. The graph is a view over
-existing entities and relations; it never persists or owns narrative data.
+Visual graph derived from the active project. The graph is a view over existing
+entities and relations; relation creation is emitted as an intent and executed
+outside the canvas through application services.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -144,8 +145,10 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setZValue(2)
 
         color = QColor(_NODE_COLORS.get(node.kind.lower(), "#8EA4C8"))
+        self._normal_pen = QPen(QColor("#F7F1E8"), 2.0)
+        self._highlight_pen = QPen(QColor("#EBCB8B"), 4.0)
         self.setBrush(QBrush(color.lighter(112)))
-        self.setPen(QPen(QColor("#F7F1E8"), 2.0))
+        self.setPen(self._normal_pen)
 
         title = QGraphicsSimpleTextItem(_fit_text(node.name, 22), self)
         title.setBrush(QBrush(QColor("#111827")))
@@ -173,6 +176,9 @@ class GraphNodeItem(QGraphicsEllipseItem):
             self._visibility_dot = QGraphicsEllipseItem(radius - 26, -radius + 12, 14, 14, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.2))
+
+    def set_drag_highlight(self, enabled: bool):
+        self.setPen(self._highlight_pen if enabled else self._normal_pen)
 
     def itemChange(self, change, value):
         return super().itemChange(change, value)
@@ -230,6 +236,7 @@ class GraphCanvasView(QGraphicsView):
 
     entitySelected = Signal(str)
     relationSelected = Signal(str)
+    relationCreateRequested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -244,22 +251,109 @@ class GraphCanvasView(QGraphicsView):
         self.setScene(self.scene_obj)
         self._nodes: dict[str, GraphNodeItem] = {}
         self._edges: list[GraphEdgeItem] = []
+        self._pending_source: GraphNodeItem | None = None
+        self._drag_source: GraphNodeItem | None = None
+        self._drag_target: GraphNodeItem | None = None
+        self._drag_origin_view_pos = QPointF()
+        self._drag_line: QGraphicsLineItem | None = None
 
     def wheelEvent(self, event):
         factor = 1.12 if event.angleDelta().y() > 0 else 1 / 1.12
         self.scale(factor, factor)
 
-    def mousePressEvent(self, event):
-        item = self.itemAt(event.position().toPoint())
+    def _item_node_at(self, view_pos) -> GraphNodeItem | None:
+        item = self.itemAt(view_pos.toPoint())
         while item is not None:
             if isinstance(item, GraphNodeItem):
-                self.entitySelected.emit(item.node.entity_id)
-                break
-            if isinstance(item, GraphEdgeItem):
-                self.relationSelected.emit(item.edge.relation_id)
-                break
+                return item
             item = item.parentItem()
+        return None
+
+    def _item_edge_at(self, view_pos) -> GraphEdgeItem | None:
+        item = self.itemAt(view_pos.toPoint())
+        while item is not None:
+            if isinstance(item, GraphEdgeItem):
+                return item
+            item = item.parentItem()
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            node = self._item_node_at(event.position())
+            if node is not None:
+                self._pending_source = node
+                self._drag_origin_view_pos = event.position()
+                self.entitySelected.emit(node.node.entity_id)
+                event.accept()
+                return
+            edge = self._item_edge_at(event.position())
+            if edge is not None:
+                self.relationSelected.emit(edge.edge.relation_id)
+                event.accept()
+                return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._pending_source is not None and self._drag_source is None:
+            delta = event.position() - self._drag_origin_view_pos
+            if abs(delta.x()) + abs(delta.y()) > 10:
+                self._start_relation_drag(self._pending_source)
+        if self._drag_source is not None:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self._update_relation_drag(scene_pos, self._item_node_at(event.position()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_source is not None:
+            source = self._drag_source
+            target = self._item_node_at(event.position())
+            self._finish_relation_drag(target)
+            if target is not None and target is not source:
+                self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
+            event.accept()
+            return
+        self._pending_source = None
+        super().mouseReleaseEvent(event)
+
+    def _start_relation_drag(self, source: GraphNodeItem):
+        self._drag_source = source
+        self._drag_target = None
+        line = QGraphicsLineItem()
+        pen = QPen(QColor("#D08770"), 2.5, Qt.PenStyle.DashLine)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        line.setPen(pen)
+        line.setZValue(3)
+        self._drag_line = line
+        self.scene_obj.addItem(line)
+        source.set_drag_highlight(True)
+
+    def _update_relation_drag(self, scene_pos: QPointF, target: GraphNodeItem | None):
+        if self._drag_source is None or self._drag_line is None:
+            return
+        start = self._drag_source.scenePos()
+        self._drag_line.setLine(QLineF(start, scene_pos))
+        if target is self._drag_source:
+            target = None
+        if target is not self._drag_target:
+            if self._drag_target is not None:
+                self._drag_target.set_drag_highlight(False)
+            self._drag_target = target
+            if self._drag_target is not None:
+                self._drag_target.set_drag_highlight(True)
+
+    def _finish_relation_drag(self, target: GraphNodeItem | None):
+        if self._drag_source is not None:
+            self._drag_source.set_drag_highlight(False)
+        if self._drag_target is not None:
+            self._drag_target.set_drag_highlight(False)
+        if self._drag_line is not None:
+            self.scene_obj.removeItem(self._drag_line)
+            self._drag_line = None
+        self._pending_source = None
+        self._drag_source = None
+        self._drag_target = None
 
     def clear_graph(self):
         self.scene_obj.clear()
@@ -304,6 +398,7 @@ class GraphCanvasWidget(QWidget):
 
     entitySelected = Signal(str)
     relationSelected = Signal(str)
+    relationCreateRequested = Signal(str, str)
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -323,7 +418,7 @@ class GraphCanvasWidget(QWidget):
         header_layout.setSpacing(10)
         self.title = SectionHeader(
             "Grafo narrativo",
-            "Explora entidades y relaciones como un lienzo derivado del canon actual."
+            "Explora entidades y relaciones. Arrastra un nodo sobre otro para proponer una relación."
         )
         header_layout.addWidget(self.title, 1)
         self.stats = QLabel("Sin proyecto")
@@ -340,6 +435,7 @@ class GraphCanvasWidget(QWidget):
         self.canvas = GraphCanvasView()
         self.canvas.entitySelected.connect(self._entity_selected)
         self.canvas.relationSelected.connect(self._relation_selected)
+        self.canvas.relationCreateRequested.connect(self.relationCreateRequested.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
 

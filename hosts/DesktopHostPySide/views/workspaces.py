@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+from hosts.DesktopHostPySide.widgets.relation_create_panel import RelationCreatePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
@@ -26,6 +27,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     human_ref,
     make_scroll_area,
 )
+from packages.domain.result import Error
 
 
 class CreationWorkspace(QTabWidget):
@@ -50,6 +52,7 @@ class CreationWorkspace(QTabWidget):
         self.relation_controller = getattr(relation_view, "rc", None)
         self.graph.entitySelected.connect(self._open_node_panel)
         self.graph.relationSelected.connect(self._open_relation_panel)
+        self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
 
         self.addTab(self.graph, "Grafo")
         self.addTab(self.import_export_view, "Importación")
@@ -113,6 +116,72 @@ class CreationWorkspace(QTabWidget):
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
+
+    def _entity_by_id(self, entity_id: str):
+        pc = self.ctx.project_controller
+        project = pc.ps.active_project if pc else None
+        if project is None:
+            return None
+        for entity in getattr(project, "entities", []) or []:
+            if getattr(entity, "id", None) == entity_id:
+                return entity
+        return None
+
+    def _entity_label(self, entity_id: str) -> str:
+        entity = self._entity_by_id(entity_id)
+        if entity is None:
+            return "Entidad no encontrada"
+        kind = getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "entidad"))
+        return human_ref(getattr(entity, "name", "Sin nombre"), enum_human(str(kind)))
+
+    def _relation_exists(self, source_id: str, target_id: str) -> bool:
+        if self.relation_controller is None:
+            return False
+        for relation in self.relation_controller.list_all():
+            src = getattr(relation, "source_id", "")
+            tgt = getattr(relation, "target_id", "")
+            if (src, tgt) == (source_id, target_id) or (src, tgt) == (target_id, source_id):
+                return True
+        return False
+
+    def _open_relation_create_panel(self, source_id: str, target_id: str):
+        controller = self.relation_controller
+        drawer = self.ctx.drawer
+        if controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo crear relación: servicio no disponible")
+            return
+        if source_id == target_id:
+            self.ctx.log("error", "No se puede crear una relación sobre la misma entidad")
+            return
+        if self._relation_exists(source_id, target_id):
+            self.ctx.log("error", "Ya existe una relación entre esas entidades")
+            return
+
+        def create_relation(relation_type: str, description: str):
+            result = controller.create(
+                source_id,
+                target_id,
+                relation_type,
+                {"description": description} if description else {},
+            )
+            if isinstance(result, Error):
+                self.ctx.log("error", result.error)
+                return
+            relation = result.value
+            relation_id = getattr(relation, "id", "")
+            self.ctx.log("info", "Relación creada desde el grafo")
+            self.refresh()
+            if relation_id:
+                self._open_relation_panel(relation_id)
+
+        panel = RelationCreatePanel(
+            self._entity_label(source_id),
+            self._entity_label(target_id),
+            on_create=create_relation,
+            on_cancel=drawer.close,
+        )
+        drawer.set_content(panel, title="Crear relación")
+        drawer.open()
 
 
 class GalleryWorkspace(QWidget):
