@@ -65,42 +65,41 @@ Al entrar en cualquiera de los tres espacios principales:
 
 La entrada principal será un grafo narrativo visual.
 
-### Grafo central
+### Grafo central (lienzo base)
 - Ocupará el centro de la pantalla como vista principal.
 - Paneles y herramientas laterales ocultos por defecto, despliegue contextual al acercar cursor.
 - Nodos derivados de entidades existentes.
 - Aristas derivadas de relaciones existentes.
-- Colores de nodo/arista según tipo.
+- Colores de nodo/arista según tipo (paleta §31.3).
 - Nombre y descripción breve en cada nodo.
-- Indicadores visuales de estado: canon, borrador, oculto, revelado, pendiente, conflicto, sugerencia IA.
-- Filtros por tipo, capa, dominio, campaña, sesión.
-- Búsqueda por nombre/contenido.
-- Zoom, pan, enfoque de nodo.
+- Indicadores visuales de estado: canon, borrador, oculto, sugerencia IA.
+- Zoom, pan y enfoque de nodo.
 - Navegación directa arrastrando sobre el lienzo.
-- Modo Worldbuilding: capas como elementos navegables de primer nivel.
-- IA general: análisis contextual, sugerencias de nodos/relaciones, coherencia narrativa.
-- Sugerencias IA con tratamiento visual diferenciado y acciones para aceptar/canonizar.
+- Layout automático básico.
 - El grafo es siempre vista derivada del core, nunca base de datos paralela.
 
-### Nodos
+### Funcionalidades avanzadas del grafo (post-T03)
+- Filtros complejos por tipo, capa, dominio, campaña, sesión.
+- Búsqueda avanzada por nombre/contenido.
+- Modo Worldbuilding: capas como elementos navegables de primer nivel.
+- IA general: análisis contextual, sugerencias de nodos/relaciones, coherencia narrativa (§31.8).
+- Sugerencias IA con tratamiento visual diferenciado (§31.8).
+- Overlays de coherencia y análisis (§31.8).
+
+### Nodos (§31.6.2)
 Cada nodo representa un objeto narrativo. Muestra en modo normal: nombre, tipo visual, color, descripción breve, estado, nunca ID interno.
 
-### Panel lateral de nodo
+### Panel lateral de nodo (§31.6.3)
 Se abre dentro de la ventana principal con animación suave. Muestra: nombre, tipo, descripción, cuerpo, notas, estado canon, visibilidad, relaciones, apariciones, campañas, secretos/pistas, capas/dominios, acciones edición, acciones IA. Permite editar todo, guardar, cancelar. Datos técnicos solo en modo avanzado.
 
-### Relaciones visuales
+### Relaciones visuales (§31.6.4)
 Flechas/conexiones con dirección, tipo en lenguaje humano, color, etiqueta. Punto seleccionable para abrir detalle.
 
-### Panel lateral de relación
+### Panel lateral de relación (§31.6.5)
 Origen, destino, tipo, descripción, estado, intensidad, notas, evidencia, acciones IA. Permite editar, archivar, crear escena, sugerir conflicto.
 
-### Creación visual de relaciones
-Drag nodo sobre nodo → selector tipo → crear mediante servicios → grafo se actualiza → panel lateral se abre.
-
-### Acciones IA en Creación
-Sobre nodo: generar texto, mejorar, sugerir relaciones, conflicto, secretos, pistas, detectar contradicciones, resumir, crear candidato.
-Sobre relación: profundizar, evolución, escena, contradicción, secreto/pista, candidato.
-Sobre grafo: nodos faltantes, relaciones faltantes, zonas aisladas, inconsistencias, tramas emergentes.
+### Creación visual de relaciones (§31.6.6)
+Drag nodo sobre nodo → selector tipo (popup contextual, no QDialog) → crear mediante servicios → grafo se actualiza → panel lateral se abre.
 
 ## 31.7 Contexto narrativo para IA (NarrativeContextBuilder)
 
@@ -110,61 +109,97 @@ Contexto incluye según procede: proyecto activo, campaña activa, tono, género
 
 Respecta: visibilidad, secretos no revelados, pistas no entregadas, perfil GM/jugador/público, canon vs candidato, importación no aceptada, configuración campaña.
 
-## 31.8 Configuración creativa
+La IA puede recibir candidatos relacionados marcados explícitamente como no-canon si la acción lo requiere, pero nunca los mezclará con canon ni los usará como hechos confirmados.
+
+## 31.8 Acciones IA contextuales
+
+Acciones sobre nodo: generar texto, mejorar, sugerir relaciones, conflicto, secretos, pistas, detectar contradicciones, resumir, crear candidato.
+Acciones sobre relación: profundizar, evolución, escena, contradicción, secreto/pista, candidato.
+Acciones sobre grafo: nodos faltantes, relaciones faltantes, zonas aisladas, inconsistencias, tramas emergentes.
+
+Todas usan NarrativeContextBuilder. Todas producen Candidate/preview/sugerencia revisable. Nunca canon directo.
+
+Sugerencias visuales en grafo: nodos/relaciones propuestas con tratamiento visual diferenciado (paleta §31.3). Acción visible para aceptar/canonizar. Al canonizar: se convierte en entidad/relación real mediante servicios. Candidate conserva source=AI, action_type, context_hash/resumen, target object. Aceptar sugerencia crea history/source si el dominio lo soporta.
+
+Análisis de coherencia narrativa sobre canon visible, considerando relaciones, dependencias, contradicciones, vacíos y capas de worldbuilding activas. Resultados reflejados visualmente en el grafo mediante indicadores armoniosos. Ninguna observación modifica canon automáticamente.
+
+## 31.9 Configuración creativa
 
 Proyecto: nombre, género, tono, realismo, estilo narrativo, capas worldbuilding, visibilidad, preferencias IA.
 Campaña: mundo, sistema juego, tono, género, realismo, temas, notas privadas, resumen público, visibilidad, límites.
 
 IA usará esta configuración en toda generación contextual.
 
-## 31.9 Espacio Galería
+## 31.10 Espacio Galería
 
 Espacio para explorar y contemplar material creado. No será tabla técnica.
 
-Incluye: vista cards, vista mural, vista por tipo, campaña, localización, facción, secretos/pistas (autorizado), buscador, filtros, agrupaciones.
+Incluye: vista cards, vista mural, vista por tipo/campaña/localización/facción, secretos/pistas (autorizado), buscador, filtros, agrupaciones.
 
 Cada card: nombre, tipo, icono/color, descripción breve, estado, relaciones destacadas, apariciones, imagen/placeholder/símbolo.
 
-Al seleccionar: detalle limpio en misma ventana, sin ID, sin JSON, técnicos en modo avanzado.
+Al seleccionar: detalle limpio en misma ventana (RightDrawer), sin ID, sin JSON, técnicos en modo avanzado. Si no hay contenido: EmptyState estético.
 
 Experiencia favorece exploración tranquila, lectura cómoda y contemplación.
 
-## 31.10 Espacio Sesión
+## 31.11 Espacio Sesión
 
 Espacio inmersivo para campaña de rol: preparación, dirección en vivo y post-sesión.
 
-Incluye: selector campaña, estado campaña, próxima sesión, sesión activa, clocks visibles, frentes activos, facciones activas, secretos ocultos/revelados, pistas pendientes/entregadas, escenas preparadas.
+Fase A — Shell + campaña:
+Selector campaña, estado campaña, clocks visibles, frentes activos, facciones activas, sin datos técnicos en modo normal.
 
-## 31.11 Modo avanzado
+Fase B — Preparación y escenas:
+Escenas preparadas navegables, secretos ocultos/revelados, pistas pendientes/entregadas, detalle en RightDrawer.
+
+Fase C — Live/Post inmersivo:
+Sesión activa con controles de dirección en vivo, post-sesión: resumen, semillas, issues. Integración con IA contextual (T07/T08).
+
+## 31.12 Modo avanzado
 
 Ocultación completa de datos técnicos en modo normal. IDs, JSON, metadata, campos internos, source_ids, custom fields solo en modo avanzado/debug activable desde configuración.
 
-## 31.12 Tickets
+Toggle global afecta TODOS los espacios. Estado se persiste entre sesiones. Indicador visual discreto cuando activo.
 
-| Ticket | Título | Perfil sugerido |
-|--------|--------|-----------------|
-| B31-T01 | Home inmersiva y navegación fullscreen | ui-agent |
-| B31-T02 | Eliminación ventanas externas y RightDrawer interno | ui-agent |
-| B31-T03 | Graph Canvas visual mínimo | ui-agent |
-| B31-T04 | Panel contextual de nodo | ui-agent |
-| B31-T05 | Panel contextual de relación | ui-agent |
-| B31-T06 | Drag-to-relate / creación visual de relaciones | ui-agent |
-| B31-T07 | NarrativeContextBuilder | application-agent |
-| B31-T08 | Acciones IA contextuales | ai-agent |
-| B31-T09 | Galería inmersiva basada en cards | ui-agent |
-| B31-T10 | Sesión inmersiva campaña/live/post | ui-agent |
-| B31-T11 | Modo avanzado y ocultación técnica completa | ui-agent |
-| B31-T12 | QA Windows UX y cierre | qa-agent |
+Auditoría estática: escaneo de textos visibles en modo normal para patrones de ID/JSON en paneles principales.
 
-## Decisiones de producto fijadas
+## 31.13 Reglas transversales
 
-1. La pantalla inicial no es un dashboard. Es una home inmersiva. Métricas, contadores y diagnósticos van a modo avanzado o configuración.
-2. No se permiten ventanas externas para flujos normales. Todo dentro de la ventana principal. Criterio de rechazo.
-3. El grafo no es una feature más. Es la entrada principal de Creación. Corpus y Relaciones pueden existir en modo avanzado, pero no son la experiencia principal.
-4. IA contextual exige una capa propia (NarrativeContextBuilder). Sin ella, la IA seguirá generando texto genérico.
+1. No romper CLI ni servicios existentes.
+2. No eliminar vistas técnicas; reubicarlas en modo avanzado.
+3. Sin IDs/JSON en modo normal. En modo avanzado sí pueden aparecer.
+4. Paleta y tipografía según §31.3.
+5. python -m pytest tests/architecture/ -q debe pasar tras cada ticket.
 
-## Dependencias
+## 31.14 Decisiones de producto fijadas
 
-- Bloque 30 completado (base funcional y contractual).
+1. La pantalla inicial no es un dashboard. Es una home inmersiva.
+2. No se permiten ventanas externas para flujos normales. Criterio de rechazo.
+3. El grafo no es una feature más. Es la entrada principal de Creación.
+4. IA contextual exige NarrativeContextBuilder.
+5. QDialog/QMessageBox solo para errores críticos y confirmaciones destructivas. Prohibidos como editor.
+
+## 31.15 Dependencias
+
+- Bloque 30 completado.
 - PySide6 >= 6.7.0.
-- motor de grafo visual (PySide6 QGraphicsScene o integración con librería externa por decidir en T03).
+- Motor de grafo visual (QGraphicsScene/QGraphicsView base, evaluable en T03).
+
+## 31.16 Orden de implementación recomendado
+
+```
+T01 — Home inmersiva y navegación fullscreen
+T02 — RightDrawer / sin ventanas externas
+T11 — Modo avanzado y ocultación técnica
+T03 — Graph Canvas mínimo
+T04 — Panel contextual de nodo
+T05 — Panel contextual de relación
+T06 — Drag-to-relate
+T07 — NarrativeContextBuilder (puede ir en paralelo desde B30)
+T08 — Acciones IA contextuales
+T09 — Galería inmersiva
+T10A — Session shell + campaña/clocks/fronts/facciones
+T10B — Preparación y escenas
+T10C — Live/Post inmersivo
+T12 — QA Windows UX y cierre
+```
