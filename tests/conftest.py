@@ -29,6 +29,18 @@ if os.name == "nt":
 
     shlex.split = _windows_safe_split
     os.environ["PYTHONUTF8"] = "1"
+
+    # subprocess.run(text=True) decodes with cp1252 on Windows, but the child
+    # writes UTF-8 (PYTHONUTF8=1). Default encoding='utf-8' when text=True.
+    import subprocess
+    _original_run = subprocess.run
+
+    def _utf8_run(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("text") and "encoding" not in kwargs:
+            kwargs["encoding"] = "utf-8"
+        return _original_run(*args, **kwargs)
+
+    subprocess.run = _utf8_run
 # --- end Windows compat ---
 
 from packages.domain.config import AppConfig, LoggingConfig, reset_settings
