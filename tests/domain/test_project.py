@@ -275,7 +275,7 @@ class TestToDict:
             "domains", "world_layers", "advanced_config",
             "import_baskets",
             "campaigns", "player_character_profiles", "campaign_clocks",
-            "secrets", "clues", "factions", "fronts", "sessions",
+            "secrets", "clues", "factions", "fronts", "sessions", "saved_graph_views",
         }
         assert set(d.keys()) == expected_keys
 

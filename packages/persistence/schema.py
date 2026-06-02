@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B21-T02: upgraded to v15)
-CURRENT_SCHEMA_VERSION: int = 18
+# Current schema version for new projects (B28-T03: saved graph views)
+CURRENT_SCHEMA_VERSION: int = 19
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 18
+MAX_SUPPORTED_VERSION: int = 19
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +634,14 @@ def _apply_migration_v17_to_v18(data):
     migrated['schema_version'] = 18
     return migrated
 
+
+def _apply_migration_v18_to_v19(data):
+    """v18 → v19: adds saved_graph_views collection (B28-T03)."""
+    migrated = dict(data)
+    migrated.setdefault('saved_graph_views', [])
+    migrated['schema_version'] = 19
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -676,7 +684,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "campaigns", "player_character_profiles", "campaign_clocks",
         "secrets", "clues",
         "factions", "fronts",
-        "sessions",
+        "sessions", "saved_graph_views",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):

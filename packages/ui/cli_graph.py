@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from packages.application.graph_models import GraphFilters
+from packages.application.graph_models import GraphFilters, SavedGraphView
 from packages.application.graph_service import GraphService
 from packages.domain.entity import EntityType
 from packages.domain.result import Error
@@ -38,7 +38,14 @@ def register_graph_commands(subparsers: Any) -> None:
     # --- B11-T03: export ---
     p_e = gs.add_parser("export", help="Export graph view")
     p_e.add_argument("--json", action="store_true", help="Output as JSON")
+    p_e.add_argument("--overlay", action="append", default=[], help="Read-only overlay (repeatable)")
     _add_filter_flags(p_e)
+
+    # --- B28-T04: compare derived views ---
+    p_cmp = gs.add_parser("compare", help="Compare two derived graph views")
+    p_cmp.add_argument("--view-a", required=True, help="Saved view A name")
+    p_cmp.add_argument("--view-b", required=True, help="Saved view B name")
+    p_cmp.add_argument("--json", action="store_true", help="Output as JSON")
 
     # --- B11-T03: entity <id> ---
     p_ent = gs.add_parser("entity", help="Entity neighborhood")
@@ -91,10 +98,13 @@ def register_graph_commands(subparsers: Any) -> None:
     p_vs = view_subs.add_parser("save", help="Save view preset")
     p_vs.add_argument("name", help="Preset name")
     p_vs.add_argument("--force", action="store_true", help="Overwrite existing")
+    p_vs.add_argument("--description", default="", help="Human description")
+    p_vs.add_argument("--overlay", action="append", default=[], help="Read-only overlay (repeatable)")
     _add_filter_flags(p_vs)
     p_vshow = view_subs.add_parser("show", help="Show preset")
     p_vshow.add_argument("name", help="Preset name")
-    view_subs.add_parser("list", help="List presets")
+    p_vlist = view_subs.add_parser("list", help="List presets")
+    p_vlist.add_argument("--json", action="store_true", help="Output as JSON")
     p_vd = view_subs.add_parser("delete", help="Delete preset")
     p_vd.add_argument("name", help="Preset name")
 
@@ -107,6 +117,10 @@ def _add_filter_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--domain-id", default=None)
     parser.add_argument("--layer-id", default=None)
     parser.add_argument("--relation-type", default=None)
+    parser.add_argument("--view-type", default="global", help="Specialized view type")
+    parser.add_argument("--audience", default="author", choices=["author", "gm", "player", "public"])
+    parser.add_argument("--campaign-id", default=None)
+    parser.add_argument("--session-id", default=None)
     parser.add_argument("--include-archived", action="store_true")
     parser.add_argument("--max-nodes", type=int, default=200)
     parser.add_argument("--view", default=None, help="Load preset by name")
@@ -142,6 +156,11 @@ def _build_filters(args: argparse.Namespace) -> GraphFilters:
         relation_type=getattr(args, "relation_type", None),
         include_archived=getattr(args, "include_archived", False),
         max_nodes=max_nodes,
+        view_type=getattr(args, "view_type", "global"),
+        overlays=list(getattr(args, "overlay", []) or []),
+        audience=getattr(args, "audience", "author"),
+        campaign_id=getattr(args, "campaign_id", None),
+        session_id=getattr(args, "session_id", None),
     )
 
 
@@ -152,25 +171,36 @@ def _load_preset(name: str, args: argparse.Namespace) -> GraphFilters:
     if proj is None:
         print("error: No active project", file=sys.stderr)
         sys.exit(1)
-    views = proj.metadata.get("graph_views", {})
-    preset = views.get(name)
-    if not preset:
+    preset = _find_saved_view(proj, name)
+    if preset is None:
         print(f"error: View preset '{name}' not found", file=sys.stderr)
         sys.exit(1)
-    return GraphFilters(
-        entity_type=preset.get("entity_type"),
-        custom_type_id=preset.get("custom_type_id"),
-        canon_state=preset.get("canon_state"),
-        visibility_state=preset.get("visibility_state"),
-        domain_id=preset.get("domain_id"),
-        layer_id=preset.get("layer_id"),
-        relation_type=preset.get("relation_type"),
-        custom_relation_type_id=preset.get("custom_relation_type_id"),
-        include_archived=preset.get("include_archived", False),
-        include_broken=preset.get("include_broken", True),
-        max_nodes=preset.get("max_nodes", 200),
-        max_edges=preset.get("max_edges", 500),
-    )
+    return SavedGraphView.from_dict(preset).filters
+
+
+def _find_saved_view(project: Any, name: str) -> dict[str, Any] | None:
+    """Find a v19 saved graph view by name/id, with legacy metadata fallback."""
+    for raw in getattr(project, "saved_graph_views", []):
+        if not isinstance(raw, dict):
+            continue
+        if raw.get("name") == name or raw.get("id") == name:
+            return raw
+    legacy = getattr(project, "metadata", {}).get("graph_views", {})
+    if isinstance(legacy, dict) and name in legacy:
+        return {"name": name, "filters": legacy[name]}
+    return None
+
+
+def _saved_views(project: Any) -> list[dict[str, Any]]:
+    """Return v19 saved graph views plus legacy presets for compatibility."""
+    views = [v for v in getattr(project, "saved_graph_views", []) if isinstance(v, dict)]
+    legacy = getattr(project, "metadata", {}).get("graph_views", {})
+    if isinstance(legacy, dict):
+        existing = {v.get("name") for v in views}
+        for name, filters in legacy.items():
+            if name not in existing:
+                views.append({"name": name, "filters": filters})
+    return views
 
 
 def _build_graph_service(project_path):
@@ -190,6 +220,8 @@ def handle_graph_command(args: argparse.Namespace, session: SessionContext) -> N
         _cmd_summary(args, project_path)
     elif cmd == "export":
         _cmd_export(args, project_path)
+    elif cmd == "compare":
+        _cmd_compare(args, project_path)
     elif cmd == "entity":
         _cmd_entity(args, project_path, session)
     elif cmd == "path":
@@ -229,7 +261,7 @@ def _cmd_summary(args, project_path):
 def _cmd_export(args, project_path):
     ps, es, rs, gs = _build_graph_service(project_path)
     filters = _build_filters(args)
-    result = gs.build_graph(filters)
+    result = gs.build_specialized_graph(filters)
     if isinstance(result, Error):
         print(f"error: {result.error}", file=sys.stderr)
         sys.exit(1)
@@ -245,6 +277,47 @@ def _cmd_export(args, project_path):
             print(f"  [{n.entity_type}] {n.label} ({n.id[:8]}){arch}")
         if len(view.nodes) > 20:
             print(f"  ... and {len(view.nodes) - 20} more nodes")
+
+
+def _cmd_compare(args, project_path):
+    ps, es, rs, gs = _build_graph_service(project_path)
+    proj = ps.active_project
+    if proj is None:
+        print("error: No active project", file=sys.stderr)
+        sys.exit(1)
+    raw_a = _find_saved_view(proj, args.view_a)
+    raw_b = _find_saved_view(proj, args.view_b)
+    if raw_a is None:
+        print(f"error: View preset '{args.view_a}' not found", file=sys.stderr)
+        sys.exit(1)
+    if raw_b is None:
+        print(f"error: View preset '{args.view_b}' not found", file=sys.stderr)
+        sys.exit(1)
+    saved_a = SavedGraphView.from_dict(raw_a)
+    saved_b = SavedGraphView.from_dict(raw_b)
+    view_a = gs.build_specialized_graph(saved_a.filters)
+    view_b = gs.build_specialized_graph(saved_b.filters)
+    if isinstance(view_a, Error):
+        print(f"error: {view_a.error}", file=sys.stderr)
+        sys.exit(1)
+    if isinstance(view_b, Error):
+        print(f"error: {view_b.error}", file=sys.stderr)
+        sys.exit(1)
+    result = gs.compare_graph_views(view_a.value, view_b.value, saved_a.name, saved_b.name)
+    if isinstance(result, Error):
+        print(f"error: {result.error}", file=sys.stderr)
+        sys.exit(1)
+    comparison = result.value
+    if getattr(args, "json", False):
+        print(json.dumps(comparison.to_dict(), indent=2, ensure_ascii=False))
+        return
+    print(f"Graph comparison: {saved_a.name} -> {saved_b.name}")
+    print(f"  Added nodes: {len(comparison.added_nodes)}")
+    print(f"  Removed nodes: {len(comparison.removed_nodes)}")
+    print(f"  Changed nodes: {len(comparison.changed_nodes)}")
+    print(f"  Added edges: {len(comparison.added_edges)}")
+    print(f"  Removed edges: {len(comparison.removed_edges)}")
+    print(f"  Changed edges: {len(comparison.changed_edges)}")
 
 
 def _cmd_entity(args, project_path, session):
@@ -426,55 +499,72 @@ def _cmd_view(args, project_path):
     if proj is None:
         print("error: No active project", file=sys.stderr)
         sys.exit(1)
-    views = proj.metadata.setdefault("graph_views", {})
+    if not isinstance(getattr(proj, "saved_graph_views", None), list):
+        proj.saved_graph_views = []
+
     if cmd == "save":
-        if args.name in views and not getattr(args, "force", False):
+        existing_index = next(
+            (idx for idx, raw in enumerate(proj.saved_graph_views)
+             if isinstance(raw, dict) and raw.get("name") == args.name),
+            None,
+        )
+        if existing_index is not None and not getattr(args, "force", False):
             print(
                 f"error: View '{args.name}' already exists. "
                 "Use --force to overwrite.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        preset = {
-            "entity_type": args.type,
-            "custom_type_id": getattr(args, "custom_type_id", None),
-            "canon_state": args.canon,
-            "visibility_state": getattr(args, "visibility", None),
-            "domain_id": getattr(args, "domain_id", None),
-            "layer_id": getattr(args, "layer_id", None),
-            "relation_type": getattr(args, "relation_type", None),
-            "custom_relation_type_id": None,
-            "include_archived": getattr(args, "include_archived", False),
-            "include_broken": True,
-            "max_nodes": getattr(args, "max_nodes", 200),
-            "max_edges": 500,
-        }
-        views[args.name] = preset
+        filters = _build_filters(args)
+        saved = SavedGraphView(
+            name=args.name,
+            description=getattr(args, "description", ""),
+            filters=filters,
+            scope=filters.normalized_scope(),
+            overlays=list(getattr(args, "overlay", []) or []),
+        ).to_dict()
+        if existing_index is None:
+            proj.saved_graph_views.append(saved)
+        else:
+            old = proj.saved_graph_views[existing_index]
+            if isinstance(old, dict) and old.get("id"):
+                saved["id"] = old["id"]
+            proj.saved_graph_views[existing_index] = saved
         save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: {save_result.error}", file=sys.stderr)
             sys.exit(1)
         print(f"View '{args.name}' saved")
     elif cmd == "show":
-        preset = views.get(args.name)
-        if not preset:
+        preset = _find_saved_view(proj, args.name)
+        if preset is None:
             print(f"error: View '{args.name}' not found", file=sys.stderr)
             sys.exit(1)
-        print(json.dumps(preset, indent=2, ensure_ascii=False))
+        print(json.dumps(SavedGraphView.from_dict(preset).to_dict(), indent=2, ensure_ascii=False))
     elif cmd == "list":
+        views = _saved_views(proj)
+        if getattr(args, "json", False):
+            print(json.dumps({"views": [SavedGraphView.from_dict(v).to_dict() for v in views]}, indent=2, ensure_ascii=False))
+            return
         if not views:
             print("No saved views")
             return
-        for name in sorted(views):
-            p = views[name]
-            print(f"  {name}: type={p.get('entity_type','*')}, "
-                  f"canon={p.get('canon_state','*')}, "
-                  f"archived={p.get('include_archived',False)}")
+        for raw in sorted(views, key=lambda item: str(item.get("name", ""))):
+            saved = SavedGraphView.from_dict(raw)
+            filters = saved.filters
+            print(f"  {saved.name}: view_type={filters.normalized_view_type().value}, "
+                  f"audience={filters.audience}, "
+                  f"archived={filters.include_archived}")
     elif cmd == "delete":
-        if args.name not in views:
+        index = next(
+            (idx for idx, raw in enumerate(proj.saved_graph_views)
+             if isinstance(raw, dict) and (raw.get("name") == args.name or raw.get("id") == args.name)),
+            None,
+        )
+        if index is None:
             print(f"error: View '{args.name}' not found", file=sys.stderr)
             sys.exit(1)
-        del views[args.name]
+        del proj.saved_graph_views[index]
         save_result = ps.save(Path(project_path))
         if isinstance(save_result, Error):
             print(f"error: {save_result.error}", file=sys.stderr)

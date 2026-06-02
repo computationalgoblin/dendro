@@ -160,6 +160,9 @@ class Project:
     # ── Sessions (Bloque 23) ──
     sessions: list[Session] = field(default_factory=list)
 
+    # ── Saved graph views (Bloque 28) ──
+    saved_graph_views: list[dict] = field(default_factory=list)
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -260,6 +263,8 @@ class Project:
             "fronts": [f.to_dict() for f in self.fronts],
             # ── Sessions (Bloque 23) ──
             "sessions": [s.to_dict() for s in self.sessions],
+            # ── Saved graph views (Bloque 28) ──
+            "saved_graph_views": [dict(v) for v in self.saved_graph_views],
         }
 
     @classmethod
@@ -458,6 +463,11 @@ class Project:
             **(
                 {"sessions": [Session.from_dict(s) for s in data.get("sessions", []) if isinstance(s, dict)]}
                 if "sessions" in data else {}
+            ),
+            # ── Saved graph views (Bloque 28) ──
+            **(
+                {"saved_graph_views": [dict(v) for v in data.get("saved_graph_views", []) if isinstance(v, dict)]}
+                if "saved_graph_views" in data else {}
             ),
         )
 
