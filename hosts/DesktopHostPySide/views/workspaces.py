@@ -473,6 +473,7 @@ class SessionWorkspace(QTabWidget):
         super().__init__()
         self.ctx = ctx
         self.overview = SessionOverview(ctx)
+        self.preparation = SessionPreparationWorkspace(ctx)
         self.campaign_view = campaign_view
         self.faction_view = faction_view
         self.session_view = session_view
@@ -480,16 +481,18 @@ class SessionWorkspace(QTabWidget):
         self.secrets_view = secrets_view
         self.issues_view = issues_view
         self.addTab(self.overview, "Resumen")
+        self.addTab(self.preparation, "Preparación")
         self.addTab(self.campaign_view, "Campaña")
-        self.addTab(self.session_view, "Preparación")
+        self.technical_session_index = self.addTab(self.session_view, "Preparación técnica")
         self.addTab(self.faction_view, "Facciones/Frentes")
         self.addTab(self.secrets_view, "Secretos/Pistas")
         self.addTab(self.live_post_view, "En vivo/Post")
         if self.issues_view is not None:
             self.addTab(self.issues_view, "Incidencias")
+        self.set_advanced_mode(bool(ctx.advanced_mode))
 
     def refresh(self):
-        for widget in [self.overview, self.campaign_view, self.session_view, self.faction_view,
+        for widget in [self.overview, self.preparation, self.campaign_view, self.session_view, self.faction_view,
                        self.secrets_view, self.live_post_view, self.issues_view]:
             if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
@@ -497,6 +500,270 @@ class SessionWorkspace(QTabWidget):
     def set_advanced_mode(self, enabled: bool):
         if hasattr(self.overview, "set_advanced_mode"):
             self.overview.set_advanced_mode(enabled)
+        if hasattr(self.preparation, "set_advanced_mode"):
+            self.preparation.set_advanced_mode(enabled)
+        self.setTabVisible(self.technical_session_index, bool(enabled))
+
+
+class SessionPreparationWorkspace(QWidget):
+    """Immersive preparation view: scenes, secrets and clues without live/post execution."""
+
+    def __init__(self, ctx: AppContext):
+        super().__init__()
+        self.ctx = ctx
+        self._advanced_mode = bool(ctx.advanced_mode)
+        self.selected_session_id: str | None = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        header = QWidget()
+        header.setObjectName("cardSurface")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(22, 16, 22, 16)
+        header_layout.setSpacing(10)
+        header_layout.addWidget(SectionHeader(
+            "Preparación",
+            "Escenas, secretos y pistas de la próxima sesión. Sin modo live ni mutaciones de canon."
+        ))
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Sesión:"))
+        self.session_selector = QComboBox()
+        self.session_selector.currentIndexChanged.connect(self._session_changed)
+        controls.addWidget(self.session_selector, 1)
+        self.summary_label = QLabel("Sin sesión")
+        self.summary_label.setObjectName("mutedLabel")
+        controls.addWidget(self.summary_label)
+        header_layout.addLayout(controls)
+        root.addWidget(header)
+
+        self.container = QWidget()
+        self.cards = QVBoxLayout(self.container)
+        self.cards.setContentsMargins(22, 22, 22, 22)
+        self.cards.setSpacing(14)
+        root.addWidget(make_scroll_area(self.container), 1)
+
+    def _project(self):
+        pc = self.ctx.project_controller
+        return pc.ps.active_project if pc else None
+
+    def _is_gm(self) -> bool:
+        return str(getattr(self.ctx, "current_audience", "gm") or "gm").lower() == "gm"
+
+    def _clear(self):
+        while self.cards.count():
+            item = self.cards.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+    def _session_changed(self):
+        self.selected_session_id = self.session_selector.currentData()
+        self.refresh()
+
+    def _sessions(self, project):
+        sessions = list(getattr(project, "sessions", []) or [])
+        return sorted(sessions, key=lambda s: (getattr(s, "session_number", 0), getattr(s, "name", "")))
+
+    def _selected_session(self, project):
+        sessions = self._sessions(project)
+        if not sessions:
+            return None
+        if self.selected_session_id:
+            for session in sessions:
+                if getattr(session, "id", "") == self.selected_session_id:
+                    return session
+        self.selected_session_id = getattr(sessions[0], "id", "")
+        return sessions[0]
+
+    def _populate_selector(self, project):
+        sessions = self._sessions(project)
+        current = self.selected_session_id
+        self.session_selector.blockSignals(True)
+        self.session_selector.clear()
+        for session in sessions:
+            number = getattr(session, "session_number", 0)
+            label = getattr(session, "name", "Sesión")
+            if number:
+                label = f"#{number} · {label}"
+            self.session_selector.addItem(label, getattr(session, "id", ""))
+        if current:
+            idx = self.session_selector.findData(current)
+            if idx >= 0:
+                self.session_selector.setCurrentIndex(idx)
+        self.session_selector.blockSignals(False)
+
+    def _detail(self, title: str, subtitle: str, obj, rows: list[tuple[str, str]]):
+        if self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir detalle de preparación")
+            return
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
+        layout.addWidget(SectionHeader(title, subtitle))
+        for label, value in rows:
+            line = QHBoxLayout()
+            left = QLabel(label)
+            left.setObjectName("mutedLabel")
+            line.addWidget(left)
+            right = QLabel(value or "—")
+            right.setWordWrap(True)
+            line.addWidget(right, 1)
+            layout.addLayout(line)
+        technical = QTextEdit()
+        technical.setReadOnly(True)
+        technical.setPlainText(f"ID: {getattr(obj, 'id', '')}")
+        technical.setVisible(self._advanced_mode)
+        layout.addWidget(technical)
+        layout.addStretch()
+        self.ctx.drawer.set_content(panel, title="Preparación")
+        self.ctx.drawer.open()
+
+    def _scene_card(self, scene, kind: str):
+        title = getattr(scene, "name", "Escena")
+        subtitle = getattr(scene, "description", "") or getattr(scene, "notes", "") or "Escena preparada"
+        card = Card(title, subtitle)
+        row = card.add_row()
+        scene_type = enum_human(str(getattr(getattr(scene, "scene_type", None), "value", getattr(scene, "scene_type", kind))))
+        row.addWidget(Badge(scene_type, "info" if kind == "prevista" else "warning"))
+        row.addWidget(Badge(f"Orden {getattr(scene, 'order', 0)}", "success"))
+        row.addStretch()
+        btn = QPushButton("Detalle")
+        btn.clicked.connect(lambda: self._detail(title, "Escena", scene, [
+            ("Tipo", scene_type),
+            ("Descripción", getattr(scene, "description", "") or "—"),
+            ("Notas", getattr(scene, "notes", "") or "—"),
+            ("NPCs", str(len(getattr(scene, "npc_ids", []) or []))),
+        ]))
+        row.addWidget(btn)
+        return card
+
+    def _secret_card(self, secret):
+        state = enum_human(str(getattr(getattr(secret, "revelation_state", None), "value", getattr(secret, "revelation_state", "oculto"))))
+        title = "Secreto" if not self._is_gm() else (getattr(secret, "content", "")[:80] or "Secreto")
+        subtitle = "Oculto para jugadores" if not self._is_gm() else getattr(secret, "content", "")
+        card = Card(title, subtitle)
+        row = card.add_row()
+        row.addWidget(Badge(state, "danger" if "oculto" in state.lower() else "success"))
+        row.addWidget(Badge(f"Importancia {getattr(secret, 'importance', 3)}", "warning"))
+        row.addStretch()
+        if self._is_gm():
+            btn = QPushButton("Detalle")
+            btn.clicked.connect(lambda: self._detail("Secreto", state, secret, [
+                ("Contenido", getattr(secret, "content", "") or "—"),
+                ("Consecuencias", ", ".join(getattr(secret, "revelation_consequences", []) or []) or "—"),
+                ("Pistas asociadas", str(len(getattr(secret, "associated_clue_ids", []) or []))),
+            ]))
+            row.addWidget(btn)
+        return card
+
+    def _clue_card(self, clue):
+        state_raw = str(getattr(getattr(clue, "delivery_state", None), "value", getattr(clue, "delivery_state", "pendiente")))
+        state = enum_human(state_raw)
+        form = enum_human(str(getattr(getattr(clue, "delivery_form", None), "value", getattr(clue, "delivery_form", "pista"))))
+        card = Card(form, getattr(clue, "content", "") or "Pista preparada")
+        row = card.add_row()
+        row.addWidget(Badge(state, "success" if state_raw == "entregada" else "warning"))
+        row.addWidget(Badge(f"Claridad {getattr(clue, 'clarity', 3)}", "info"))
+        row.addStretch()
+        btn = QPushButton("Detalle")
+        btn.clicked.connect(lambda: self._detail("Pista", state, clue, [
+            ("Contenido", getattr(clue, "content", "") or "—"),
+            ("Interpretación probable", getattr(clue, "probable_interpretation", "") or "—"),
+            ("Riesgo de pérdida", str(getattr(clue, "loss_risk", 3))),
+        ]))
+        row.addWidget(btn)
+        return card
+
+    def _session_clues(self, project, session):
+        ids = set(getattr(session, "available_clue_ids", []) or [])
+        session_id = getattr(session, "id", "")
+        clues = []
+        for clue in getattr(project, "clues", []) or []:
+            if getattr(clue, "id", "") in ids or session_id in (getattr(clue, "planned_session_ids", []) or []) or getattr(clue, "delivered_session_id", None) == session_id:
+                clues.append(clue)
+        return clues
+
+    def _session_secrets(self, project, session):
+        ids = set(getattr(session, "revealable_secret_ids", []) or [])
+        session_id = getattr(session, "id", "")
+        secrets = []
+        for secret in getattr(project, "secrets", []) or []:
+            if getattr(secret, "id", "") in ids or session_id in (getattr(secret, "planned_revelation_session_ids", []) or []) or getattr(secret, "actual_revelation_session_id", None) == session_id:
+                secrets.append(secret)
+        return secrets
+
+    def refresh(self):
+        self._clear()
+        project = self._project()
+        if project is None:
+            self.session_selector.clear()
+            self.summary_label.setText("Sin proyecto")
+            self.cards.addWidget(EmptyState("Sin proyecto", "Abre un proyecto para preparar sesión."))
+            self.cards.addStretch()
+            return
+        self._populate_selector(project)
+        session = self._selected_session(project)
+        if session is None:
+            self.summary_label.setText("Sin sesiones")
+            self.cards.addWidget(EmptyState("Sin sesiones", "Crea una sesión para preparar escenas, pistas y secretos."))
+            self.cards.addStretch()
+            return
+        state = enum_human(str(getattr(getattr(session, "state", None), "value", getattr(session, "state", "preparacion"))))
+        self.summary_label.setText(state)
+        summary = Card(getattr(session, "name", "Sesión"), getattr(session, "context_summary", "") or getattr(session, "player_safe_summary", "") or "Preparación de sesión")
+        row = summary.add_row()
+        row.addWidget(Badge(state, "info"))
+        row.addWidget(Badge(f"Escenas {len(getattr(session, 'planned_scenes', []) or []) + len(getattr(session, 'optional_scenes', []) or [])}", "success"))
+        row.addWidget(Badge(f"Pistas {len(self._session_clues(project, session))}", "warning"))
+        row.addStretch()
+        self.cards.addWidget(summary)
+
+        self.cards.addWidget(SectionHeader("Escenas preparadas", "Navegación de escenas previstas y opcionales."))
+        scenes = list(getattr(session, "planned_scenes", []) or []) + list(getattr(session, "optional_scenes", []) or [])
+        scenes = sorted(scenes, key=lambda s: getattr(s, "order", 0))
+        if scenes:
+            for scene in scenes:
+                kind = str(getattr(getattr(scene, "scene_type", None), "value", getattr(scene, "scene_type", "prevista")))
+                self.cards.addWidget(self._scene_card(scene, kind))
+        else:
+            self.cards.addWidget(EmptyState("Sin escenas", "Añade escenas previstas u opcionales en la vista técnica o servicios existentes."))
+
+        self.cards.addWidget(SectionHeader("Pistas", "Pendientes y entregadas para esta sesión."))
+        clues = self._session_clues(project, session)
+        if clues:
+            for clue in clues:
+                self.cards.addWidget(self._clue_card(clue))
+        else:
+            self.cards.addWidget(EmptyState("Sin pistas", "No hay pistas planificadas para esta sesión."))
+
+        self.cards.addWidget(SectionHeader("Secretos", "Respeta visibilidad: contenido completo solo para GM."))
+        secrets = self._session_secrets(project, session)
+        if secrets:
+            for secret in secrets:
+                self.cards.addWidget(self._secret_card(secret))
+        else:
+            self.cards.addWidget(EmptyState("Sin secretos", "No hay secretos revelables planificados."))
+
+        self.cards.addWidget(SectionHeader("Checklist", "Objetivos, continuidad y preguntas abiertas."))
+        checklist = []
+        if self._is_gm():
+            checklist.extend(getattr(session, "gm_objectives", []) or [])
+            checklist.extend(getattr(session, "continuity_checklist", []) or [])
+            checklist.extend(getattr(session, "open_questions", []) or [])
+        else:
+            checklist.extend(getattr(session, "player_known_objectives", []) or [])
+        if checklist:
+            for item in checklist[:12]:
+                self.cards.addWidget(Card("•", str(item)))
+        else:
+            self.cards.addWidget(EmptyState("Sin checklist", "No hay elementos de preparación pendientes."))
+        self.cards.addStretch()
+
+    def set_advanced_mode(self, enabled: bool):
+        self._advanced_mode = bool(enabled)
+        self.refresh()
 
 
 class SessionOverview(QWidget):
