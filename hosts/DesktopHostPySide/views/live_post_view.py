@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QComboBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QTabWidget,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerSelectPrompt, DrawerTextPrompt
+from hosts.DesktopHostPySide.widgets.design_system import Badge, Card, EmptyState, SectionHeader
 from packages.domain.result import Error
 
 
@@ -28,62 +30,98 @@ class LivePostView(QWidget):
 
     def _build(self):
         layout = QVBoxLayout(self)
-        self.session_sel = QComboBox()
-        layout.addWidget(QLabel("Sesión:"))
-        layout.addWidget(self.session_sel)
-        btn_r = QPushButton("Refrescar sesiones")
-        btn_r.clicked.connect(self.refresh)
-        layout.addWidget(btn_r)
+        layout.setContentsMargins(22, 18, 22, 18)
+        layout.setSpacing(14)
+        layout.addWidget(SectionHeader(
+            "En vivo / Post",
+            "Dirección de sesión dentro de la ventana principal. La IA es opcional; los candidatos post-sesión son revisables."
+        ))
 
-        tabs = QTabWidget()
+        session_row = QHBoxLayout()
+        session_row.addWidget(QLabel("Sesión:"))
+        self.session_sel = QComboBox()
+        session_row.addWidget(self.session_sel, 1)
+        btn_r = QPushButton("Refrescar")
+        btn_r.clicked.connect(self.refresh)
+        session_row.addWidget(btn_r)
+        layout.addLayout(session_row)
+
+        self.tabs = QTabWidget()
         live = QWidget()
         ll = QVBoxLayout(live)
-        for label, handler in [
-            ("Open/Activate", self._live_open),
-            ("Quick Note", self._live_note),
-            ("Player Decision", self._live_decide),
-            ("Event", self._live_event),
-            ("Consequence", self._live_consequence),
-            ("Entity (provisional)", self._live_entity),
-            ("Relation (provisional)", self._live_relation),
-            ("Clue Deliver", self._live_clue),
-            ("Secret Reveal", self._live_secret),
-            ("Improvise", self._live_improvise),
-            ("Done", self._live_done),
-        ]:
+        ll.setContentsMargins(12, 12, 12, 12)
+        live_card = Card("Sesión activa", "Registra notas, decisiones, eventos y consecuencias sin salir del espacio narrativo.")
+        status_row = live_card.add_row()
+        self.live_status = QLabel("Pendiente de activar")
+        self.live_status.setObjectName("mutedLabel")
+        status_row.addWidget(Badge("Live", "info"))
+        status_row.addWidget(self.live_status, 1)
+        control_specs = [
+            ("Activar", self._live_open, "success"),
+            ("Nota rápida", self._live_note, "info"),
+            ("Decisión PJ", self._live_decide, "info"),
+            ("Evento", self._live_event, "warning"),
+            ("Consecuencia", self._live_consequence, "warning"),
+            ("Entregar pista", self._live_clue, "success"),
+            ("Revelar secreto", self._live_secret, "danger"),
+            ("Improvisar", self._live_improvise, "info"),
+            ("Cerrar live", self._live_done, "neutral"),
+        ]
+        row = live_card.add_row()
+        for idx, (label, handler, _tone) in enumerate(control_specs):
+            if idx and idx % 3 == 0:
+                row = live_card.add_row()
             btn = QPushButton(label)
             btn.clicked.connect(handler)
-            ll.addWidget(btn)
+            row.addWidget(btn)
         self.live_output = QTextEdit()
         self.live_output.setReadOnly(True)
-        self.live_output.setMaximumHeight(110)
-        ll.addWidget(self.live_output)
-        tabs.addTab(live, "Live")
+        self.live_output.setPlaceholderText("Aquí aparecerá el último resultado live.")
+        self.live_output.setMaximumHeight(130)
+        live_card.layout.addWidget(self.live_output)
+        ll.addWidget(live_card)
+        ll.addWidget(EmptyState("Material provisional", "Entidades/relaciones improvisadas siguen en los servicios live existentes y pasan por revisión post-sesión."))
+        ll.addStretch()
+        self.tabs.addTab(live, "Live")
 
         post = QWidget()
         pl = QVBoxLayout(post)
-        for label, handler in [
-            ("Close Session", self._post_close),
-            ("Private summary", self._post_private_summary),
-            ("Player summary", self._post_public_summary),
-            ("Generate Candidates", self._post_candidates),
-            ("Accept", self._post_accept),
-            ("Reject", self._post_reject),
-            ("Source", self._post_source),
-            ("Seeds", self._post_seeds),
-        ]:
+        pl.setContentsMargins(12, 12, 12, 12)
+        post_card = Card("Post-sesión", "Genera resúmenes, semillas y candidatos revisables desde el material live registrado.")
+        post_row = post_card.add_row()
+        for idx, (label, handler) in enumerate([
+            ("Cerrar sesión", self._post_close),
+            ("Resumen GM", self._post_private_summary),
+            ("Resumen jugadores", self._post_public_summary),
+            ("Generar candidatos", self._post_candidates),
+            ("Fuente", self._post_source),
+            ("Semillas", self._post_seeds),
+        ]):
+            if idx and idx % 3 == 0:
+                post_row = post_card.add_row()
             btn = QPushButton(label)
             btn.clicked.connect(handler)
-            pl.addWidget(btn)
+            post_row.addWidget(btn)
+        cand_row = post_card.add_row()
+        cand_row.addWidget(QLabel("Candidato:"))
         self.cand_combo = QComboBox()
-        pl.addWidget(QLabel("Candidate:"))
-        pl.addWidget(self.cand_combo)
+        cand_row.addWidget(self.cand_combo, 1)
+        accept_btn = QPushButton("Aceptar")
+        accept_btn.clicked.connect(self._post_accept)
+        reject_btn = QPushButton("Rechazar")
+        reject_btn.clicked.connect(self._post_reject)
+        cand_row.addWidget(accept_btn)
+        cand_row.addWidget(reject_btn)
         self.post_output = QTextEdit()
         self.post_output.setReadOnly(True)
-        self.post_output.setMaximumHeight(110)
-        pl.addWidget(self.post_output)
-        tabs.addTab(post, "Post")
-        layout.addWidget(tabs)
+        self.post_output.setPlaceholderText("Aquí aparecerán resumen, semillas o candidatos generados.")
+        self.post_output.setMaximumHeight(150)
+        post_card.layout.addWidget(self.post_output)
+        pl.addWidget(post_card)
+        pl.addWidget(EmptyState("IA opcional", "Si no hay proveedor IA, los servicios generan material determinista desde notas, eventos y consecuencias."))
+        pl.addStretch()
+        self.tabs.addTab(post, "Post")
+        layout.addWidget(self.tabs, 1)
 
     def _sid(self):
         return self.session_sel.currentData()
@@ -125,38 +163,44 @@ class LivePostView(QWidget):
 
     def _live_open(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             self.ctx.selected_session_id = sid
-            self._show_result(self.live_output, self.lmc.activate(sid), lambda session: f"Activated: {session.name}")
+            self._show_result(self.live_output, self.lmc.activate(sid), lambda session: f"Activada: {session.name}")
+            self.live_status.setText("Activa")
+        elif self.lmc is None:
+            self.live_output.setText("Servicio live no disponible; la aplicación sigue funcionando sin IA/live opcional.")
 
     def _live_note(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             self._prompt_text("Quick Note", "Text:", lambda text: self._show_result(self.live_output, self.lmc.note(sid, text), lambda _: "Note added"))
 
     def _live_decide(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             self._prompt_text("Player Decision", "Text:", lambda text: self._show_result(self.live_output, self.lmc.decision(sid, text), lambda _: "Player decision registered"))
 
     def _live_event(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             self._prompt_text("Event", "Text:", lambda text: self._show_result(self.live_output, self.lmc.event(sid, text), lambda _: "Event registered"))
 
     def _live_consequence(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             self._prompt_text("Consequence", "Text:", lambda text: self._show_result(self.live_output, self.lmc.consequence(sid, text), lambda _: "Consequence registered"))
 
     def _live_entity(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             result = self.lmc.entity(sid, "Improvised NPC", "personaje")
             self._show_result(self.live_output, result, lambda entity: f"Created entity: {entity.name}")
 
     def _live_relation(self):
         sid = self._sid()
+        if self.lmc is None:
+            self.live_output.setText("Servicio live no disponible.")
+            return
         project = self.sc.ps.active_project
         if not sid or project is None or len(project.entities) < 2:
             self.live_output.setText("Need at least two entities")
@@ -168,7 +212,8 @@ class LivePostView(QWidget):
 
     def _live_clue(self):
         sid = self._sid()
-        if not sid:
+        if not sid or self.lmc is None:
+            self.live_output.setText("Servicio live no disponible o sesión no seleccionada.")
             return
         clues = self.lmc.query_clues(sid)
         if isinstance(clues, Error) or not clues.value:
@@ -179,7 +224,8 @@ class LivePostView(QWidget):
 
     def _live_secret(self):
         sid = self._sid()
-        if not sid:
+        if not sid or self.lmc is None:
+            self.live_output.setText("Servicio live no disponible o sesión no seleccionada.")
             return
         secrets = self.lmc.query_secrets(sid)
         if isinstance(secrets, Error) or not secrets.value:
@@ -190,13 +236,13 @@ class LivePostView(QWidget):
 
     def _live_improvise(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             result = self.lmc.improvise(sid, "fantasy scene", True)
             self._show_result(self.live_output, result, lambda data: f"{data.get('name', '?')}\n{data.get('description', '?')}")
 
     def _live_done(self):
         sid = self._sid()
-        if sid:
+        if sid and self.lmc is not None:
             result = self.lmc.done(sid)
             self._show_result(
                 self.live_output,
@@ -206,22 +252,23 @@ class LivePostView(QWidget):
 
     def _post_close(self):
         sid = self._sid()
-        if sid:
+        if sid and self.psc is not None:
             self._show_result(self.post_output, self.psc.close(sid), lambda session: f"Closed: {session.state.value}")
 
     def _post_private_summary(self):
         sid = self._sid()
-        if sid:
+        if sid and self.psc is not None:
             self._show_result(self.post_output, self.psc.private_summary(sid), lambda text: text)
 
     def _post_public_summary(self):
         sid = self._sid()
-        if sid:
+        if sid and self.psc is not None:
             self._show_result(self.post_output, self.psc.public_summary(sid), lambda text: text)
 
     def _post_candidates(self):
         sid = self._sid()
-        if not sid:
+        if not sid or self.psc is None:
+            self.post_output.setText("Servicio post-sesión no disponible o sesión no seleccionada.")
             return
         first = self.psc.generate_candidates(sid)
         if isinstance(first, Error):
@@ -237,20 +284,20 @@ class LivePostView(QWidget):
 
     def _post_accept(self):
         cid = self.cand_combo.currentData()
-        if cid:
+        if cid and self.psc is not None:
             self._show_result(self.post_output, self.psc.accept_candidate(cid), lambda entity: f"Accepted: {entity.name}")
 
     def _post_reject(self):
         cid = self.cand_combo.currentData()
-        if cid:
+        if cid and self.psc is not None:
             self._show_result(self.post_output, self.psc.reject_candidate(cid), lambda _: "Rejected")
 
     def _post_source(self):
         sid = self._sid()
-        if sid:
+        if sid and self.psc is not None:
             self._show_result(self.post_output, self.psc.source(sid), lambda source: f"Source: {source.title}")
 
     def _post_seeds(self):
         sid = self._sid()
-        if sid:
+        if sid and self.psc is not None:
             self._show_result(self.post_output, self.psc.seeds(sid), lambda seeds: str(seeds))
