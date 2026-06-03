@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -50,6 +49,12 @@ class InspectorPanel(QWidget):
         self.id_label.setVisible(False)
         layout.addWidget(self.id_label)
 
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("mutedLabel")
+        self.status_label.setWordWrap(True)
+        self.status_label.setVisible(False)
+        layout.addWidget(self.status_label)
+
         self.form = QFormLayout()
         layout.addLayout(self.form)
 
@@ -79,6 +84,8 @@ class InspectorPanel(QWidget):
         self.title.setText("Inspector")
         self.id_label.setText(message)
         self.id_label.setVisible(False)
+        self.status_label.setText("")
+        self.status_label.setVisible(False)
         self.save_button.setEnabled(False)
         self.revert_button.setEnabled(False)
         self.copy_id_button.setEnabled(False)
@@ -100,6 +107,8 @@ class InspectorPanel(QWidget):
         self._on_revert = on_revert
         self._object_id = object_id
         self.title.setText(title)
+        self.status_label.setText("")
+        self.status_label.setVisible(False)
         self.id_label.setText(f"ID: {object_id}")
         self.id_label.setVisible(self._advanced_mode)
         for spec in fields:
@@ -134,8 +143,11 @@ class InspectorPanel(QWidget):
             return
         try:
             self._on_save(self.values())
+            self.status_label.setText("Guardado")
+            self.status_label.setVisible(True)
         except Exception as exc:  # UI boundary: no raw traceback to console
-            QMessageBox.critical(self, "Error guardando", str(exc))
+            self.status_label.setText(f"Error guardando: {exc}")
+            self.status_label.setVisible(True)
 
     def revert(self) -> None:
         if self._on_revert is not None:
