@@ -41,8 +41,8 @@ class RightDrawer(QFrame):
         self.setFixedHeight(parent.height() if parent else 800)
         self.setStyleSheet(
             "QFrame#rightDrawer { "
-            "background: #131820; "
-            "border-left: 1px solid #252D3B; "
+            "background: #F8F6ED; "
+            "border-left: 1px solid #D8D6C8; "
             "border-radius: 0px; "
             "}"
         )
@@ -54,14 +54,14 @@ class RightDrawer(QFrame):
 
         # Header bar
         header = QFrame()
-        header.setStyleSheet("background: #0D1017; border-bottom: 1px solid #1E2530;")
+        header.setStyleSheet("background: #EEECDD; border-bottom: 1px solid #D8D6C8;")
         header.setFixedHeight(44)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(14, 6, 14, 6)
 
         self._title = QLabel("")
         self._title.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: #ECEFF4; "
+            "font-size: 14px; font-weight: 700; color: #5C5A3E; "
             "background: transparent; border: none;"
         )
         h_layout.addWidget(self._title)
@@ -70,9 +70,9 @@ class RightDrawer(QFrame):
         self._close_btn = QPushButton("✕")
         self._close_btn.setFixedSize(30, 30)
         self._close_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #2B3546; "
-            "border-radius: 6px; color: #8993A5; font-size: 14px; } "
-            "QPushButton:hover { background: #1A2030; color: #CDD5E0; }"
+            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
+            "border-radius: 6px; color: #6F6A42; font-size: 14px; } "
+            "QPushButton:hover { background: #F8F5EA; color: #504B2E; }"
         )
         self._close_btn.clicked.connect(self.close)
         h_layout.addWidget(self._close_btn)

@@ -3,6 +3,7 @@
 Fecha: 2026-06-03
 Estado: validación parcial A-E ejecutada por el usuario.
 Resultado parcial: NO PASA.
+Estado posterior: paquete correctivo `B31-UX-FIX-01` implementado en WSL y pendiente de repetición A-E en Windows nativo.
 
 ## Veredicto provisional
 

@@ -39,7 +39,7 @@ class DrawerForm(QWidget):
 
         if self._title:
             lbl = QLabel(self._title)
-            lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #ECEFF4;")
+            lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #5C5A3E;")
             lbl.setWordWrap(True)
             layout.addWidget(lbl)
 
@@ -52,9 +52,9 @@ class DrawerForm(QWidget):
         btn_row.setSpacing(8)
         self._cancel_btn = QPushButton("Cancelar")
         self._cancel_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #2B3546; "
-            "border-radius: 8px; padding: 8px 16px; color: #8993A5; } "
-            "QPushButton:hover { background: #1A2030; }"
+            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
+            "border-radius: 8px; padding: 8px 16px; color: #6F6A42; } "
+            "QPushButton:hover { background: #F8F5EA; }"
         )
         self._cancel_btn.clicked.connect(self._on_cancel)
         self._accept_btn = QPushButton("Guardar")

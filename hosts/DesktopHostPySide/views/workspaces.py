@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QComboBox,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -39,6 +40,239 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 from packages.domain.result import Error
 
 
+class _SimpleFormPanel(QWidget):
+    """Small drawer form used by normal-mode creation paths."""
+
+    def __init__(self, title: str, subtitle: str = ""):
+        super().__init__()
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(18, 16, 18, 18)
+        self.layout.setSpacing(12)
+        self.layout.addWidget(SectionHeader(title, subtitle))
+
+    def add_status(self) -> QLabel:
+        label = QLabel("")
+        label.setObjectName("mutedLabel")
+        label.setWordWrap(True)
+        self.layout.addWidget(label)
+        return label
+
+
+class EntityQuickCreatePanel(_SimpleFormPanel):
+    def __init__(self, controller, on_created):
+        super().__init__("Nueva entidad", "Crea una pieza narrativa sin ver campos técnicos.")
+        self.controller = controller
+        self.on_created = on_created
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Nombre visible")
+        self.kind = QComboBox()
+        self.kind.addItems(["personaje", "localizacion", "objeto", "evento", "faccion", "secreto", "pista", "trama", "nota"])
+        self.description = QTextEdit()
+        self.description.setPlaceholderText("Descripción breve")
+        self.description.setMinimumHeight(90)
+        form.addRow("Nombre", self.name)
+        form.addRow("Tipo", self.kind)
+        form.addRow("Descripción", self.description)
+        self.layout.addLayout(form)
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        save = QPushButton("Crear entidad")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        result = self.controller.create({
+            "name": self.name.text().strip(),
+            "entity_type": self.kind.currentText(),
+            "brief_description": self.description.toPlainText().strip(),
+        })
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        entity = result.value
+        self.status.setText(f"Entidad creada: {getattr(entity, 'name', 'sin nombre')}")
+        self.on_created()
+
+
+class SourceQuickCreatePanel(_SimpleFormPanel):
+    def __init__(self, controller, on_created):
+        super().__init__("Nueva fuente", "Registra una referencia legible para trazabilidad narrativa.")
+        self.controller = controller
+        self.on_created = on_created
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Nombre de la referencia")
+        self.reference = QLineEdit()
+        self.reference.setPlaceholderText("URL, libro, nota o archivo")
+        self.fragment = QTextEdit()
+        self.fragment.setPlaceholderText("Fragmento o contexto")
+        self.fragment.setMinimumHeight(90)
+        form.addRow("Nombre", self.name)
+        form.addRow("Referencia", self.reference)
+        form.addRow("Fragmento", self.fragment)
+        self.layout.addLayout(form)
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        save = QPushButton("Crear fuente")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        result = self.controller.create({
+            "name": self.name.text().strip(),
+            "reference": self.reference.text().strip(),
+            "fragment": self.fragment.toPlainText().strip(),
+            "source_type": "entrada_manual",
+        })
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        source = result.value
+        self.status.setText(f"Fuente creada: {getattr(source, 'name', 'sin nombre')}")
+        self.on_created()
+
+
+class LayerQuickCreatePanel(_SimpleFormPanel):
+    def __init__(self, controller, on_created):
+        super().__init__("Nueva capa", "Organiza el worldbuilding como estratos visuales.")
+        self.controller = controller
+        self.on_created = on_created
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Nombre de la capa")
+        self.description = QTextEdit()
+        self.description.setPlaceholderText("Qué representa esta capa")
+        self.description.setMinimumHeight(90)
+        form.addRow("Nombre", self.name)
+        form.addRow("Descripción", self.description)
+        self.layout.addLayout(form)
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        save = QPushButton("Crear capa")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        result = self.controller.create({
+            "name": self.name.text().strip(),
+            "description": self.description.toPlainText().strip(),
+        })
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        layer = result.value
+        self.status.setText(f"Capa creada: {getattr(layer, 'name', 'sin nombre')}")
+        self.on_created()
+
+
+class CandidateReviewPanel(_SimpleFormPanel):
+    def __init__(self, controller, on_changed):
+        super().__init__("Sugerencias", "Revisa candidatos como tarjetas, sin tabla técnica.")
+        self.controller = controller
+        self.on_changed = on_changed
+        self.cards = QWidget()
+        self.cards_layout = QVBoxLayout(self.cards)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(10)
+        self.layout.addWidget(make_scroll_area(self.cards), 1)
+        self.refresh()
+
+    def refresh(self):
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        candidates = self.controller.list_all()
+        if not candidates:
+            self.cards_layout.addWidget(EmptyState("Sin sugerencias", "Cuando la IA proponga candidatos aparecerán aquí."))
+            return
+        for candidate in candidates:
+            title = getattr(candidate, "title", "") or getattr(candidate, "name", "Sugerencia")
+            desc = getattr(candidate, "description", "") or getattr(candidate, "summary", "") or "Revisión pendiente"
+            card = Card(title, desc)
+            row = QHBoxLayout()
+            accept = QPushButton("Aceptar")
+            reject = QPushButton("Rechazar")
+            accept.clicked.connect(lambda _, cid=getattr(candidate, "id", ""): self._accept(cid))
+            reject.clicked.connect(lambda _, cid=getattr(candidate, "id", ""): self._reject(cid))
+            row.addStretch(1)
+            row.addWidget(accept)
+            row.addWidget(reject)
+            card.layout.addLayout(row)
+            self.cards_layout.addWidget(card)
+        self.cards_layout.addStretch(1)
+
+    def _accept(self, candidate_id: str):
+        result = self.controller.accept(candidate_id)
+        if isinstance(result, Error):
+            self.layout.addWidget(QLabel(result.error))
+            return
+        self.on_changed()
+        self.refresh()
+
+    def _reject(self, candidate_id: str):
+        result = self.controller.reject(candidate_id)
+        if isinstance(result, Error):
+            self.layout.addWidget(QLabel(result.error))
+            return
+        self.on_changed()
+        self.refresh()
+
+
+class NarrativeWorkbench(QWidget):
+    """Normal-mode clean entry points for creation work."""
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__()
+        self.workspace = workspace
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(14)
+        layout.addWidget(SectionHeader(
+            "Taller narrativo",
+            "Crea y organiza sin tablas técnicas; los detalles avanzados quedan detrás del modo avanzado."
+        ))
+        grid_host = QWidget()
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(14)
+        actions = [
+            ("Entidad", "Crear personaje, lugar, objeto o concepto.", "Nueva entidad", self.workspace.open_entity_create),
+            ("Relaciones", "Conecta nodos visualmente desde el grafo.", "Ir al grafo", self.workspace.open_graph),
+            ("Sugerencias", "Revisa candidatos como tarjetas.", "Revisar", self.workspace.open_candidates_clean),
+            ("Fuentes", "Guarda referencias legibles.", "Nueva fuente", self.workspace.open_source_create),
+            ("Capas", "Ordena el worldbuilding por estratos.", "Nueva capa", self.workspace.open_layer_create),
+        ]
+        for idx, (title, desc, button, callback) in enumerate(actions):
+            card = Card(title, desc)
+            btn = QPushButton(button)
+            if idx == 0:
+                btn.setObjectName("primaryButton")
+            btn.clicked.connect(callback)
+            card.layout.addWidget(btn)
+            grid.addWidget(card, idx // 2, idx % 2)
+        layout.addWidget(grid_host)
+        layout.addWidget(EmptyState(
+            "Modo normal activo",
+            "IDs, JSON, tablas técnicas y metadatos quedan en Avanzado. La funcionalidad sigue disponible con lenguaje narrativo."
+        ))
+        layout.addStretch(1)
+
+
 class CreationWorkspace(QTabWidget):
     """Creation space: graph-first normal entry, technical tools in advanced tabs."""
 
@@ -57,6 +291,8 @@ class CreationWorkspace(QTabWidget):
         self.candidate_view = candidate_view
         self.source_view = source_view
         self.layer_view = layer_view
+        self.source_controller = getattr(source_view, "ctrl", None)
+        self.layer_controller = getattr(layer_view, "ctrl", None)
         self.entity_controller = getattr(corpus_view, "ec", None)
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
@@ -69,6 +305,8 @@ class CreationWorkspace(QTabWidget):
         self.graph.relationSelected.connect(self._open_relation_panel)
         self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
 
+        self.workbench = NarrativeWorkbench(self)
+        self.addTab(self.workbench, "Taller")
         self.addTab(self.graph, "Grafo")
         self.addTab(self.import_export_view, "Importación")
         self.addTab(self.writing_view, "Escritura")
@@ -105,6 +343,46 @@ class CreationWorkspace(QTabWidget):
                        self.source_view, self.layer_view]:
             if widget is not None and hasattr(widget, "refresh"):
                 widget.refresh()
+
+    def open_graph(self):
+        self.setCurrentWidget(self.graph)
+
+    def open_entity_create(self):
+        drawer = self.ctx.drawer
+        if self.entity_controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo crear entidad: servicio no disponible")
+            return
+        panel = EntityQuickCreatePanel(self.entity_controller, on_created=self.refresh)
+        drawer.set_content(panel, title="Nueva entidad")
+        drawer.open()
+
+    def open_candidates_clean(self):
+        drawer = self.ctx.drawer
+        controller = getattr(self.candidate_view, "cc", None)
+        if controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo abrir sugerencias: servicio no disponible")
+            return
+        panel = CandidateReviewPanel(controller, on_changed=self.refresh)
+        drawer.set_content(panel, title="Sugerencias")
+        drawer.open()
+
+    def open_source_create(self):
+        drawer = self.ctx.drawer
+        if self.source_controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo crear fuente: servicio no disponible")
+            return
+        panel = SourceQuickCreatePanel(self.source_controller, on_created=self.refresh)
+        drawer.set_content(panel, title="Nueva fuente")
+        drawer.open()
+
+    def open_layer_create(self):
+        drawer = self.ctx.drawer
+        if self.layer_controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo crear capa: servicio no disponible")
+            return
+        panel = LayerQuickCreatePanel(self.layer_controller, on_created=self.refresh)
+        drawer.set_content(panel, title="Nueva capa")
+        drawer.open()
 
     def _open_node_panel(self, entity_id: str):
         if self.entity_controller is None or self.ctx.drawer is None:

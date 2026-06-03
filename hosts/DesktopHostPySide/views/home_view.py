@@ -1,15 +1,16 @@
-"""HomeView — Immersive home portal for B31.
+"""HomeView — Dendro immersive portal for B31 UX fix.
 
-Replaces the sidebar-driven navigation with three large entry cards
-(Creación, Galería, Sesión) and a discrete project/config zone.
+Normal mode is intentionally non-technical: no schema, no provider status, no
+counts, no raw IDs. Project/config actions are grouped behind quiet icon buttons.
 """
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -19,118 +20,82 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
-from hosts.DesktopHostPySide.widgets.design_system import (
-    Badge,
-    SectionHeader,
-    make_scroll_area,
-)
+from hosts.DesktopHostPySide.widgets.design_system import Badge, make_scroll_area
 
 
-# ── Home entry card ──────────────────────────────────────────────────────────
+class HomeNode(QFrame):
+    """Soft clickable node for one of Dendro's three product spaces."""
 
-class HomeEntryCard(QFrame):
-    """Large clickable card representing one of the three main spaces."""
-
-    def __init__(
-        self,
-        title: str,
-        description: str,
-        icon_text: str = "",
-        tone: str = "info",
-        parent: QWidget | None = None,
-    ):
+    def __init__(self, title: str, subtitle: str, glyph: str, tone: str, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setObjectName("homeCard")
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("dendroNode")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumSize(230, 230)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(200)
-
-        tone_colors = {
-            "creation": ("#1A2744", "#3B6BDF", "#7DA4FF"),
-            "gallery": ("#1F3A2A", "#2E8B57", "#7DCEA0"),
-            "session": ("#3A1F2A", "#8B3A62", "#CE7DA0"),
+        tones = {
+            "creation": ("#F7F4EA", "#7A733D", "#AFA77A"),
+            "gallery": ("#F3F5EE", "#6E7B59", "#B5BBA5"),
+            "session": ("#F6F1E8", "#8A6849", "#C8AF8C"),
         }
-        bg, accent, fg = tone_colors.get(tone, ("#1A2744", "#3B6BDF", "#7DA4FF"))
-        self._bg = bg
-        self._accent = accent
-
+        bg, fg, border = tones.get(tone, tones["creation"])
         self.setStyleSheet(
-            f"QFrame#homeCard {{ background: {bg}; border: 2px solid {accent}33; "
-            f"border-radius: 18px; }} "
-            f"QFrame#homeCard:hover {{ border: 2px solid {accent}; "
-            f"background: {bg}CC; }}"
+            f"QFrame#dendroNode {{ background: {bg}; border: 1px solid {border}; "
+            "border-radius: 36px; }} "
+            f"QFrame#dendroNode:hover {{ background: #FBFAF4; border: 2px solid {fg}; }}"
         )
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(12)
+        layout.addStretch(1)
 
-        # Icon row
-        icon_label = QLabel(icon_text)
-        icon_label.setStyleSheet(
-            f"font-size: 36px; color: {fg}; background: transparent; border: none;"
-        )
-        layout.addWidget(icon_label)
+        icon = QLabel(glyph)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(f"font-size: 38px; color: {fg}; background: transparent; border: none;")
+        layout.addWidget(icon)
 
-        # Title
         title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet(
-            f"font-size: 22px; font-weight: 800; color: {fg}; "
-            "background: transparent; border: none;"
+            f"font-size: 24px; font-weight: 700; color: {fg}; "
+            "font-family: Georgia, 'Courier New', serif; background: transparent; border: none;"
         )
         layout.addWidget(title_label)
 
-        # Description
-        desc_label = QLabel(description)
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet(
-            "font-size: 13px; color: #A0B0C4; background: transparent; border: none;"
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle_label.setWordWrap(True)
+        subtitle_label.setStyleSheet("font-size: 13px; color: #6E705E; background: transparent; border: none;")
+        layout.addWidget(subtitle_label)
+        layout.addStretch(1)
+
+        self._hint = QLabel("Entrar")
+        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint.setStyleSheet(
+            f"font-size: 12px; color: {fg}; background: transparent; border: none; letter-spacing: 1px;"
         )
-        layout.addWidget(desc_label)
-
-        layout.addStretch()
-
-        # Status area (populated on refresh)
-        self._status_row = QHBoxLayout()
-        self._status_row.setSpacing(8)
-        layout.addLayout(self._status_row)
-
-    def set_status(self, badges: list[tuple[str, str]]):
-        """Set status badges. Each tuple is (text, tone)."""
-        while self._status_row.count():
-            item = self._status_row.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-        for text, tone in badges:
-            self._status_row.addWidget(Badge(text, tone))
-        self._status_row.addStretch()
+        layout.addWidget(self._hint)
 
 
-# ── Config action button (small, icon-style) ─────────────────────────────────
-
-class ConfigButton(QPushButton):
-    """Small discrete button for the project/config zone."""
+class QuietIconButton(QPushButton):
+    """Small grouped action button used on the Home surface."""
 
     def __init__(self, text: str, parent: QWidget | None = None):
         super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #2B3546; "
-            "border-radius: 8px; padding: 6px 12px; color: #8993A5; font-size: 12px; } "
-            "QPushButton:hover { background: #1A2030; color: #CDD5E0; }"
+            "QPushButton { background: rgba(255,255,255,0.45); border: 1px solid #D8D6C8; "
+            "border-radius: 18px; padding: 8px 14px; color: #6F6A42; font-size: 12px; } "
+            "QPushButton:hover { background: #F8F5EA; border: 1px solid #AFA77A; color: #504B2E; }"
         )
 
 
-# ── HomeView ─────────────────────────────────────────────────────────────────
-
 class HomeView(QWidget):
-    """Immersive home portal with three space entries and discrete config."""
+    """Dendro home: three connected narrative spaces + grouped configuration."""
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
         self.ctx = ctx
-        self._callbacks: dict[str, callable] = {}
+        self._callbacks: dict[str, Callable] = {}
         self._build()
 
     def _build(self):
@@ -138,116 +103,115 @@ class HomeView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Scrollable content
         content = QWidget()
+        content.setObjectName("dendroHome")
+        content.setStyleSheet(
+            "QWidget#dendroHome { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, "
+            "stop:0 #F7F5EA, stop:0.55 #EEEEDF, stop:1 #E8E8DC); }"
+        )
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(60, 40, 60, 40)
-        layout.setSpacing(32)
+        layout.setContentsMargins(64, 42, 64, 34)
+        layout.setSpacing(24)
 
-        # Header zone
-        header = QVBoxLayout()
-        header.setSpacing(4)
-        self._project_label = QLabel("Narrative Architect")
+        top = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+        self._project_label = QLabel("Dendro")
         self._project_label.setStyleSheet(
-            "font-size: 28px; font-weight: 800; color: #ECEFF4; "
-            "background: transparent; border: none;"
+            "font-size: 42px; font-weight: 600; color: #67643A; "
+            "font-family: Georgia, 'Courier New', serif; background: transparent; border: none;"
         )
-        header.addWidget(self._project_label)
-
-        self._subtitle_label = QLabel("Espacio de creación narrativa")
-        self._subtitle_label.setStyleSheet(
-            "font-size: 14px; color: #6B7A8D; background: transparent; border: none;"
-        )
-        header.addWidget(self._subtitle_label)
-
+        title_box.addWidget(self._project_label)
+        self._subtitle_label = QLabel("Un escritorio tranquilo para crear mundos, relatos y sesiones.")
+        self._subtitle_label.setStyleSheet("font-size: 14px; color: #7C806E; background: transparent; border: none;")
+        title_box.addWidget(self._subtitle_label)
         self._status_label = QLabel("")
-        self._status_label.setObjectName("mutedLabel")
-        self._status_label.setStyleSheet("font-size: 12px; background: transparent; border: none;")
-        header.addWidget(self._status_label)
-        layout.addLayout(header)
+        self._status_label.setStyleSheet("font-size: 12px; color: #8C8A74; background: transparent; border: none;")
+        title_box.addWidget(self._status_label)
+        top.addLayout(title_box)
+        top.addStretch(1)
 
-        # Three entry cards
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(20)
-
-        self.creation_card = HomeEntryCard(
-            "Creación",
-            "Explora y construye tu mundo narrativo con un grafo interactivo.",
-            icon_text="✦",
-            tone="creation",
-        )
-        self.creation_card.clicked = lambda: self._navigate("creation")
-
-        self.gallery_card = HomeEntryCard(
-            "Galería",
-            "Contempla y explora tus personajes, lugares y elementos.",
-            icon_text="◈",
-            tone="gallery",
-        )
-        self.gallery_card.clicked = lambda: self._navigate("gallery")
-
-        self.session_card = HomeEntryCard(
-            "Sesión",
-            "Prepara, dirige y cierra sesiones de rol en un espacio inmersivo.",
-            icon_text="⚔",
-            tone="session",
-        )
-        self.session_card.clicked = lambda: self._navigate("session")
-
-        for card in [self.creation_card, self.gallery_card, self.session_card]:
-            card.mousePressEvent = lambda event, c=card: self._on_card_click(c, event)
-            cards_row.addWidget(card)
-
-        layout.addLayout(cards_row, stretch=1)
-
-        # Discrete config zone
-        config_zone = QFrame()
-        config_zone.setObjectName("configZone")
-        config_zone.setStyleSheet(
-            "QFrame#configZone { background: transparent; border: none; }"
-        )
-        cfg_layout = QHBoxLayout(config_zone)
-        cfg_layout.setContentsMargins(0, 0, 0, 0)
-        cfg_layout.setSpacing(8)
-
-        self._btn_new = ConfigButton("Nuevo")
-        self._btn_open = ConfigButton("Abrir")
-        self._btn_save = ConfigButton("Guardar")
-        self._btn_close = ConfigButton("Cerrar")
-        self._btn_settings = ConfigButton("Ajustes IA")
-        self._btn_advanced = ConfigButton("Modo avanzado")
-        self._btn_diagnostic = ConfigButton("Diagnóstico")
-        self._advanced_indicator = Badge("Modo avanzado activo", "info")
+        self._btn_project = QuietIconButton("◇ Proyecto")
+        self._btn_config = QuietIconButton("⚙ Configuración")
+        self._advanced_indicator = Badge("Avanzado", "warning")
         self._advanced_indicator.setVisible(False)
+        self._btn_project.clicked.connect(lambda: self._action("project_menu"))
+        self._btn_config.clicked.connect(lambda: self._action("config_menu"))
+        top.addWidget(self._advanced_indicator)
+        top.addWidget(self._btn_project)
+        top.addWidget(self._btn_config)
+        layout.addLayout(top)
 
-        self._btn_new.clicked.connect(lambda: self._action("new_project"))
-        self._btn_open.clicked.connect(lambda: self._action("open_project"))
-        self._btn_save.clicked.connect(lambda: self._action("save_project"))
-        self._btn_close.clicked.connect(lambda: self._action("close_project"))
-        self._btn_settings.clicked.connect(lambda: self._action("ai_settings"))
-        self._btn_advanced.clicked.connect(lambda: self._action("toggle_advanced"))
-        self._btn_diagnostic.clicked.connect(lambda: self._action("toggle_diagnostic"))
+        layout.addStretch(1)
 
-        for btn in [
-            self._btn_new, self._btn_open, self._btn_save, self._btn_close,
-            self._btn_settings, self._btn_advanced, self._btn_diagnostic,
-        ]:
-            cfg_layout.addWidget(btn)
-        cfg_layout.addWidget(self._advanced_indicator)
-        cfg_layout.addStretch()
+        node_row = QHBoxLayout()
+        node_row.setSpacing(20)
+        self.creation_card = HomeNode(
+            "Creación",
+            "Grafo, entidades, relaciones y semillas narrativas.",
+            "✧",
+            "creation",
+        )
+        self.gallery_card = HomeNode(
+            "Galería",
+            "Material narrativo como tarjetas, referencias y hallazgos.",
+            "◌",
+            "gallery",
+        )
+        self.session_card = HomeNode(
+            "Sesión",
+            "Preparación, mesa viva y cierre de partida.",
+            "☉",
+            "session",
+        )
+        self.creation_card.mousePressEvent = lambda event: self._navigate("creation")
+        self.gallery_card.mousePressEvent = lambda event: self._navigate("gallery")
+        self.session_card.mousePressEvent = lambda event: self._navigate("session")
+        node_row.addStretch(1)
+        node_row.addWidget(self.creation_card, 3)
+        node_row.addWidget(self._branch("━━"))
+        node_row.addWidget(self.gallery_card, 3)
+        node_row.addWidget(self._branch("━━"))
+        node_row.addWidget(self.session_card, 3)
+        node_row.addStretch(1)
+        layout.addLayout(node_row, stretch=4)
 
-        layout.addWidget(config_zone)
+        self._normal_paths = QLabel(
+            "Modo normal: crea entidades desde el grafo, revisa sugerencias, organiza fuentes y capas sin tablas técnicas."
+        )
+        self._normal_paths.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._normal_paths.setWordWrap(True)
+        self._normal_paths.setStyleSheet("font-size: 13px; color: #777660; background: transparent; border: none;")
+        layout.addWidget(self._normal_paths)
+        layout.addStretch(1)
+
         root.addWidget(make_scroll_area(content))
 
-    def _on_card_click(self, card: HomeEntryCard, event):
-        mapping = {
-            id(self.creation_card): "creation",
-            id(self.gallery_card): "gallery",
-            id(self.session_card): "session",
-        }
-        space = mapping.get(id(card))
-        if space:
-            self._navigate(space)
+        self._fade = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._fade)
+        self._fade.setOpacity(1.0)
+
+    def _branch(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("font-size: 22px; color: #B4B29B; background: transparent; border: none;")
+        label.setMinimumWidth(44)
+        return label
+
+    def register_callback(self, name: str, callback: Callable):
+        self._callbacks[name] = callback
+
+    def set_advanced_mode(self, enabled: bool):
+        self._advanced_indicator.setVisible(bool(enabled))
+
+    def animate_arrival(self):
+        self._fade.setOpacity(0.7)
+        animation = QPropertyAnimation(self._fade, b"opacity", self)
+        animation.setDuration(220)
+        animation.setStartValue(0.7)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _navigate(self, space: str):
         cb = self._callbacks.get(f"navigate_{space}")
@@ -259,58 +223,15 @@ class HomeView(QWidget):
         if cb:
             cb()
 
-    def register_callback(self, name: str, callback: callable):
-        self._callbacks[name] = callback
-
-    def set_advanced_mode(self, enabled: bool):
-        self._btn_advanced.setText("Modo avanzado: ON" if enabled else "Modo avanzado")
-        self._btn_diagnostic.setVisible(bool(enabled))
-        self._advanced_indicator.setVisible(bool(enabled))
-        self._btn_advanced.setStyleSheet(
-            "QPushButton { background: #263244; border: 1px solid #5B7CFA; "
-            "border-radius: 8px; padding: 6px 12px; color: #7DA4FF; font-size: 12px; } "
-            if enabled else
-            "QPushButton { background: transparent; border: 1px solid #2B3546; "
-            "border-radius: 8px; padding: 6px 12px; color: #8993A5; font-size: 12px; } "
-            "QPushButton:hover { background: #1A2030; color: #CDD5E0; }"
-        )
-
     def refresh(self):
         pc = self.ctx.project_controller
-        if pc is None:
-            return
         p = pc.ps.active_project if pc else None
         if p is None:
-            self._project_label.setText("Narrative Architect")
-            self._subtitle_label.setText("Abre o crea un proyecto para comenzar")
-            self._status_label.setText("")
-            self.creation_card.set_status([])
-            self.gallery_card.set_status([])
-            self.session_card.set_status([])
+            self._project_label.setText("Dendro")
+            self._subtitle_label.setText("Un escritorio tranquilo para crear mundos, relatos y sesiones.")
+            self._status_label.setText("Abre o crea un proyecto para comenzar.")
             return
-
-        name = getattr(p, "name", "Sin nombre")
-        self._project_label.setText(f"Narrative Architect")
+        name = getattr(p, "name", "Sin nombre") or "Sin nombre"
+        self._project_label.setText("Dendro")
         self._subtitle_label.setText(name)
-
-        schema = getattr(p, "schema_version", "?")
-        self._status_label.setText(f"Schema v{schema}")
-
-        # Card status badges
-        entities = getattr(p, "entities", []) or []
-        relations = getattr(p, "relations", []) or []
-        campaigns = getattr(p, "campaigns", []) or []
-        sessions = getattr(p, "sessions", []) or []
-        factions = getattr(p, "factions", []) or []
-
-        self.creation_card.set_status([
-            (f"{len(entities)} entidades", "info"),
-            (f"{len(relations)} relaciones", "neutral"),
-        ])
-        self.gallery_card.set_status([
-            (f"{len(entities)} elementos", "success"),
-        ])
-        self.session_card.set_status([
-            (f"{len(campaigns)} campañas", "info"),
-            (f"{len(sessions)} sesiones", "neutral"),
-        ])
+        self._status_label.setText("Proyecto activo")

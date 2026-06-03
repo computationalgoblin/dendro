@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -63,6 +64,7 @@ from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryW
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
+from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ProjectActionsPanel
 
 
 # Index constants for the stack widget
@@ -82,7 +84,7 @@ class MainWindow(QMainWindow):
         self.ctx.project_controller = self.controller
         self.ctx.log_sink = self.log_msg
 
-        self.setWindowTitle("Narrative Architect")
+        self.setWindowTitle("Dendro")
         self.setMinimumSize(1180, 760)
         self.setStyleSheet(APP_STYLESHEET)
 
@@ -149,11 +151,13 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("navigate_creation", lambda: self._go_space(_IDX_CREATION))
         self.home_view.register_callback("navigate_gallery", lambda: self._go_space(_IDX_GALLERY))
         self.home_view.register_callback("navigate_session", lambda: self._go_space(_IDX_SESSION))
+        self.home_view.register_callback("project_menu", self._open_project_panel)
+        self.home_view.register_callback("config_menu", self._open_config_panel)
         self.home_view.register_callback("new_project", self._new_project)
         self.home_view.register_callback("open_project", self._open_project)
         self.home_view.register_callback("save_project", self._save)
         self.home_view.register_callback("close_project", self._close_project)
-        self.home_view.register_callback("ai_settings", self._test_ai)
+        self.home_view.register_callback("ai_settings", self._open_ai_settings)
         self.home_view.register_callback("toggle_advanced", self._toggle_advanced)
         self.home_view.register_callback("toggle_diagnostic", self._toggle_diagnostic)
 
@@ -190,8 +194,10 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Top bar: always visible, minimal
+        # Technical top bar: advanced-mode only. Normal Home has no persistent header.
         topbar = self._build_topbar()
+        self._topbar = topbar
+        topbar.setVisible(False)
         root.addWidget(topbar)
 
         # Stack + Drawer horizontal layout
@@ -227,16 +233,16 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("topbar")
         bar.setStyleSheet(
-            "QFrame#topbar { background: #0B0E13; border-bottom: 1px solid #1E2530; }"
+            "QFrame#topbar { background: #EEECDD; border-bottom: 1px solid #D8D6C8; }"
         )
         bar.setFixedHeight(40)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 4, 16, 4)
         layout.setSpacing(10)
 
-        self._top_project = QLabel("Narrative Architect")
+        self._top_project = QLabel("Dendro")
         self._top_project.setStyleSheet(
-            "font-weight: 700; font-size: 13px; color: #ECEFF4; "
+            "font-weight: 700; font-size: 13px; color: #5C5A3E; "
             "background: transparent; border: none;"
         )
         layout.addWidget(self._top_project)
@@ -255,8 +261,8 @@ class MainWindow(QMainWindow):
 
         self._advanced_badge = QLabel("AVANZADO")
         self._advanced_badge.setStyleSheet(
-            "font-size: 10px; font-weight: 700; color: #7DA4FF; "
-            "background: #1A2744; border: 1px solid #3B6BDF; "
+            "font-size: 10px; font-weight: 700; color: #8A6849; "
+            "background: #EFE3C7; border: 1px solid #C8AF8C; "
             "border-radius: 8px; padding: 3px 8px;"
         )
         layout.addWidget(self._advanced_badge)
@@ -274,25 +280,27 @@ class MainWindow(QMainWindow):
         navbar = QFrame()
         navbar.setObjectName("spaceNavbar")
         navbar.setStyleSheet(
-            "QFrame#spaceNavbar { background: #0D1017; border-bottom: 1px solid #1E2530; }"
+            "QFrame#spaceNavbar { background: #EEECDD; border-bottom: 1px solid #D8D6C8; }"
         )
         navbar.setFixedHeight(42)
         nav_layout = QHBoxLayout(navbar)
         nav_layout.setContentsMargins(12, 4, 16, 4)
 
-        back_btn = QPushButton("← Inicio")
+        back_btn = QPushButton("←")
+        back_btn.setToolTip("Volver a Dendro")
+        back_btn.setFixedSize(34, 30)
         back_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #2B3546; "
-            "border-radius: 8px; padding: 4px 12px; color: #8993A5; font-size: 12px; } "
-            "QPushButton:hover { background: #1A2030; color: #CDD5E0; }"
+            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
+            "border-radius: 15px; padding: 0px; color: #6F6A42; font-size: 16px; } "
+            "QPushButton:hover { background: #F8F5EA; color: #504B2E; }"
         )
         back_btn.clicked.connect(lambda: self._go_space(back_idx))
         nav_layout.addWidget(back_btn)
 
         space_title = QLabel(title)
         space_title.setStyleSheet(
-            "font-size: 15px; font-weight: 700; color: #ECEFF4; "
-            "background: transparent; border: none;"
+            "font-size: 15px; font-weight: 700; color: #5C5A3E; "
+            "font-family: Georgia, 'Courier New', serif; background: transparent; border: none;"
         )
         nav_layout.addWidget(space_title)
         nav_layout.addStretch()
@@ -304,11 +312,16 @@ class MainWindow(QMainWindow):
     # ── Navigation ───────────────────────────────────────────────────────────
 
     def _go_space(self, idx: int):
+        if idx == _IDX_HOME:
+            self._clear_contextual_surface()
         self.stack.setCurrentIndex(idx)
         widget = self.stack.widget(idx)
+        self._animate_stack_arrival(widget)
         # Refresh the space's content
         if idx == _IDX_HOME:
             self.home_view.refresh()
+            if hasattr(self.home_view, "animate_arrival"):
+                self.home_view.animate_arrival()
         else:
             # The actual workspace is inside the wrapper
             wrapper = widget
@@ -320,9 +333,68 @@ class MainWindow(QMainWindow):
                             child.refresh()
                         except Exception as exc:
                             self.log_msg(f"Error refreshing: {exc}")
-        self.log_msg(f"Navegación: {'Inicio' if idx == _IDX_HOME else ['','Creación','Galería','Sesión'][idx]}")
+        self.log_msg(f"Navegación: {'Dendro' if idx == _IDX_HOME else ['','Creación','Galería','Sesión'][idx]}")
+
+    def _clear_contextual_surface(self):
+        if getattr(self.ctx, "drawer", None) is not None:
+            self.ctx.drawer.close()
+        self.ctx.selected_entity_id = None
+        self.ctx.selected_relation_id = None
+        self.ctx.selected_candidate_id = None
+        self.ctx.selected_session_id = None
+        self.ctx.selected_campaign_id = None
+
+    def _animate_stack_arrival(self, widget: QWidget):
+        effect = widget.graphicsEffect()
+        if effect is None:
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        try:
+            effect.setOpacity(0.82)
+            animation = QPropertyAnimation(effect, b"opacity", widget)
+            animation.setDuration(180)
+            animation.setStartValue(0.82)
+            animation.setEndValue(1.0)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        except Exception:
+            pass
 
     # ── Project actions ──────────────────────────────────────────────────────
+
+    def _open_project_panel(self):
+        if self.ctx.drawer is None:
+            return
+        panel = ProjectActionsPanel({
+            "new_project": self._new_project,
+            "open_project": self._open_project,
+            "save_project": self._save,
+            "close_project": self._close_project,
+        })
+        self.ctx.drawer.set_content(panel, title="Proyecto")
+        self.ctx.drawer.open()
+
+    def _open_config_panel(self):
+        if self.ctx.drawer is None:
+            return
+        panel = AppConfigPanel(
+            advanced_enabled=self.ctx.advanced_mode,
+            diagnostic_visible=hasattr(self, "log") and self.log.isVisible(),
+            callbacks={
+                "toggle_advanced": self._toggle_advanced,
+                "toggle_diagnostic": self._toggle_diagnostic,
+                "ai_settings": self._open_ai_settings,
+            },
+        )
+        self.ctx.drawer.set_content(panel, title="Configuración")
+        self.ctx.drawer.open()
+
+    def _open_ai_settings(self):
+        if self.ctx.drawer is None:
+            return
+        panel = AISettingsPanel(self.ai, on_status=lambda msg: self.log_msg(f"IA: {msg}"))
+        self.ctx.drawer.set_content(panel, title="Ajustes IA")
+        self.ctx.drawer.open()
 
     def _new_project(self):
         drawer = self.ctx.drawer
@@ -340,6 +412,8 @@ class MainWindow(QMainWindow):
                 self.controller.save()
                 self.log_msg(f"Proyecto creado: {Path(path).name}")
                 self._refresh_all_views()
+                if self.ctx.drawer:
+                    self.ctx.drawer.close()
             except Exception as exc:
                 self.log_msg(f"Error creando proyecto: {exc}")
 
@@ -355,6 +429,8 @@ class MainWindow(QMainWindow):
             self.controller.open(path)
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
             self._refresh_all_views()
+            if self.ctx.drawer:
+                self.ctx.drawer.close()
         except Exception as exc:
             self.log_msg(f"Error abriendo proyecto: {exc}")
 
@@ -363,6 +439,8 @@ class MainWindow(QMainWindow):
             self.controller.close()
             self.log_msg("Proyecto cerrado")
             self._refresh_all_views()
+            if self.ctx.drawer:
+                self.ctx.drawer.close()
         except Exception as exc:
             self.log_msg(f"Error cerrando proyecto: {exc}")
 
@@ -371,6 +449,8 @@ class MainWindow(QMainWindow):
             self.controller.save()
             self.log_msg("Proyecto guardado")
             self._refresh_all_views()
+            if self.ctx.drawer:
+                self.ctx.drawer.close()
         except Exception as exc:
             self.log_msg(f"Error guardando proyecto: {exc}")
 
@@ -410,6 +490,8 @@ class MainWindow(QMainWindow):
                     self.log_msg(f"Error aplicando modo avanzado en {type(widget).__name__}: {exc}")
         if hasattr(self, "_advanced_badge"):
             self._advanced_badge.setVisible(bool(enabled))
+        if hasattr(self, "_topbar"):
+            self._topbar.setVisible(bool(enabled))
         if hasattr(self, "log") and not enabled:
             self.log.setVisible(False)
 
@@ -425,10 +507,10 @@ class MainWindow(QMainWindow):
         try:
             c = self.controller.counts()
             if c:
-                self._top_project.setText(f"Narrative Architect — {c['name']}")
-                self._top_schema.setText(f"v{c.get('schema', '?')}")
+                self._top_project.setText(f"Dendro — {c['name']}")
+                self._top_schema.setText(f"schema v{c.get('schema', '?')}")
             else:
-                self._top_project.setText("Narrative Architect")
+                self._top_project.setText("Dendro")
                 self._top_schema.setText("")
             self._top_ai.setText(self.ai.provider_info())
         except Exception as exc:

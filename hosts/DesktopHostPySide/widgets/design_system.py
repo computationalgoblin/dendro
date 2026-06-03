@@ -24,77 +24,60 @@ from PySide6.QtWidgets import (
 
 APP_STYLESHEET = """
 QMainWindow, QWidget {
-    background: #101319;
-    color: #ECEFF4;
+    background: #F4F2E8;
+    color: #4F4D38;
     font-family: "Segoe UI", "Inter", "Arial";
     font-size: 13px;
 }
-QListWidget {
-    background: #0B0E13;
-    border: none;
-    padding: 10px;
-    outline: 0;
-}
-QListWidget::item {
-    padding: 12px 14px;
-    margin: 4px 0;
-    border-radius: 10px;
-    color: #B7C0CC;
-}
-QListWidget::item:selected {
-    background: #263244;
-    color: #FFFFFF;
-}
 QPushButton {
-    background: #273142;
-    border: 1px solid #38465D;
+    background: #F8F6ED;
+    border: 1px solid #D6D2BF;
     border-radius: 10px;
     padding: 8px 12px;
-    color: #ECEFF4;
+    color: #5C5A3E;
 }
-QPushButton:hover { background: #334158; }
-QPushButton:pressed { background: #1F2938; }
+QPushButton:hover { background: #FFFFFF; border-color: #AAA579; }
+QPushButton:pressed { background: #E7E4D4; }
 QPushButton#primaryButton {
-    background: #5B7CFA;
-    border: 1px solid #7691FF;
-    color: white;
+    background: #7A733D;
+    border: 1px solid #6C6536;
+    color: #FFFDF5;
     font-weight: 600;
 }
-QLabel#mutedLabel { color: #8993A5; }
-QLabel#sectionTitle { font-size: 18px; font-weight: 700; }
-QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget {
-    background: #151A23;
-    border: 1px solid #2D3748;
-    border-radius: 8px;
-    color: #ECEFF4;
-    padding: 6px;
+QLabel#mutedLabel { color: #7C806E; }
+QLabel#sectionTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: #5D603F;
+    font-family: Georgia, "Courier New", serif;
 }
-QTabWidget::pane { border: 1px solid #252D3B; border-radius: 12px; }
+QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget {
+    background: #FFFDF7;
+    border: 1px solid #D8D6C8;
+    border-radius: 8px;
+    color: #4F4D38;
+    padding: 6px;
+    selection-background-color: #B5BBA5;
+}
+QTabWidget::pane { border: 1px solid #D8D6C8; border-radius: 12px; background: #F8F6ED; }
 QTabBar::tab {
-    background: #151A23;
-    color: #AAB4C3;
+    background: #ECE9DA;
+    color: #777660;
     padding: 8px 14px;
     border-top-left-radius: 8px;
     border-top-right-radius: 8px;
     margin-right: 2px;
 }
-QTabBar::tab:selected { background: #263244; color: white; }
-/* B31: subtle scrollbars for studio feel */
-QScrollBar:vertical {
-    background: transparent; width: 8px; margin: 0;
-}
-QScrollBar::handle:vertical {
-    background: #2A3344; border-radius: 4px; min-height: 30px;
-}
-QScrollBar::handle:vertical:hover { background: #3A4558; }
+QTabBar::tab:selected { background: #FFFDF7; color: #5C5A3E; }
+QTableWidget { gridline-color: #E1DEC9; }
+QHeaderView::section { background: #ECE9DA; color: #5C5A3E; padding: 6px; border: none; }
+QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+QScrollBar::handle:vertical { background: #C7C6B8; border-radius: 4px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #AFA77A; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal {
-    background: transparent; height: 8px; margin: 0;
-}
-QScrollBar::handle:horizontal {
-    background: #2A3344; border-radius: 4px; min-width: 30px;
-}
-QScrollBar::handle:horizontal:hover { background: #3A4558; }
+QScrollBar:horizontal { background: transparent; height: 8px; margin: 0; }
+QScrollBar::handle:horizontal { background: #C7C6B8; border-radius: 4px; min-width: 30px; }
+QScrollBar::handle:horizontal:hover { background: #AFA77A; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
@@ -107,7 +90,7 @@ class Card(QFrame):
         self.setObjectName("card")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(
-            "QFrame#card { background: #161B25; border: 1px solid #2B3546; "
+            "QFrame#card { background: #FFFDF7; border: 1px solid #D8D6C8; "
             "border-radius: 14px; }"
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -146,11 +129,11 @@ class Badge(QLabel):
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None):
         super().__init__(text, parent)
         colors = {
-            "neutral": ("#2A3342", "#C9D2E3"),
-            "info": ("#1D3B53", "#9ED8FF"),
-            "success": ("#1D4532", "#9FF0BD"),
-            "warning": ("#51421D", "#FFE08A"),
-            "danger": ("#50262C", "#FFB3BF"),
+            "neutral": ("#E8E5D6", "#5C5A3E"),
+            "info": ("#E2E6D8", "#5F6F4D"),
+            "success": ("#E4EBDD", "#58744A"),
+            "warning": ("#EFE3C7", "#8A6849"),
+            "danger": ("#F0D8D0", "#8A4E43"),
         }
         bg, fg = colors.get(tone, colors["neutral"])
         self.setStyleSheet(
@@ -179,7 +162,7 @@ class EmptyState(Card):
     def __init__(self, title: str, message: str, parent: QWidget | None = None):
         super().__init__(title, message, parent)
         self.setStyleSheet(
-            "QFrame#card { background: #121720; border: 1px dashed #344157; "
+            "QFrame#card { background: #F8F6ED; border: 1px dashed #C9C5B1; "
             "border-radius: 14px; }"
         )
 
