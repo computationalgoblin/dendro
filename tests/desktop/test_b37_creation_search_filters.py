@@ -221,3 +221,114 @@ def test_b37_camera_helpers_do_not_error(qapp):
     view.reset_view()
     assert view.focus_node("ent-devian") is True
     assert view.center_selection() is True
+
+
+# ── T06: Suggestion Inbox ──────────────────────────────
+
+def _make_mock_controller(candidates):
+    """Create a mock candidate controller with list_all/accept/reject."""
+    class MockCtrl:
+        def __init__(self, cands):
+            self._cands = list(cands)
+        def list_all(self):
+            return list(self._cands)
+        def accept(self, cid):
+            for i, c in enumerate(self._cands):
+                if c.id == cid:
+                    self._cands.pop(i)
+                    from packages.domain.result import Ok
+                    return Ok(c)
+            from packages.domain.result import Error
+            return Error("not found")
+        def reject(self, cid):
+            for i, c in enumerate(self._cands):
+                if c.id == cid:
+                    self._cands.pop(i)
+                    from packages.domain.result import Ok
+                    return Ok(c)
+            from packages.domain.result import Error
+            return Error("not found")
+    return MockCtrl(candidates)
+
+
+def _make_candidate(cid="cand-1", title="Test candidate", cand_type="entity",
+                    state="PENDIENTE", source="ia", confidence=0.8, proposed_data=None):
+    """Build a minimal candidate namespace."""
+    return SimpleNamespace(
+        id=cid,
+        title=title,
+        name=title,
+        candidate_type=SimpleNamespace(value=cand_type),
+        state=SimpleNamespace(value=state),
+        source=source,
+        confidence=confidence,
+        summary="Test summary",
+        description="Test desc",
+        proposed_data=proposed_data or {},
+    )
+
+
+def test_b37_suggestion_inbox_panel_shows_candidates(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    cands = [_make_candidate("c1", "Nodo sugerido"), _make_candidate("c2", "Relación sugerida")]
+    ctrl = _make_mock_controller(cands)
+    changed = {"count": 0}
+    def on_changed():
+        changed["count"] += 1
+    panel = SuggestionInboxPanel(ctrl, on_changed=on_changed)
+    # Verify refresh populated cards
+    assert panel.cards_layout.count() >= 2
+
+
+def test_b37_suggestion_inbox_empty_state(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    ctrl = _make_mock_controller([])
+    panel = SuggestionInboxPanel(ctrl, on_changed=lambda: None)
+    assert panel.cards_layout.count() >= 1
+
+
+def test_b37_suggestion_inbox_accept_removes(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    cands = [_make_candidate("c1", "Nodo sugerido")]
+    ctrl = _make_mock_controller(cands)
+    changed = {"count": 0}
+    def on_changed():
+        changed["count"] += 1
+    panel = SuggestionInboxPanel(ctrl, on_changed=on_changed)
+    panel._accept("c1")
+    assert changed["count"] == 1
+    # After accept, controller list should be empty
+    assert len(ctrl.list_all()) == 0
+
+
+def test_b37_suggestion_inbox_reject_removes(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    cands = [_make_candidate("c1", "Nodo sugerido")]
+    ctrl = _make_mock_controller(cands)
+    changed = {"count": 0}
+    def on_changed():
+        changed["count"] += 1
+    panel = SuggestionInboxPanel(ctrl, on_changed=on_changed)
+    panel._reject("c1")
+    assert changed["count"] == 1
+    assert len(ctrl.list_all()) == 0
+
+
+def test_b37_suggestion_inbox_focus_calls_callback(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    cands = [_make_candidate("c1", "Nodo sugerido", proposed_data={"entity_id": "ent-1"})]
+    ctrl = _make_mock_controller(cands)
+    focused = {"id": None}
+    def on_focus(eid):
+        focused["id"] = eid
+    panel = SuggestionInboxPanel(ctrl, on_changed=lambda: None, on_focus=on_focus)
+    panel._focus("c1")
+    assert focused["id"] == "ent-1"
+
+
+def test_b37_suggestion_inbox_no_crash_on_empty_focus(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import SuggestionInboxPanel
+    cands = [_make_candidate("c1", "Nodo sugerido")]
+    ctrl = _make_mock_controller(cands)
+    panel = SuggestionInboxPanel(ctrl, on_changed=lambda: None, on_focus=lambda eid: None)
+    panel._focus("c1")  # proposed_data has no entity_id — should not crash

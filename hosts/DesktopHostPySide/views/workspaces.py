@@ -237,6 +237,101 @@ class CandidateReviewPanel(_SimpleFormPanel):
         self.refresh()
 
 
+class SuggestionInboxPanel(_SimpleFormPanel):
+    """Unified suggestion inbox with type, origin, summary and focus action."""
+
+    def __init__(self, controller, on_changed, on_focus=None):
+        super().__init__("Bandeja de sugerencias", "Candidatos IA generados por coherencia, worldbuilding e importación.")
+        self.controller = controller
+        self.on_changed = on_changed
+        self.on_focus = on_focus
+        self.cards = QWidget()
+        self.cards_layout = QVBoxLayout(self.cards)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(10)
+        self.layout.addWidget(make_scroll_area(self.cards), 1)
+        self.refresh()
+
+    def refresh(self):
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        candidates = self.controller.list_all()
+        if not candidates:
+            self.cards_layout.addWidget(EmptyState("Sin sugerencias", "Cuando la IA proponga candidatos aparecerán aquí."))
+            return
+        for candidate in candidates:
+            title = getattr(candidate, "title", "") or getattr(candidate, "name", "Sugerencia")
+            cand_type = str(getattr(getattr(candidate, "candidate_type", ""), "value", ""))
+            origin = getattr(candidate, "source", "") or ""
+            state = str(getattr(getattr(candidate, "state", ""), "value", ""))
+            confidence = getattr(candidate, "confidence", 0)
+            summary = getattr(candidate, "summary", "") or getattr(candidate, "description", "") or ""
+            if not summary and cand_type:
+                summary = f"Candidato de tipo {cand_type}"
+            # Card subtitle
+            subtitle_parts = []
+            if cand_type:
+                subtitle_parts.append(cand_type)
+            if origin:
+                subtitle_parts.append(origin)
+            if state:
+                subtitle_parts.append(state)
+            if confidence:
+                subtitle_parts.append(f"{confidence:.0%}")
+            subtitle = " · ".join(subtitle_parts) if subtitle_parts else summary or "Pendiente de revisión"
+            card = Card(title, subtitle)
+            row = QHBoxLayout()
+            focus_btn = QPushButton("Enfocar")
+            focus_btn.setToolTip("Ir al elemento relacionado en el grafo")
+            focus_btn.setEnabled(bool(self.on_focus))
+            focus_btn.clicked.connect(lambda _, cid=getattr(candidate, "id", ""): self._focus(cid))
+            accept = QPushButton("Aceptar")
+            reject = QPushButton("Descartar")
+            accept.clicked.connect(lambda _, cid=getattr(candidate, "id", ""): self._accept(cid))
+            reject.clicked.connect(lambda _, cid=getattr(candidate, "id", ""): self._reject(cid))
+            row.addStretch(1)
+            row.addWidget(focus_btn)
+            row.addWidget(accept)
+            row.addWidget(reject)
+            card.layout.addLayout(row)
+            self.cards_layout.addWidget(card)
+        self.cards_layout.addStretch(1)
+
+    def _focus(self, candidate_id: str):
+        if self.on_focus is None:
+            return
+        candidates = self.controller.list_all()
+        for c in candidates:
+            if getattr(c, "id", "") == candidate_id:
+                proposed = getattr(c, "proposed_data", {}) or {}
+                entity_id = proposed.get("entity_id") or proposed.get("source_id") or proposed.get("target_id") or ""
+                if entity_id:
+                    self.on_focus(entity_id)
+                else:
+                    from hosts.DesktopHostPySide.app_context import AppContext
+                    pass  # no entity to focus
+                break
+
+    def _accept(self, candidate_id: str):
+        result = self.controller.accept(candidate_id)
+        if isinstance(result, Error):
+            self.layout.addWidget(QLabel(result.error))
+            return
+        self.on_changed()
+        self.refresh()
+
+    def _reject(self, candidate_id: str):
+        result = self.controller.reject(candidate_id)
+        if isinstance(result, Error):
+            self.layout.addWidget(QLabel(result.error))
+            return
+        self.on_changed()
+        self.refresh()
+
+
 class NarrativeWorkbench(QWidget):
     """Normal-mode clean entry points for creation work."""
 
@@ -781,6 +876,15 @@ class CreationWorkspace(QWidget):
 
         layout.addStretch()
 
+        # Suggestion inbox button
+        self._suggestion_btn = QPushButton("💡")
+        self._suggestion_btn.setToolTip("Bandeja de sugerencias")
+        self._suggestion_btn.setStyleSheet(btn_style)
+        self._suggestion_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._suggestion_btn.clicked.connect(self._open_suggestion_inbox)
+        self._suggestion_count = 0
+        layout.addWidget(self._suggestion_btn)
+
         # Delete selected entity/relation/container
         delete_btn = QPushButton("🗑")
         delete_btn.setToolTip("Eliminar selección (nodo, contenedor o relación)")
@@ -851,6 +955,39 @@ class CreationWorkspace(QWidget):
         panel = CreationFilterPanel(self)
         drawer.set_content(panel, title="Filtros")
         drawer.open()
+
+    def _open_suggestion_inbox(self):
+        drawer = self.ctx.drawer
+        controller = getattr(self.candidate_view, "cc", None)
+        if controller is None or drawer is None:
+            self.ctx.log("error", "No se pudo abrir la bandeja de sugerencias")
+            return
+        panel = SuggestionInboxPanel(controller, on_changed=self._on_suggestion_changed, on_focus=self._focus_suggestion_entity)
+        drawer.set_content(panel, title="Sugerencias")
+        drawer.open()
+
+    def _on_suggestion_changed(self):
+        self.refresh()
+        self._sync_suggestion_indicator()
+
+    def _focus_suggestion_entity(self, entity_id: str):
+        if hasattr(self.graph, "focus_node"):
+            self.graph.focus_node(entity_id)
+            self._open_node_panel(entity_id)
+
+    def _sync_suggestion_indicator(self):
+        btn = getattr(self, "_suggestion_btn", None)
+        if btn is None:
+            return
+        controller = getattr(self.candidate_view, "cc", None)
+        if controller is None:
+            return
+        count = len(controller.list_all())
+        self._suggestion_count = count
+        if count > 0:
+            btn.setText(f"💡 {count}")
+        else:
+            btn.setText("💡")
 
     def _sync_filter_indicator(self):
         btn = getattr(self, "_filter_btn", None)

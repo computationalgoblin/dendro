@@ -68,6 +68,7 @@ SUITES: dict[str, list[str]] = {
     ],
     "b37": [
         "tests/desktop/test_b37_creation_search_filters.py",
+        "tests/desktop/test_b37_t07_smoke.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
