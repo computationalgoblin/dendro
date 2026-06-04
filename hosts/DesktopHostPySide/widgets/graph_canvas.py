@@ -212,9 +212,13 @@ def _fit_text(text: str, max_chars: int) -> str:
 
 
 class GraphNodeItem(QGraphicsEllipseItem):
-    """Visual node item; stores full entity ID internally, never shows it."""
+    """Visual node item; stores full entity ID internally, never shows it.
 
-    def __init__(self, node: _NodeView, *, x: float, y: float, radius: float = 72.0):
+    Compact mode: shows name + type + status dot only.
+    Brief description is available via tooltip, not rendered inside the node.
+    """
+
+    def __init__(self, node: _NodeView, *, x: float, y: float, radius: float = 58.0):
         super().__init__(-radius, -radius, radius * 2, radius * 2)
         self.node = node
         self.radius = radius
@@ -234,32 +238,41 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setBrush(QBrush(color.lighter(112)))
         self.setPen(self._normal_pen)
 
-        title = QGraphicsSimpleTextItem(_fit_text(node.name, 22), self)
+        # Name — centred, fitted to node width
+        title = QGraphicsSimpleTextItem(_fit_text(node.name, 20), self)
         title.setBrush(QBrush(QColor("#111827")))
-        title.setScale(1.08)
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(9)
+        title.setFont(font)
         title_rect = title.boundingRect()
-        title.setPos(-title_rect.width() / 2, -25)
+        title.setPos(-title_rect.width() / 2, -title_rect.height() / 2 - 6)
 
-        subtitle = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 24), self)
-        subtitle.setBrush(QBrush(QColor("#374151")))
-        subtitle_rect = subtitle.boundingRect()
-        subtitle.setPos(-subtitle_rect.width() / 2, -4)
+        # Type — small label below name
+        type_label = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 18), self)
+        type_label.setBrush(QBrush(QColor("#4B5563")))
+        type_label.setFont(QFont("", 7))
+        type_rect = type_label.boundingRect()
+        type_label.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
 
-        note = QGraphicsSimpleTextItem(_fit_text(node.subtitle, 30), self)
-        note.setBrush(QBrush(QColor("#4B5563")))
-        note.setScale(0.82)
-        note_rect = note.boundingRect()
-        note.setPos(-note_rect.width() * 0.41, 18)
-
-        self._status_dot = QGraphicsEllipseItem(-radius + 12, -radius + 12, 14, 14, self)
+        # Status dot (top-left)
+        self._status_dot = QGraphicsEllipseItem(-radius + 8, -radius + 8, 10, 10, self)
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
-        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.2))
+        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
 
+        # Visibility dot (top-right)
         visibility_key = node.visibility.lower()
         if visibility_key in _VISIBILITY_COLORS and visibility_key not in {"publico", "publico_mundo"}:
-            self._visibility_dot = QGraphicsEllipseItem(radius - 26, -radius + 12, 14, 14, self)
+            self._visibility_dot = QGraphicsEllipseItem(radius - 18, -radius + 8, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
-            self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.2))
+            self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
+
+        # Tooltip with full info (not rendered inside node)
+        tip_parts = [f"<b>{node.name}</b>", f"Tipo: {enum_human(node.kind)}"]
+        if node.subtitle:
+            tip_parts.append(f"Descripción: {node.subtitle}")
+        tip_parts.append(f"Estado: {node.canon}")
+        self.setToolTip("<br>".join(tip_parts))
 
     def set_drag_highlight(self, enabled: bool):
         if self._coherence_selected and not enabled:
@@ -278,32 +291,34 @@ class GraphNodeItem(QGraphicsEllipseItem):
 class GraphTreeItem(QGraphicsRectItem):
     """Visual tree-container item for ``contenedor`` entities.
 
-    Renders as a rounded rectangle with a header bar that displays the
-    container name and type.  Child entities (linked via ``contiene``
-    relations) are positioned inside the rectangle.  The container
-    auto-resizes to encompass its children with padding.
+    Renders as a rounded rectangle with a **fixed header bar** at the top.
+    The header always shows: name, type badge, member count, collapse toggle.
+    Brief description is in tooltip only — never in the content area.
 
-    Clicking the header toggles collapse/expand.  When collapsed, children
-    are hidden and the rectangle shrinks to show name + member count.
+    Children (GraphNodeItem / GraphTreeItem) are positioned below the header.
+    The container auto-resizes to encompass children with padding.
 
-    Shares the same interaction contract as ``GraphNodeItem``:
-    movable, selectable, drag-highlight, coherence-selection, and
-    exposes ``node`` for entity-id lookups.
+    Collapse/Expand:
+    - Collapsing hides child nodes AND their internal edges.
+    - Expanding restores everything and recalculates layout.
+
+    External relations (entity↔tree, tree↔tree narrative) connect to
+    the tree's header or border, not the center.
     """
 
     def __init__(self, node: _NodeView, *, x: float, y: float, width: float = _CONTAINER_MIN_WIDTH, height: float = _CONTAINER_MIN_HEIGHT):
-        super().__init__(-width / 2, -height / 2, width, height)
+        super().__init__(0, 0, width, height)
         self.node = node
-        self._half_w = width / 2
-        self._half_h = height / 2
+        self._width = width
+        self._height = height
         self._coherence_selected = False
         self._collapsed = False
-        self._expanded_rect: QRectF | None = None  # saved rect for re-expand
-        self.setPos(x, y)
+        self._expanded_rect: QRectF | None = None
+        self.setPos(x - width / 2, y - height / 2)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
-        self.setZValue(0)  # Behind regular nodes (z=2)
+        self.setZValue(0)
 
         # Pens
         self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#A4AEC0"), 2.0 if not node.proposed else 2.6)
@@ -312,203 +327,251 @@ class GraphTreeItem(QGraphicsRectItem):
         self._highlight_pen = QPen(QColor("#EBCB8B"), 3.5)
         self._selected_pen = QPen(QColor("#5B8DEF"), 4.0)
 
-        # Background fill — semi-transparent warm tone
+        # Background fill
         bg_color = QColor(_CONTAINER_COLOR)
         bg_color.setAlpha(160)
         self.setBrush(QBrush(bg_color))
         self.setPen(self._normal_pen)
 
-        # Header bar (child rect at top)
-        header_rect = QRectF(-width / 2, -height / 2, width, _CONTAINER_HEADER_HEIGHT)
-        self._header_item = QGraphicsRectItem(header_rect, self)
+        # ── Header bar (fixed at top of rect) ──
+        self._header_item = QGraphicsRectItem(0, 0, width, _CONTAINER_HEADER_HEIGHT, self)
         header_bg = QColor(_CONTAINER_HEADER_COLOR)
-        header_bg.setAlpha(200)
+        header_bg.setAlpha(210)
         self._header_item.setBrush(QBrush(header_bg))
         self._header_item.setPen(QPen(Qt.PenStyle.NoPen))
 
-        # Title text in header
-        self._title_item = QGraphicsSimpleTextItem(_fit_text(node.name, 28), self)
+        # Title in header
+        self._title_item = QGraphicsSimpleTextItem(_fit_text(node.name, 26), self)
         self._title_item.setBrush(QBrush(QColor("#2D2A1E")))
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(11)
-        self._title_item.setFont(font)
-        title_rect = self._title_item.boundingRect()
-        self._title_item.setPos(-width / 2 + 10, -height / 2 + (_CONTAINER_HEADER_HEIGHT - title_rect.height()) / 2)
+        title_font = QFont()
+        title_font.setBold(True)
+        title_font.setPointSize(10)
+        self._title_item.setFont(title_font)
+        self._reposition_title()
 
-        # Collapse indicator (shown when collapsed)
+        # Type badge in header (right side)
+        type_text = _fit_text(enum_human(node.kind), 14)
+        self._type_badge = QGraphicsSimpleTextItem(type_text, self)
+        self._type_badge.setBrush(QBrush(QColor("#6F6A42")))
+        self._type_badge.setFont(QFont("", 7))
+        self._reposition_type_badge()
+
+        # Member count (updates dynamically)
+        self._count_item = QGraphicsSimpleTextItem("", self)
+        self._count_item.setBrush(QBrush(QColor("#5C5A3E")))
+        self._count_item.setFont(QFont("", 8))
+
+        # Collapse indicator
         self._collapse_indicator = QGraphicsSimpleTextItem("", self)
         self._collapse_indicator.setBrush(QBrush(QColor("#6F6A42")))
-        ind_font = QFont()
-        ind_font.setPointSize(9)
-        self._collapse_indicator.setFont(ind_font)
+        self._collapse_indicator.setFont(QFont("", 8))
         self._collapse_indicator.setVisible(False)
 
-        # Subtitle (entity type)
-        self._subtitle_item = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 20), self)
-        self._subtitle_item.setBrush(QBrush(QColor("#5C5A3E")))
-        self._subtitle_item.setFont(QFont("", 9))
-        subtitle_rect = self._subtitle_item.boundingRect()
-        self._subtitle_item.setPos(
-            -width / 2 + 10,
-            -height / 2 + _CONTAINER_HEADER_HEIGHT + 4,
-        )
-
-        # Status dot (top-right corner)
-        self._status_dot = QGraphicsEllipseItem(
-            width / 2 - 22,
-            -height / 2 + 8,
-            14, 14,
-            self,
-        )
+        # Status dot (top-right of header)
+        self._status_dot = QGraphicsEllipseItem(width - 20, 8, 10, 10, self)
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
-        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.2))
+        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
 
-        # Visibility indicator
+        # Visibility dot
         visibility_key = node.visibility.lower()
-        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {"publico", "publico_mundo", "publico_mundo"}:
-            self._visibility_dot = QGraphicsEllipseItem(
-                width / 2 - 40,
-                -height / 2 + 8,
-                14, 14,
-                self,
-            )
+        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {"publico", "publico_mundo"}:
+            self._visibility_dot = QGraphicsEllipseItem(width - 36, 8, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
-            self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.2))
+            self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
 
-        # Brief description label
-        brief = _fit_text(node.subtitle, 50)
-        if brief:
-            self._brief_item = QGraphicsSimpleTextItem(brief, self)
-            self._brief_item.setBrush(QBrush(QColor("#6B7280")))
-            self._brief_item.setFont(QFont("", 8))
-            self._brief_item.setPos(
-                -width / 2 + 10,
-                -height / 2 + _CONTAINER_HEADER_HEIGHT + 18,
-            )
+        # Track children and internal edges
+        self._child_nodes: list[GraphNodeItem | GraphTreeItem] = []
+        self._internal_edges: list[GraphEdgeItem] = []
 
-        # Track children for resizing
-        self._child_nodes: list[GraphNodeItem] = []
+        # Tooltip with full info
+        tip_parts = [f"<b>{node.name}</b>", f"Tipo: {enum_human(node.kind)}"]
+        if node.subtitle:
+            tip_parts.append(f"Descripción: {node.subtitle}")
+        tip_parts.append(f"Estado: {node.canon}")
+        self.setToolTip("<br>".join(tip_parts))
+
+    # ── Helper repositioning ──
+
+    def _reposition_title(self):
+        tr = self._title_item.boundingRect()
+        self._title_item.setPos(10, (_CONTAINER_HEADER_HEIGHT - tr.height()) / 2)
+
+    def _reposition_type_badge(self):
+        br = self._type_badge.boundingRect()
+        self._type_badge.setPos(self._width - br.width() - 46, (_CONTAINER_HEADER_HEIGHT - br.height()) / 2)
+
+    def _reposition_status_dots(self):
+        self._status_dot.setRect(self._width - 20, 8, 10, 10)
+        if hasattr(self, "_visibility_dot"):
+            self._visibility_dot.setRect(self._width - 36, 8, 10, 10)
+
+    def _update_count(self):
+        n = len(self._child_nodes)
+        label = f"({n})"
+        self._count_item.setText(label)
+        cr = self._count_item.boundingRect()
+        self._count_item.setPos(
+            10 + self._title_item.boundingRect().width() + 6,
+            (_CONTAINER_HEADER_HEIGHT - cr.height()) / 2,
+        )
 
     # ------------------------------------------------------------------
     # Collapse / Expand
     # ------------------------------------------------------------------
 
     def toggle_collapse(self):
-        """Toggle between collapsed and expanded state."""
         if self._collapsed:
             self._expand()
         else:
             self._collapse()
 
     def _collapse(self):
-        """Hide children and shrink to compact size."""
-        self._expanded_rect = self.rect()
-        # Hide children
+        """Hide children + internal edges, shrink to header-only."""
+        self._expanded_rect = QRectF(self.rect())
+        # Hide child nodes
         for child in self._child_nodes:
             child.setVisible(False)
-        # Collapse indicator
+        # Hide internal edges
+        for edge in self._internal_edges:
+            edge.setVisible(False)
+        # Show collapse indicator
         n = len(self._child_nodes)
         label = f"{n} miembro{'s' if n != 1 else ''}"
         self._collapse_indicator.setText(label)
         self._collapse_indicator.setVisible(True)
-        # Hide subtitle and brief when collapsed
-        if hasattr(self, "_subtitle_item"):
-            self._subtitle_item.setVisible(False)
-        if hasattr(self, "_brief_item"):
-            self._brief_item.setVisible(False)
-        # Shrink rect to header-only size
-        collapse_h = _CONTAINER_HEADER_HEIGHT + 22
-        collapse_w = max(_CONTAINER_MIN_WIDTH, self._title_item.boundingRect().width() + self._collapse_indicator.boundingRect().width() + 50)
-        self.setRect(-collapse_w / 2, -collapse_h / 2, collapse_w, collapse_h)
-        self._half_w = collapse_w / 2
-        self._half_h = collapse_h / 2
-        # Position collapse indicator next to title
-        self._collapse_indicator.setPos(
-            -collapse_w / 2 + 10 + self._title_item.boundingRect().width() + 8,
-            -collapse_h / 2 + (_CONTAINER_HEADER_HEIGHT - self._collapse_indicator.boundingRect().height()) / 2,
-        )
-        self._header_item.setRect(self.rect().x(), self.rect().y(), collapse_w, _CONTAINER_HEADER_HEIGHT)
-        self._status_dot.setRect(self.rect().right() - 18, self.rect().top() + 8, 14, 14)
-        if hasattr(self, "_visibility_dot"):
-            self._visibility_dot.setRect(self.rect().right() - 36, self.rect().top() + 8, 14, 14)
+        # Shrink to header + indicator height
+        collapse_h = _CONTAINER_HEADER_HEIGHT + 20
+        title_w = self._title_item.boundingRect().width()
+        ind_w = self._collapse_indicator.boundingRect().width()
+        collapse_w = max(_CONTAINER_MIN_WIDTH, title_w + ind_w + 60)
+        self._width = collapse_w
+        self._height = collapse_h
+        self.setRect(0, 0, collapse_w, collapse_h)
+        self._header_item.setRect(0, 0, collapse_w, _CONTAINER_HEADER_HEIGHT)
+        self._reposition_title()
+        self._reposition_type_badge()
+        self._reposition_status_dots()
+        # Position collapse indicator below header
+        ir = self._collapse_indicator.boundingRect()
+        self._collapse_indicator.setPos(10, _CONTAINER_HEADER_HEIGHT + 4)
         self._collapsed = True
 
     def _expand(self):
-        """Show children and restore expanded size."""
+        """Restore children + internal edges, recalculate layout."""
         self._collapsed = False
         self._collapse_indicator.setVisible(False)
-        # Show subtitle and brief
-        if hasattr(self, "_subtitle_item"):
-            self._subtitle_item.setVisible(True)
-        if hasattr(self, "_brief_item"):
-            self._brief_item.setVisible(True)
         # Show children
         for child in self._child_nodes:
             child.setVisible(True)
-        # Restore expanded rect (or resize to fit)
-        if self._expanded_rect is not None:
-            self.setRect(self._expanded_rect)
-            self._half_w = self._expanded_rect.width() / 2
-            self._half_h = self._expanded_rect.height() / 2
-            self._header_item.setRect(self._expanded_rect.x(), self._expanded_rect.y(), self._expanded_rect.width(), _CONTAINER_HEADER_HEIGHT)
-            self._status_dot.setRect(self._expanded_rect.right() - 18, self._expanded_rect.top() + 8, 14, 14)
-            if hasattr(self, "_visibility_dot"):
-                self._visibility_dot.setRect(self._expanded_rect.right() - 36, self._expanded_rect.top() + 8, 14, 14)
-        # Re-fit in case children moved
+        # Show internal edges
+        for edge in self._internal_edges:
+            edge.setVisible(True)
+        # Recalculate size to fit children
         if self._child_nodes:
             self.resize_to_fit_children()
+        elif self._expanded_rect is not None:
+            self._width = self._expanded_rect.width()
+            self._height = self._expanded_rect.height()
+            self.setRect(self._expanded_rect)
+            self._header_item.setRect(0, 0, self._width, _CONTAINER_HEADER_HEIGHT)
+            self._reposition_title()
+            self._reposition_type_badge()
+            self._reposition_status_dots()
 
     @property
     def is_collapsed(self) -> bool:
         return self._collapsed
 
     # ------------------------------------------------------------------
-    # Public API (mirrors GraphNodeItem)
+    # Child / Edge management
     # ------------------------------------------------------------------
 
-    def add_child_node(self, child: GraphNodeItem):
-        """Register a child GraphNodeItem positioned inside this container."""
+    def add_child_node(self, child):
+        """Register a child item (GraphNodeItem or GraphTreeItem)."""
         self._child_nodes.append(child)
+        self._update_count()
 
     def child_node_count(self) -> int:
         return len(self._child_nodes)
 
+    def register_internal_edge(self, edge):
+        """Register an edge between two children of this container."""
+        self._internal_edges.append(edge)
+
+    def find_internal_edges(self, all_edges: list):
+        """Scan all_edges and register those whose source+target are both children."""
+        child_ids = set()
+        for child in self._child_nodes:
+            child_ids.add(child.node.entity_id)
+        # Also include this tree's own ID (entity inside tree → tree itself)
+        child_ids.add(self.node.entity_id)
+        self._internal_edges = []
+        for edge in all_edges:
+            src_id = edge.source.node.entity_id if hasattr(edge.source, "node") else ""
+            tgt_id = edge.target.node.entity_id if hasattr(edge.target, "node") else ""
+            if src_id in child_ids and tgt_id in child_ids:
+                self._internal_edges.append(edge)
+
     def resize_to_fit_children(self):
-        """Expand the rectangle so all children fit with padding."""
+        """Expand the rectangle so all children fit below the header with padding."""
         if not self._child_nodes:
             return
+        my_pos = self.pos()
         min_x = min_y = float("inf")
         max_x = max_y = float("-inf")
         for child in self._child_nodes:
-            cx = child.pos().x() - self.pos().x()
-            cy = child.pos().y() - self.pos().y()
-            cr = child.radius
-            min_x = min(min_x, cx - cr)
-            min_y = min(min_y, cy - cr)
-            max_x = max(max_x, cx + cr)
-            max_y = max(max_y, cy + cr)
-        # Add padding and header space
+            if not child.isVisible():
+                continue
+            cx = child.pos().x() - my_pos.x()
+            cy = child.pos().y() - my_pos.y()
+            cr = getattr(child, "radius", 58.0)
+            min_x = min(min_x, cx - cr - 8)
+            min_y = min(min_y, cy - cr - 8)
+            max_x = max(max_x, cx + cr + 8)
+            max_y = max(max_y, cy + cr + 8)
+        # Ensure header is above all children
+        min_y = min(min_y, 0)
+        min_x = min(min_x, 0)
+        # Add padding
         min_x -= _CONTAINER_PADDING
-        min_y -= _CONTAINER_PADDING + _CONTAINER_HEADER_HEIGHT + 20  # extra space for subtitle/brief
+        min_y -= _CONTAINER_PADDING
         max_x += _CONTAINER_PADDING
         max_y += _CONTAINER_PADDING
+        # Ensure header height at top
+        min_y = min(min_y, -_CONTAINER_HEADER_HEIGHT - 8)
         w = max(_CONTAINER_MIN_WIDTH, max_x - min_x)
         h = max(_CONTAINER_MIN_HEIGHT, max_y - min_y)
-        self._half_w = w / 2
-        self._half_h = h / 2
+        self._width = w
+        self._height = h
         self.setRect(min_x, min_y, w, h)
-        # Update header bar
-        self._header_item.setRect(QRectF(min_x, min_y, w, _CONTAINER_HEADER_HEIGHT))
-        # Update status dot position
-        self._status_dot.setRect(max_x - 18, min_y + 8, 14, 14)
+        self._header_item.setRect(min_x, min_y, w, _CONTAINER_HEADER_HEIGHT)
+        self._title_item.setPos(min_x + 10, min_y + (_CONTAINER_HEADER_HEIGHT - self._title_item.boundingRect().height()) / 2)
+        self._type_badge.setPos(
+            min_x + w - self._type_badge.boundingRect().width() - 46,
+            min_y + (_CONTAINER_HEADER_HEIGHT - self._type_badge.boundingRect().height()) / 2,
+        )
+        self._status_dot.setRect(min_x + w - 20, min_y + 8, 10, 10)
         if hasattr(self, "_visibility_dot"):
-            self._visibility_dot.setRect(max_x - 36, min_y + 8, 14, 14)
+            self._visibility_dot.setRect(min_x + w - 36, min_y + 8, 10, 10)
+        self._count_item.setPos(
+            min_x + 10 + self._title_item.boundingRect().width() + 6,
+            min_y + (_CONTAINER_HEADER_HEIGHT - self._count_item.boundingRect().height()) / 2,
+        )
 
     @property
-    def radius(self) -> float:  # noqa: D401 — compatibility with GraphNodeItem.radius
-        """Effective 'radius' for edge shortening (half the shorter side)."""
-        return min(self._half_w, self._half_h)
+    def radius(self) -> float:
+        """Effective 'radius' for edge shortening — distance from center to top of header."""
+        return min(self._width, self._height) / 2
+
+    def connection_point(self, from_pos: QPointF) -> QPointF:
+        """Return the best point on the header border for an external relation edge.
+
+        This avoids edges going to the center of the container where children are.
+        """
+        center = self.scenePos() + QPointF(self._width / 2, self._height / 2)
+        # Prefer connecting to the header area (top portion)
+        header_center = self.scenePos() + QPointF(self._width / 2, self.rect().top() + _CONTAINER_HEADER_HEIGHT / 2)
+        return header_center
 
     def set_drag_highlight(self, enabled: bool):
         if self._coherence_selected and not enabled:
@@ -521,8 +584,6 @@ class GraphTreeItem(QGraphicsRectItem):
         self.setPen(self._selected_pen if enabled else self._normal_pen)
 
     def mouseDoubleClickEvent(self, event):
-        """Double-click on header toggles collapse/expand."""
-        # Check if click is in header area
         local_pos = event.pos()
         header_bottom = self.rect().top() + _CONTAINER_HEADER_HEIGHT
         if local_pos.y() <= header_bottom:
@@ -532,14 +593,12 @@ class GraphTreeItem(QGraphicsRectItem):
             super().mouseDoubleClickEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None):
-        """Override to draw rounded rectangle."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(self.brush())
         painter.setPen(self.pen())
         painter.drawRoundedRect(self.rect(), 12.0, 12.0)
 
     def itemChange(self, change, value):
-        # When the container moves, reposition child nodes accordingly
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self._child_nodes:
             delta = value - self._previous_pos if hasattr(self, "_previous_pos") else QPointF(0, 0)
             for child in self._child_nodes:
@@ -628,8 +687,15 @@ class GraphEdgeItem(QGraphicsPathItem):
         return path
 
     def update_path(self):
-        start = self.source.scenePos()
-        end = self.target.scenePos()
+        # For containers, use connection_point (header) instead of center
+        if isinstance(self.source, GraphTreeItem) and hasattr(self.source, "connection_point"):
+            start = self.source.connection_point(self.target.scenePos())
+        else:
+            start = self.source.scenePos()
+        if isinstance(self.target, GraphTreeItem) and hasattr(self.target, "connection_point"):
+            end = self.target.connection_point(start)
+        else:
+            end = self.target.scenePos()
 
         # Shorten the line slightly so the arrowhead doesn't overlap the node circle
         dx = end.x() - start.x()
@@ -1101,36 +1167,46 @@ class GraphCanvasView(QGraphicsView):
             child_ids = contains_map.get(cnode.entity_id, set())
             # Include both regular nodes AND other containers as children
             all_children = [n for n in (regular_nodes + container_nodes) if n.entity_id in child_ids and n.entity_id != cnode.entity_id]
-            # But skip containers that are themselves parents (avoid double placement)
-            child_nodes = [n for n in all_children if n.entity_id not in contains_map or n.kind.lower() != "contenedor"]
+            # Separate regular children from nested containers
+            child_nodes = [n for n in all_children if n.kind.lower() != "contenedor"]
             container_children = [n for n in all_children if n.kind.lower() == "contenedor"]
+
+            # ── Layout regular children below header ──
+            child_radius = 70.0  # default, overwritten if there are children
             if child_nodes:
-                child_radius = max(90, min(200, 60 * len(child_nodes)))
+                child_radius = max(70, min(160, 50 * len(child_nodes)))
                 for ci, child in enumerate(child_nodes):
                     child_item = self._nodes.get(child.entity_id)
                     if child_item is None:
                         continue
-                    # Reposition child inside the container
-                    ca = (2 * math.pi * ci) / max(1, len(child_nodes))
-                    child_x = cx + math.cos(ca) * child_radius
-                    child_y = cy + math.sin(ca) * child_radius * 0.7 + _CONTAINER_HEADER_HEIGHT
+                    # Position child in a small arc below header
+                    n_children = max(1, len(child_nodes))
+                    if n_children == 1:
+                        child_x = cx
+                        child_y = cy + _CONTAINER_HEADER_HEIGHT + 60
+                    else:
+                        ca = (2 * math.pi * ci) / n_children
+                        child_x = cx + math.cos(ca) * child_radius
+                        child_y = cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(ca) * child_radius * 0.5
                     child_item.setPos(child_x, child_y)
                     tree.add_child_node(child_item)  # type: ignore[arg-type]
 
-                # Resize container to fit children
-                tree.resize_to_fit_children()
-
-            # Position nested containers inside this parent
+            # ── Layout nested containers below regular children ──
             if container_children:
-                nested_offset = tree.rect().height() / 2 - 40
+                nested_y_offset = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if child_nodes else 0)
                 for nci, nc in enumerate(container_children):
                     nc_item = self._trees.get(nc.entity_id) or self._nodes.get(nc.entity_id)
                     if nc_item is None:
                         continue
-                    nc_item.setPos(cx + (nci - len(container_children) / 2) * 100, cy + nested_offset)
+                    spread = max(1, len(container_children))
+                    nc_x = cx + (nci - (spread - 1) / 2) * (_CONTAINER_MIN_WIDTH + 20)
+                    nc_y = cy + nested_y_offset
+                    nc_item.setPos(nc_x, nc_y)
                     tree.add_child_node(nc_item)  # type: ignore[arg-type]
-                if child_nodes:
-                    tree.resize_to_fit_children()
+
+            # Resize container to fit all children
+            if tree._child_nodes:
+                tree.resize_to_fit_children()
 
         # ── Create edge items ──
         seen_edge_ids: set[str] = set()
@@ -1150,6 +1226,11 @@ class GraphCanvasView(QGraphicsView):
             item = GraphEdgeItem(edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
+
+        # ── Register internal edges for each container ──
+        for tree in self._trees.values():
+            tree.find_internal_edges(self._edges)
+
         self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
     def focus_entity(self, entity_id: str):
