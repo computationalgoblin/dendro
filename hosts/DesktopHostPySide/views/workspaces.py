@@ -1052,14 +1052,21 @@ class CreationWorkspace(QWidget):
                 return True
         return False
 
+    @staticmethod
+    def _rtype_value(rel) -> str:
+        """Extract relation_type value as lowercase string, handling enum and str."""
+        rtype = getattr(rel, "relation_type", "")
+        if hasattr(rtype, "value"):
+            return str(rtype.value).lower()
+        return str(rtype).lower()
+
     def _remove_tree_membership(self, entity_id: str):
         """Remove any existing 'contiene' relation where entity_id is the target."""
         if self.relation_controller is None:
             return
         to_delete = []
         for rel in self.relation_controller.list_all():
-            rtype = str(getattr(rel, "relation_type", ""))
-            if rtype == "contiene" and getattr(rel, "target_id", "") == entity_id:
+            if self._rtype_value(rel) == "contiene" and getattr(rel, "target_id", "") == entity_id:
                 to_delete.append(rel.id)
         for rid in to_delete:
             self.relation_controller.delete(rid)
@@ -1074,8 +1081,7 @@ class CreationWorkspace(QWidget):
         if self.relation_controller is None:
             return False
         for rel in self.relation_controller.list_all():
-            rtype = str(getattr(rel, "relation_type", ""))
-            if rtype == "contiene" and getattr(rel, "target_id", "") == entity_id:
+            if self._rtype_value(rel) == "contiene" and getattr(rel, "target_id", "") == entity_id:
                 parent = getattr(rel, "source_id", "")
                 if parent == ancestor_id:
                     return True
