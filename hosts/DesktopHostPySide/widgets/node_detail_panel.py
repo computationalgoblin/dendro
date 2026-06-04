@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
+from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
 from packages.domain.result import Error
 
@@ -215,6 +216,7 @@ class NodeDetailPanel(QWidget):
         *,
         on_saved=None,
         ai_controller=None,
+        relation_controller=None,
         is_new: bool = False,
     ):
         super().__init__()
@@ -223,6 +225,7 @@ class NodeDetailPanel(QWidget):
         self.entity_id = entity_id
         self.on_saved = on_saved
         self.ai_controller = ai_controller
+        self.relation_controller = relation_controller
         self.is_new = bool(is_new)
         self._entity = None
         self._current_color: str = ""
@@ -402,6 +405,14 @@ class NodeDetailPanel(QWidget):
         self.ai_generate_btn.clicked.connect(self._start_ai_suggestion)
         prompt_row.addWidget(self.ai_generate_btn)
         ai_layout.addLayout(prompt_row)
+
+        # Coherence analysis button
+        self.ai_coherence_btn = QPushButton("Analizar coherencia")
+        self.ai_coherence_btn.setFixedHeight(28)
+        self.ai_coherence_btn.setToolTip("Analizar coherencia narrativa de esta entidad con su contexto")
+        self.ai_coherence_btn.setEnabled(self.ai_controller is not None)
+        self.ai_coherence_btn.clicked.connect(self._open_coherence)
+        ai_layout.addWidget(self.ai_coherence_btn)
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -701,6 +712,27 @@ class NodeDetailPanel(QWidget):
     def _discard_suggestion(self):
         self.suggestion_frame.setVisible(False)
         self.suggestion_text.clear()
+
+    # ------------------------------------------------------------------
+    # Coherence analysis
+    # ------------------------------------------------------------------
+
+    def _open_coherence(self):
+        """Open coherence analysis panel for this entity."""
+        if self.ai_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "IA contextual no disponible para coherencia")
+            return
+        panel = CoherencePanel(
+            self.ctx,
+            self.ai_controller,
+            self.entity_controller,
+            self.relation_controller,
+            entity_ids=[self.entity_id],
+            relation_ids=[],
+            on_saved=self.on_saved,
+        )
+        self.ctx.drawer.set_content(panel, title="Coherencia")
+        self.ctx.drawer.open()
 
     # ------------------------------------------------------------------
     # Cancel

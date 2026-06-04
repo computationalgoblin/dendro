@@ -1007,6 +1007,7 @@ class CreationWorkspace(QWidget):
             entity_id,
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
+            relation_controller=self.relation_controller,
             is_new=is_new,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
@@ -1022,6 +1023,7 @@ class CreationWorkspace(QWidget):
             relation_id,
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
+            entity_controller=self.entity_controller,
             is_new=is_new,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
