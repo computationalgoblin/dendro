@@ -42,6 +42,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     make_scroll_area,
 )
 from packages.domain.result import Error
+from packages.domain.world_layer import default_world_layers
 
 
 class _SimpleFormPanel(QWidget):
@@ -643,6 +644,197 @@ class CreationFilterPanel(_SimpleFormPanel):
         self.status.setText(f"{count} filtro(s) activo(s)." if count else "Sin filtros activos.")
 
 
+
+# ── Left-edge layer flyout ──────────────────────────────────────────────
+
+class _LayerEdgeFlyout(QFrame):
+    """Left-edge flyout that shows causal layers when Worldbuilding is ON.
+    
+    Appears when cursor approaches the left edge of the canvas.
+    Shows a vertical list of causal layers; clicking one toggles it.
+    """
+
+    LAYER_BG = "rgba(248,246,237,0.96)"
+    LAYER_BORDER = "#D8D6C8"
+    CHIP_BG = "rgba(255,255,255,0.55)"
+    CHIP_ACTIVE_BG = "rgba(175,167,122,0.22)"
+    CHIP_HOVER_BG = "rgba(255,255,255,0.80)"
+    TEXT_COLOR = "#6F6A42"
+    TEXT_ACTIVE = "#504B2E"
+    MUTED = "#8C8A74"
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__(workspace)
+        self._workspace = workspace
+        self.setObjectName("layerEdgeFlyout")
+        self.setFixedWidth(240)
+        self.setStyleSheet(
+            f"QFrame#layerEdgeFlyout {{ background: {self.LAYER_BG}; "
+            f"border-right: 2px solid {self.LAYER_BORDER}; "
+            f"border-top: 1px solid {self.LAYER_BORDER}; "
+            f"border-bottom: 1px solid {self.LAYER_BORDER}; "
+            f"border-radius: 0 10px 10px 0; }}"
+        )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
+
+        # Header
+        header = QLabel("Capas causales")
+        header.setStyleSheet(
+            f"font-size: 13px; font-weight: bold; color: {self.TEXT_ACTIVE}; "
+            f"background: transparent; border: none;"
+        )
+        layout.addWidget(header)
+
+        hint = QLabel("Clic para filtrar por capa")
+        hint.setStyleSheet(
+            f"font-size: 10px; color: {self.MUTED}; background: transparent; "
+            f"border: none; font-style: italic;"
+        )
+        layout.addWidget(hint)
+
+        # Toggle layers mode button
+        self._toggle_btn = QPushButton("Vista por bandas")
+        self._toggle_btn.setCheckable(True)
+        self._toggle_btn.setStyleSheet(
+            f"QPushButton {{ background: {self.CHIP_BG}; border: 1px solid {self.LAYER_BORDER}; "
+            f"border-radius: 8px; padding: 5px 10px; color: {self.TEXT_COLOR}; font-size: 11px; }} "
+            f"QPushButton:checked {{ background: {self.CHIP_ACTIVE_BG}; border-color: #AFA77A; }} "
+            f"QPushButton:hover {{ background: {self.CHIP_HOVER_BG}; }}"
+        )
+        self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._toggle_btn.clicked.connect(self._toggle_layers_mode)
+        layout.addWidget(self._toggle_btn)
+
+        # Scroll area for layer chips
+        self._chips_widget = QWidget()
+        self._chips_layout = QVBoxLayout(self._chips_widget)
+        self._chips_layout.setContentsMargins(0, 4, 0, 0)
+        self._chips_layout.setSpacing(4)
+        self._chips_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._chips_widget)
+        scroll.setStyleSheet(
+            f"QScrollArea {{ background: transparent; border: none; }} "
+            f"QScrollBar:vertical {{ width: 4px; background: transparent; }} "
+            f"QScrollBar::handle:vertical {{ background: {self.LAYER_BORDER}; border-radius: 2px; }}"
+        )
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(scroll, 1)
+
+        # Clear filter button
+        self._clear_btn = QPushButton("Quitar filtro")
+        self._clear_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {self.LAYER_BORDER}; "
+            f"border-radius: 8px; padding: 4px 10px; color: {self.MUTED}; font-size: 10px; }} "
+            f"QPushButton:hover {{ background: {self.CHIP_HOVER_BG}; color: {self.TEXT_COLOR}; }}"
+        )
+        self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_btn.clicked.connect(self._clear_layer_filter)
+        layout.addWidget(self._clear_btn)
+
+        # State
+        self._active_layer_id: str | None = None
+        self._layer_chips: dict[str, QPushButton] = {}
+
+        # Initially hidden
+        self.setVisible(False)
+        self._layers_loaded = False
+
+    def populate_layers(self):
+        """Fill chip list from project layers or defaults."""
+        # Clear existing
+        while self._chips_layout.count() > 1:
+            item = self._chips_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._layer_chips.clear()
+
+        # Get layers from project or defaults
+        project = self._workspace._get_active_project()
+        if project and getattr(project, "world_layers", None):
+            layers = list(project.world_layers)
+        else:
+            layers = default_world_layers()
+
+        # Sort by order
+        layers = sorted(layers, key=lambda l: getattr(l, "order", 99))
+
+        for layer in layers:
+            lid = str(getattr(layer, "id", ""))
+            name = str(getattr(layer, "name", ""))
+            if not lid or not name:
+                continue
+            chip = QPushButton(name)
+            chip.setCheckable(True)
+            chip.setProperty("layer_id", lid)
+            chip.setStyleSheet(
+                f"QPushButton {{ background: {self.CHIP_BG}; border: 1px solid {self.LAYER_BORDER}; "
+                f"border-radius: 6px; padding: 4px 8px; color: {self.TEXT_COLOR}; "
+                f"font-size: 11px; text-align: left; }} "
+                f"QPushButton:checked {{ background: {self.CHIP_ACTIVE_BG}; "
+                f"border-color: #AFA77A; color: {self.TEXT_ACTIVE}; font-weight: bold; }} "
+                f"QPushButton:hover {{ background: {self.CHIP_HOVER_BG}; }}"
+            )
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.clicked.connect(lambda checked, _lid=lid: self._on_chip_clicked(_lid))
+            # Insert before the stretch
+            self._chips_layout.insertWidget(self._chips_layout.count() - 1, chip)
+            self._layer_chips[lid] = chip
+
+        self._layers_loaded = True
+
+    def _on_chip_clicked(self, layer_id: str):
+        """Toggle layer filter on chip click."""
+        if self._active_layer_id == layer_id:
+            # Deselect
+            self._clear_layer_filter()
+            return
+        # Activate this layer
+        self._active_layer_id = layer_id
+        for lid, chip in self._layer_chips.items():
+            chip.setChecked(lid == layer_id)
+        # Apply visual filter
+        self._workspace._apply_layer_filter(layer_id)
+
+    def _clear_layer_filter(self):
+        """Remove layer filter."""
+        self._active_layer_id = None
+        for chip in self._layer_chips.values():
+            chip.setChecked(False)
+        self._workspace._clear_layer_filter()
+
+    def _toggle_layers_mode(self, checked: bool):
+        """Toggle the band-based layers view."""
+        if checked:
+            self._workspace._activate_layers_view()
+        else:
+            self._workspace._deactivate_layers_view()
+
+    def show_flyout(self):
+        """Show the flyout if worldbuilding is active."""
+        project = self._workspace._get_active_project()
+        if not project or not getattr(project, "worldbuilding_active", False):
+            return
+        if not self._layers_loaded:
+            self.populate_layers()
+        self.setVisible(True)
+        self.raise_()
+
+    def hide_flyout(self):
+        """Hide the flyout."""
+        self.setVisible(False)
+
+    def update_toggle_state(self, layers_active: bool):
+        """Sync the toggle button with the current layers mode."""
+        self._toggle_btn.setChecked(layers_active)
+
+
 class CreationWorkspace(QWidget):
     """Creation space: graph-first immersive experience."""
 
@@ -705,8 +897,13 @@ class CreationWorkspace(QWidget):
         bottom_bar = self._build_bottom_toolbar()
         layout.addWidget(bottom_bar)
 
-        # Enable mouse tracking for hover toolbar
+        # Left-edge layer flyout (overlay, positioned absolutely in resizeEvent)
+        self._layer_flyout = _LayerEdgeFlyout(self)
+        self._layer_flyout.setVisible(False)
+
+        # Enable mouse tracking for hover toolbar and layer flyout
         self.setMouseTracking(True)
+        self.graph.setMouseTracking(True)
 
     def _build_top_toolbar(self) -> QWidget:
         """Hover-triggered utilities bar at the top."""
@@ -905,29 +1102,52 @@ class CreationWorkspace(QWidget):
 
         return bar
 
-    # ── Mouse tracking for top toolbar hover reveal ────────────────────────
+    # ── Mouse tracking for top toolbar hover reveal and left layer flyout ──
 
     def mouseMoveEvent(self, event):
-        """Show top toolbar when cursor is near the top edge."""
-        threshold = 40
-        if event.position().y() < threshold:
+        """Show top toolbar when cursor near top; show layer flyout near left edge."""
+        pos = event.position()
+        # ── Top toolbar ──
+        top_threshold = 40
+        if pos.y() < top_threshold:
             if not self._top_toolbar.isVisible():
                 self._top_toolbar.setVisible(True)
                 self._top_toolbar.setFixedHeight(44)
         elif self._top_toolbar.isVisible():
             toolbar_rect = self._top_toolbar.rect()
-            toolbar_global = self._top_toolbar.mapFrom(self, event.position().toPoint())
+            toolbar_global = self._top_toolbar.mapFrom(self, pos.toPoint())
             if not toolbar_rect.contains(toolbar_global):
                 self._top_toolbar.setFixedHeight(0)
                 self._top_toolbar.setVisible(False)
+
+        # ── Left layer flyout ──
+        left_threshold = 30
+        if pos.x() < left_threshold:
+            if not self._layer_flyout.isVisible():
+                self._layer_flyout.show_flyout()
+        elif self._layer_flyout.isVisible():
+            flyout_rect = self._layer_flyout.rect()
+            flyout_global = self._layer_flyout.mapFrom(self, pos.toPoint())
+            if not flyout_rect.contains(flyout_global):
+                self._layer_flyout.hide_flyout()
+
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
-        """Hide top toolbar when mouse leaves the widget."""
+        """Hide top toolbar and layer flyout when mouse leaves the widget."""
         if self._top_toolbar.isVisible():
             self._top_toolbar.setFixedHeight(0)
             self._top_toolbar.setVisible(False)
+        if hasattr(self, "_layer_flyout") and self._layer_flyout.isVisible():
+            self._layer_flyout.hide_flyout()
         super().leaveEvent(event)
+
+    def resizeEvent(self, event):
+        """Position layer flyout along the left edge."""
+        super().resizeEvent(event)
+        if hasattr(self, "_layer_flyout"):
+            h = self.height() - 48 - 44  # subtract bottom bar + top toolbar
+            self._layer_flyout.setGeometry(0, 44, 240, max(h, 200))
 
     def _activate_layers_view(self):
         project = self._get_active_project()
@@ -939,6 +1159,29 @@ class CreationWorkspace(QWidget):
             self.graph.set_worldbuilding_active(True)
         else:
             self.refresh()
+        if hasattr(self, "_layer_flyout"):
+            self._layer_flyout.update_toggle_state(True)
+
+    def _deactivate_layers_view(self):
+        """Switch back from layers band view to normal graph view."""
+        if hasattr(self.graph, "set_worldbuilding_active"):
+            self.graph.set_worldbuilding_active(False)
+        else:
+            self.refresh()
+        if hasattr(self, "_layer_flyout"):
+            self._layer_flyout.update_toggle_state(False)
+
+    def _apply_layer_filter(self, layer_id: str):
+        """Filter the graph to show only nodes/edges in the selected causal layer."""
+        from hosts.DesktopHostPySide.widgets.graph_canvas import VisualFilterState
+        self.graph.canvas.apply_visual_filter(
+            VisualFilterState(layer_ids=(layer_id,))
+        )
+
+    def _clear_layer_filter(self):
+        """Remove layer filter and show all nodes."""
+        if hasattr(self.graph, "canvas") and hasattr(self.graph.canvas, "clear_visual_filters"):
+            self.graph.canvas.clear_visual_filters()
 
     def _open_search_panel(self):
         drawer = self.ctx.drawer
