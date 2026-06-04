@@ -15,6 +15,7 @@ Suites:
     perf        performance tests (fast)
     integ       integration tests (slow)
     desktop     DesktopHost/PySide contract tests (fast/static)
+    b33         Creación MVP stable smoke/regression tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
@@ -38,6 +39,14 @@ SUITES: dict[str, list[str]] = {
     "perf": ["tests/performance"],
     "integ": ["tests/integration"],
     "desktop": ["tests/desktop"],
+    "b33": [
+        "tests/application/test_b33_visual_relation.py",
+        "tests/application/test_b33_relation_inline_ai.py",
+        "tests/application/test_b33_creation_mvp_stabilization.py",
+        "tests/ui/test_b33_visual_relation_static.py",
+        "tests/ui/test_b33_relation_inline_ai_static.py",
+        "tests/desktop/test_b33_creation_mvp_stabilization.py",
+    ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }
