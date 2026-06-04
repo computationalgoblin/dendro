@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
