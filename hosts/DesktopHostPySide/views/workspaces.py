@@ -6,7 +6,7 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QPointF, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -905,6 +905,15 @@ class CreationWorkspace(QWidget):
         # Enable mouse tracking for hover toolbar and layer flyout
         self.setMouseTracking(True)
         self.graph.setMouseTracking(True)
+        # Install event filter on graph and its children so we can detect
+        # mouse position even when the cursor is over the canvas child widget.
+        self.graph.installEventFilter(self)
+        # Also filter on the QGraphicsView inside GraphCanvasWidget
+        if hasattr(self.graph, "canvas") and self.graph.canvas is not None:
+            self.graph.canvas.setMouseTracking(True)
+            self.graph.canvas.viewport().setMouseTracking(True)
+            self.graph.canvas.installEventFilter(self)
+            self.graph.canvas.viewport().installEventFilter(self)
 
     def _build_top_toolbar(self) -> QWidget:
         """Hover-triggered utilities bar at the top."""
@@ -1105,9 +1114,18 @@ class CreationWorkspace(QWidget):
 
     # ── Mouse tracking for top toolbar hover reveal and left layer flyout ──
 
-    def mouseMoveEvent(self, event):
-        """Show top toolbar when cursor near top; show layer flyout near left edge."""
-        pos = event.position()
+    def eventFilter(self, obj, event):
+        """Intercept mouse move from child widgets (graph canvas, viewport)."""
+        if event.type() == event.Type.MouseMove:
+            # Map the child-local position to this workspace's coordinates
+            child_pos = event.position().toPoint()
+            global_pos = obj.mapToGlobal(child_pos)
+            ws_pos = self.mapFromGlobal(global_pos)
+            self._handle_hover(QPointF(ws_pos))
+        return super().eventFilter(obj, event)
+
+    def _handle_hover(self, pos: "QPointF"):
+        """Centralised hover logic for top toolbar and left layer flyout."""
         # ── Top toolbar ──
         top_threshold = 40
         if pos.y() < top_threshold:
@@ -1132,6 +1150,9 @@ class CreationWorkspace(QWidget):
             if not flyout_rect.contains(flyout_global):
                 self._layer_flyout.hide_flyout()
 
+    def mouseMoveEvent(self, event):
+        """Fallback for direct mouse moves on the workspace itself."""
+        self._handle_hover(event.position())
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
