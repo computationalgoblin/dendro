@@ -66,6 +66,28 @@ class WorldLayer:
         )
 
 
+# B36-T01: seed causal metadata for the existing 16 world layers.
+# Stored as strings to preserve the current Project/WorldLayer schema.
+_B36_CAUSAL_DEFAULT_METADATA: dict[str, dict[str, str]] = {
+    "layer_premisa": {"causal_role": "meta_context", "causal_aliases": "premisa estética,tono,marco creativo,atmósfera"},
+    "layer_metafisica": {"causal_rank": "1", "causal_role": "root_cause", "causal_aliases": "metafísica,cosmología,causas primeras,origen de la realidad"},
+    "layer_reglas": {"causal_rank": "2", "causal_role": "fundamental_law", "causal_aliases": "leyes fundamentales,reglas del mundo,leyes naturales,reglas mágicas", "causal_parent_layer_ids": "layer_metafisica"},
+    "layer_fisica": {"causal_rank": "3", "causal_role": "material_nature", "causal_aliases": "materia,naturaleza,física,restricciones materiales", "causal_parent_layer_ids": "layer_metafisica,layer_reglas"},
+    "layer_geografia": {"causal_rank": "4", "causal_role": "geography_resources", "causal_aliases": "geografía,clima,recursos,territorio", "causal_parent_layer_ids": "layer_fisica"},
+    "layer_biologia": {"causal_rank": "5", "causal_role": "life_ecology", "causal_aliases": "vida,ecología,biología,especies,ecosistemas", "causal_parent_layer_ids": "layer_fisica,layer_geografia"},
+    "layer_lenguaje": {"causal_rank": "6", "causal_role": "language_symbols", "causal_aliases": "lenguaje,símbolos,tradición,idiomas,signos", "causal_parent_layer_ids": "layer_comunidades,layer_religion,layer_historia"},
+    "layer_comunidades": {"causal_rank": "7", "causal_role": "cultures_societies", "causal_aliases": "culturas,sociedades,comunidades,asentamientos", "causal_parent_layer_ids": "layer_geografia,layer_biologia,layer_lenguaje"},
+    "layer_economia": {"causal_rank": "8", "causal_role": "economy_politics_institutions", "causal_aliases": "economía,política,instituciones,gobierno,poder", "causal_parent_layer_ids": "layer_geografia,layer_comunidades"},
+    "layer_religion": {"causal_rank": "9", "causal_role": "religion_myth_ideology", "causal_aliases": "religión,mito,ideología,creencias", "causal_parent_layer_ids": "layer_metafisica,layer_comunidades,layer_historia"},
+    "layer_tecnologia": {"causal_rank": "10", "causal_role": "technology_magic_power_systems", "causal_aliases": "tecnología,magia,sistemas de poder,artefactos", "causal_parent_layer_ids": "layer_reglas,layer_fisica,layer_economia"},
+    "layer_historia": {"causal_rank": "11", "causal_role": "history_memory", "causal_aliases": "historia,memoria,memoria colectiva,eventos históricos", "causal_parent_layer_ids": "layer_comunidades,layer_economia,layer_religion"},
+    "layer_conflictos": {"causal_rank": "12", "causal_role": "active_conflicts", "causal_aliases": "conflictos activos,guerras,tensiones,disputas", "causal_parent_layer_ids": "layer_historia,layer_economia,layer_religion"},
+    "layer_narrativa": {"causal_rank": "13", "causal_role": "narrative_plots_characters", "causal_aliases": "narrativa,tramas,personajes,facciones,escenas", "causal_parent_layer_ids": "layer_conflictos,layer_historia,layer_situacion"},
+    "layer_situacion": {"causal_rank": "14", "causal_role": "status_quo", "causal_aliases": "situación actual,status quo,equilibrio presente,estado actual", "causal_parent_layer_ids": "layer_historia,layer_conflictos,layer_economia"},
+    "layer_campaña": {"causal_rank": "15", "causal_role": "play_consequence", "causal_aliases": "campaña,sesiones,consecuencias de juego,partida", "causal_parent_layer_ids": "layer_narrativa,layer_situacion,layer_conflictos"},
+}
+
+
 def default_world_layers() -> list[WorldLayer]:
     """Return the 16 predefined world layers from §10.3.
 
@@ -77,7 +99,7 @@ def default_world_layers() -> list[WorldLayer]:
     These are the canonical defaults; users can hide, reorder, or add
     custom layers on top.
     """
-    return [
+    layers = [
         WorldLayer(
             id="layer_premisa",
             name="Premisa estética y tonal",
@@ -191,3 +213,8 @@ def default_world_layers() -> list[WorldLayer]:
             is_default=True,
         ),
     ]
+    for layer in layers:
+        defaults = _B36_CAUSAL_DEFAULT_METADATA.get(layer.id)
+        if defaults:
+            layer.metadata.update(defaults)
+    return layers

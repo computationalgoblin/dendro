@@ -9,6 +9,8 @@ from dataclasses import is_dataclass
 from enum import Enum
 from typing import Any, Iterable
 
+from packages.application.world_layer_causal import causal_layer_summary
+
 
 _GM_AUDIENCES = {"gm", "master", "director", "author", "autor"}
 _PLAYER_AUDIENCES = {"player", "jugador", "players", "jugadores"}
@@ -500,12 +502,14 @@ class NarrativeContextBuilder:
         }
 
     def _layer_summary(self, layer) -> dict[str, Any]:
-        return {
+        summary = {
             "id": getattr(layer, "id", ""),
             "name": getattr(layer, "name", ""),
             "kind": _string_value(getattr(layer, "kind", "")),
             "active": bool(getattr(layer, "active", True)),
         }
+        summary["causal"] = causal_layer_summary(layer)
+        return summary
 
     def _neighborhood(self, target_type: str, target_id: str | None, audience: str) -> dict[str, Any]:
         if target_type != "entity" or not target_id:

@@ -20,14 +20,14 @@
 
 ## Bloque actual
 
-- **B35**: Coherencia de subgrafo — análisis de consistencia dentro de árboles.
-  - Trabaja sobre modelo/servicios/contexto, NO sobre perfección visual del canvas.
-  - No rediseña layout (ver DC-034-04).
+- **B36**: Worldbuilding por capas causales — planificación abierta sobre infraestructura real existente.
+  - No reimplementa capas desde cero: reutiliza `Project.world_layers` y las 16 capas contractuales existentes.
+  - T00 documenta la reconciliación entre capas existentes y enfoque causal en `docs/product/B36_worldbuilding_layer_mapping.md`.
+  - Tickets Kanban creados en estado bloqueado para revisión/aprobación antes de implementar.
 
 ## Bloques pendientes
 
-- **B36**: Worldbuilding por capas — sistema de capas en Creación cuando worldbuilding activo.
-- **B31-UX-FIX-02**: Home + Creación + Configuración/Proyecto como núcleo inmersivo (pausa actual, retomar tras B35).
+- **B31-UX-FIX-02**: Home + Creación + Configuración/Proyecto como núcleo inmersivo (pausa actual, retomar tras B36).
   - Tipografía máquina de escribir, fondo blanco roto, animaciones zoom.
   - Configuración (abajo izquierda) con Apariencia, IA (chatbot prueba), Avanzado.
   - Proyecto (abajo derecha) con tipo, worldbuilding, género, tono, sistema rol.

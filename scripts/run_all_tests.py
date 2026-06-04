@@ -17,6 +17,8 @@ Suites:
     desktop     DesktopHost/PySide contract tests (fast/static)
     b33         Creación MVP stable smoke/regression tests
     b34         Tree semantic contract smoke/regression tests
+    b35         Coherencia de subgrafo smoke/regression tests
+    b36         Worldbuilding causal layer contract tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
@@ -58,6 +60,9 @@ SUITES: dict[str, list[str]] = {
     ],
     "b35": [
         "tests/application/test_b35_coherence.py",
+    ],
+    "b36": [
+        "tests/application/test_b36_causal_layer_contract.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
