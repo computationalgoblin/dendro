@@ -244,15 +244,8 @@ class NarrativeContextBuilder:
 
     def _entity_summary(self, entity, audience: str) -> dict[str, Any]:
         entity_id = getattr(entity, "id", "")
-        # Compute tree membership (which containers this entity belongs to)
-        tree_names = []
-        if self.project is not None:
-            for r in _list(getattr(self.project, "relations", [])):
-                rtype = _string_value(getattr(r, "relation_type", ""))
-                if rtype == "contiene" and getattr(r, "target_id", "") == entity_id:
-                    parent = self._entity_by_id(getattr(r, "source_id", ""))
-                    if parent is not None:
-                        tree_names.append(getattr(parent, "name", ""))
+        # Compute enriched tree membership
+        tree_ctx = self._tree_context(entity_id)
         return {
             "id": entity_id,
             "name": getattr(entity, "name", ""),
@@ -269,8 +262,143 @@ class NarrativeContextBuilder:
             "exportable_notes": getattr(entity, "exportable_notes", ""),
             "narrative_importance": _string_value(getattr(entity, "narrative_importance", "")),
             "development_level": _string_value(getattr(entity, "development_level", "")),
-            "tree_membership": tree_names,
+            "tree_membership": tree_ctx,
         }
+
+    def _tree_context(self, entity_id: str) -> dict[str, Any]:
+        """Build enriched tree context for an entity.
+
+        Returns a dict with:
+        - parent_trees: list of direct parent tree names (backward compat)
+        - ancestors: chain of ancestor trees from immediate parent upward
+        - siblings: other entities in the same immediate parent tree
+        - children: if entity is a container, its direct children
+        - subtree_trees: if entity is a container, sub-containers inside it
+        - internal_rules: rules from TreeMeta of parent tree
+        - external_relations: narrative relations of parent tree with outside entities
+        """
+        if self.project is None:
+            return {}
+
+        relations = _list(getattr(self.project, "relations", []))
+
+        # Find direct parent trees (CONTIENE where entity_id is target)
+        parent_ids: list[str] = []
+        for r in relations:
+            rtype = _string_value(getattr(r, "relation_type", ""))
+            if rtype == "contiene" and getattr(r, "target_id", "") == entity_id:
+                src = getattr(r, "source_id", "")
+                if src:
+                    parent_ids.append(src)
+
+        # Build ancestors chain (walk up CONTIENE links)
+        ancestors: list[dict[str, str]] = []
+        visited: set[str] = set()
+        current_parents = list(parent_ids)
+        while current_parents:
+            next_parents: list[str] = []
+            for pid in current_parents:
+                if pid in visited:
+                    continue
+                visited.add(pid)
+                parent_ent = self._entity_by_id(pid)
+                if parent_ent is not None:
+                    ancestors.append({
+                        "id": pid,
+                        "name": getattr(parent_ent, "name", ""),
+                        "type": _string_value(getattr(parent_ent, "entity_type", "")),
+                    })
+                    # Find this parent's own parents
+                    for r in relations:
+                        rtype = _string_value(getattr(r, "relation_type", ""))
+                        if rtype == "contiene" and getattr(r, "target_id", "") == pid:
+                            gpid = getattr(r, "source_id", "")
+                            if gpid and gpid not in visited:
+                                next_parents.append(gpid)
+            current_parents = next_parents
+
+        # Siblings: other entities in same immediate parent tree
+        siblings: list[dict[str, str]] = []
+        for pid in parent_ids:
+            for r in relations:
+                rtype = _string_value(getattr(r, "relation_type", ""))
+                if rtype == "contiene" and getattr(r, "source_id", "") == pid:
+                    sibling_id = getattr(r, "target_id", "")
+                    if sibling_id and sibling_id != entity_id:
+                        sib = self._entity_by_id(sibling_id)
+                        if sib is not None:
+                            siblings.append({
+                                "id": sibling_id,
+                                "name": getattr(sib, "name", ""),
+                                "type": _string_value(getattr(sib, "entity_type", "")),
+                            })
+
+        # If entity is a container, find its children and sub-containers
+        children: list[dict[str, str]] = []
+        subtree_trees: list[dict[str, str]] = []
+        entity_type_val = _string_value(getattr(self._entity_by_id(entity_id), "entity_type", ""))
+        if entity_type_val == "contenedor":
+            for r in relations:
+                rtype = _string_value(getattr(r, "relation_type", ""))
+                if rtype == "contiene" and getattr(r, "source_id", "") == entity_id:
+                    child_id = getattr(r, "target_id", "")
+                    child = self._entity_by_id(child_id)
+                    if child is not None:
+                        child_type = _string_value(getattr(child, "entity_type", ""))
+                        entry = {"id": child_id, "name": getattr(child, "name", ""), "type": child_type}
+                        if child_type == "contenedor":
+                            subtree_trees.append(entry)
+                        else:
+                            children.append(entry)
+
+        # Internal rules from TreeMeta of parent tree
+        internal_rules: list[str] = []
+        for pid in parent_ids:
+            parent_ent = self._entity_by_id(pid)
+            if parent_ent is not None:
+                meta = getattr(parent_ent, "custom_metadata", {}) or {}
+                rules = meta.get("tree_internal_rules", [])
+                if isinstance(rules, list):
+                    internal_rules.extend(str(r) for r in rules)
+
+        # External relations of parent tree (narrative, not CONTIENE)
+        external_relations: list[dict[str, str]] = []
+        for pid in parent_ids:
+            for r in relations:
+                rtype = _string_value(getattr(r, "relation_type", ""))
+                if rtype == "contiene":
+                    continue
+                src = getattr(r, "source_id", "")
+                tgt = getattr(r, "target_id", "")
+                if src == pid or tgt == pid:
+                    other_id = tgt if src == pid else src
+                    other = self._entity_by_id(other_id)
+                    other_name = getattr(other, "name", other_id) if other else other_id
+                    external_relations.append({
+                        "relation_type": rtype,
+                        "with_entity": other_name,
+                        "direction": "outgoing" if src == pid else "incoming",
+                    })
+
+        parent_names = [a["name"] for a in ancestors]
+
+        result: dict[str, Any] = {
+            "parent_trees": parent_names,
+        }
+        if ancestors:
+            result["ancestors"] = ancestors
+        if siblings:
+            result["siblings"] = siblings[:20]  # cap for token limits
+        if children:
+            result["children"] = children[:20]
+        if subtree_trees:
+            result["subtree_trees"] = subtree_trees
+        if internal_rules:
+            result["internal_rules"] = internal_rules
+        if external_relations:
+            result["external_relations"] = external_relations[:12]
+
+        return result
 
     def _relation_summary(self, relation, audience: str) -> dict[str, Any]:
         source = self._entity_by_id(getattr(relation, "source_id", ""))
