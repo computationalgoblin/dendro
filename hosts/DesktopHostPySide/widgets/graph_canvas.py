@@ -416,7 +416,45 @@ class GraphTreeItem(QGraphicsRectItem):
         )
 
     # ------------------------------------------------------------------
-    # Collapse / Expand
+    # Descendant helpers (transitive)
+    # ------------------------------------------------------------------
+
+    def _descendants(self) -> list["GraphNodeItem | GraphTreeItem"]:
+        """All descendant nodes transitively (children + grandchildren + ...)."""
+        result: list[GraphNodeItem | GraphTreeItem] = []
+        stack = list(self._child_nodes)
+        while stack:
+            item = stack.pop()
+            result.append(item)
+            if isinstance(item, GraphTreeItem):
+                stack.extend(item._child_nodes)
+        return result
+
+    def _descendant_tree_ids(self) -> set[str]:
+        """Entity IDs of all descendant containers."""
+        ids: set[str] = set()
+        for d in self._descendants():
+            if isinstance(d, GraphTreeItem):
+                ids.add(d.node.entity_id)
+        return ids
+
+    def _all_descendant_entity_ids(self) -> set[str]:
+        """Entity IDs of ALL descendant items (nodes + trees)."""
+        return {d.node.entity_id for d in self._descendants()}
+
+    def _descendant_edges(self, all_edges: list) -> list:
+        """All edges that involve at least one descendant entity."""
+        desc_ids = self._all_descendant_entity_ids()
+        result = []
+        for edge in all_edges:
+            src_id = edge.source.node.entity_id if hasattr(edge.source, "node") else ""
+            tgt_id = edge.target.node.entity_id if hasattr(edge.target, "node") else ""
+            if src_id in desc_ids or tgt_id in desc_ids:
+                result.append(edge)
+        return result
+
+    # ------------------------------------------------------------------
+    # Collapse / Expand (transitive)
     # ------------------------------------------------------------------
 
     def toggle_collapse(self):
@@ -426,20 +464,24 @@ class GraphTreeItem(QGraphicsRectItem):
             self._collapse()
 
     def _collapse(self):
-        """Hide children + internal edges, shrink to header-only."""
+        """Hide ALL descendants transitively + all their edges, shrink."""
         self._expanded_rect = QRectF(self.rect())
-        # Hide child nodes
-        for child in self._child_nodes:
-            child.setVisible(False)
-        # Hide internal edges
-        for edge in self._internal_edges:
-            edge.setVisible(False)
-        # Show collapse indicator
-        n = len(self._child_nodes)
+        # 1. Hide all descendants transitively
+        for desc in self._descendants():
+            desc.setVisible(False)
+            # Also collapse any descendant trees so their state is consistent
+            if isinstance(desc, GraphTreeItem) and not desc._collapsed:
+                desc._collapse_silent()
+        # 2. Hide all edges involving any descendant
+        if hasattr(self, "_canvas_edges"):
+            for edge in self._descendant_edges(self._canvas_edges):
+                edge.setVisible(False)
+        # 3. Show collapse indicator with total descendant count
+        n = len(self._descendants())
         label = f"{n} miembro{'s' if n != 1 else ''}"
         self._collapse_indicator.setText(label)
         self._collapse_indicator.setVisible(True)
-        # Shrink to header + indicator height
+        # 4. Shrink to header + indicator
         collapse_h = _CONTAINER_HEADER_HEIGHT + 20
         title_w = self._title_item.boundingRect().width()
         ind_w = self._collapse_indicator.boundingRect().width()
@@ -451,22 +493,43 @@ class GraphTreeItem(QGraphicsRectItem):
         self._reposition_title()
         self._reposition_type_badge()
         self._reposition_status_dots()
-        # Position collapse indicator below header
-        ir = self._collapse_indicator.boundingRect()
         self._collapse_indicator.setPos(10, _CONTAINER_HEADER_HEIGHT + 4)
         self._collapsed = True
 
+    def _collapse_silent(self):
+        """Mark as collapsed and shrink, but don't recurse (parent handles that)."""
+        self._expanded_rect = QRectF(self.rect())
+        self._collapsed = True
+        n = len(self._descendants())
+        label = f"{n} miembro{'s' if n != 1 else ''}"
+        self._collapse_indicator.setText(label)
+        self._collapse_indicator.setVisible(True)
+        collapse_h = _CONTAINER_HEADER_HEIGHT + 20
+        collapse_w = max(_CONTAINER_MIN_WIDTH, self._title_item.boundingRect().width() + 60)
+        self._width = collapse_w
+        self._height = collapse_h
+        self.setRect(0, 0, collapse_w, collapse_h)
+        self._header_item.setRect(0, 0, collapse_w, _CONTAINER_HEADER_HEIGHT)
+        self._reposition_title()
+        self._reposition_type_badge()
+        self._reposition_status_dots()
+        self._collapse_indicator.setPos(10, _CONTAINER_HEADER_HEIGHT + 4)
+
     def _expand(self):
-        """Restore children + internal edges, recalculate layout."""
+        """Restore ALL descendants transitively + recalculate layout bottom-up."""
         self._collapsed = False
         self._collapse_indicator.setVisible(False)
-        # Show children
+        # 1. Expand descendant trees first (bottom-up)
+        for child in self._child_nodes:
+            if isinstance(child, GraphTreeItem) and child._collapsed:
+                child._expand()
+        # 2. Show direct children
         for child in self._child_nodes:
             child.setVisible(True)
-        # Show internal edges
-        for edge in self._internal_edges:
-            edge.setVisible(True)
-        # Recalculate size to fit children
+        # 3. Re-show all descendant edges via global edge visibility pass
+        if hasattr(self, "_canvas_edges"):
+            self._refresh_edge_visibility()
+        # 4. Recalculate size
         if self._child_nodes:
             self.resize_to_fit_children()
         elif self._expanded_rect is not None:
@@ -477,6 +540,19 @@ class GraphTreeItem(QGraphicsRectItem):
             self._reposition_title()
             self._reposition_type_badge()
             self._reposition_status_dots()
+
+    def _refresh_edge_visibility(self):
+        """Show/hide all canvas edges based on source+target visibility."""
+        if not hasattr(self, "_canvas_edges"):
+            return
+        for edge in self._canvas_edges:
+            src_vis = edge.source.isVisible()
+            tgt_vis = edge.target.isVisible()
+            edge.setVisible(src_vis and tgt_vis)
+
+    def set_canvas_edges(self, edges: list):
+        """Store reference to all canvas edges for visibility management."""
+        self._canvas_edges = edges
 
     @property
     def is_collapsed(self) -> bool:
@@ -513,7 +589,11 @@ class GraphTreeItem(QGraphicsRectItem):
                 self._internal_edges.append(edge)
 
     def resize_to_fit_children(self):
-        """Expand the rectangle so all children fit below the header with padding."""
+        """Expand the rectangle so all children fit below the header with padding.
+
+        Uses boundingRect() for sub-trees (which accounts for their own children)
+        and radius for regular nodes.  Works correctly for nested containers.
+        """
         if not self._child_nodes:
             return
         my_pos = self.pos()
@@ -522,13 +602,23 @@ class GraphTreeItem(QGraphicsRectItem):
         for child in self._child_nodes:
             if not child.isVisible():
                 continue
-            cx = child.pos().x() - my_pos.x()
-            cy = child.pos().y() - my_pos.y()
-            cr = getattr(child, "radius", 58.0)
-            min_x = min(min_x, cx - cr - 8)
-            min_y = min(min_y, cy - cr - 8)
-            max_x = max(max_x, cx + cr + 8)
-            max_y = max(max_y, cy + cr + 8)
+            if isinstance(child, GraphTreeItem):
+                # Use the tree's actual bounding rect (includes its children)
+                br = child.boundingRect()
+                cx = child.pos().x() - my_pos.x()
+                cy = child.pos().y() - my_pos.y()
+                min_x = min(min_x, cx + br.left() - 8)
+                min_y = min(min_y, cy + br.top() - 8)
+                max_x = max(max_x, cx + br.right() + 8)
+                max_y = max(max_y, cy + br.bottom() + 8)
+            else:
+                cr = getattr(child, "radius", 58.0)
+                cx = child.pos().x() - my_pos.x()
+                cy = child.pos().y() - my_pos.y()
+                min_x = min(min_x, cx - cr - 8)
+                min_y = min(min_y, cy - cr - 8)
+                max_x = max(max_x, cx + cr + 8)
+                max_y = max(max_y, cy + cr + 8)
         # Ensure header is above all children
         min_y = min(min_y, 0)
         min_x = min(min_x, 0)
@@ -1151,8 +1241,30 @@ class GraphCanvasView(QGraphicsView):
             self._nodes[node.entity_id] = item
 
         # ── Create container (tree) items ──
+        # Build dependency graph for bottom-up layout
+        container_child_map: dict[str, list[str]] = {}  # parent_id -> [child_container_ids]
         for idx, cnode in enumerate(container_nodes):
-            # Position containers in a separate ring further out
+            child_ids = contains_map.get(cnode.entity_id, set())
+            c_children = [n.entity_id for n in container_nodes
+                          if n.entity_id in child_ids and n.entity_id != cnode.entity_id]
+            container_child_map[cnode.entity_id] = c_children
+
+        # Topological sort: leaves first, parents later
+        sorted_container_ids: list[str] = []
+        visited: set[str] = set()
+        def _visit(cid: str):
+            if cid in visited:
+                return
+            visited.add(cid)
+            for child_cid in container_child_map.get(cid, []):
+                _visit(child_cid)
+            sorted_container_ids.append(cid)
+        for cn in container_nodes:
+            _visit(cn.entity_id)
+        # sorted_container_ids is now leaves-first
+
+        # Position containers in outer ring
+        for idx, cnode in enumerate(container_nodes):
             c_angle = (2 * math.pi * idx) / max(1, len(container_nodes)) + math.pi / len(container_nodes)
             c_ring = radius * 1.6 if len(container_nodes) > 1 else 0
             cx = center.x() + math.cos(c_angle) * c_ring
@@ -1160,38 +1272,46 @@ class GraphCanvasView(QGraphicsView):
             tree = GraphTreeItem(cnode, x=cx, y=cy)
             self.scene_obj.addItem(tree)
             self._trees[cnode.entity_id] = tree
-            # Also register in _nodes so edges can find it
             self._nodes[cnode.entity_id] = tree  # type: ignore[assignment]
 
-            # ── Position child entities inside the container ──
-            child_ids = contains_map.get(cnode.entity_id, set())
-            # Include both regular nodes AND other containers as children
-            all_children = [n for n in (regular_nodes + container_nodes) if n.entity_id in child_ids and n.entity_id != cnode.entity_id]
-            # Separate regular children from nested containers
+        # Populate children bottom-up (leaves first)
+        for cnode_id in sorted_container_ids:
+            tree = self._trees.get(cnode_id)
+            if tree is None:
+                continue
+            cnode = next((n for n in container_nodes if n.entity_id == cnode_id), None)
+            if cnode is None:
+                continue
+            child_ids = contains_map.get(cnode_id, set())
+            all_children = [n for n in (regular_nodes + container_nodes)
+                            if n.entity_id in child_ids and n.entity_id != cnode_id]
             child_nodes = [n for n in all_children if n.kind.lower() != "contenedor"]
             container_children = [n for n in all_children if n.kind.lower() == "contenedor"]
 
-            # ── Layout regular children below header ──
-            child_radius = 70.0  # default, overwritten if there are children
+            # Get tree center position
+            tree_cx = tree.pos().x() + tree._width / 2
+            tree_cy = tree.pos().y() + tree._height / 2
+
+            # Layout regular children below header
+            child_radius = 70.0
             if child_nodes:
                 child_radius = max(70, min(160, 50 * len(child_nodes)))
                 for ci, child in enumerate(child_nodes):
                     child_item = self._nodes.get(child.entity_id)
                     if child_item is None:
                         continue
-                    # Position child in a small arc below header
                     n_children = max(1, len(child_nodes))
                     if n_children == 1:
-                        child_x = cx
-                        child_y = cy + _CONTAINER_HEADER_HEIGHT + 60
+                        child_x = tree_cx
+                        child_y = tree_cy + _CONTAINER_HEADER_HEIGHT + 60
                     else:
                         ca = (2 * math.pi * ci) / n_children
-                        child_x = cx + math.cos(ca) * child_radius
-                        child_y = cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(ca) * child_radius * 0.5
+                        child_x = tree_cx + math.cos(ca) * child_radius
+                        child_y = tree_cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(ca) * child_radius * 0.5
                     child_item.setPos(child_x, child_y)
                     tree.add_child_node(child_item)  # type: ignore[arg-type]
 
-            # ── Layout nested containers below regular children ──
+            # Layout nested containers below regular children
             if container_children:
                 nested_y_offset = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if child_nodes else 0)
                 for nci, nc in enumerate(container_children):
@@ -1199,12 +1319,13 @@ class GraphCanvasView(QGraphicsView):
                     if nc_item is None:
                         continue
                     spread = max(1, len(container_children))
-                    nc_x = cx + (nci - (spread - 1) / 2) * (_CONTAINER_MIN_WIDTH + 20)
-                    nc_y = cy + nested_y_offset
+                    nc_w = nc_item._width if isinstance(nc_item, GraphTreeItem) else _CONTAINER_MIN_WIDTH
+                    nc_x = tree_cx + (nci - (spread - 1) / 2) * (nc_w + 30)
+                    nc_y = tree_cy + nested_y_offset
                     nc_item.setPos(nc_x, nc_y)
                     tree.add_child_node(nc_item)  # type: ignore[arg-type]
 
-            # Resize container to fit all children
+            # Resize container to fit all children (bottom-up: children already laid out)
             if tree._child_nodes:
                 tree.resize_to_fit_children()
 
@@ -1230,6 +1351,10 @@ class GraphCanvasView(QGraphicsView):
         # ── Register internal edges for each container ──
         for tree in self._trees.values():
             tree.find_internal_edges(self._edges)
+
+        # ── Pass canvas edges to all root-level trees for collapse visibility ──
+        for tree in self._trees.values():
+            tree.set_canvas_edges(self._edges)
 
         self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
