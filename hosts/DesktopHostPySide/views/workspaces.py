@@ -828,6 +828,7 @@ class CreationWorkspace(QWidget):
             "entity_type": "nota",
             "brief_description": "",
             "canon_state": "borrador",
+            "custom_metadata": {"_visual_draft": True},
         })
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando entidad: {result.error}")
@@ -839,7 +840,7 @@ class CreationWorkspace(QWidget):
         # Focus the new node
         self.graph.canvas.focus_entity(entity_id)
         # Open detail panel for editing
-        self._open_node_panel(entity_id)
+        self._open_node_panel(entity_id, is_new=True)
 
     def _create_tree_on_graph(self):
         """Create a new contenedor entity and open tree detail panel."""
@@ -987,7 +988,7 @@ class CreationWorkspace(QWidget):
         drawer.set_content(panel, title="Nueva capa")
         drawer.open()
 
-    def _open_node_panel(self, entity_id: str):
+    def _open_node_panel(self, entity_id: str, *, is_new: bool = False):
         if self.entity_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de nodo")
             return
@@ -1004,6 +1005,7 @@ class CreationWorkspace(QWidget):
             entity_id,
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
+            is_new=is_new,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()

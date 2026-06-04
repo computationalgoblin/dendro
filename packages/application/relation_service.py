@@ -88,6 +88,37 @@ class RelationService:
             except Exception:
                 setattr(relation, attr, default)
 
+    def _relation_signature(
+        self,
+        relation: NarrativeRelation,
+        *,
+        source_id: str | None = None,
+        target_id: str | None = None,
+        relation_type: RelationType | str | None = None,
+        direction: Direction | str | None = None,
+    ) -> tuple[str, str, str, str]:
+        rtype = relation_type if relation_type is not None else getattr(relation, "relation_type", RelationType.ESTA_RELACIONADO_CON)
+        direction_value = direction if direction is not None else getattr(relation, "direction", Direction.UNIDIRECCIONAL)
+        if isinstance(rtype, RelationType):
+            rtype = rtype.value
+        if isinstance(direction_value, Direction):
+            direction_value = direction_value.value
+        return (
+            source_id if source_id is not None else getattr(relation, "source_id", ""),
+            target_id if target_id is not None else getattr(relation, "target_id", ""),
+            str(rtype or RelationType.ESTA_RELACIONADO_CON.value),
+            str(direction_value or Direction.UNIDIRECCIONAL.value),
+        )
+
+    def _has_duplicate_relation(self, relation: NarrativeRelation, relations: list[NarrativeRelation]) -> bool:
+        signature = self._relation_signature(relation)
+        for other in relations:
+            if getattr(other, "id", "") == getattr(relation, "id", ""):
+                continue
+            if self._relation_signature(other) == signature:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -157,6 +188,8 @@ class RelationService:
         issues = validate_relation(relation)
         if issues:
             return Error(f"Relation validation failed: {'; '.join(issues)}")
+        if self._has_duplicate_relation(relation, proj.value.relations):
+            return Error("Ya existe una relación con el mismo origen, destino, tipo y dirección")
 
         proj.value.relations.append(relation)
         proj.value.touch()
@@ -182,6 +215,23 @@ class RelationService:
 
         for r in proj.value.relations:
             if r.id == relation_id:
+                previous = {
+                    "source_id": r.source_id,
+                    "target_id": r.target_id,
+                    "relation_type": r.relation_type,
+                    "description": getattr(r, "description", ""),
+                    "temporality": getattr(r, "temporality", ""),
+                    "causality": getattr(r, "causality", ""),
+                    "conditions": getattr(r, "conditions", ""),
+                    "source": getattr(r, "source", ""),
+                    "direction": getattr(r, "direction", Direction.UNIDIRECCIONAL),
+                    "intensity": getattr(r, "intensity", IntensityLevel.MEDIA),
+                    "canon_state": getattr(r, "canon_state", CanonState.BORRADOR),
+                    "visibility_state": getattr(r, "visibility_state", VisibilityState.VISIBLE_USUARIO),
+                    "validity_conditions": list(getattr(r, "validity_conditions", []) or []),
+                    "tags": list(getattr(r, "tags", []) or []),
+                    "custom_metadata": dict(getattr(r, "custom_metadata", {}) or {}),
+                }
                 scalar_fields = (
                     "source_id", "target_id", "description", "temporality", "causality",
                     "conditions", "source", "direction", "intensity", "canon_state",
@@ -197,7 +247,13 @@ class RelationService:
                     r.custom_metadata = dict(data["custom_metadata"])
                 issues = validate_relation(r)
                 if issues:
+                    for key, value in previous.items():
+                        setattr(r, key, value)
                     return Error(f"Relation validation failed: {'; '.join(issues)}")
+                if self._has_duplicate_relation(r, proj.value.relations):
+                    for key, value in previous.items():
+                        setattr(r, key, value)
+                    return Error("Ya existe una relación con el mismo origen, destino, tipo y dirección")
                 r.touch()
                 proj.value.touch()
                 if history_service is not None:

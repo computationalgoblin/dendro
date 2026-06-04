@@ -215,6 +215,7 @@ class NodeDetailPanel(QWidget):
         *,
         on_saved=None,
         ai_controller=None,
+        is_new: bool = False,
     ):
         super().__init__()
         self.ctx = ctx
@@ -222,6 +223,7 @@ class NodeDetailPanel(QWidget):
         self.entity_id = entity_id
         self.on_saved = on_saved
         self.ai_controller = ai_controller
+        self.is_new = bool(is_new)
         self._entity = None
         self._current_color: str = ""
         self._ai_worker: _NodeAIWorker | None = None
@@ -705,8 +707,22 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _cancel(self):
-        """Reset to last saved state (refresh) and try to close the drawer."""
+        """Cancel edits. New visual drafts are removed; saved entities are reloaded."""
+        self._autosave_timer.stop()
         self._discard_suggestion()
+        if self.is_new:
+            result = self.entity_controller.delete(self.entity_id)
+            if isinstance(result, Error):
+                self.ctx.log("warning", result.error)
+            elif self.on_saved is not None:
+                self.on_saved()
+            parent = self.parent()
+            while parent is not None:
+                if type(parent).__name__ == "RightDrawer":
+                    parent.close()
+                    return
+                parent = parent.parent()
+            return
         self.refresh()
         parent = self.parent()
         while parent is not None:
@@ -885,6 +901,7 @@ class NodeDetailPanel(QWidget):
 
         # Build custom_metadata with colour
         meta = dict(getattr(self._entity, "custom_metadata", {}) or {})
+        meta.pop("_visual_draft", None)
         if self._current_color:
             meta["_node_color"] = self._current_color
         # Remove _node_color if it matches the default (no need to store)
@@ -908,6 +925,7 @@ class NodeDetailPanel(QWidget):
             self.ctx.log("error", result.error)
             return
         self.ctx.log("info", "Entidad guardada")
+        self.is_new = False
         self.ctx.selected_entity_id = self.entity_id
         if refresh_after:
             self.refresh()

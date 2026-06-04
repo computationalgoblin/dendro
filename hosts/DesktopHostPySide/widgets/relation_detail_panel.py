@@ -706,11 +706,8 @@ class RelationDetailPanel(QWidget):
         text = self.suggestion_text.toPlainText().strip()
         if text:
             current_body = self.body_edit.toPlainText().strip()
-            current_desc = self.description_edit.toPlainText().strip()
-            # Put in body if empty, otherwise append to body
-            if not current_body and not current_desc:
-                self.description_edit.setPlainText(text)
-            elif not current_body:
+            # Relation AI suggestions are narrative text: keep short description stable and write/append to body.
+            if not current_body:
                 self.body_edit.setPlainText(text)
             else:
                 self.body_edit.setPlainText(current_body + "\n\n" + text)

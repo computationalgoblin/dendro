@@ -30,8 +30,8 @@ def test_relation_panel_has_b33_inline_ai_contract():
 def test_relation_panel_accepts_suggestion_into_user_editable_text_only():
     text = REL_PANEL.read_text(encoding="utf-8")
     assert "self.suggestion_text.toPlainText().strip()" in text
-    assert "self.description_edit.setPlainText(text)" in text
     assert "self.body_edit.setPlainText(text)" in text
+    assert "Relation AI suggestions are narrative text" in text
     assert "self.body_edit.setPlainText(current_body + \"\\n\\n\" + text)" in text
     # Accepting does not call controller.update directly; persistence happens only via save/autosave path.
     accept_body = text.split("def _accept_suggestion", 1)[1].split("def _discard_suggestion", 1)[0]

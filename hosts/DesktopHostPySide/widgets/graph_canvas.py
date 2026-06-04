@@ -1022,7 +1022,13 @@ class GraphCanvasView(QGraphicsView):
                     tree.resize_to_fit_children()
 
         # ── Create edge items ──
+        seen_edge_ids: set[str] = set()
         for edge in edges:
+            edge_id = getattr(edge, "relation_id", "")
+            if edge_id and edge_id in seen_edge_ids:
+                continue
+            if edge_id:
+                seen_edge_ids.add(edge_id)
             # Skip "contiene" edges — they are rendered by the container visual
             if edge.kind.lower() == "contiene":
                 continue
@@ -1134,8 +1140,22 @@ class GraphCanvasWidget(QWidget):
             self.canvas.setVisible(False)
             self.empty.setVisible(True)
             return
-        entities = [_entity_view(entity) for entity in (getattr(project, "entities", []) or [])]
-        relations = [_relation_view(relation) for relation in (getattr(project, "relations", []) or [])]
+        entities = []
+        seen_entity_ids: set[str] = set()
+        for entity in (getattr(project, "entities", []) or []):
+            entity_id = getattr(entity, "id", "")
+            if not entity_id or entity_id in seen_entity_ids:
+                continue
+            seen_entity_ids.add(entity_id)
+            entities.append(_entity_view(entity))
+        relations = []
+        seen_relation_ids: set[str] = set()
+        for relation in (getattr(project, "relations", []) or []):
+            relation_id = getattr(relation, "id", "")
+            if not relation_id or relation_id in seen_relation_ids:
+                continue
+            seen_relation_ids.add(relation_id)
+            relations.append(_relation_view(relation))
         known_entity_ids = {node.entity_id for node in entities}
         proposed_nodes = []
         proposed_edges = []
