@@ -50,6 +50,7 @@ SUITES: dict[str, list[str]] = {
     ],
     "b34": [
         "tests/application/test_b34_tree_contract.py",
+        "tests/application/test_b34_tree_panel_lifecycle.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],

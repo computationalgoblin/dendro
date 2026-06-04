@@ -852,6 +852,7 @@ class CreationWorkspace(QWidget):
             "entity_type": "contenedor",
             "brief_description": "",
             "canon_state": "borrador",
+            "custom_metadata": {"_visual_draft": True},
         })
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando contenedor: {result.error}")
@@ -861,7 +862,7 @@ class CreationWorkspace(QWidget):
         self.ctx.log("info", "Contenedor creado en modo borrador")
         self.refresh()
         self.graph.canvas.focus_entity(entity_id)
-        self._open_tree_panel(entity_id)
+        self._open_tree_panel(entity_id, is_new=True)
 
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
@@ -894,7 +895,7 @@ class CreationWorkspace(QWidget):
         self.ctx.log("info", "Entidad asignada al contenedor")
         self.refresh()
 
-    def _open_tree_panel(self, entity_id: str):
+    def _open_tree_panel(self, entity_id: str, *, is_new: bool = False):
         if self.entity_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de contenedor")
             return
@@ -906,6 +907,7 @@ class CreationWorkspace(QWidget):
             entity_id,
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
+            is_new=is_new,
         )
         self.ctx.drawer.set_content(panel, title="Contenedor")
         self.ctx.drawer.open()

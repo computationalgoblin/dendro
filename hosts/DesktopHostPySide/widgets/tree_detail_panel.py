@@ -197,6 +197,8 @@ class TreeDetailPanel(QWidget):
         on_saved: Callable[[], None] | None = None,
         ai_controller=None,
         parent: QWidget | None = None,
+        *,
+        is_new: bool = False,
     ):
         super().__init__(parent)
         self.ctx = ctx
@@ -207,6 +209,7 @@ class TreeDetailPanel(QWidget):
         self.ai_controller = ai_controller
         self._ai_worker: _TreeAIWorker | None = None
         self._tree_meta = TreeMeta()
+        self._is_new = is_new
 
         self._build_ui()
         self.refresh()
@@ -721,6 +724,8 @@ class TreeDetailPanel(QWidget):
         ]
 
         merged_meta = self._tree_meta.merge_into(entity.custom_metadata)
+        # Remove draft marker on save
+        merged_meta.pop("_visual_draft", None)
 
         data: dict[str, Any] = {
             "name": self.name_edit.text().strip(),
@@ -741,6 +746,7 @@ class TreeDetailPanel(QWidget):
             if self.ctx:
                 self.ctx.log("error", f"Error guardando árbol: {result.error}")
             return
+        self._is_new = False
         if self.ctx:
             self.ctx.log("info", "Árbol guardado")
         if self.on_saved:
@@ -749,7 +755,15 @@ class TreeDetailPanel(QWidget):
 
     def _cancel(self):
         self._discard_suggestion()
-        self.refresh()
+        if self._is_new:
+            # Delete the draft entity
+            if self.entity_controller is not None:
+                self.entity_controller.delete(self.entity_id)
+            self._is_new = False
+            if self.on_saved:
+                self.on_saved()
+        else:
+            self.refresh()
         parent = self.parent()
         while parent is not None:
             if type(parent).__name__ == "RightDrawer":
