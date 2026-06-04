@@ -283,6 +283,9 @@ class GraphTreeItem(QGraphicsRectItem):
     relations) are positioned inside the rectangle.  The container
     auto-resizes to encompass its children with padding.
 
+    Clicking the header toggles collapse/expand.  When collapsed, children
+    are hidden and the rectangle shrinks to show name + member count.
+
     Shares the same interaction contract as ``GraphNodeItem``:
     movable, selectable, drag-highlight, coherence-selection, and
     exposes ``node`` for entity-id lookups.
@@ -294,6 +297,8 @@ class GraphTreeItem(QGraphicsRectItem):
         self._half_w = width / 2
         self._half_h = height / 2
         self._coherence_selected = False
+        self._collapsed = False
+        self._expanded_rect: QRectF | None = None  # saved rect for re-expand
         self.setPos(x, y)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -322,21 +327,29 @@ class GraphTreeItem(QGraphicsRectItem):
         self._header_item.setPen(QPen(Qt.PenStyle.NoPen))
 
         # Title text in header
-        title = QGraphicsSimpleTextItem(_fit_text(node.name, 28), self)
-        title.setBrush(QBrush(QColor("#2D2A1E")))
+        self._title_item = QGraphicsSimpleTextItem(_fit_text(node.name, 28), self)
+        self._title_item.setBrush(QBrush(QColor("#2D2A1E")))
         font = QFont()
         font.setBold(True)
         font.setPointSize(11)
-        title.setFont(font)
-        title_rect = title.boundingRect()
-        title.setPos(-width / 2 + 10, -height / 2 + (_CONTAINER_HEADER_HEIGHT - title_rect.height()) / 2)
+        self._title_item.setFont(font)
+        title_rect = self._title_item.boundingRect()
+        self._title_item.setPos(-width / 2 + 10, -height / 2 + (_CONTAINER_HEADER_HEIGHT - title_rect.height()) / 2)
+
+        # Collapse indicator (shown when collapsed)
+        self._collapse_indicator = QGraphicsSimpleTextItem("", self)
+        self._collapse_indicator.setBrush(QBrush(QColor("#6F6A42")))
+        ind_font = QFont()
+        ind_font.setPointSize(9)
+        self._collapse_indicator.setFont(ind_font)
+        self._collapse_indicator.setVisible(False)
 
         # Subtitle (entity type)
-        subtitle = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 20), self)
-        subtitle.setBrush(QBrush(QColor("#5C5A3E")))
-        subtitle.setFont(QFont("", 9))
-        subtitle_rect = subtitle.boundingRect()
-        subtitle.setPos(
+        self._subtitle_item = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 20), self)
+        self._subtitle_item.setBrush(QBrush(QColor("#5C5A3E")))
+        self._subtitle_item.setFont(QFont("", 9))
+        subtitle_rect = self._subtitle_item.boundingRect()
+        self._subtitle_item.setPos(
             -width / 2 + 10,
             -height / 2 + _CONTAINER_HEADER_HEIGHT + 4,
         )
@@ -366,16 +379,89 @@ class GraphTreeItem(QGraphicsRectItem):
         # Brief description label
         brief = _fit_text(node.subtitle, 50)
         if brief:
-            brief_item = QGraphicsSimpleTextItem(brief, self)
-            brief_item.setBrush(QBrush(QColor("#6B7280")))
-            brief_item.setFont(QFont("", 8))
-            brief_item.setPos(
+            self._brief_item = QGraphicsSimpleTextItem(brief, self)
+            self._brief_item.setBrush(QBrush(QColor("#6B7280")))
+            self._brief_item.setFont(QFont("", 8))
+            self._brief_item.setPos(
                 -width / 2 + 10,
                 -height / 2 + _CONTAINER_HEADER_HEIGHT + 18,
             )
 
         # Track children for resizing
         self._child_nodes: list[GraphNodeItem] = []
+
+    # ------------------------------------------------------------------
+    # Collapse / Expand
+    # ------------------------------------------------------------------
+
+    def toggle_collapse(self):
+        """Toggle between collapsed and expanded state."""
+        if self._collapsed:
+            self._expand()
+        else:
+            self._collapse()
+
+    def _collapse(self):
+        """Hide children and shrink to compact size."""
+        self._expanded_rect = self.rect()
+        # Hide children
+        for child in self._child_nodes:
+            child.setVisible(False)
+        # Collapse indicator
+        n = len(self._child_nodes)
+        label = f"{n} miembro{'s' if n != 1 else ''}"
+        self._collapse_indicator.setText(label)
+        self._collapse_indicator.setVisible(True)
+        # Hide subtitle and brief when collapsed
+        if hasattr(self, "_subtitle_item"):
+            self._subtitle_item.setVisible(False)
+        if hasattr(self, "_brief_item"):
+            self._brief_item.setVisible(False)
+        # Shrink rect to header-only size
+        collapse_h = _CONTAINER_HEADER_HEIGHT + 22
+        collapse_w = max(_CONTAINER_MIN_WIDTH, self._title_item.boundingRect().width() + self._collapse_indicator.boundingRect().width() + 50)
+        self.setRect(-collapse_w / 2, -collapse_h / 2, collapse_w, collapse_h)
+        self._half_w = collapse_w / 2
+        self._half_h = collapse_h / 2
+        # Position collapse indicator next to title
+        self._collapse_indicator.setPos(
+            -collapse_w / 2 + 10 + self._title_item.boundingRect().width() + 8,
+            -collapse_h / 2 + (_CONTAINER_HEADER_HEIGHT - self._collapse_indicator.boundingRect().height()) / 2,
+        )
+        self._header_item.setRect(self.rect().x(), self.rect().y(), collapse_w, _CONTAINER_HEADER_HEIGHT)
+        self._status_dot.setRect(self.rect().right() - 18, self.rect().top() + 8, 14, 14)
+        if hasattr(self, "_visibility_dot"):
+            self._visibility_dot.setRect(self.rect().right() - 36, self.rect().top() + 8, 14, 14)
+        self._collapsed = True
+
+    def _expand(self):
+        """Show children and restore expanded size."""
+        self._collapsed = False
+        self._collapse_indicator.setVisible(False)
+        # Show subtitle and brief
+        if hasattr(self, "_subtitle_item"):
+            self._subtitle_item.setVisible(True)
+        if hasattr(self, "_brief_item"):
+            self._brief_item.setVisible(True)
+        # Show children
+        for child in self._child_nodes:
+            child.setVisible(True)
+        # Restore expanded rect (or resize to fit)
+        if self._expanded_rect is not None:
+            self.setRect(self._expanded_rect)
+            self._half_w = self._expanded_rect.width() / 2
+            self._half_h = self._expanded_rect.height() / 2
+            self._header_item.setRect(self._expanded_rect.x(), self._expanded_rect.y(), self._expanded_rect.width(), _CONTAINER_HEADER_HEIGHT)
+            self._status_dot.setRect(self._expanded_rect.right() - 18, self._expanded_rect.top() + 8, 14, 14)
+            if hasattr(self, "_visibility_dot"):
+                self._visibility_dot.setRect(self._expanded_rect.right() - 36, self._expanded_rect.top() + 8, 14, 14)
+        # Re-fit in case children moved
+        if self._child_nodes:
+            self.resize_to_fit_children()
+
+    @property
+    def is_collapsed(self) -> bool:
+        return self._collapsed
 
     # ------------------------------------------------------------------
     # Public API (mirrors GraphNodeItem)
@@ -433,6 +519,17 @@ class GraphTreeItem(QGraphicsRectItem):
     def set_coherence_selected(self, enabled: bool):
         self._coherence_selected = bool(enabled)
         self.setPen(self._selected_pen if enabled else self._normal_pen)
+
+    def mouseDoubleClickEvent(self, event):
+        """Double-click on header toggles collapse/expand."""
+        # Check if click is in header area
+        local_pos = event.pos()
+        header_bottom = self.rect().top() + _CONTAINER_HEADER_HEIGHT
+        if local_pos.y() <= header_bottom:
+            self.toggle_collapse()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None):
         """Override to draw rounded rectangle."""
