@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import EmptyState, enum_human
+from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 
 
 _NODE_COLORS = {
@@ -67,6 +68,11 @@ _EDGE_COLORS = {
     "controla": "#DCA35F",
     "posee": "#C9A5FF",
     "simboliza": "#9BB4C7",
+    "deriva_de": "#8B5CF6",
+    "condiciona": "#7C3AED",
+    "explica": "#6D28D9",
+    "contradice": "#D46A6A",
+    "produce_consecuencia_en": "#A855F7",
     "faccion": "#D9908F",
 }
 
@@ -105,6 +111,7 @@ class _NodeView:
     subtitle: str
     canon: str
     visibility: str
+    layer_id: str = ""
     proposed: bool = False
 
 
@@ -143,6 +150,7 @@ def _entity_view(entity: Any) -> _NodeView:
         subtitle=str(subtitle),
         canon=_enum_value(getattr(entity, "canon_state", None), ""),
         visibility=_enum_value(getattr(entity, "visibility_state", None), ""),
+        layer_id=str((getattr(entity, "layer_ids", []) or [""])[0] or ""),
     )
 
 
@@ -151,7 +159,7 @@ def _relation_view(relation: Any) -> _EdgeView:
     label = enum_human(kind)
     direction = _enum_value(getattr(relation, "direction", None), "unidireccional")
     meta = dict(getattr(relation, "custom_metadata", {}) or {})
-    color = meta.get("_edge_color", "")
+    color = meta.get("_edge_color", "") or _EDGE_COLORS.get(kind.lower(), "")
     return _EdgeView(
         relation=relation,
         relation_id=str(getattr(relation, "id", "")),
@@ -184,6 +192,7 @@ def _candidate_node_view(candidate: Any) -> _NodeView | None:
         subtitle="Sugerencia IA · no canon",
         canon="propuesto",
         visibility="privado",
+        layer_id=str(data.get("layer_id") or ((data.get("layer_ids") or [""])[0] if isinstance(data.get("layer_ids"), list) else "")),
         proposed=True,
     )
 
@@ -1299,7 +1308,96 @@ class GraphCanvasView(QGraphicsView):
         self._edges.clear()
         self._emit_selection_changed()
 
-    def set_graph(self, nodes: list[_NodeView], edges: list[_EdgeView]):
+    def _layer_for_node(self, node: _NodeView, layers_by_id: dict[str, Any]):
+        return layers_by_id.get(node.layer_id or "")
+
+    def _set_graph_by_layers(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]):
+        self.clear_graph()
+        if not nodes:
+            return
+        visible_layers = [layer for layer in sort_layers_by_causal_rank(layers or []) if getattr(layer, "is_visible", True) and get_causal_rank(layer) is not None]
+        layers_by_id = {str(getattr(layer, "id", "")): layer for layer in visible_layers}
+        layer_ids_with_nodes = {n.layer_id for n in nodes if n.layer_id}
+        if not visible_layers:
+            self.set_graph(nodes, edges, layer_mode=False, layers=[])
+            return
+        ordered_layer_ids = [str(getattr(layer, "id", "")) for layer in visible_layers]
+        unknown_nodes = [n for n in nodes if not n.layer_id or n.layer_id not in layers_by_id]
+        band_h = 210.0
+        band_w = max(900.0, 150.0 * max(3, len(nodes)))
+        x0 = -band_w / 2
+        for row, layer in enumerate(visible_layers):
+            y = row * band_h
+            rect = QGraphicsRectItem(x0, y - band_h / 2 + 8, band_w, band_h - 16)
+            color = QColor("#F0EDE1" if row % 2 == 0 else "#E9E4D3")
+            color.setAlpha(165)
+            rect.setBrush(QBrush(color))
+            rect.setPen(QPen(QColor("#D8D2BF"), 1.0, Qt.PenStyle.DashLine))
+            rect.setZValue(-50)
+            self.scene_obj.addItem(rect)
+            label = QGraphicsSimpleTextItem(str(getattr(layer, "name", "Capa")))
+            label.setBrush(QBrush(QColor("#6F6A42")))
+            font = QFont(); font.setBold(True); font.setPointSize(10)
+            label.setFont(font)
+            label.setPos(x0 + 18, y - band_h / 2 + 18)
+            label.setZValue(-49)
+            self.scene_obj.addItem(label)
+        nodes_by_layer: dict[str, list[_NodeView]] = {lid: [] for lid in ordered_layer_ids}
+        for node in nodes:
+            if node.layer_id in nodes_by_layer:
+                nodes_by_layer[node.layer_id].append(node)
+        if unknown_nodes:
+            nodes_by_layer.setdefault("__sin_capa__", []).extend(unknown_nodes)
+            y = len(visible_layers) * band_h
+            rect = QGraphicsRectItem(x0, y - band_h / 2 + 8, band_w, band_h - 16)
+            rect.setBrush(QBrush(QColor("#F7F1E8")))
+            rect.setPen(QPen(QColor("#D8D2BF"), 1.0, Qt.PenStyle.DashLine))
+            rect.setZValue(-50)
+            self.scene_obj.addItem(rect)
+            label = QGraphicsSimpleTextItem("Sin capa asignada")
+            label.setBrush(QBrush(QColor("#6F6A42")))
+            self.scene_obj.addItem(label)
+            label.setPos(x0 + 18, y - band_h / 2 + 18)
+            ordered_layer_ids.append("__sin_capa__")
+        for row, layer_id in enumerate(ordered_layer_ids):
+            layer_nodes = nodes_by_layer.get(layer_id, [])
+            if not layer_nodes:
+                continue
+            spacing = min(170.0, band_w / max(1, len(layer_nodes) + 1))
+            start_x = -spacing * (len(layer_nodes) - 1) / 2
+            y = row * band_h
+            for idx, node in enumerate(layer_nodes):
+                x = start_x + idx * spacing
+                if node.kind.lower() == "contenedor":
+                    item = GraphTreeItem(node, x=x, y=y, width=240, height=120)
+                    self._trees[node.entity_id] = item
+                else:
+                    item = GraphNodeItem(node, x=x, y=y)
+                self.scene_obj.addItem(item)
+                self._nodes[node.entity_id] = item  # type: ignore[assignment]
+        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        seen_edge_ids: set[str] = set()
+        for edge in edges:
+            edge_id = getattr(edge, "relation_id", "")
+            if edge_id and edge_id in seen_edge_ids:
+                continue
+            if edge_id:
+                seen_edge_ids.add(edge_id)
+            if edge.kind.lower() == "contiene":
+                continue
+            source = self._nodes.get(edge.source_id)
+            target = self._nodes.get(edge.target_id)
+            if not source or not target:
+                continue
+            item = GraphEdgeItem(edge, source, target)
+            self.scene_obj.addItem(item)
+            self._edges.append(item)
+        self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def set_graph(self, nodes: list[_NodeView], edges: list[_EdgeView], *, layer_mode: bool = False, layers: list[Any] | None = None):
+        if layer_mode:
+            self._set_graph_by_layers(nodes, edges, layers or [])
+            return
         self.clear_graph()
         if not nodes:
             return
@@ -1499,6 +1597,7 @@ class GraphCanvasWidget(QWidget):
         self.ctx = ctx
         self._advanced_mode = bool(ctx.advanced_mode)
         self.ai_controller = None
+        self._layer_mode = False
         self._build()
 
     def _build(self):
@@ -1613,7 +1712,12 @@ class GraphCanvasWidget(QWidget):
             return
         self.empty.setVisible(False)
         self.canvas.setVisible(True)
-        self.canvas.set_graph(entities, relations)
+        self._layer_mode = bool(getattr(project, "worldbuilding_active", False))
+        self.canvas.set_graph(entities, relations, layer_mode=self._layer_mode, layers=list(getattr(project, "world_layers", []) or []))
+
+    def set_worldbuilding_active(self, active: bool):
+        self._layer_mode = bool(active)
+        self.refresh()
 
     def set_advanced_mode(self, enabled: bool):
         self._advanced_mode = bool(enabled)

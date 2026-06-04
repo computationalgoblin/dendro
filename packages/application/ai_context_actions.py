@@ -27,6 +27,8 @@ _NODE_ACTIONS: dict[str, AIMode] = {
     "detect_contradictions": AIMode.CONSISTENCY_ANALYSIS,
     "summarize": AIMode.SUMMARIZE,
     "create_candidate": AIMode.GENERATE_ENTITY,
+    "expand_causal_down": AIMode.GENERATE_ENTITY,
+    "explain_from_causes": AIMode.CRITICAL_ANALYSIS,
 }
 _RELATION_ACTIONS: dict[str, AIMode] = {
     "deepen": AIMode.EXPAND_ENTITY,
@@ -213,7 +215,9 @@ _COHERENCE_SYSTEM_PROMPT_EN = (
     "relationships. Return clear observations and repair proposals. Prioritize causal, motivational, "
     "tonal, and dramatic coherence. Structure the response with sections: Global verdict, Entity "
     "observations, Relationship observations, Contradictions, Motivation gaps, Continuity, Tonal "
-    "risks, Dramatic opportunities, Repair proposals, and Open questions."
+    "risks, Dramatic opportunities, Repair proposals, and Open questions. "
+    "If Worldbuilding is active, explicitly use causal_context: include relevant upper causes, orphan elements "
+    "without upper cause/justification, and contradictions between layers."
 )
 
 _COHERENCE_REPAIR_SYSTEM_PROMPT_ES = (
@@ -271,7 +275,8 @@ def _entity_text_user_prompt(context: dict[str, Any], prompt_hint: str, language
             f"Narrative style: {creative.get('narrative_style') or '—'}\n"
             f"Creative rules: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}\n"
             f"Worldbuilding active: {project.get('worldbuilding_active', False)}\n"
-            f"Neighborhood context: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n\n"
+            f"Neighborhood context: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n"
+            f"Causal layer context: {_compact_for_prompt(context.get('causal_context') or {}, 1600)}\n\n"
             f"User instruction: {instruction or no_instruction}"
         )
     no_instruction = "Sin instrucción extra: mejora o completa el texto existente con coherencia."
@@ -288,7 +293,8 @@ def _entity_text_user_prompt(context: dict[str, Any], prompt_hint: str, language
         f"Estilo narrativo: {creative.get('narrative_style') or '—'}\n"
         f"Reglas creativas: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}\n"
         f"Worldbuilding activo: {project.get('worldbuilding_active', False)}\n"
-        f"Contexto de relaciones: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n\n"
+        f"Contexto de relaciones: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n"
+        f"Contexto causal por capas: {_compact_for_prompt(context.get('causal_context') or {}, 1600)}\n\n"
         f"Instrucción del usuario: {instruction or no_instruction}"
     )
 
@@ -309,6 +315,7 @@ def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, 
             f"Selected entities:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
             f"Selected relationships:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
             f"Relevant nearby context:\n{_compact_for_prompt(context.get('nearby_context') or {}, 3000)}\n\n"
+            f"Causal layer context:\n{_compact_for_prompt(context.get('causal_context') or {}, 4000)}\n\n"
             f"User instruction: {instruction or 'Analyze joint narrative coherence of the selected subgraph.'}"
         )
     return (
@@ -321,6 +328,7 @@ def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, 
         f"Entidades seleccionadas:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
         f"Relaciones seleccionadas:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
         f"Contexto cercano relevante:\n{_compact_for_prompt(context.get('nearby_context') or {}, 3000)}\n\n"
+        f"Contexto causal por capas:\n{_compact_for_prompt(context.get('causal_context') or {}, 4000)}\n\n"
         f"Instrucción del usuario: {instruction or 'Analiza la coherencia narrativa conjunta del subgrafo seleccionado.'}"
     )
 

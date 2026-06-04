@@ -32,6 +32,7 @@ from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, hum
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
 from packages.domain.result import Error
+from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 
 # ---------------------------------------------------------------------------
 # Warm palette constants
@@ -201,6 +202,36 @@ class _NodeRefineWorker(QThread):
             self.finished.emit("", str(exc))
 
 
+class _NodeContextActionWorker(QThread):
+    """Runs a candidate-producing contextual AI action in background."""
+
+    finished = Signal(str, str)
+
+    def __init__(self, ai_controller, entity_id: str, action_type: str, prompt_hint: str, language: str = "es"):
+        super().__init__()
+        self.ai_controller = ai_controller
+        self.entity_id = entity_id
+        self.action_type = action_type
+        self.prompt_hint = prompt_hint
+        self.language = language
+
+    def run(self):
+        try:
+            if not hasattr(self.ai_controller, "node_action"):
+                self.finished.emit("", "La acción IA contextual no está disponible.")
+                return
+            result = self.ai_controller.node_action(self.entity_id, self.action_type, prompt_hint=self.prompt_hint)
+            if isinstance(result, Error):
+                self.finished.emit("", result.error)
+                return
+            summary = self.ai_controller.result_summary(result) if hasattr(self.ai_controller, "result_summary") else "IA contextual completada."
+            value = result.value
+            body = getattr(value, "raw_text", "") or ""
+            self.finished.emit((summary + ("\n\n" + body if body else "")).strip(), "")
+        except Exception as exc:
+            self.finished.emit("", str(exc))
+
+
 # ---------------------------------------------------------------------------
 # NodeDetailPanel
 # ---------------------------------------------------------------------------
@@ -328,6 +359,12 @@ class NodeDetailPanel(QWidget):
             self.canon_combo.addItem(enum_human(val), val)
         form_layout.addRow(canon_label, self.canon_combo)
 
+        self.layer_label = QLabel("Capa:")
+        self.layer_label.setStyleSheet(_label_ss)
+        self.layer_combo = QComboBox()
+        self.layer_combo.addItem("— Sin capa —", "")
+        form_layout.addRow(self.layer_label, self.layer_combo)
+
         root.addWidget(form_card)
 
         # -- Hidden fields (only in advanced mode) --
@@ -413,6 +450,23 @@ class NodeDetailPanel(QWidget):
         self.ai_coherence_btn.setEnabled(self.ai_controller is not None)
         self.ai_coherence_btn.clicked.connect(self._open_coherence)
         ai_layout.addWidget(self.ai_coherence_btn)
+
+        causal_row = QHBoxLayout()
+        causal_row.setSpacing(6)
+        self.target_layer_label = QLabel("Destino causal:")
+        self.target_layer_combo = QComboBox()
+        self.target_layer_combo.addItem("— Capa inferior —", "")
+        causal_row.addWidget(self.target_layer_label)
+        causal_row.addWidget(self.target_layer_combo, 1)
+        ai_layout.addLayout(causal_row)
+        self.expand_down_btn = QPushButton("Expandir hacia capa inferior")
+        self.expand_down_btn.setEnabled(self.ai_controller is not None)
+        self.expand_down_btn.clicked.connect(self._start_expand_down)
+        ai_layout.addWidget(self.expand_down_btn)
+        self.explain_causes_btn = QPushButton("Explicar desde causas superiores")
+        self.explain_causes_btn.setEnabled(self.ai_controller is not None)
+        self.explain_causes_btn.clicked.connect(self._start_explain_from_causes)
+        ai_layout.addWidget(self.explain_causes_btn)
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -552,6 +606,7 @@ class NodeDetailPanel(QWidget):
         self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.visibility_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
+        self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -582,14 +637,59 @@ class NodeDetailPanel(QWidget):
         private_notes = self.private_notes_edit.toPlainText().strip()
         exportable_notes = self.exportable_notes_edit.toPlainText().strip()
         instruction = (user_instruction or "").strip()
+        layer_name = self.layer_combo.currentText() if self._worldbuilding_active() else "—"
         return (
             f"Nombre actual: {entity_name}\n"
             f"Tipo actual: {type_value}\n"
+            f"Capa causal actual: {layer_name}\n"
             f"Descripción breve actual del formulario:\n{brief or '—'}\n\n"
             f"Cuerpo actual del formulario:\n{body or '—'}\n\n"
             f"Notas actuales:\n{private_notes or exportable_notes or '—'}\n\n"
             f"Instrucción opcional del usuario: {instruction or '—'}"
         )
+
+    def _target_layer_text(self) -> str:
+        return self.target_layer_combo.currentText().strip() or "capa inferior adecuada"
+
+    def _start_expand_down(self):
+        if self.ai_controller is None:
+            self._show_ai_error("IA contextual no disponible en esta sesión.")
+            return
+        target_layer = self._target_layer_text()
+        prompt = self._build_ai_instruction(
+            f"B36: Expandir consecuencias descendentes hacia {target_layer}. "
+            "Proponer nodos candidatos, árboles candidatos y relaciones causales candidatas; no canonizar."
+        )
+        self._start_context_action("expand_causal_down", prompt, "Expandiendo…")
+
+    def _start_explain_from_causes(self):
+        if self.ai_controller is None:
+            self._show_ai_error("IA contextual no disponible en esta sesión.")
+            return
+        prompt = self._build_ai_instruction(
+            "B36: Explicar este elemento desde causas superiores relevantes. "
+            "Proponer explicación causal y relaciones causales candidatas; no canonizar."
+        )
+        self._start_context_action("explain_from_causes", prompt, "Buscando causas…")
+
+    def _start_context_action(self, action_type: str, prompt_hint: str, status_text: str):
+        if self._ai_worker is not None and self._ai_worker.isRunning():
+            return
+        self.ai_generate_btn.setEnabled(False)
+        self.expand_down_btn.setEnabled(False)
+        self.explain_causes_btn.setEnabled(False)
+        self.suggestion_text.setPlainText(status_text)
+        self.suggestion_frame.setVisible(True)
+        self.accept_btn.setEnabled(False)
+        self._ai_worker = _NodeContextActionWorker(
+            self.ai_controller,
+            self.entity_id,
+            action_type,
+            prompt_hint,
+            getattr(self.ctx, "language", "es"),
+        )
+        self._ai_worker.finished.connect(self._on_ai_finished)
+        self._ai_worker.start()
 
     def _start_ai_suggestion(self):
         if self.ai_controller is None:
@@ -618,8 +718,11 @@ class NodeDetailPanel(QWidget):
         self._ai_worker.start()
 
     def _show_ai_error(self, message: str):
-        self.ai_generate_btn.setEnabled(self.ai_controller is not None)
+        has_ai = self.ai_controller is not None
+        self.ai_generate_btn.setEnabled(has_ai)
         self.ai_generate_btn.setText("Generar sugerencia")
+        self.expand_down_btn.setEnabled(has_ai)
+        self.explain_causes_btn.setEnabled(has_ai)
         self.refine_btn.setEnabled(True)
         self.suggestion_text.setPlainText(f"Error IA: {message}")
         self.suggestion_frame.setVisible(True)
@@ -628,8 +731,11 @@ class NodeDetailPanel(QWidget):
             self.ctx.log("warning", f"IA: {message}")
 
     def _on_ai_finished(self, text: str, error: str):
-        self.ai_generate_btn.setEnabled(True)
+        has_ai = self.ai_controller is not None
+        self.ai_generate_btn.setEnabled(has_ai)
         self.ai_generate_btn.setText("Generar sugerencia")
+        self.expand_down_btn.setEnabled(has_ai)
+        self.explain_causes_btn.setEnabled(has_ai)
         if error:
             self._show_ai_error(error)
             return
@@ -772,6 +878,60 @@ class NodeDetailPanel(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
+    def _worldbuilding_active(self) -> bool:
+        project = self._project()
+        return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
+
+    def _refresh_layer_combo(self, entity=None):
+        current = ""
+        if entity is not None:
+            current = str((getattr(entity, "layer_ids", []) or [""])[0] or "")
+        self.layer_combo.blockSignals(True)
+        self.layer_combo.clear()
+        self.layer_combo.addItem("— Sin capa —", "")
+        project = self._project()
+        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
+        for layer in sort_layers_by_causal_rank(layers):
+            if not getattr(layer, "is_visible", True):
+                continue
+            rank = get_causal_rank(layer)
+            prefix = f"{rank}. " if rank is not None else ""
+            self.layer_combo.addItem(prefix + str(getattr(layer, "name", "Capa")), str(getattr(layer, "id", "")))
+        idx = self.layer_combo.findData(current)
+        self.layer_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.layer_combo.blockSignals(False)
+        visible = self._worldbuilding_active()
+        self.layer_label.setVisible(visible)
+        self.layer_combo.setVisible(visible)
+
+    def _refresh_target_layer_combo(self, entity=None):
+        current_rank = None
+        project = self._project()
+        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
+        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in layers}
+        if entity is not None:
+            current_id = str((getattr(entity, "layer_ids", []) or [""])[0] or "")
+            current_layer = layer_by_id.get(current_id)
+            current_rank = get_causal_rank(current_layer) if current_layer is not None else None
+        self.target_layer_combo.blockSignals(True)
+        self.target_layer_combo.clear()
+        self.target_layer_combo.addItem("— Capa inferior —", "")
+        for layer in sort_layers_by_causal_rank(layers):
+            if not getattr(layer, "is_visible", True):
+                continue
+            rank = get_causal_rank(layer)
+            if rank is None or (current_rank is not None and rank <= current_rank):
+                continue
+            self.target_layer_combo.addItem(f"{rank}. {getattr(layer, 'name', 'Capa')}", str(getattr(layer, "id", "")))
+        if self.target_layer_combo.count() > 1:
+            self.target_layer_combo.setCurrentIndex(1)
+        self.target_layer_combo.blockSignals(False)
+        visible = self._worldbuilding_active()
+        self.target_layer_label.setVisible(visible)
+        self.target_layer_combo.setVisible(visible)
+        self.expand_down_btn.setVisible(visible)
+        self.explain_causes_btn.setVisible(visible)
+
     def _entity_by_id(self, entity_id: str):
         project = self._project()
         if project is None:
@@ -813,6 +973,8 @@ class NodeDetailPanel(QWidget):
             self.summary.setText(
                 f"{enum_human(kind)} · {enum_human(canon_val)}"
             )
+            self._refresh_layer_combo(entity)
+            self._refresh_target_layer_combo(entity)
 
             self.name_edit.setText(getattr(entity, "name", ""))
             self._set_combo_value(self.type_combo, kind)
@@ -950,6 +1112,7 @@ class NodeDetailPanel(QWidget):
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
             "canon_state": canon_value,
             "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
+            "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
         }
         result = self.entity_controller.update(self.entity_id, payload)

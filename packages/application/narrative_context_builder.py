@@ -9,7 +9,7 @@ from dataclasses import is_dataclass
 from enum import Enum
 from typing import Any, Iterable
 
-from packages.application.world_layer_causal import causal_layer_summary
+from packages.application.world_layer_causal import causal_layer_summary, get_causal_rank, sort_layers_by_causal_rank
 
 
 _GM_AUDIENCES = {"gm", "master", "director", "author", "autor"}
@@ -137,7 +137,7 @@ class NarrativeContextBuilder:
                 if eid and eid not in selected_set and eid not in nearby_entity_ids:
                     nearby_entity_ids.append(str(eid))
         nearby_entities = [e for e in self._entities_by_ids(nearby_entity_ids[:12]) if self._can_include_entity(e, audience)]
-        return self._base_context("graph_selection", None, audience) | {
+        context = self._base_context("graph_selection", None, audience) | {
             "selection": {
                 "entities": [self._entity_summary(e, audience) for e in selected_entities],
                 "relations": [self._relation_summary(r, audience) for r in selected_relations],
@@ -147,6 +147,8 @@ class NarrativeContextBuilder:
                 "relations": [self._relation_summary(r, audience) for r in nearby_relations],
             },
         }
+        context["causal_context"] = self._causal_context(selected_entities, audience)
+        return context
 
     def build_context(self, target_type: str, target_id: str | None = None, *, audience: str = "gm") -> dict[str, Any]:
         context = self._base_context(target_type, target_id, audience)
@@ -159,6 +161,9 @@ class NarrativeContextBuilder:
         context["history"] = self._history(target_type, target_id, audience)
         context["candidates"] = self._candidates(target_type, target_id, audience)
         context["issues"] = self._issues(target_type, target_id, audience)
+        if target_type == "entity" and target_id:
+            entity = self._entity_by_id(target_id)
+            context["causal_context"] = self._causal_context([entity] if entity is not None else [], audience)
         return context
 
     def _audience_kind(self, audience: str) -> str:
@@ -202,6 +207,7 @@ class NarrativeContextBuilder:
                 "narrative_style": getattr(project, "narrative_style", ""),
                 "creative_rules": getattr(project, "creative_rules", ""),
                 "general": _safe_obj(getattr(project, "general", None)),
+                "worldbuilding_active": bool(getattr(project, "worldbuilding_active", False)),
                 "world_layers": [self._layer_summary(layer) for layer in _list(getattr(project, "world_layers", []))],
                 "domains": list(getattr(project, "domains", []) or []),
             },
@@ -260,6 +266,8 @@ class NarrativeContextBuilder:
             "tags": list(getattr(entity, "tags", []) or []),
             "domain": getattr(entity, "domain", ""),
             "layers": list(getattr(entity, "layers", []) or []),
+            "layer_ids": list(getattr(entity, "layer_ids", []) or []),
+            "world_layers": self._entity_layer_summaries(entity),
             "private_notes": getattr(entity, "private_notes", "") if self._audience_kind(audience) == "gm" else "",
             "exportable_notes": getattr(entity, "exportable_notes", ""),
             "narrative_importance": _string_value(getattr(entity, "narrative_importance", "")),
@@ -425,6 +433,8 @@ class NarrativeContextBuilder:
             "visibility_state": _string_value(getattr(relation, "visibility_state", "")),
             "source_note": getattr(relation, "source", "") if self._audience_kind(audience) == "gm" else "",
             "tags": list(getattr(relation, "tags", []) or []),
+            "layer_ids": list(getattr(relation, "layer_ids", []) or []),
+            "causal_style": _string_value(getattr(relation, "relation_type", "")) in {"deriva_de", "condiciona", "explica", "contradice", "produce_consecuencia_en", "causo", "fue_causado_por"},
         }
 
     def _session_summary(self, session, audience: str) -> dict[str, Any]:
@@ -510,6 +520,70 @@ class NarrativeContextBuilder:
         }
         summary["causal"] = causal_layer_summary(layer)
         return summary
+
+    def _layers_by_id(self) -> dict[str, Any]:
+        return {str(getattr(layer, "id", "")): layer for layer in _list(getattr(self.project, "world_layers", []))}
+
+    def _entity_layer_summaries(self, entity) -> list[dict[str, Any]]:
+        layer_map = self._layers_by_id()
+        result = []
+        for layer_id in list(getattr(entity, "layer_ids", []) or []):
+            layer = layer_map.get(str(layer_id))
+            if layer is not None:
+                result.append(self._layer_summary(layer))
+        return result
+
+    def _primary_causal_rank(self, entity) -> int | None:
+        layer_map = self._layers_by_id()
+        ranks = []
+        for layer_id in list(getattr(entity, "layer_ids", []) or []):
+            layer = layer_map.get(str(layer_id))
+            rank = get_causal_rank(layer) if layer is not None else None
+            if rank is not None:
+                ranks.append(rank)
+        return min(ranks) if ranks else None
+
+    def _causal_context(self, selected_entities: Iterable[Any], audience: str) -> dict[str, Any]:
+        project = self.project
+        if project is None or not bool(getattr(project, "worldbuilding_active", False)):
+            return {"enabled": False}
+        selected = [e for e in selected_entities if e is not None]
+        selected_ids = {str(getattr(e, "id", "")) for e in selected}
+        selected_ranks = [rank for rank in (self._primary_causal_rank(e) for e in selected) if rank is not None]
+        layer_map = self._layers_by_id()
+        ranked_layers = [self._layer_summary(layer) for layer in sort_layers_by_causal_rank(layer_map.values()) if get_causal_rank(layer) is not None]
+        upper_entities = []
+        if selected_ranks:
+            lowest_selected_rank = min(selected_ranks)
+            for entity in _list(getattr(project, "entities", [])):
+                if str(getattr(entity, "id", "")) in selected_ids or not self._can_include_entity(entity, audience):
+                    continue
+                rank = self._primary_causal_rank(entity)
+                if rank is not None and rank < lowest_selected_rank:
+                    upper_entities.append(self._entity_summary(entity, audience))
+                    if len(upper_entities) >= 12:
+                        break
+        causal_types = {"deriva_de", "condiciona", "explica", "contradice", "produce_consecuencia_en", "causo", "fue_causado_por"}
+        causal_relations = []
+        for relation in _list(getattr(project, "relations", [])):
+            if not self._can_include_relation(relation, audience):
+                continue
+            rtype = _string_value(getattr(relation, "relation_type", ""))
+            if rtype not in causal_types:
+                continue
+            src = str(getattr(relation, "source_id", ""))
+            tgt = str(getattr(relation, "target_id", ""))
+            if src in selected_ids or tgt in selected_ids or any((src == e.get("id") or tgt == e.get("id")) for e in upper_entities):
+                causal_relations.append(self._relation_summary(relation, audience))
+            if len(causal_relations) >= 16:
+                break
+        return {
+            "enabled": True,
+            "causal_layers": ranked_layers,
+            "upper_cause_entities": upper_entities,
+            "causal_relations": causal_relations,
+            "orphan_detection_hint": "En Worldbuilding ON, marca como posible huérfano cualquier elemento seleccionado sin causa superior, relación causal o justificación en capas superiores.",
+        }
 
     def _neighborhood(self, target_type: str, target_id: str | None, audience: str) -> dict[str, Any]:
         if target_type != "entity" or not target_id:

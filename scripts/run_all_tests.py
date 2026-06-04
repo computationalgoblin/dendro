@@ -63,6 +63,7 @@ SUITES: dict[str, list[str]] = {
     ],
     "b36": [
         "tests/application/test_b36_causal_layer_contract.py",
+        "tests/application/test_b36_causal_layers_integration.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],

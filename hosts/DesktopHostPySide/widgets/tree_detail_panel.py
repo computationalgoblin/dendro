@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import enum_human
 from packages.application.tree_meta import NARRATIVE_ROLES, TREE_TYPES, TreeMeta
+from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.entity import (
     CanonState,
     CertaintyLevel,
@@ -175,6 +176,35 @@ class _TreeAIWorker(QThread):
                 self.finished.emit(
                     "\n\n".join(parts) if parts else "Sin sugerencia disponible.", "",
                 )
+        except Exception as exc:
+            self.finished.emit("", str(exc))
+
+
+class _TreeContextActionWorker(QThread):
+    """Runs candidate-producing contextual AI actions for a tree entity."""
+
+    finished = Signal(str, str)
+
+    def __init__(self, ai_controller, entity_id: str, action_type: str, prompt_hint: str, language: str = "es"):
+        super().__init__()
+        self.ai_controller = ai_controller
+        self.entity_id = entity_id
+        self.action_type = action_type
+        self.prompt_hint = prompt_hint
+        self.language = language
+
+    def run(self):
+        try:
+            if not hasattr(self.ai_controller, "node_action"):
+                self.finished.emit("", "IA contextual no disponible en esta versión.")
+                return
+            result = self.ai_controller.node_action(self.entity_id, self.action_type, prompt_hint=self.prompt_hint)
+            if isinstance(result, Error):
+                self.finished.emit("", result.error)
+                return
+            summary = self.ai_controller.result_summary(result) if hasattr(self.ai_controller, "result_summary") else "IA contextual completada."
+            body = getattr(result.value, "raw_text", "") or ""
+            self.finished.emit((summary + ("\n\n" + body if body else "")).strip(), "")
         except Exception as exc:
             self.finished.emit("", str(exc))
 
@@ -332,6 +362,11 @@ class TreeDetailPanel(QWidget):
 
         self.certainty_combo = _styled_combo([e.value for e in CertaintyLevel], "")
         wc_form.addRow("Certeza", self.certainty_combo)
+
+        self.layer_combo = _styled_combo([], "— Sin capa —")
+        self.layer_label = QLabel("Capa causal")
+        self.layer_label.setStyleSheet(f"color: {_LABEL_COLOR}; background: transparent;")
+        wc_form.addRow(self.layer_label, self.layer_combo)
 
         wc_layout.addLayout(wc_form)
 
@@ -511,6 +546,56 @@ class TreeDetailPanel(QWidget):
     # Refresh — load entity data into UI
     # ------------------------------------------------------------------
 
+    def _worldbuilding_active(self) -> bool:
+        project = self._project()
+        return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
+
+    def _refresh_layer_combo(self, entity=None):
+        current = str((getattr(entity, "layer_ids", []) or [""])[0] or "") if entity is not None else ""
+        self.layer_combo.blockSignals(True)
+        self.layer_combo.clear()
+        self.layer_combo.addItem("— Sin capa —", "")
+        project = self._project()
+        for layer in sort_layers_by_causal_rank(list(getattr(project, "world_layers", []) or []) if project is not None else []):
+            if not getattr(layer, "is_visible", True):
+                continue
+            rank = get_causal_rank(layer)
+            prefix = f"{rank}. " if rank is not None else ""
+            self.layer_combo.addItem(prefix + str(getattr(layer, "name", "Capa")), str(getattr(layer, "id", "")))
+        idx = self.layer_combo.findData(current)
+        self.layer_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.layer_combo.blockSignals(False)
+        visible = self._worldbuilding_active()
+        self.layer_label.setVisible(visible)
+        self.layer_combo.setVisible(visible)
+
+    def _refresh_target_layer_combo(self, entity=None):
+        project = self._project()
+        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
+        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in layers}
+        current_id = str((getattr(entity, "layer_ids", []) or [""])[0] or "") if entity is not None else ""
+        current_layer = layer_by_id.get(current_id)
+        current_rank = get_causal_rank(current_layer) if current_layer is not None else None
+        self.target_layer_combo.blockSignals(True)
+        self.target_layer_combo.clear()
+        self.target_layer_combo.addItem("— Capa inferior —", "")
+        for layer in sort_layers_by_causal_rank(layers):
+            if not getattr(layer, "is_visible", True):
+                continue
+            rank = get_causal_rank(layer)
+            if rank is None or (current_rank is not None and rank <= current_rank):
+                continue
+            self.target_layer_combo.addItem(f"{rank}. {getattr(layer, 'name', 'Capa')}", str(getattr(layer, "id", "")))
+        if self.target_layer_combo.count() > 1:
+            self.target_layer_combo.setCurrentIndex(1)
+        self.target_layer_combo.blockSignals(False)
+        visible = self._worldbuilding_active()
+        for widget in (self.target_layer_label, self.target_layer_combo, self.ai_expand_down_btn, self.ai_explain_causes_btn):
+            widget.setVisible(visible)
+        has_ai = self.ai_controller is not None
+        self.ai_expand_down_btn.setEnabled(has_ai)
+        self.ai_explain_causes_btn.setEnabled(has_ai)
+
     def refresh(self):
         entity = self._entity_by_id(self.entity_id)
         if entity is None:
@@ -554,6 +639,8 @@ class TreeDetailPanel(QWidget):
         self._set_combo_value(self.canon_combo, _enum_value(entity.canon_state))
         self._set_combo_value(self.visibility_combo, _enum_value(entity.visibility_state))
         self._set_combo_value(self.certainty_combo, _enum_value(entity.certainty_level))
+        self._refresh_layer_combo(entity)
+        self._refresh_target_layer_combo(entity)
 
         # Notes
         self.private_notes_edit.setPlainText(entity.private_notes)
@@ -737,6 +824,7 @@ class TreeDetailPanel(QWidget):
             "canon_state": self._current_combo_text(self.canon_combo) or entity.canon_state.value,
             "visibility_state": self._current_combo_text(self.visibility_combo) or entity.visibility_state.value,
             "certainty_level": self._current_combo_text(self.certainty_combo) or entity.certainty_level.value,
+            "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(entity, "layer_ids", []) or []),
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
         }
@@ -828,6 +916,52 @@ class TreeDetailPanel(QWidget):
         ]
         return "; ".join(rules) if rules else "ninguna definida"
 
+    def _target_layer_text(self) -> str:
+        return self.target_layer_combo.currentText().strip() or "capa inferior adecuada"
+
+    def _start_expand_down(self):
+        target_layer = self._target_layer_text()
+        entity = self._entity_by_id(self.entity_id)
+        entity_name = getattr(entity, "name", self.entity_id)
+        prompt = (
+            f"B36: Expandir consecuencias descendentes del árbol hacia {target_layer}. "
+            f"Árbol: {entity_name}. "
+            f"Miembros actuales: {self._get_members_text()}. Reglas internas: {self._get_rules_text()}. "
+            "Proponer nodos, árboles y relaciones causales candidatas; no canonizar."
+        )
+        self._start_context_action("expand_causal_down", prompt, "Expandiendo consecuencias…")
+
+    def _start_explain_from_causes(self):
+        prompt = (
+            f"B36: Explicar este árbol desde causas superiores relevantes. "
+            f"Miembros actuales: {self._get_members_text()}. Reglas internas: {self._get_rules_text()}. "
+            "Proponer explicación causal y relaciones causales candidatas; no canonizar."
+        )
+        self._start_context_action("explain_from_causes", prompt, "Buscando causas superiores…")
+
+    def _start_context_action(self, action_type: str, prompt_hint: str, status_text: str):
+        if self.ai_controller is None:
+            self._show_ai_error("IA no disponible.")
+            return
+        if self._ai_worker is not None and self._ai_worker.isRunning():
+            return
+        for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
+                    self.ai_coherence_btn, self.ai_questions_btn,
+                    self.ai_expand_down_btn, self.ai_explain_causes_btn):
+            btn.setEnabled(False)
+        self.suggestion_text.setPlainText(status_text)
+        self.suggestion_frame.setVisible(True)
+        self.accept_btn.setEnabled(False)
+        self._ai_worker = _TreeContextActionWorker(
+            self.ai_controller,
+            self.entity_id,
+            action_type,
+            prompt_hint,
+            language=getattr(self.ctx, "language", "es"),
+        )
+        self._ai_worker.finished.connect(self._on_ai_finished)
+        self._ai_worker.start()
+
     def _start_ai(self, action: str):
         if self.ai_controller is None:
             self._show_ai_error("IA no disponible.")
@@ -837,6 +971,7 @@ class TreeDetailPanel(QWidget):
 
         entity = self._entity_by_id(self.entity_id)
         entity_name = entity.name if entity else "este árbol"
+        layer_name = self.layer_combo.currentText() if self._worldbuilding_active() else "—"
         members = self._get_members_text()
         rules = self._get_rules_text()
         tree_type = self._current_combo_text(self.tree_type_combo) or "general"
@@ -845,7 +980,7 @@ class TreeDetailPanel(QWidget):
         prompts: dict[str, str] = {
             "description": (
                 f"Genera una descripcion narrativa extendida para el árbol '{entity_name}' "
-                f"(tipo: {tree_type}). Miembros: {members}. Reglas internas: {rules}. "
+                f"(tipo: {tree_type}, capa causal: {layer_name}). Miembros: {members}. Reglas internas: {rules}. "
                 f"El texto debe ser coherente con los miembros y las reglas. "
                 f"{custom_hint}"
             ),
@@ -879,7 +1014,8 @@ class TreeDetailPanel(QWidget):
 
         # Disable buttons while running
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
-                     self.ai_coherence_btn, self.ai_questions_btn):
+                     self.ai_coherence_btn, self.ai_questions_btn,
+                     self.ai_expand_down_btn, self.ai_explain_causes_btn):
             btn.setEnabled(False)
 
         self._ai_worker = _TreeAIWorker(
@@ -895,7 +1031,8 @@ class TreeDetailPanel(QWidget):
         # Re-enable buttons
         has_ai = self.ai_controller is not None
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
-                     self.ai_coherence_btn, self.ai_questions_btn):
+                     self.ai_coherence_btn, self.ai_questions_btn,
+                     self.ai_expand_down_btn, self.ai_explain_causes_btn):
             btn.setEnabled(has_ai)
 
         if error:

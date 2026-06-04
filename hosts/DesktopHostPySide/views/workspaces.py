@@ -552,6 +552,14 @@ class CreationWorkspace(QWidget):
         self._coherence_btn.clicked.connect(self._open_coherence_panel)
         layout.addWidget(self._coherence_btn)
 
+        self._layers_view_btn = QPushButton("▤")
+        self._layers_view_btn.setToolTip("Vista Capas causales")
+        self._layers_view_btn.setStyleSheet(btn_style)
+        self._layers_view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._layers_view_btn.clicked.connect(self._activate_layers_view)
+        self._layers_view_btn.setVisible(False)
+        layout.addWidget(self._layers_view_btn)
+
         layout.addStretch()
 
         # Delete selected entity/relation/container
@@ -597,6 +605,17 @@ class CreationWorkspace(QWidget):
             self._top_toolbar.setFixedHeight(0)
             self._top_toolbar.setVisible(False)
         super().leaveEvent(event)
+
+    def _activate_layers_view(self):
+        project = self._get_active_project()
+        if project is None or not bool(getattr(project, "worldbuilding_active", False)):
+            self.ctx.log("warning", "La vista Capas solo está disponible con Worldbuilding activado")
+            return
+        self.ctx.log("info", "Vista Capas causales activa")
+        if hasattr(self.graph, "set_worldbuilding_active"):
+            self.graph.set_worldbuilding_active(True)
+        else:
+            self.refresh()
 
     # ── Utility openers ────────────────────────────────────────────────────
 
@@ -938,9 +957,11 @@ class CreationWorkspace(QWidget):
 
     def set_worldbuilding_active(self, active: bool):
         """Show/hide worldbuilding-related UI elements."""
-        # No tabs to toggle anymore — worldbuilding layers are accessible
-        # via advanced utilities if needed.
-        pass
+        active = bool(active)
+        if hasattr(self, "_layers_view_btn"):
+            self._layers_view_btn.setVisible(active)
+        if hasattr(self, "graph") and hasattr(self.graph, "set_worldbuilding_active"):
+            self.graph.set_worldbuilding_active(active)
 
     def refresh(self):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,

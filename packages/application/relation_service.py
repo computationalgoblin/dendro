@@ -174,7 +174,7 @@ class RelationService:
             scalar_fields = (
                 "description", "temporality", "causality", "conditions", "source",
                 "direction", "intensity", "canon_state", "visibility_state",
-                "validity_conditions", "tags", "source_id", "target_id",
+                "validity_conditions", "tags", "source_id", "target_id", "layer_ids",
             )
             for key in scalar_fields:
                 if key in data:
@@ -230,12 +230,13 @@ class RelationService:
                     "visibility_state": getattr(r, "visibility_state", VisibilityState.VISIBLE_USUARIO),
                     "validity_conditions": list(getattr(r, "validity_conditions", []) or []),
                     "tags": list(getattr(r, "tags", []) or []),
+                    "layer_ids": list(getattr(r, "layer_ids", []) or []),
                     "custom_metadata": dict(getattr(r, "custom_metadata", {}) or {}),
                 }
                 scalar_fields = (
                     "source_id", "target_id", "description", "temporality", "causality",
                     "conditions", "source", "direction", "intensity", "canon_state",
-                    "visibility_state", "validity_conditions", "tags",
+                    "visibility_state", "validity_conditions", "tags", "layer_ids",
                 )
                 for key in scalar_fields:
                     if key in data:
