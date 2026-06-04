@@ -975,7 +975,7 @@ class GraphCanvasView(QGraphicsView):
                 check = check.parentItem()
         return None
 
-    def _start_alt_drag(self, source: GraphNodeItem):
+    def _start_alt_drag(self, source: GraphNodeItem | GraphTreeItem):
         line = QGraphicsLineItem()
         pen = QPen(QColor("#5B8DEF"), 2.5, Qt.PenStyle.DashDotLine)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -995,6 +995,14 @@ class GraphCanvasView(QGraphicsView):
             self._alt_tree_target = target
             if self._alt_tree_target is not None:
                 self._alt_tree_target.set_drag_highlight(True)
+        # Visual feedback: red line if would create cycle
+        if target is not None and self._alt_source is not None:
+            src_id = self._alt_source.node.entity_id
+            tgt_id = target.node.entity_id
+            if self.would_create_cycle(src_id, tgt_id):
+                self._alt_line.setPen(QPen(QColor("#D94040"), 2.5, Qt.PenStyle.DashDotLine))
+            else:
+                self._alt_line.setPen(QPen(QColor("#5B8DEF"), 2.5, Qt.PenStyle.DashDotLine))
 
     def _finish_alt_drag(self):
         if self._alt_tree_target is not None:
@@ -1053,6 +1061,12 @@ class GraphCanvasView(QGraphicsView):
             if edge.kind.lower() == "contiene":
                 contains_map.setdefault(edge.source_id, set()).add(edge.target_id)
                 contained_set.add(edge.target_id)
+
+        # ── Build membership index for cycle detection ──
+        self._membership = {}
+        for edge in edges:
+            if edge.kind.lower() == "contiene":
+                self._membership[edge.target_id] = edge.source_id
 
         # ── Layout parameters ──
         # Non-contained, non-container nodes arranged in a circle
