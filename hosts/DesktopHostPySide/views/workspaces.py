@@ -6,9 +6,11 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -26,12 +28,14 @@ from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextC
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_create_panel import RelationCreatePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
     Card,
     EmptyState,
+    ICON_GLYPHS,
     SectionHeader,
     enum_human,
     human_ref,
@@ -257,6 +261,7 @@ class NarrativeWorkbench(QWidget):
             ("Fuentes", "Guarda referencias legibles.", "Nueva fuente", self.workspace.open_source_create),
             ("Capas", "Ordena el worldbuilding por estratos.", "Nueva capa", self.workspace.open_layer_create),
         ]
+        self._cards: dict[str, tuple[QWidget, int, int]] = {}
         for idx, (title, desc, button, callback) in enumerate(actions):
             card = Card(title, desc)
             btn = QPushButton(button)
@@ -264,24 +269,119 @@ class NarrativeWorkbench(QWidget):
                 btn.setObjectName("primaryButton")
             btn.clicked.connect(callback)
             card.layout.addWidget(btn)
-            grid.addWidget(card, idx // 2, idx % 2)
+            row, col = idx // 2, idx % 2
+            self._cards[title] = (card, row, col)
+            grid.addWidget(card, row, col)
         layout.addWidget(grid_host)
+
+        # Store layer card data for worldbuilding visibility control
+        self._layer_card_data = self._cards.get("Capas")
+
+        # Worldbuilding layer chips section
+        self._layer_section = QWidget()
+        layer_section_layout = QVBoxLayout(self._layer_section)
+        layer_section_layout.setContentsMargins(0, 8, 0, 0)
+        layer_section_layout.setSpacing(6)
+
+        layer_header = QLabel("Capas de worldbuilding")
+        layer_header.setStyleSheet(
+            "font-size: 12px; font-weight: 600; color: #7A733D; background: transparent; border: none;"
+        )
+        layer_section_layout.addWidget(layer_header)
+
+        self._layer_chips_container = QWidget()
+        self._chips_layout = QHBoxLayout(self._layer_chips_container)
+        self._chips_layout.setContentsMargins(0, 0, 0, 0)
+        self._chips_layout.setSpacing(8)
+        layer_section_layout.addWidget(self._layer_chips_container)
+
+        self._layer_empty = QLabel("Worldbuilding activo. Aún no hay capas.")
+        self._layer_empty.setStyleSheet(
+            "font-size: 11px; color: #8C8A74; background: transparent; border: none; font-style: italic;"
+        )
+        layer_section_layout.addWidget(self._layer_empty)
+
+        layout.addWidget(self._layer_section)
+        self._layer_section.setVisible(False)  # hidden by default
+
+        # Check worldbuilding on init
+        project = self._get_active_project()
+        if project:
+            wb = getattr(project, "worldbuilding_active", False)
+            self.set_worldbuilding_active(wb)
+        else:
+            self.set_worldbuilding_active(False)
         layout.addWidget(EmptyState(
             "Modo normal activo",
             "IDs, JSON, tablas técnicas y metadatos quedan en Avanzado. La funcionalidad sigue disponible con lenguaje narrativo."
         ))
         layout.addStretch(1)
 
+    def _get_active_project(self):
+        pc = getattr(self.workspace.ctx, "project_controller", None)
+        if pc:
+            return getattr(pc.ps, "active_project", None)
+        return None
 
-class CreationWorkspace(QTabWidget):
-    """Creation space: graph-first normal entry, technical tools in advanced tabs."""
+    def set_worldbuilding_active(self, active: bool):
+        """Show/hide the Capas card based on worldbuilding status."""
+        if self._layer_card_data:
+            card, row, col = self._layer_card_data
+            card.setVisible(active)
+        self.refresh_layers()
+
+    def refresh_layers(self):
+        """Update layer chips based on current project layers."""
+        project = self._get_active_project()
+        if project is None or not getattr(project, "worldbuilding_active", False):
+            self._layer_section.setVisible(False)
+            return
+
+        self._layer_section.setVisible(True)
+
+        # Clear existing chips
+        while self._chips_layout.count():
+            item = self._chips_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        # Get layers from controller
+        layers = []
+        if self.workspace.layer_controller:
+            try:
+                layers = self.workspace.layer_controller.list_all() or []
+            except Exception:
+                layers = []
+
+        if not layers:
+            self._layer_empty.setVisible(True)
+            self._layer_chips_container.setVisible(False)
+            return
+
+        self._layer_empty.setVisible(False)
+        self._layer_chips_container.setVisible(True)
+
+        for layer in layers[:8]:  # max 8 chips
+            name = getattr(layer, "name", getattr(layer, "title", "Capa"))
+            chip = QLabel(f"  {name}  ")
+            chip.setStyleSheet(
+                "background: #E8E5D4; border: 1px solid #C9C5B1; border-radius: 10px; "
+                "padding: 3px 10px; font-size: 11px; color: #6E705E; "
+                "font-family: Georgia, 'Courier New', serif;"
+            )
+            self._chips_layout.addWidget(chip)
+        self._chips_layout.addStretch(1)
+
+
+class CreationWorkspace(QWidget):
+    """Creation space: graph-first immersive experience."""
 
     def __init__(self, ctx: AppContext, *, corpus_view, relation_view, candidate_view,
                  import_export_view, writing_view, timeline_view, framework_view,
                  source_view=None, layer_view=None):
         super().__init__()
         self.ctx = ctx
-        self.graph = GraphCanvasWidget(ctx)
         self.import_export_view = import_export_view
         self.writing_view = writing_view
         self.timeline_view = timeline_view
@@ -296,46 +396,548 @@ class CreationWorkspace(QTabWidget):
         self.entity_controller = getattr(corpus_view, "ec", None)
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
+        self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
         project_service = getattr(project_controller, "ps", None)
         if project_service is not None:
             self.ai_context_controller = AIContextController(project_service)
+
+        self._build_ui()
+
+        # Apply worldbuilding visibility based on current project
+        project = self._get_active_project()
+        if project:
+            wb = getattr(project, "worldbuilding_active", False)
+            self.set_worldbuilding_active(wb)
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Top hover toolbar (hidden by default, appears on cursor near top)
+        self._top_toolbar = self._build_top_toolbar()
+        self._top_toolbar.setFixedHeight(0)  # collapsed
+        self._top_toolbar.setVisible(False)
+        layout.addWidget(self._top_toolbar)
+
+        # Graph canvas (takes all space)
+        self.graph = GraphCanvasWidget(self.ctx)
         self.graph.set_ai_controller(self.ai_context_controller)
         self.graph.entitySelected.connect(self._open_node_panel)
         self.graph.relationSelected.connect(self._open_relation_panel)
         self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
+        self.graph.graphSelectionChanged.connect(self._on_graph_selection_changed)
+        self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
+        layout.addWidget(self.graph, 1)
 
-        self.workbench = NarrativeWorkbench(self)
-        self.addTab(self.workbench, "Taller")
-        self.addTab(self.graph, "Grafo")
-        self.addTab(self.import_export_view, "Importación")
-        self.addTab(self.writing_view, "Escritura")
-        self.addTab(self.timeline_view, "Timeline")
-        self.addTab(self.framework_view, "Frameworks")
-        self._advanced_tab_indexes = []
-        for title, widget in [
-            ("Corpus técnico", self.corpus_view),
-            ("Relaciones técnicas", self.relation_view),
-            ("Candidatos técnicos", self.candidate_view),
-        ]:
-            self.addTab(widget, title)
-            self._advanced_tab_indexes.append(self.count() - 1)
-        # Optional advanced-only views
-        if self.source_view is not None:
-            self.addTab(self.source_view, "Fuentes")
-            self._advanced_tab_indexes.append(self.count() - 1)
-        if self.layer_view is not None:
-            self.addTab(self.layer_view, "Capas")
-            self._advanced_tab_indexes.append(self.count() - 1)
-        self.set_advanced_mode(ctx.advanced_mode)
+        # Bottom toolbar (always visible, symbol-only buttons)
+        bottom_bar = self._build_bottom_toolbar()
+        layout.addWidget(bottom_bar)
+
+        # Enable mouse tracking for hover toolbar
+        self.setMouseTracking(True)
+
+    def _build_top_toolbar(self) -> QWidget:
+        """Hover-triggered utilities bar at the top."""
+        bar = QFrame()
+        bar.setObjectName("topUtilsBar")
+        bar.setStyleSheet(
+            "QFrame#topUtilsBar { background: rgba(238,236,221,0.95); "
+            "border-bottom: 1px solid #D8D6C8; }"
+        )
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(8)
+
+        util_btn_style = (
+            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
+            "border-radius: 12px; padding: 4px 12px; color: #6F6A42; font-size: 12px; } "
+            "QPushButton:hover { background: #F8F5EA; }"
+        )
+
+        # Import TXT
+        import_btn = QPushButton("Importar documento")
+        import_btn.setStyleSheet(util_btn_style)
+        import_btn.clicked.connect(lambda: self._open_utility(self.import_export_view))
+        layout.addWidget(import_btn)
+
+        # Writing
+        writing_btn = QPushButton("Escritura")
+        writing_btn.setStyleSheet(util_btn_style)
+        writing_btn.clicked.connect(lambda: self._open_utility(self.writing_view))
+        layout.addWidget(writing_btn)
+
+        # Timeline
+        timeline_btn = QPushButton("Timeline")
+        timeline_btn.setStyleSheet(util_btn_style)
+        timeline_btn.clicked.connect(lambda: self._open_utility(self.timeline_view))
+        layout.addWidget(timeline_btn)
+
+        # Frameworks
+        framework_btn = QPushButton("Frameworks")
+        framework_btn.setStyleSheet(util_btn_style)
+        framework_btn.clicked.connect(lambda: self._open_utility(self.framework_view))
+        layout.addWidget(framework_btn)
+
+        layout.addStretch()
+        return bar
+
+    def _build_bottom_toolbar(self) -> QWidget:
+        """Minimal symbol-only action bar at the bottom of the graph."""
+        bar = QFrame()
+        bar.setObjectName("creationToolbar")
+        bar.setStyleSheet(
+            "QFrame#creationToolbar { background: rgba(248,246,237,0.90); "
+            "border-top: 1px solid #D8D6C8; }"
+        )
+        bar.setFixedHeight(48)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(24, 6, 24, 6)
+        layout.setSpacing(6)
+
+        btn_style = (
+            "QPushButton { background: rgba(255,255,255,0.45); border: 1px solid #D8D6C8; "
+            "border-radius: 16px; padding: 4px; color: #6F6A42; font-size: 18px; "
+            "min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; } "
+            "QPushButton:hover { background: #F8F5EA; border: 1px solid #AFA77A; color: #504B2E; }"
+        )
+        disabled_style = (
+            "QPushButton { background: rgba(255,255,255,0.25); border: 1px solid #E0DDD0; "
+            "border-radius: 16px; padding: 4px; color: #B8B5A8; font-size: 18px; "
+            "min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; } "
+        )
+        self._toolbar_btn_style = btn_style
+        self._toolbar_disabled_style = disabled_style
+
+        # Create entity (IMPLEMENTED)
+        create_btn = QPushButton(ICON_GLYPHS["add"])
+        create_btn.setToolTip("Crear entidad")
+        create_btn.setStyleSheet(btn_style)
+        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        create_btn.clicked.connect(self._create_entity_on_graph)
+        layout.addWidget(create_btn)
+
+        # Create tree/container
+        create_tree_btn = QPushButton("⊞")
+        create_tree_btn.setToolTip("Crear contenedor")
+        create_tree_btn.setStyleSheet(btn_style)
+        create_tree_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        create_tree_btn.clicked.connect(self._create_tree_on_graph)
+        layout.addWidget(create_tree_btn)
+
+        # Suggest entity via AI (selection-aware)
+        suggest_entity_btn = QPushButton("✦")
+        suggest_entity_btn.setToolTip("Sugerir entidad con IA (selecciona nodos como contexto)")
+        suggest_entity_btn.setStyleSheet(btn_style)
+        suggest_entity_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        suggest_entity_btn.clicked.connect(self._suggest_node)
+        self._suggest_entity_btn = suggest_entity_btn
+        layout.addWidget(suggest_entity_btn)
+
+        # Suggest relation via AI (selection-aware)
+        suggest_rel_btn = QPushButton("⟷")
+        suggest_rel_btn.setToolTip("Sugerir relación con IA (selecciona nodos como contexto)")
+        suggest_rel_btn.setStyleSheet(btn_style)
+        suggest_rel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        suggest_rel_btn.clicked.connect(self._suggest_relation)
+        self._suggest_relation_btn = suggest_rel_btn
+        layout.addWidget(suggest_rel_btn)
+
+        # Analyze joint coherence
+        self._coherence_btn = QPushButton("⚖")
+        self._coherence_btn.setToolTip("Analizar coherencia de la selección")
+        self._coherence_btn.setStyleSheet(disabled_style)
+        self._coherence_btn.setEnabled(False)
+        self._coherence_btn.clicked.connect(self._open_coherence_panel)
+        layout.addWidget(self._coherence_btn)
+
+        layout.addStretch()
+
+        # Delete selected entity/relation/container
+        delete_btn = QPushButton("🗑")
+        delete_btn.setToolTip("Eliminar selección (nodo, contenedor o relación)")
+        delete_btn.setStyleSheet(disabled_style)
+        delete_btn.setEnabled(False)
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete_btn.clicked.connect(self._delete_selected)
+        self._delete_btn = delete_btn
+        layout.addWidget(delete_btn)
+
+        # Fit view
+        fit_btn = QPushButton(ICON_GLYPHS["expand"])
+        fit_btn.setToolTip("Enfocar todo")
+        fit_btn.setStyleSheet(btn_style)
+        fit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fit_btn.clicked.connect(self.graph._fit_all)
+        layout.addWidget(fit_btn)
+
+        return bar
+
+    # ── Mouse tracking for top toolbar hover reveal ────────────────────────
+
+    def mouseMoveEvent(self, event):
+        """Show top toolbar when cursor is near the top edge."""
+        threshold = 40
+        if event.position().y() < threshold:
+            if not self._top_toolbar.isVisible():
+                self._top_toolbar.setVisible(True)
+                self._top_toolbar.setFixedHeight(44)
+        elif self._top_toolbar.isVisible():
+            toolbar_rect = self._top_toolbar.rect()
+            toolbar_global = self._top_toolbar.mapFrom(self, event.position().toPoint())
+            if not toolbar_rect.contains(toolbar_global):
+                self._top_toolbar.setFixedHeight(0)
+                self._top_toolbar.setVisible(False)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        """Hide top toolbar when mouse leaves the widget."""
+        if self._top_toolbar.isVisible():
+            self._top_toolbar.setFixedHeight(0)
+            self._top_toolbar.setVisible(False)
+        super().leaveEvent(event)
+
+    # ── Utility openers ────────────────────────────────────────────────────
+
+    def _on_graph_selection_changed(self, entity_ids: list[str], relation_ids: list[str]):
+        has_selection = bool(entity_ids or relation_ids)
+        n_e = len(entity_ids)
+        n_r = len(relation_ids)
+
+        # Coherence button
+        button = getattr(self, "_coherence_btn", None)
+        if button is not None:
+            button.setEnabled(has_selection)
+            button.setStyleSheet(self._toolbar_btn_style if has_selection else self._toolbar_disabled_style)
+            if has_selection:
+                button.setToolTip(f"Analizar coherencia: {n_e} nodo(s), {n_r} relación(es)")
+            else:
+                button.setToolTip("Selecciona nodos o relaciones para analizar coherencia")
+
+        # Suggest entity / relation buttons: always enabled, but update tooltip with context info
+        for attr, base in [("_suggest_entity_btn", "Sugerir entidad"), ("_suggest_relation_btn", "Sugerir relación")]:
+            btn = getattr(self, attr, None)
+            if btn is not None and btn.isEnabled():
+                if has_selection:
+                    btn.setToolTip(f"{base} con IA (contexto: {n_e} nodo(s), {n_r} relación(es) seleccionado(s))")
+                else:
+                    btn.setToolTip(f"{base} con IA (contexto: todo el proyecto)")
+
+        # Delete button: enabled when something is selected
+        del_btn = getattr(self, "_delete_btn", None)
+        if del_btn is not None:
+            del_btn.setEnabled(has_selection)
+            del_btn.setStyleSheet(self._toolbar_btn_style if has_selection else self._toolbar_disabled_style)
+            if has_selection:
+                parts = []
+                if n_e:
+                    parts.append(f"{n_e} nodo(s)")
+                if n_r:
+                    parts.append(f"{n_r} relación(es)")
+                del_btn.setToolTip(f"Eliminar: {', '.join(parts)}")
+            else:
+                del_btn.setToolTip("Selecciona algo para eliminar")
+
+    def _delete_selected(self):
+        """Delete selected entities and/or relations."""
+        entity_ids = self.graph.selected_entity_ids()
+        relation_ids = self.graph.selected_relation_ids()
+        if not (entity_ids or relation_ids):
+            return
+        deleted = 0
+        errors = []
+        # Delete relations first (before cascade from entity delete removes them)
+        if self.relation_controller is not None:
+            for rid in relation_ids:
+                result = self.relation_controller.delete(rid)
+                if isinstance(result, Error):
+                    errors.append(result.error)
+                else:
+                    deleted += 1
+        # Delete entities (cascades to their relations)
+        if self.entity_controller is not None:
+            for eid in entity_ids:
+                result = self.entity_controller.delete(eid)
+                if isinstance(result, Error):
+                    errors.append(result.error)
+                else:
+                    deleted += 1
+        if errors:
+            self.ctx.log("error", f"Errores al eliminar: {'; '.join(errors)}")
+        if deleted > 0:
+            self.ctx.log("info", f"Eliminado(s): {deleted} elemento(s)")
+            # Close drawer if it shows a deleted entity/relation
+            if hasattr(self, "ctx") and hasattr(self.ctx, "drawer"):
+                self.ctx.drawer.close()
+            self.refresh()
+
+    def _open_coherence_panel(self):
+        entity_ids = self.graph.selected_entity_ids()
+        relation_ids = self.graph.selected_relation_ids()
+        if not (entity_ids or relation_ids):
+            self.ctx.log("info", "Selecciona uno o varios nodos/relaciones para analizar coherencia")
+            return
+        if self.ai_context_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "IA contextual no disponible para coherencia")
+            return
+        panel = CoherencePanel(
+            self.ctx,
+            self.ai_context_controller,
+            self.entity_controller,
+            self.relation_controller,
+            entity_ids=entity_ids,
+            relation_ids=relation_ids,
+            on_saved=self.refresh,
+        )
+        self.ctx.drawer.set_content(panel, title="Coherencia")
+        self.ctx.drawer.open()
+
+    def _open_utility(self, view):
+        """Open a utility view in the right drawer."""
+        drawer = self.ctx.drawer
+        if drawer is None or view is None:
+            return
+        title = getattr(view, "windowTitle", "")
+        if callable(title):
+            title = title()
+        if not title:
+            title = "Herramienta"
+        drawer.set_content(view, title=title)
+        drawer.open()
+
+    # ── Suggest node / relation via AI ─────────────────────────────────
+
+    def _suggest_node(self):
+        """Ask AI to suggest missing entities. Uses graph selection as context if available."""
+        if self.ai_context_controller is None:
+            self.ctx.log("error", "IA no configurada. Verifica proveedor en Ajustes.")
+            return
+        project = self._get_active_project()
+        if project is None:
+            self.ctx.log("error", "No hay proyecto activo")
+            return
+
+        # Selection takes priority; fall back to all entities
+        sel_e = self.graph.selected_entity_ids()
+        sel_r = self.graph.selected_relation_ids()
+        if sel_e:
+            entity_ids = sel_e
+            relation_ids = sel_r
+            context_label = f"{len(sel_e)} nodo(s) seleccionado(s)"
+        else:
+            entity_ids = [getattr(e, "id", "") for e in getattr(project, "entities", []) or []]
+            relation_ids = []
+            context_label = "todo el proyecto"
+
+        btn = getattr(self, "_suggest_entity_btn", None)
+        if btn:
+            btn.setEnabled(False)
+            btn.setToolTip("Consultando IA...")
+
+        self._suggest_worker = _SuggestWorker(
+            self.ai_context_controller,
+            action="suggest_missing_nodes",
+            entity_ids=entity_ids,
+            relation_ids=relation_ids,
+        )
+        self._suggest_worker.finished.connect(lambda: self._on_suggest_done("nodo", "_suggest_entity_btn", "_suggest_worker"))
+        self._suggest_worker.start()
+        self.ctx.log("info", f"Consultando IA para sugerir entidades (contexto: {context_label})...")
+
+    def _suggest_relation(self):
+        """Ask AI to suggest missing relations. Uses graph selection as context if available."""
+        if self.ai_context_controller is None:
+            self.ctx.log("error", "IA no configurada. Verifica proveedor en Ajustes.")
+            return
+        project = self._get_active_project()
+        if project is None:
+            self.ctx.log("error", "No hay proyecto activo")
+            return
+
+        sel_e = self.graph.selected_entity_ids()
+        sel_r = self.graph.selected_relation_ids()
+        if sel_e:
+            entity_ids = sel_e
+            relation_ids = sel_r
+            context_label = f"{len(sel_e)} nodo(s) seleccionado(s)"
+        else:
+            entity_ids = [getattr(e, "id", "") for e in getattr(project, "entities", []) or []]
+            relation_ids = []
+            context_label = "todo el proyecto"
+
+        btn = getattr(self, "_suggest_relation_btn", None)
+        if btn:
+            btn.setEnabled(False)
+            btn.setToolTip("Consultando IA...")
+
+        self._suggest_rel_worker = _SuggestWorker(
+            self.ai_context_controller,
+            action="suggest_missing_relations",
+            entity_ids=entity_ids,
+            relation_ids=relation_ids,
+        )
+        self._suggest_rel_worker.finished.connect(lambda: self._on_suggest_done("relación", "_suggest_relation_btn", "_suggest_rel_worker"))
+        self._suggest_rel_worker.start()
+        self.ctx.log("info", f"Consultando IA para sugerir relaciones (contexto: {context_label})...")
+
+    def _on_suggest_done(self, kind: str, btn_attr: str, worker_attr: str):
+        """Handle AI suggestion result (works for both nodes and relations)."""
+        btn = getattr(self, btn_attr, None)
+        if btn:
+            btn.setEnabled(True)
+            tooltip_base = "Sugerir entidad" if kind == "nodo" else "Sugerir relación"
+            btn.setToolTip(f"{tooltip_base} con IA (selecciona nodos como contexto)")
+
+        worker = getattr(self, worker_attr, None)
+        if worker is None:
+            return
+        result = worker.result
+        setattr(self, worker_attr, None)
+
+        if result is None:
+            self.ctx.log("error", f"La sugerencia IA de {kind} falló sin resultado")
+            return
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error IA: {result.error}")
+            return
+
+        value = result.value
+        candidate_count = len(getattr(value, "candidates", []) or [])
+        preview_count = len(getattr(value, "previews", []) or [])
+
+        if candidate_count == 0 and preview_count == 0:
+            raw = getattr(value, "raw_text", "") or ""
+            if raw:
+                self.ctx.log("info", f"IA: {raw[:200]}")
+            else:
+                self.ctx.log("info", f"La IA no generó sugerencias de {kind}")
+            return
+
+        self.ctx.log("info", f"IA sugirió {candidate_count} candidato(s) de {kind}")
+        self.refresh()
+        self.open_candidates_clean()
+
+    def _create_entity_on_graph(self):
+        """Create a new entity, add node to graph center, open detail panel."""
+        if self.entity_controller is None:
+            self.ctx.log("error", "No se pudo crear entidad: servicio no disponible")
+            return
+        result = self.entity_controller.create({
+            "name": "Nueva entidad",
+            "entity_type": "nota",
+            "brief_description": "",
+            "canon_state": "borrador",
+        })
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error creando entidad: {result.error}")
+            return
+        entity = result.value
+        entity_id = getattr(entity, "id", "")
+        self.ctx.log("info", "Entidad creada en modo borrador")
+        self.refresh()
+        # Focus the new node
+        self.graph.canvas.focus_entity(entity_id)
+        # Open detail panel for editing
+        self._open_node_panel(entity_id)
+
+    def _create_tree_on_graph(self):
+        """Create a new contenedor entity and open tree detail panel."""
+        if self.entity_controller is None:
+            self.ctx.log("error", "No se pudo crear contenedor: servicio no disponible")
+            return
+        result = self.entity_controller.create({
+            "name": "Nuevo contenedor",
+            "entity_type": "contenedor",
+            "brief_description": "",
+            "canon_state": "borrador",
+        })
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error creando contenedor: {result.error}")
+            return
+        entity = result.value
+        entity_id = getattr(entity, "id", "")
+        self.ctx.log("info", "Contenedor creado en modo borrador")
+        self.refresh()
+        self.graph.canvas.focus_entity(entity_id)
+        self._open_tree_panel(entity_id)
+
+    def _assign_node_to_tree(self, entity_id: str, tree_id: str):
+        """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
+        if self.relation_controller is None:
+            self.ctx.log("error", "No se pudo asignar al contenedor: servicio no disponible")
+            return
+        # Check for cycle
+        if entity_id == tree_id:
+            self.ctx.log("error", "Un contenedor no puede contenerse a sí mismo")
+            return
+        # Check for nesting cycle: tree_id must not be inside entity_id
+        if self._is_nested_in(tree_id, entity_id):
+            self.ctx.log("error", "Anidamiento cíclico: el contenedor destino ya pertenece al origen")
+            return
+        # Remove any existing 'contiene' relation pointing to this entity
+        self._remove_tree_membership(entity_id)
+        # Check if already in this tree
+        if self._relation_exists(tree_id, entity_id):
+            self.ctx.log("info", "Esta entidad ya pertenece al contenedor")
+            return
+        result = self.relation_controller.create(
+            tree_id,
+            entity_id,
+            "contiene",
+            "Pertenencia semántica (árbol)",
+        )
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error asignando al contenedor: {result.error}")
+            return
+        self.ctx.log("info", "Entidad asignada al contenedor")
+        self.refresh()
+
+    def _open_tree_panel(self, entity_id: str):
+        if self.entity_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo abrir el panel de contenedor")
+            return
+        from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
+        panel = TreeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            self.relation_controller,
+            entity_id,
+            on_saved=self.refresh,
+            ai_controller=self.ai_context_controller,
+        )
+        self.ctx.drawer.set_content(panel, title="Contenedor")
+        self.ctx.drawer.open()
+
+    # ── Existing workspace methods (preserved) ─────────────────────────────
+
+    def refresh_ai_controller(self):
+        """Rebuild contextual AI controller after provider/settings changes."""
+        project_controller = getattr(self.ctx, "project_controller", None)
+        project_service = getattr(project_controller, "ps", None)
+        if project_service is None:
+            self.ai_context_controller = None
+        else:
+            self.ai_context_controller = AIContextController(project_service)
+        if hasattr(self, "graph"):
+            self.graph.set_ai_controller(self.ai_context_controller)
 
     def set_advanced_mode(self, enabled: bool):
-        for idx in self._advanced_tab_indexes:
-            if hasattr(self, "setTabVisible"):
-                self.setTabVisible(idx, enabled)
-        for widget in [self.import_export_view, self.graph]:
-            if hasattr(widget, "set_advanced_mode"):
-                widget.set_advanced_mode(enabled)
+        self._advanced_mode = bool(enabled)
+        if hasattr(self.graph, "set_advanced_mode"):
+            self.graph.set_advanced_mode(enabled)
+
+    def _get_active_project(self):
+        pc = getattr(self.ctx, "project_controller", None)
+        if pc:
+            return getattr(pc.ps, "active_project", None)
+        return None
+
+    def set_worldbuilding_active(self, active: bool):
+        """Show/hide worldbuilding-related UI elements."""
+        # No tabs to toggle anymore — worldbuilding layers are accessible
+        # via advanced utilities if needed.
+        pass
 
     def refresh(self):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,
@@ -345,7 +947,8 @@ class CreationWorkspace(QTabWidget):
                 widget.refresh()
 
     def open_graph(self):
-        self.setCurrentWidget(self.graph)
+        """Graph is always visible — this is now a no-op."""
+        pass
 
     def open_entity_create(self):
         drawer = self.ctx.drawer
@@ -388,6 +991,13 @@ class CreationWorkspace(QTabWidget):
         if self.entity_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de nodo")
             return
+        # Route contenedor entities to tree detail panel
+        entity = self._entity_by_id(entity_id)
+        if entity is not None:
+            etype = str(getattr(getattr(entity, "entity_type", ""), "value", getattr(entity, "entity_type", "")))
+            if etype == "contenedor":
+                self._open_tree_panel(entity_id)
+                return
         panel = NodeDetailPanel(
             self.ctx,
             self.entity_controller,
@@ -398,7 +1008,7 @@ class CreationWorkspace(QTabWidget):
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()
 
-    def _open_relation_panel(self, relation_id: str):
+    def _open_relation_panel(self, relation_id: str, *, is_new: bool = False):
         if self.relation_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de relación")
             return
@@ -408,6 +1018,7 @@ class CreationWorkspace(QTabWidget):
             relation_id,
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
+            is_new=is_new,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
@@ -439,6 +1050,37 @@ class CreationWorkspace(QTabWidget):
                 return True
         return False
 
+    def _remove_tree_membership(self, entity_id: str):
+        """Remove any existing 'contiene' relation where entity_id is the target."""
+        if self.relation_controller is None:
+            return
+        to_delete = []
+        for rel in self.relation_controller.list_all():
+            rtype = str(getattr(rel, "relation_type", ""))
+            if rtype == "contiene" and getattr(rel, "target_id", "") == entity_id:
+                to_delete.append(rel.id)
+        for rid in to_delete:
+            self.relation_controller.delete(rid)
+
+    def _is_nested_in(self, entity_id: str, ancestor_id: str, visited: set | None = None) -> bool:
+        """Check if entity_id is transitively contained inside ancestor_id."""
+        if visited is None:
+            visited = set()
+        if entity_id in visited:
+            return False
+        visited.add(entity_id)
+        if self.relation_controller is None:
+            return False
+        for rel in self.relation_controller.list_all():
+            rtype = str(getattr(rel, "relation_type", ""))
+            if rtype == "contiene" and getattr(rel, "target_id", "") == entity_id:
+                parent = getattr(rel, "source_id", "")
+                if parent == ancestor_id:
+                    return True
+                if self._is_nested_in(parent, ancestor_id, visited):
+                    return True
+        return False
+
     def _open_relation_create_panel(self, source_id: str, target_id: str):
         controller = self.relation_controller
         drawer = self.ctx.drawer
@@ -467,7 +1109,7 @@ class CreationWorkspace(QTabWidget):
             self.ctx.log("info", "Relación creada desde el grafo")
             self.refresh()
             if relation_id:
-                self._open_relation_panel(relation_id)
+                self._open_relation_panel(relation_id, is_new=True)
 
         panel = RelationCreatePanel(
             self._entity_label(source_id),
@@ -1298,3 +1940,26 @@ class SessionOverview(QWidget):
     def set_advanced_mode(self, enabled: bool):
         self._advanced_mode = bool(enabled)
         self.refresh()
+
+
+class _SuggestWorker(QThread):
+    """Background worker for AI suggestions (nodes or relations) — keeps UI responsive."""
+
+    def __init__(self, ai_controller, action: str, entity_ids: list[str] | None = None, relation_ids: list[str] | None = None):
+        super().__init__()
+        self.ai_controller = ai_controller
+        self.action = action
+        self.entity_ids = entity_ids or []
+        self.relation_ids = relation_ids or []
+        self.result = None
+
+    def run(self):
+        try:
+            self.result = self.ai_controller.graph_action(
+                self.action,
+                entity_ids=self.entity_ids,
+                relation_ids=self.relation_ids,
+            )
+        except Exception as exc:
+            from packages.domain.result import Error as _Err
+            self.result = _Err(f"Worker exception: {exc}")

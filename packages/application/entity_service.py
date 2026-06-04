@@ -635,5 +635,22 @@ class EntityService:
             return Error(proj.error)
         return Ok([e for e in proj.value.entities if layer_id in e.layer_ids])
 
+    def delete_entity(self, entity_id: str) -> Result[None, str]:
+        """Delete an entity by id. Also removes all relations involving it."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+        before = len(proj.value.entities)
+        proj.value.entities = [e for e in proj.value.entities if e.id != entity_id]
+        if len(proj.value.entities) == before:
+            return Error(f"Entity '{entity_id}' not found")
+        # Cascade: remove relations involving this entity
+        proj.value.relations = [
+            r for r in proj.value.relations
+            if r.source_id != entity_id and r.target_id != entity_id
+        ]
+        proj.value.touch()
+        return Ok(None)
+
 
 __all__ = ["EntityService"]

@@ -1,7 +1,7 @@
-"""RightDrawer — Slide-in panel for B31 immersive UX.
+"""LeftDrawer — Slide-in panel from the left for B31 immersive UX.
 
-Replaces QDialog editing with a right-side drawer that opens
-inside the main window with a smooth animation.
+Mirror of RightDrawer but opens from the LEFT side.
+Used for ConfigPanel (settings/configuration).
 """
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 
-class RightDrawer(QFrame):
-    """Reusable right-side drawer panel.
+class LeftDrawer(QFrame):
+    """Reusable left-side drawer panel.
 
     Usage:
-        drawer = RightDrawer(parent)
+        drawer = LeftDrawer(parent)
         # Set content:
         drawer.set_content(my_widget)
         drawer.open()
@@ -33,7 +33,7 @@ class RightDrawer(QFrame):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setObjectName("rightDrawer")
+        self.setObjectName("leftDrawer")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._parent_ref = parent
         self._target_width = self._compute_target_width()
@@ -41,9 +41,9 @@ class RightDrawer(QFrame):
         self.setMaximumWidth(0)
         self.setFixedHeight(parent.height() if parent else 800)
         self.setStyleSheet(
-            "QFrame#rightDrawer { "
+            "QFrame#leftDrawer { "
             "background: #F8F6ED; "
-            "border-left: 1px solid #D8D6C8; "
+            "border-right: 1px solid #D8D6C8; "
             "border-radius: 0px; "
             "}"
         )
@@ -139,7 +139,6 @@ class RightDrawer(QFrame):
         self.show()
         self.raise_()
         self.setFocus(Qt.FocusReason.OtherFocusReason)
-        # Animate both min and max width together so the drawer is always [min, max]
         self._animate_width(0, self._target_width)
 
     def close(self):

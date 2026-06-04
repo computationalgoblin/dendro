@@ -109,11 +109,41 @@ class NarrativeContextBuilder:
         relation_ids: Iterable[str] | None = None,
         audience: str = "gm",
     ) -> dict[str, Any]:
+        selected_entity_ids = [str(eid) for eid in (entity_ids or []) if eid]
+        selected_relation_ids = [str(rid) for rid in (relation_ids or []) if rid]
+        selected_relations = [r for r in self._relations_by_ids(selected_relation_ids) if self._can_include_relation(r, audience)]
+        expanded_entity_ids = list(selected_entity_ids)
+        for relation in selected_relations:
+            for eid in (getattr(relation, "source_id", ""), getattr(relation, "target_id", "")):
+                if eid and eid not in expanded_entity_ids:
+                    expanded_entity_ids.append(str(eid))
+        selected_entities = [e for e in self._entities_by_ids(expanded_entity_ids) if self._can_include_entity(e, audience)]
+        selected_set = set(expanded_entity_ids)
+        nearby_relations = []
+        project_relations = _list(getattr(self.project, "relations", [])) if self.project is not None else []
+        for relation in project_relations:
+            relation_id = str(getattr(relation, "id", ""))
+            if relation_id in selected_relation_ids or not self._can_include_relation(relation, audience):
+                continue
+            if {str(getattr(relation, "source_id", "")), str(getattr(relation, "target_id", ""))} & selected_set:
+                nearby_relations.append(relation)
+            if len(nearby_relations) >= 12:
+                break
+        nearby_entity_ids = []
+        for relation in nearby_relations:
+            for eid in (getattr(relation, "source_id", ""), getattr(relation, "target_id", "")):
+                if eid and eid not in selected_set and eid not in nearby_entity_ids:
+                    nearby_entity_ids.append(str(eid))
+        nearby_entities = [e for e in self._entities_by_ids(nearby_entity_ids[:12]) if self._can_include_entity(e, audience)]
         return self._base_context("graph_selection", None, audience) | {
             "selection": {
-                "entities": [self._entity_summary(e, audience) for e in self._entities_by_ids(entity_ids or []) if self._can_include_entity(e, audience)],
-                "relations": [self._relation_summary(r, audience) for r in self._relations_by_ids(relation_ids or []) if self._can_include_relation(r, audience)],
-            }
+                "entities": [self._entity_summary(e, audience) for e in selected_entities],
+                "relations": [self._relation_summary(r, audience) for r in selected_relations],
+            },
+            "nearby_context": {
+                "entities": [self._entity_summary(e, audience) for e in nearby_entities],
+                "relations": [self._relation_summary(r, audience) for r in nearby_relations],
+            },
         }
 
     def build_context(self, target_type: str, target_id: str | None = None, *, audience: str = "gm") -> dict[str, Any]:
@@ -208,8 +238,18 @@ class NarrativeContextBuilder:
         return serializer(obj, audience)
 
     def _entity_summary(self, entity, audience: str) -> dict[str, Any]:
+        entity_id = getattr(entity, "id", "")
+        # Compute tree membership (which containers this entity belongs to)
+        tree_names = []
+        if self.project is not None:
+            for r in _list(getattr(self.project, "relations", [])):
+                rtype = _string_value(getattr(r, "relation_type", ""))
+                if rtype == "contiene" and getattr(r, "target_id", "") == entity_id:
+                    parent = self._entity_by_id(getattr(r, "source_id", ""))
+                    if parent is not None:
+                        tree_names.append(getattr(parent, "name", ""))
         return {
-            "id": getattr(entity, "id", ""),
+            "id": entity_id,
             "name": getattr(entity, "name", ""),
             "type": _string_value(getattr(entity, "entity_type", "")),
             "brief_description": getattr(entity, "brief_description", ""),
@@ -224,6 +264,7 @@ class NarrativeContextBuilder:
             "exportable_notes": getattr(entity, "exportable_notes", ""),
             "narrative_importance": _string_value(getattr(entity, "narrative_importance", "")),
             "development_level": _string_value(getattr(entity, "development_level", "")),
+            "tree_membership": tree_names,
         }
 
     def _relation_summary(self, relation, audience: str) -> dict[str, Any]:

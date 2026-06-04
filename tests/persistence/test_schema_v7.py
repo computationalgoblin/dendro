@@ -70,10 +70,10 @@ def _v6_minimal(**overrides) -> dict:
 
 class TestSchemaVersionV7:
     def test_current_schema_is_v9(self):
-        assert CURRENT_SCHEMA_VERSION == 19
+        assert CURRENT_SCHEMA_VERSION == 20
 
     def test_max_supported_is_v9(self):
-        assert MAX_SUPPORTED_VERSION == 19
+        assert MAX_SUPPORTED_VERSION == 20
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -388,7 +388,7 @@ class TestMigrationChainV1ToV9:
         data = result.value
 
         # Verify the result is v7
-        assert data["schema_version"] == 19
+        assert data["schema_version"] == 20
 
         # All v7 fields present
         assert data["domains"] == [
@@ -412,7 +412,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 19
+        assert data["schema_version"] == 20
 
         # Legacy data preserved
         assert data["id"] == "proj-001"
@@ -443,7 +443,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 19
+        assert data["schema_version"] == 20
         assert data["domains"] == ["mundo", "historia"]
         assert len(data["world_layers"]) == 1
         assert data["world_layers"][0]["name"] == "Custom"

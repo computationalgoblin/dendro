@@ -5,7 +5,6 @@ candidates/previews. They never mutate canon directly.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
@@ -43,6 +42,7 @@ _GRAPH_ACTIONS: dict[str, AIMode] = {
     "detect_isolated_zones": AIMode.CRITICAL_ANALYSIS,
     "detect_inconsistencies": AIMode.CONSISTENCY_ANALYSIS,
     "suggest_emergent_plots": AIMode.CONTINUITY_QUESTION,
+    "describe_tree": AIMode.SUMMARIZE,
 }
 _PREVIEW_ACTIONS = {"summarize", "detect_contradictions", "detect_contradiction", "detect_isolated_zones", "detect_inconsistencies"}
 
@@ -52,7 +52,12 @@ def _json_dumps(data: Any) -> str:
 
 
 def _context_hash(context: dict[str, Any]) -> str:
-    return hashlib.sha256(_json_dumps(context).encode("utf-8")).hexdigest()[:16]
+    serialized = _json_dumps(context)
+    # Deterministic lightweight fingerprint; avoids adding lower-layer forbidden imports.
+    acc = 0
+    for idx, char in enumerate(serialized, start=1):
+        acc = (acc + idx * ord(char)) % 0xFFFFFFFFFFFF
+    return f"{acc:012x}{len(serialized) % 0xFFFF:04x}"
 
 
 def _candidate_type_for(action_type: str, payload: dict[str, Any], fallback: CandidateType = CandidateType.SUGERENCIA_IA) -> str:
@@ -147,6 +152,269 @@ class AIContextActionResult:
         }
 
 
+
+_ENTITY_TEXT_SYSTEM_PROMPT_ES = (
+    "Eres un asistente de escritura integrado en Dendro. Tu tarea es mejorar o completar "
+    "el contenido textual de la entidad seleccionada. Usa el nombre, tipo, descripción, "
+    "cuerpo actual, notas y contexto del proyecto. Respeta el género, tono, realismo, "
+    "estilo narrativo e idioma configurados. Sigue especialmente la instrucción opcional "
+    "del usuario si existe. Devuelve únicamente el texto sugerido para incorporar al cuerpo "
+    "o descripción de la entidad. No devuelvas JSON. No devuelvas una ficha Entity/Name/Type. "
+    "No crees entidades, relaciones, secretos ni canon nuevo salvo que el usuario lo pida "
+    "explícitamente. No modifiques el proyecto. Responde en español."
+)
+
+_ENTITY_TEXT_SYSTEM_PROMPT_EN = (
+    "You are a writing assistant integrated into Dendro. Your task is to improve or complete "
+    "the textual content of the selected entity. Use the name, type, current description, "
+    "current body, notes, and project context. Respect the configured genre, tone, realism, "
+    "narrative style, and language. Follow the optional user instruction especially when it "
+    "exists. Return only the suggested text to incorporate into the entity body or description. "
+    "Do not return JSON. Do not return an Entity/Name/Type sheet. Do not create entities, "
+    "relationships, secrets, or new canon unless the user explicitly asks for it. Do not modify "
+    "the project. Respond in English."
+)
+
+_RELATION_TEXT_SYSTEM_PROMPT_ES = (
+    "Eres un asistente de escritura integrado en Dendro. Tu tarea es mejorar o completar "
+    "el contenido textual de la relación seleccionada. Usa el nodo origen, el nodo destino, "
+    "el tipo de relación, la descripción actual, el cuerpo actual, las notas y el contexto "
+    "del proyecto. Respeta género, tono, realismo, estilo narrativo e idioma configurados. "
+    "Sigue especialmente la instrucción opcional del usuario si existe. Devuelve únicamente "
+    "el texto sugerido para incorporar a la descripción o cuerpo de la relación. No devuelvas "
+    "JSON. No devuelvas una ficha técnica. No crees nuevas entidades, nuevas relaciones, "
+    "secretos ni canon nuevo salvo que el usuario lo pida explícitamente. No modifiques el "
+    "proyecto. Responde en español."
+)
+
+_RELATION_TEXT_SYSTEM_PROMPT_EN = (
+    "You are a writing assistant integrated into Dendro. Your task is to improve or complete "
+    "the textual content of the selected relationship. Use the source node, target node, "
+    "relationship type, current description, current body, notes, and project context. Respect "
+    "the configured genre, tone, realism, narrative style, and language. Follow the optional "
+    "user instruction especially when it exists. Return only the suggested text to incorporate "
+    "into the relationship description or body. Do not return JSON. Do not return a technical "
+    "sheet. Do not create new entities, relationships, secrets, or new canon unless the user "
+    "explicitly asks for it. Do not modify the project. Respond in English."
+)
+
+_COHERENCE_SYSTEM_PROMPT_ES = (
+    "Eres un editor de coherencia narrativa integrado en Dendro. Tu tarea es analizar si un "
+    "conjunto de entidades y relaciones encaja con el canon existente, la motivación de los "
+    "personajes y la configuración creativa del proyecto. No debes modificar contenido durante "
+    "el análisis. No debes crear entidades ni relaciones. Devuelve observaciones claras y "
+    "propuestas de reparación. Respeta el idioma configurado. Prioriza coherencia causal, "
+    "motivacional, tonal y dramática. Estructura la respuesta con secciones: Veredicto global, "
+    "Observaciones por entidad, Observaciones por relación, Contradicciones, Huecos de motivación, "
+    "Continuidad, Riesgos tonales, Oportunidades dramáticas, Propuestas de reparación y Preguntas abiertas."
+)
+
+_COHERENCE_SYSTEM_PROMPT_EN = (
+    "You are a narrative coherence editor integrated into Dendro. Analyze whether a selected set "
+    "of entities and relationships fits the existing canon, character motivation, and project "
+    "creative configuration. Do not modify content during analysis. Do not create entities or "
+    "relationships. Return clear observations and repair proposals. Prioritize causal, motivational, "
+    "tonal, and dramatic coherence. Structure the response with sections: Global verdict, Entity "
+    "observations, Relationship observations, Contradictions, Motivation gaps, Continuity, Tonal "
+    "risks, Dramatic opportunities, Repair proposals, and Open questions."
+)
+
+_COHERENCE_REPAIR_SYSTEM_PROMPT_ES = (
+    "Eres un editor de coherencia narrativa integrado en Dendro. Genera una reparación aplicable "
+    "solo a los nodos y relaciones seleccionados. No crees entidades ni relaciones. Devuelve primero "
+    "un resumen narrativo breve y después un bloque JSON estricto entre <PATCH_JSON> y </PATCH_JSON>. "
+    "El JSON debe tener: {\"entities\":[{\"id\":...,\"brief_description\":...,\"extended_description\":...}], "
+    "\"relations\":[{\"id\":...,\"description\":...,\"body\":...}]}. Incluye solo campos que deban cambiar."
+)
+
+_COHERENCE_REPAIR_SYSTEM_PROMPT_EN = (
+    "You are a narrative coherence editor integrated into Dendro. Generate an applicable repair "
+    "only for selected nodes and relationships. Do not create entities or relationships. Return a "
+    "brief narrative summary first, then a strict JSON block between <PATCH_JSON> and </PATCH_JSON>. "
+    "The JSON must have: {\"entities\":[{\"id\":...,\"brief_description\":...,\"extended_description\":...}], "
+    "\"relations\":[{\"id\":...,\"description\":...,\"body\":...}]}. Include only fields that should change."
+)
+
+
+def _context_get(data: dict[str, Any], *keys: str, default: Any = "") -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key, default)
+    return current
+
+
+def _compact_for_prompt(value: Any, limit: int = 1600) -> str:
+    raw = _json_dumps(value) if not isinstance(value, str) else value
+    raw = raw.strip()
+    return raw if len(raw) <= limit else raw[:limit].rstrip() + "…"
+
+
+def _entity_text_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
+    target = context.get("target") or {}
+    project = context.get("project") or {}
+    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    genre = project.get("genre") or {}
+    tone = project.get("tone") or {}
+    realism = project.get("realism") or {}
+    instruction = (prompt_hint or "").strip()
+    if language == "en":
+        no_instruction = "No extra instruction: improve or complete the existing text coherently."
+        return (
+            f"Entity name: {target.get('name') or 'Untitled'}\n"
+            f"Entity type: {target.get('entity_type') or target.get('type') or 'entity'}\n"
+            f"Current brief description:\n{target.get('brief_description') or target.get('description') or '—'}\n\n"
+            f"Current body:\n{target.get('extended_description') or target.get('body') or '—'}\n\n"
+            f"Notes/context:\n{_compact_for_prompt(target.get('private_notes') or target.get('exportable_notes') or '—', 800)}\n\n"
+            f"Project: {project.get('name') or '—'}\n"
+            f"Genre: {_compact_for_prompt(genre, 500)}\n"
+            f"Tone: {_compact_for_prompt(tone, 500)}\n"
+            f"Realism: {_compact_for_prompt(realism, 500)}\n"
+            f"Narrative style: {creative.get('narrative_style') or '—'}\n"
+            f"Creative rules: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}\n"
+            f"Worldbuilding active: {project.get('worldbuilding_active', False)}\n"
+            f"Neighborhood context: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n\n"
+            f"User instruction: {instruction or no_instruction}"
+        )
+    no_instruction = "Sin instrucción extra: mejora o completa el texto existente con coherencia."
+    return (
+        f"Nombre de la entidad: {target.get('name') or 'Sin título'}\n"
+        f"Tipo de entidad: {target.get('entity_type') or target.get('type') or 'entidad'}\n"
+        f"Descripción breve actual:\n{target.get('brief_description') or target.get('description') or '—'}\n\n"
+        f"Cuerpo actual:\n{target.get('extended_description') or target.get('body') or '—'}\n\n"
+        f"Notas/contexto:\n{_compact_for_prompt(target.get('private_notes') or target.get('exportable_notes') or '—', 800)}\n\n"
+        f"Proyecto: {project.get('name') or '—'}\n"
+        f"Género: {_compact_for_prompt(genre, 500)}\n"
+        f"Tono: {_compact_for_prompt(tone, 500)}\n"
+        f"Realismo: {_compact_for_prompt(realism, 500)}\n"
+        f"Estilo narrativo: {creative.get('narrative_style') or '—'}\n"
+        f"Reglas creativas: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}\n"
+        f"Worldbuilding activo: {project.get('worldbuilding_active', False)}\n"
+        f"Contexto de relaciones: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}\n\n"
+        f"Instrucción del usuario: {instruction or no_instruction}"
+    )
+
+
+def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
+    project = context.get("project") or {}
+    selection = context.get("selection") or {}
+    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    instruction = (prompt_hint or "").strip()
+    if language == "en":
+        return (
+            f"Project: {project.get('name') or '—'}\n"
+            f"Language: {project.get('primary_language') or 'en'}\n"
+            f"Genre: {_compact_for_prompt(project.get('genre') or {}, 700)}\n"
+            f"Tone: {_compact_for_prompt(project.get('tone') or {}, 700)}\n"
+            f"Realism: {_compact_for_prompt(project.get('realism') or {}, 700)}\n"
+            f"Style: {creative.get('narrative_style') or '—'}\n"
+            f"Selected entities:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
+            f"Selected relationships:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
+            f"Relevant nearby context:\n{_compact_for_prompt(context.get('nearby_context') or {}, 3000)}\n\n"
+            f"User instruction: {instruction or 'Analyze joint narrative coherence of the selected subgraph.'}"
+        )
+    return (
+        f"Proyecto: {project.get('name') or '—'}\n"
+        f"Idioma: {project.get('primary_language') or 'es'}\n"
+        f"Género: {_compact_for_prompt(project.get('genre') or {}, 700)}\n"
+        f"Tono: {_compact_for_prompt(project.get('tone') or {}, 700)}\n"
+        f"Realismo: {_compact_for_prompt(project.get('realism') or {}, 700)}\n"
+        f"Estilo: {creative.get('narrative_style') or '—'}\n"
+        f"Entidades seleccionadas:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
+        f"Relaciones seleccionadas:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
+        f"Contexto cercano relevante:\n{_compact_for_prompt(context.get('nearby_context') or {}, 3000)}\n\n"
+        f"Instrucción del usuario: {instruction or 'Analiza la coherencia narrativa conjunta del subgrafo seleccionado.'}"
+    )
+
+
+def _selection_repair_user_prompt(context: dict[str, Any], proposal: str, prompt_hint: str, language: str) -> str:
+    base = _selection_coherence_user_prompt(context, prompt_hint, language)
+    if language == "en":
+        return base + "\n\nChosen repair proposal:\n" + (proposal or "Rewrite with current canon.")
+    return base + "\n\nPropuesta de reparación elegida:\n" + (proposal or "Reescribir con canon actual.")
+
+
+def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
+    target = context.get("target") or {}
+    project = context.get("project") or {}
+    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    genre = project.get("genre") or {}
+    tone = project.get("tone") or {}
+    realism = project.get("realism") or {}
+    instruction = (prompt_hint or "").strip()
+
+    source = target.get("source") or {}
+    target_node = target.get("target_node") or target.get("target") or {}
+
+    if language == "en":
+        no_instruction = "No extra instruction: improve or complete the existing text coherently."
+        parts = [
+            f"Source entity: {source.get('name') or 'Untitled'} ({source.get('entity_type') or source.get('type') or 'entity'})",
+            f"Target entity: {target_node.get('name') or 'Untitled'} ({target_node.get('entity_type') or target_node.get('type') or 'entity'})",
+            f"Relation type: {target.get('relation_type') or target.get('type') or '—'}",
+            f"Direction: {target.get('direction') or '—'}",
+            f"Current description:\n{_compact_for_prompt(target.get('description') or '—', 800)}",
+        ]
+        body = target.get("body") or target.get("extended_description")
+        if body:
+            parts.append(f"Current body:\n{_compact_for_prompt(body, 1200)}")
+        temporality = target.get("temporality") or target.get("temporal_context")
+        if temporality:
+            parts.append(f"Temporality: {temporality}")
+        causality = target.get("causality")
+        if causality:
+            parts.append(f"Causality: {causality}")
+        notes = target.get("notes") or target.get("private_notes") or target.get("exportable_notes")
+        if notes:
+            parts.append(f"Notes:\n{_compact_for_prompt(notes, 800)}")
+        parts += [
+            f"Project: {project.get('name') or '—'}",
+            f"Genre: {_compact_for_prompt(genre, 500)}",
+            f"Tone: {_compact_for_prompt(tone, 500)}",
+            f"Realism: {_compact_for_prompt(realism, 500)}",
+            f"Narrative style: {creative.get('narrative_style') or '—'}",
+            f"Creative rules: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}",
+            f"Worldbuilding active: {project.get('worldbuilding_active', False)}",
+            f"Neighborhood context: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}",
+            f"User instruction: {instruction or no_instruction}",
+        ]
+        return "\n".join(parts)
+
+    no_instruction = "Sin instrucción extra: mejora o completa el texto existente con coherencia."
+    parts = [
+        f"Entidad origen: {source.get('name') or 'Sin título'} ({source.get('entity_type') or source.get('type') or 'entidad'})",
+        f"Entidad destino: {target_node.get('name') or 'Sin título'} ({target_node.get('entity_type') or target_node.get('type') or 'entidad'})",
+        f"Tipo de relación: {target.get('relation_type') or target.get('type') or '—'}",
+        f"Dirección: {target.get('direction') or '—'}",
+        f"Descripción actual:\n{_compact_for_prompt(target.get('description') or '—', 800)}",
+    ]
+    body = target.get("body") or target.get("extended_description")
+    if body:
+        parts.append(f"Cuerpo actual:\n{_compact_for_prompt(body, 1200)}")
+    temporality = target.get("temporality") or target.get("temporal_context")
+    if temporality:
+        parts.append(f"Temporalidad: {temporality}")
+    causality = target.get("causality")
+    if causality:
+        parts.append(f"Causalidad: {causality}")
+    notes = target.get("notes") or target.get("private_notes") or target.get("exportable_notes")
+    if notes:
+        parts.append(f"Notas:\n{_compact_for_prompt(notes, 800)}")
+    parts += [
+        f"Proyecto: {project.get('name') or '—'}",
+        f"Género: {_compact_for_prompt(genre, 500)}",
+        f"Tono: {_compact_for_prompt(tone, 500)}",
+        f"Realismo: {_compact_for_prompt(realism, 500)}",
+        f"Estilo narrativo: {creative.get('narrative_style') or '—'}",
+        f"Reglas creativas: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}",
+        f"Worldbuilding activo: {project.get('worldbuilding_active', False)}",
+        f"Contexto de relaciones: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}",
+        f"Instrucción del usuario: {instruction or no_instruction}",
+    ]
+    return "\n".join(parts)
+
+
 class AIContextActionService:
     """Runs contextual AI actions and records reviewable candidates."""
 
@@ -169,6 +437,174 @@ class AIContextActionService:
         context = self.context_builder.build_for_entity(entity_id, audience=audience)
         return self._run("node", entity_id, action_type, mode, context, prompt_hint)
 
+    def run_node_text_suggestion(
+        self,
+        entity_id: str,
+        *,
+        prompt_hint: str = "",
+        audience: str = "gm",
+        language: str = "es",
+    ) -> Result[AIContextActionResult, str]:
+        """Return a text-only inline suggestion for an entity.
+
+        This path is deliberately NOT routed through generate_candidates() and
+        never calls CandidateService. It is for the entity detail panel only:
+        the suggestion remains local UI text until the user accepts it and then
+        saves the entity through EntityService.
+        """
+        context = self.context_builder.build_for_entity(entity_id, audience=audience)
+        if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
+            return Error("Target not visible for requested audience")
+        context_hash = _context_hash(context)
+        lang = "en" if str(language).lower().startswith("en") else "es"
+        system_prompt = _ENTITY_TEXT_SYSTEM_PROMPT_EN if lang == "en" else _ENTITY_TEXT_SYSTEM_PROMPT_ES
+        user_prompt = _entity_text_user_prompt(context, prompt_hint, lang)
+        try:
+            text, error = self.provider.chat(system_prompt, user_prompt)
+        except Exception as exc:
+            return Error(f"Provider error: {exc}")
+        if error:
+            return Error(str(error))
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return Error("La IA no devolvió una sugerencia de texto.")
+        return Ok(AIContextActionResult(
+            action_type="improve_text",
+            target_type="node",
+            target_id=entity_id,
+            context_hash=context_hash,
+            raw_text=cleaned,
+            candidates=[],
+            previews=[self._preview_payload("improve_text", "node", entity_id, {}, cleaned, context_hash)],
+            observations=[],
+            provider=getattr(self.provider, "provider_name", "ai"),
+        ))
+
+    def run_relation_text_suggestion(
+        self,
+        relation_id: str,
+        *,
+        prompt_hint: str = "",
+        audience: str = "gm",
+        language: str = "es",
+    ) -> Result[AIContextActionResult, str]:
+        """Return a text-only inline suggestion for a relation."""
+        context = self.context_builder.build_for_relation(relation_id, audience=audience)
+        if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
+            return Error("Target not visible for requested audience")
+        context_hash = _context_hash(context)
+        lang = "en" if str(language).lower().startswith("en") else "es"
+        system_prompt = _RELATION_TEXT_SYSTEM_PROMPT_EN if lang == "en" else _RELATION_TEXT_SYSTEM_PROMPT_ES
+        user_prompt = _relation_text_user_prompt(context, prompt_hint, lang)
+        try:
+            text, error = self.provider.chat(system_prompt, user_prompt)
+        except Exception as exc:
+            return Error(f"Provider error: {exc}")
+        if error:
+            return Error(str(error))
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return Error("La IA no devolvió una sugerencia de texto.")
+        return Ok(AIContextActionResult(
+            action_type="improve_relation_text",
+            target_type="relation",
+            target_id=relation_id,
+            context_hash=context_hash,
+            raw_text=cleaned,
+            candidates=[],
+            previews=[self._preview_payload("improve_relation_text", "relation", relation_id, {}, cleaned, context_hash)],
+            observations=[],
+            provider=getattr(self.provider, "provider_name", "ai"),
+        ))
+
+    def run_selection_coherence_analysis(
+        self,
+        *,
+        entity_ids: list[str] | None = None,
+        relation_ids: list[str] | None = None,
+        prompt_hint: str = "",
+        audience: str = "gm",
+        language: str = "es",
+    ) -> Result[AIContextActionResult, str]:
+        """Analyze joint coherence for a selected subgraph without mutating canon."""
+        if not (entity_ids or relation_ids):
+            return Error("Selecciona al menos un nodo o una relación para analizar coherencia.")
+        context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
+        selection = context.get("selection") or {}
+        if not (selection.get("entities") or selection.get("relations")):
+            return Error("La selección no contiene elementos visibles para analizar.")
+        context_hash = _context_hash(context)
+        lang = "en" if str(language).lower().startswith("en") else "es"
+        system_prompt = _COHERENCE_SYSTEM_PROMPT_EN if lang == "en" else _COHERENCE_SYSTEM_PROMPT_ES
+        user_prompt = _selection_coherence_user_prompt(context, prompt_hint, lang)
+        try:
+            text, error = self.provider.chat(system_prompt, user_prompt)
+        except Exception as exc:
+            return Error(f"Provider error: {exc}")
+        if error:
+            return Error(str(error))
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return Error("La IA no devolvió un informe de coherencia.")
+        return Ok(AIContextActionResult(
+            action_type="analyze_coherence",
+            target_type="graph_selection",
+            target_id=None,
+            context_hash=context_hash,
+            raw_text=cleaned,
+            candidates=[],
+            previews=[self._preview_payload("analyze_coherence", "graph_selection", None, {
+                "selected_entity_ids": list(entity_ids or []),
+                "selected_relation_ids": list(relation_ids or []),
+                "selection_summary": _compact_context_summary(context),
+            }, cleaned, context_hash)],
+            observations=[],
+            provider=getattr(self.provider, "provider_name", "ai"),
+        ))
+
+    def run_selection_coherence_repair(
+        self,
+        *,
+        entity_ids: list[str] | None = None,
+        relation_ids: list[str] | None = None,
+        proposal: str = "",
+        prompt_hint: str = "",
+        audience: str = "gm",
+        language: str = "es",
+    ) -> Result[AIContextActionResult, str]:
+        """Generate a reviewable repair patch for selected elements; no automatic apply."""
+        if not (entity_ids or relation_ids):
+            return Error("Selecciona elementos antes de generar una reparación.")
+        context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
+        context_hash = _context_hash(context)
+        lang = "en" if str(language).lower().startswith("en") else "es"
+        system_prompt = _COHERENCE_REPAIR_SYSTEM_PROMPT_EN if lang == "en" else _COHERENCE_REPAIR_SYSTEM_PROMPT_ES
+        user_prompt = _selection_repair_user_prompt(context, proposal, prompt_hint, lang)
+        try:
+            text, error = self.provider.chat(system_prompt, user_prompt)
+        except Exception as exc:
+            return Error(f"Provider error: {exc}")
+        if error:
+            return Error(str(error))
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return Error("La IA no devolvió una reparación.")
+        return Ok(AIContextActionResult(
+            action_type="repair_coherence",
+            target_type="graph_selection",
+            target_id=None,
+            context_hash=context_hash,
+            raw_text=cleaned,
+            candidates=[],
+            previews=[self._preview_payload("repair_coherence", "graph_selection", None, {
+                "selected_entity_ids": list(entity_ids or []),
+                "selected_relation_ids": list(relation_ids or []),
+                "proposal": proposal,
+            }, cleaned, context_hash)],
+            observations=[],
+            provider=getattr(self.provider, "provider_name", "ai"),
+        ))
+
     def run_relation_action(self, relation_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm") -> Result[AIContextActionResult, str]:
         mode = _RELATION_ACTIONS.get(action_type)
         if mode is None:
@@ -184,12 +620,13 @@ class AIContextActionService:
         relation_ids: list[str] | None = None,
         prompt_hint: str = "",
         audience: str = "gm",
+        language: str = "es",
     ) -> Result[AIContextActionResult, str]:
         mode = _GRAPH_ACTIONS.get(action_type)
         if mode is None:
             return Error(f"Unknown graph AI action: {action_type}")
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
-        return self._run("graph", None, action_type, mode, context, prompt_hint)
+        return self._run("graph", None, action_type, mode, context, prompt_hint, language=language)
 
     def _run(
         self,
@@ -199,6 +636,7 @@ class AIContextActionService:
         mode: AIMode,
         context: dict[str, Any],
         prompt_hint: str,
+        language: str = "es",
     ) -> Result[AIContextActionResult, str]:
         if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
             return Error("Target not visible for requested audience")
@@ -206,7 +644,7 @@ class AIContextActionService:
         operation = AIOperation(
             mode=mode,
             context=_authorized_context(context),
-            prompt_hint=self._prompt(action_type, prompt_hint, context),
+            prompt_hint=self._prompt(action_type, prompt_hint, context, language=language),
             entity_id=target_id if target_type == "node" else None,
             entity_ids=[target_id] if target_type == "node" and target_id else [],
             max_candidates=3,
@@ -309,7 +747,8 @@ class AIContextActionService:
             "canonical_status": "preview_non_canon",
         }
 
-    def _prompt(self, action_type: str, prompt_hint: str, context: dict[str, Any]) -> str:
+    def _prompt(self, action_type: str, prompt_hint: str, context: dict[str, Any], language: str = "es") -> str:
+        lang_note = f"\nIdioma de respuesta: {language}." if language else ""
         return (
             "Acción IA contextual: " + action_type + "\n"
             "Restricciones: no modificar canon; producir candidatos/previews revisables; "
@@ -317,6 +756,7 @@ class AIContextActionService:
             f"Context hash: {_context_hash(context)}\n"
             f"Resumen: {_json_dumps(_compact_context_summary(context))}\n"
             f"Instrucción adicional: {prompt_hint or '—'}"
+            f"{lang_note}"
         )
 
 

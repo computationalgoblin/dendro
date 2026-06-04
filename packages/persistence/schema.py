@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B28-T03: saved graph views)
-CURRENT_SCHEMA_VERSION: int = 19
+# Current schema version for new projects (B31-T04: semantic tree containers)
+CURRENT_SCHEMA_VERSION: int = 21
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 19
+MAX_SUPPORTED_VERSION: int = 21
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +640,24 @@ def _apply_migration_v18_to_v19(data):
     migrated = dict(data)
     migrated.setdefault('saved_graph_views', [])
     migrated['schema_version'] = 19
+    return migrated
+
+
+def _apply_migration_v19_to_v20(data):
+    """v19 → v20: adds project_type, worldbuilding_active, creative_config, novela_config (B31-T03)."""
+    migrated = dict(data)
+    migrated.setdefault('project_type', 'otro')
+    migrated.setdefault('worldbuilding_active', False)
+    migrated.setdefault('creative_config', {})
+    migrated.setdefault('novela_config', None)
+    migrated['schema_version'] = 20
+    return migrated
+
+
+def _apply_migration_v20_to_v21(data):
+    """v20 → v21: no structural changes — CONTENEDOR entity_type is enum-only (B31-T04)."""
+    migrated = dict(data)
+    migrated['schema_version'] = 21
     return migrated
 
 # Structural validation

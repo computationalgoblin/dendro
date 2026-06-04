@@ -63,8 +63,9 @@ from hosts.DesktopHostPySide.views.writing_view import WritingView
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryWorkspace, SessionWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
+from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
-from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ProjectActionsPanel
+from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
 
 
 # Index constants for the stack widget
@@ -91,8 +92,9 @@ class MainWindow(QMainWindow):
         self._build_controllers()
         self._build_views()
         self._build_shell()
+        self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
-        self._refresh_all_views()
+        self._refresh_recent_project_option()
 
     # ── Controllers ──────────────────────────────────────────────────────────
 
@@ -158,8 +160,8 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("save_project", self._save)
         self.home_view.register_callback("close_project", self._close_project)
         self.home_view.register_callback("ai_settings", self._open_ai_settings)
-        self.home_view.register_callback("toggle_advanced", self._toggle_advanced)
-        self.home_view.register_callback("toggle_diagnostic", self._toggle_diagnostic)
+        self.home_view.register_callback("open_last_project", self._open_last_project)
+        # T05: toggle_advanced and toggle_diagnostic removed from UI callbacks
 
         # Workspaces (preserve existing views inside them)
         self.creation_workspace = CreationWorkspace(
@@ -200,10 +202,15 @@ class MainWindow(QMainWindow):
         topbar.setVisible(False)
         root.addWidget(topbar)
 
-        # Stack + Drawer horizontal layout
+        # Stack + Drawers horizontal layout
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
+
+        # Left drawer (global, shared via AppContext) — for Config panel
+        self.left_drawer = LeftDrawer(self)
+        self.ctx.left_drawer = self.left_drawer
+        body.addWidget(self.left_drawer)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.home_view)        # 0 - home
@@ -212,7 +219,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._wrap_space(self.session_workspace, "Sesión", _IDX_HOME))     # 3
         body.addWidget(self.stack, stretch=1)
 
-        # Right drawer (global, shared via AppContext)
+        # Right drawer (global, shared via AppContext) — for Project panel
         self.drawer = RightDrawer(self)
         self.ctx.drawer = self.drawer
         body.addWidget(self.drawer)
@@ -228,6 +235,17 @@ class MainWindow(QMainWindow):
 
         # Start at home
         self.stack.setCurrentIndex(_IDX_HOME)
+
+    def resizeEvent(self, event):
+        """Update drawer heights on window resize."""
+        super().resizeEvent(event)
+        h = self.height()
+        if hasattr(self, "left_drawer") and self.left_drawer is not None:
+            self.left_drawer.setFixedHeight(h)
+            self.left_drawer.update_target_width()
+        if hasattr(self, "drawer") and self.drawer is not None:
+            self.drawer.setFixedHeight(h)
+            self.drawer.update_target_width()
 
     def _build_topbar(self) -> QWidget:
         bar = QFrame()
@@ -312,8 +330,12 @@ class MainWindow(QMainWindow):
     # ── Navigation ───────────────────────────────────────────────────────────
 
     def _go_space(self, idx: int):
-        if idx == _IDX_HOME:
-            self._clear_contextual_surface()
+        # Reset outgoing widget's opacity to prevent ghost rendering
+        current = self.stack.currentWidget()
+        if current and current.graphicsEffect():
+            current.graphicsEffect().setOpacity(1.0)
+        # Close drawers when navigating AWAY from current space
+        self._clear_contextual_surface()
         self.stack.setCurrentIndex(idx)
         widget = self.stack.widget(idx)
         self._animate_stack_arrival(widget)
@@ -336,6 +358,8 @@ class MainWindow(QMainWindow):
         self.log_msg(f"Navegación: {'Dendro' if idx == _IDX_HOME else ['','Creación','Galería','Sesión'][idx]}")
 
     def _clear_contextual_surface(self):
+        if getattr(self.ctx, "left_drawer", None) is not None:
+            self.ctx.left_drawer.close()
         if getattr(self.ctx, "drawer", None) is not None:
             self.ctx.drawer.close()
         self.ctx.selected_entity_id = None
@@ -345,39 +369,136 @@ class MainWindow(QMainWindow):
         self.ctx.selected_campaign_id = None
 
     def _animate_stack_arrival(self, widget: QWidget):
+        # Home has its own animate_arrival() — skip stack opacity animation
+        # to prevent ghost workspaces showing through semi-transparent Home.
+        idx = self.stack.indexOf(widget)
+        if idx == _IDX_HOME:
+            return
+
         effect = widget.graphicsEffect()
         if effect is None:
             effect = QGraphicsOpacityEffect(widget)
             widget.setGraphicsEffect(effect)
         try:
-            effect.setOpacity(0.82)
+            effect.setOpacity(0.60)
+            duration = self.ctx.animation_duration(380)
             animation = QPropertyAnimation(effect, b"opacity", widget)
-            animation.setDuration(180)
-            animation.setStartValue(0.82)
+            animation.setDuration(duration)
+            animation.setStartValue(0.60)
             animation.setEndValue(1.0)
             animation.setEasingCurve(QEasingCurve.Type.OutCubic)
             animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         except Exception:
             pass
 
+    def _apply_live_preferences(self):
+        """Apply appearance preferences immediately."""
+        ctx = self.ctx
+        # Font size
+        size_map = {"small": "12px", "medium": "13px", "large": "16px"}
+        base_size = size_map.get(ctx.font_size, "13px")
+
+        # Font family
+        family = ctx.font_family or "Georgia"
+
+        # Build dynamic stylesheet override — use SPECIFIC selectors (not *)
+        # so they win the CSS specificity battle against APP_STYLESHEET.
+        # QMainWindow,QWidget is the highest-specificity base rule.
+        override = (
+            f"QMainWindow, QWidget, QFrame, QDialog {{ "
+            f"font-size: {base_size}; font-family: {family}, 'Courier New', serif; }} "
+            f"QLabel, QPushButton, QComboBox, QLineEdit, QTextEdit, "
+            f"QPlainTextEdit, QCheckBox, QRadioButton, QGroupBox, "
+            f"QTabWidget, QTabBar::tab, QHeaderView::section, "
+            f"QListWidget, QTreeWidget, QTableWidget, "
+            f"QSpinBox, QDoubleSpinBox, QDateEdit, "
+            f"QScrollBar {{ "
+            f"font-size: {base_size}; font-family: {family}, 'Courier New', serif; }}"
+        )
+        # Apply as a secondary stylesheet on top of APP_STYLESHEET
+        self.setStyleSheet(APP_STYLESHEET + override)
+
+        # Fullscreen (if we decide to implement)
+        if ctx.fullscreen:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+
+        self.log_msg(f"Preferencias aplicadas: fuente {family} {base_size}")
+
     # ── Project actions ──────────────────────────────────────────────────────
+
+    def _refresh_recent_project_option(self):
+        path = self.ctx.last_project_path
+        if path and Path(path).exists():
+            self.home_view.set_last_project_option(Path(path).stem)
+        else:
+            if path:
+                self.ctx.forget_missing_project(path)
+            self.home_view.set_last_project_option(None)
+
+    def _open_last_project(self):
+        path = self.ctx.last_project_path
+        if not path:
+            self._refresh_recent_project_option()
+            return
+        if not Path(path).exists():
+            self.log_msg("El último proyecto ya no existe; se ha quitado de recientes")
+            self.ctx.forget_missing_project(path)
+            self._refresh_recent_project_option()
+            return
+        try:
+            self.controller.open(path)
+            self.ctx.remember_project(path)
+            self.log_msg(f"Proyecto abierto: {Path(path).name}")
+            self._refresh_all_views()
+            self._refresh_recent_project_option()
+        except Exception as exc:
+            self.log_msg(f"Error abriendo último proyecto: {exc}")
 
     def _open_project_panel(self):
         if self.ctx.drawer is None:
             return
-        panel = ProjectActionsPanel({
-            "new_project": self._new_project,
-            "open_project": self._open_project,
-            "save_project": self._save,
-            "close_project": self._close_project,
-        })
+        # TOGGLE: if already open, close it
+        if self.ctx.drawer.isVisible():
+            self.ctx.drawer.close()
+            return
+        # Mutual exclusion: close left drawer if open
+        if getattr(self.ctx, 'left_drawer', None) and self.ctx.left_drawer.isVisible():
+            self.ctx.left_drawer.close()
+        panel = ProjectPanel(
+            ctx=self.ctx,
+            callbacks={
+                "new_project": self._new_project,
+                "open_project": self._open_project,
+                "save_project": self._save,
+                "close_project": self._close_project,
+            },
+            on_preview=self._preview_project_change,
+        )
         self.ctx.drawer.set_content(panel, title="Proyecto")
         self.ctx.drawer.open()
 
+    def _preview_project_change(self, project_type: str, worldbuilding_active: bool):
+        """Apply project type/worldbuilding as a live preview without saving."""
+        # Update Home visibility immediately
+        self.home_view.update_project_visibility(project_type, worldbuilding_active)
+        # Update Creation workspace worldbuilding
+        if hasattr(self, 'creation_workspace'):
+            self.creation_workspace.set_worldbuilding_active(worldbuilding_active)
+
     def _open_config_panel(self):
-        if self.ctx.drawer is None:
+        if self.ctx.left_drawer is None:
             return
-        panel = AppConfigPanel(
+        # TOGGLE: if already open, close it
+        if self.ctx.left_drawer.isVisible():
+            self.ctx.left_drawer.close()
+            return
+        # Mutual exclusion: close right drawer if open
+        if self.ctx.drawer is not None and self.ctx.drawer.isVisible():
+            self.ctx.drawer.close()
+        panel = ConfigPanel(
+            ctx=self.ctx,
             advanced_enabled=self.ctx.advanced_mode,
             diagnostic_visible=hasattr(self, "log") and self.log.isVisible(),
             callbacks={
@@ -385,16 +506,25 @@ class MainWindow(QMainWindow):
                 "toggle_diagnostic": self._toggle_diagnostic,
                 "ai_settings": self._open_ai_settings,
             },
+            ai_controller=self.ai,
+            on_status=self._handle_ai_status,
+            on_apply=self._apply_live_preferences,
         )
-        self.ctx.drawer.set_content(panel, title="Configuración")
-        self.ctx.drawer.open()
+        self.ctx.left_drawer.set_content(panel, title="Configuración")
+        self.ctx.left_drawer.open()
 
     def _open_ai_settings(self):
-        if self.ctx.drawer is None:
+        if self.ctx.left_drawer is None:
             return
-        panel = AISettingsPanel(self.ai, on_status=lambda msg: self.log_msg(f"IA: {msg}"))
-        self.ctx.drawer.set_content(panel, title="Ajustes IA")
-        self.ctx.drawer.open()
+        panel = AISettingsPanel(self.ai, on_status=self._handle_ai_status)
+        self.ctx.left_drawer.set_content(panel, title="Ajustes IA")
+        self.ctx.left_drawer.open()
+
+    def _handle_ai_status(self, msg: str):
+        """Log AI status and refresh contextual AI consumers after settings changes."""
+        self.log_msg(f"IA: {msg}")
+        if hasattr(self, "creation_workspace") and hasattr(self.creation_workspace, "refresh_ai_controller"):
+            self.creation_workspace.refresh_ai_controller()
 
     def _new_project(self):
         drawer = self.ctx.drawer
@@ -410,6 +540,8 @@ class MainWindow(QMainWindow):
             try:
                 self.controller.create(name.strip(), path)
                 self.controller.save()
+                self.ctx.remember_project(path)
+                self._refresh_recent_project_option()
                 self.log_msg(f"Proyecto creado: {Path(path).name}")
                 self._refresh_all_views()
                 if self.ctx.drawer:
@@ -427,6 +559,8 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.open(path)
+            self.ctx.remember_project(path)
+            self._refresh_recent_project_option()
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
             self._refresh_all_views()
             if self.ctx.drawer:
@@ -447,6 +581,9 @@ class MainWindow(QMainWindow):
     def _save(self):
         try:
             self.controller.save()
+            if self.controller.current_path:
+                self.ctx.remember_project(self.controller.current_path)
+                self._refresh_recent_project_option()
             self.log_msg("Proyecto guardado")
             self._refresh_all_views()
             if self.ctx.drawer:
@@ -489,17 +626,28 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self.log_msg(f"Error aplicando modo avanzado en {type(widget).__name__}: {exc}")
         if hasattr(self, "_advanced_badge"):
-            self._advanced_badge.setVisible(bool(enabled))
+            # T05: Always hidden from UI
+            self._advanced_badge.setVisible(False)
         if hasattr(self, "_topbar"):
-            self._topbar.setVisible(bool(enabled))
+            # T05: Always hidden from UI
+            self._topbar.setVisible(False)
         if hasattr(self, "log") and not enabled:
             self.log.setVisible(False)
+        # Also propagate worldbuilding to creation workspace
+        if hasattr(self, "creation_workspace"):
+            project = self._get_active_project()
+            if project:
+                wb = getattr(project, "worldbuilding_active", False)
+                self.creation_workspace.set_worldbuilding_active(wb)
+
+    def _get_active_project(self):
+        return self.controller.ps.active_project
 
     def _toggle_diagnostic(self):
         visible = not self.log.isVisible()
         self.log.setVisible(visible and self.ctx.advanced_mode)
         if visible and not self.ctx.advanced_mode:
-            self.log_msg("Activa Modo avanzado para ver Diagnóstico")
+            self.log_msg("Activa Modo avanzado para ver el registro técnico")
 
     # ── Refresh ──────────────────────────────────────────────────────────────
 

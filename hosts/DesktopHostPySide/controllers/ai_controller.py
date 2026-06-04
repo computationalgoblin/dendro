@@ -81,6 +81,12 @@ class AIController:
     def test_provider(self):
         return self.orchestrator.invoke(AIMode.GENERATE_ENTITY, prompt_hint="desktop ui provider test")
 
+    def chat(self, system_prompt: str, user_message: str):
+        """Send a chat message with custom system prompt. Returns (text, error_string)."""
+        provider = self.orchestrator._provider
+        timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", "300"))
+        return provider.chat(system_prompt, user_message, timeout=timeout)
+
     def generate_entity_candidates(self, prompt_hint):
         return self.orchestrator.generate_candidates(AIMode.GENERATE_ENTITY, prompt_hint=prompt_hint)
 

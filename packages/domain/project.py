@@ -47,6 +47,68 @@ from packages.domain.source_history import HistoryEntry, Source
 _T = TypeVar("_T")
 
 
+class ProjectType:
+    """Project type constants (B31-T03)."""
+    CAMPANA = "campana"
+    NOVELA = "novela"
+    OTRO = "otro"
+
+
+@dataclass
+class CreativeProjectConfig:
+    """Creative project configuration (B31-T03)."""
+    narrative_style: str = ""
+    main_themes: list[str] = field(default_factory=list)
+    target_audience: str = ""
+    creative_rules: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "narrative_style": self.narrative_style,
+            "main_themes": self.main_themes,
+            "target_audience": self.target_audience,
+            "creative_rules": self.creative_rules,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CreativeProjectConfig:
+        return cls(
+            narrative_style=data.get("narrative_style", ""),
+            main_themes=data.get("main_themes", []),
+            target_audience=data.get("target_audience", ""),
+            creative_rules=data.get("creative_rules", []),
+        )
+
+
+@dataclass
+class NovelaConfig:
+    """Novela-specific configuration (B31-T03)."""
+    format: str = ""  # novela/relato/saga/antologia
+    point_of_view: str = ""
+    tense: str = ""
+    target_length: str = ""
+    narrative_structure: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "format": self.format,
+            "point_of_view": self.point_of_view,
+            "tense": self.tense,
+            "target_length": self.target_length,
+            "narrative_structure": self.narrative_structure,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> NovelaConfig:
+        return cls(
+            format=data.get("format", ""),
+            point_of_view=data.get("point_of_view", ""),
+            tense=data.get("tense", ""),
+            target_length=data.get("target_length", ""),
+            narrative_structure=data.get("narrative_structure", ""),
+        )
+
+
 def _now_utc() -> datetime:
     """Return current UTC datetime."""
     return datetime.now(timezone.utc)
@@ -163,6 +225,12 @@ class Project:
     # ── Saved graph views (Bloque 28) ──
     saved_graph_views: list[dict] = field(default_factory=list)
 
+    # ── Project type & creative config (B31-T03) ──
+    project_type: str = "otro"  # campana, novela, otro
+    worldbuilding_active: bool = False
+    creative_config: CreativeProjectConfig = field(default_factory=CreativeProjectConfig)
+    novela_config: NovelaConfig | None = None
+
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
         self.updated_at = _now_utc()
@@ -265,6 +333,11 @@ class Project:
             "sessions": [s.to_dict() for s in self.sessions],
             # ── Saved graph views (Bloque 28) ──
             "saved_graph_views": [dict(v) for v in self.saved_graph_views],
+            # ── Project type & creative config (B31-T03) ──
+            "project_type": self.project_type,
+            "worldbuilding_active": self.worldbuilding_active,
+            "creative_config": self.creative_config.to_dict(),
+            "novela_config": self.novela_config.to_dict() if self.novela_config else None,
         }
 
     @classmethod
@@ -469,6 +542,11 @@ class Project:
                 {"saved_graph_views": [dict(v) for v in data.get("saved_graph_views", []) if isinstance(v, dict)]}
                 if "saved_graph_views" in data else {}
             ),
+            # ── Project type & creative config (B31-T03) ──
+            project_type=data.get("project_type", "otro"),
+            worldbuilding_active=data.get("worldbuilding_active", False),
+            creative_config=CreativeProjectConfig.from_dict(data.get("creative_config", {})),
+            novela_config=NovelaConfig.from_dict(data["novela_config"]) if data.get("novela_config") else None,
         )
 
 # ── Helpers ──

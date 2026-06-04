@@ -14,6 +14,8 @@ Suites:
     qa          QA contract tests (slow)
     perf        performance tests (fast)
     integ       integration tests (slow)
+    desktop     DesktopHost/PySide contract tests (fast/static)
+    infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
 """
@@ -35,6 +37,8 @@ SUITES: dict[str, list[str]] = {
     "qa": ["tests/qa"],
     "perf": ["tests/performance"],
     "integ": ["tests/integration"],
+    "desktop": ["tests/desktop"],
+    "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }
 

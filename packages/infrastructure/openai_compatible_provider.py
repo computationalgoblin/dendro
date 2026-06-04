@@ -8,11 +8,11 @@ from packages.domain.ai_models import AIResponse
 class OpenAICompatibleProvider(AIProvider):
     provider_name = "openai_compatible"
 
-    def __init__(self, base_url=None, api_key=None, model=None, timeout=30):
+    def __init__(self, base_url=None, api_key=None, model=None, timeout=None):
         self.base_url = base_url or os.environ.get("NARRATIVE_AI_BASE_URL", "")
         self.api_key = api_key or os.environ.get("NARRATIVE_AI_API_KEY", "")
         self.model = model or os.environ.get("NARRATIVE_AI_MODEL", "gpt-4o-mini")
-        self.timeout = timeout
+        self.timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", str(timeout or 300)))
 
     def invoke(self, operation):
         t0 = time.time()
@@ -55,6 +55,35 @@ class OpenAICompatibleProvider(AIProvider):
         resp.error = reason
         resp.latency_ms = (time.time()-t0)*1000
         return resp
+
+    def chat(self, system_prompt: str, user_message: str, timeout=None):
+        """Direct chat completion with custom system prompt."""
+        t0 = time.time()
+        if not self.base_url or not self.api_key:
+            return None, "Configura API key y base URL para usar el asistente."
+        try:
+            url = f"{self.base_url.rstrip('/')}/chat/completions"
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+            data = json.dumps({
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": 2000,
+                "temperature": 0.7,
+            }).encode()
+            req = urllib.request.Request(url, data=data, headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }, method="POST")
+            timeout_val = timeout or self.timeout
+            resp = urllib.request.urlopen(req, timeout=timeout_val)
+            body = json.loads(resp.read())
+            text = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return text, None
+        except Exception as e:
+            return None, str(e)
 
 def get_provider() -> AIProvider:
     provider_type = os.environ.get("NARRATIVE_AI_PROVIDER", "")

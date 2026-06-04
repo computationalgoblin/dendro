@@ -24,9 +24,9 @@ from PySide6.QtWidgets import (
 
 APP_STYLESHEET = """
 QMainWindow, QWidget {
-    background: #F4F2E8;
+    background: #F7F5EA;
     color: #4F4D38;
-    font-family: "Segoe UI", "Inter", "Arial";
+    font-family: "Georgia", "Courier New", serif;
     font-size: 13px;
 }
 QPushButton {
@@ -56,8 +56,49 @@ QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget {
     border: 1px solid #D8D6C8;
     border-radius: 8px;
     color: #4F4D38;
-    padding: 6px;
+    padding: 8px 10px;
+    min-height: 28px;
     selection-background-color: #B5BBA5;
+    font-family: "Segoe UI", "Inter", "Arial";
+}
+QComboBox {
+    min-height: 32px;
+    padding: 6px 28px 6px 10px;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #7C806E;
+}
+QComboBox QAbstractItemView {
+    background: #FFFDF7;
+    border: 1px solid #D8D6C8;
+    border-radius: 6px;
+    color: #4F4D38;
+    selection-background-color: #D6D2BF;
+    selection-color: #3A3826;
+    padding: 4px;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    padding: 6px 8px;
+    min-height: 28px;
+    color: #4F4D38;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: #ECE9DA;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: #D6D2BF;
+    color: #3A3826;
+}
+QTextEdit, QPlainTextEdit {
+    min-height: 60px;
 }
 QTabWidget::pane { border: 1px solid #D8D6C8; border-radius: 12px; background: #F8F6ED; }
 QTabBar::tab {
@@ -82,6 +123,28 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
 
+ICON_GLYPHS = {
+    "settings": "⚙",
+    "project": "◇",
+    "creation": "✧",
+    "gallery": "◌",
+    "session": "☉",
+    "back": "←",
+    "close": "✕",
+    "add": "+",
+    "edit": "✎",
+    "delete": "✕",
+    "refresh": "↻",
+    "save": "💾",
+    "search": "⌕",
+    "filter": "▽",
+    "expand": "▾",
+    "collapse": "▸",
+    "worldbuilding": "🌐",
+    "layers": "☰",
+}
+
+
 class Card(QFrame):
     """Soft bordered card used by normal-mode product UI."""
 
@@ -91,7 +154,7 @@ class Card(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(
             "QFrame#card { background: #FFFDF7; border: 1px solid #D8D6C8; "
-            "border-radius: 14px; }"
+            "border-radius: 16px; }"
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.layout = QVBoxLayout(self)

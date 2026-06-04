@@ -34,3 +34,6 @@ class EntityController:
     def relations_for(self, eid):
         result = self.rs.get_neighborhood(eid)
         return result.value if hasattr(result, "value") else []
+
+    def delete(self, eid):
+        return self.es.delete_entity(eid)

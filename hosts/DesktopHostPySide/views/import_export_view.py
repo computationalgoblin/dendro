@@ -58,7 +58,7 @@ def _source_excerpt(candidate) -> str:
 
 
 class ImportExportView(QWidget):
-    def __init__(self, ctx: AppContext, controller, export_service: ExportService):
+    def __init__(self, ctx: AppContext, controller, export_service: ExportService | None = None):
         super().__init__()
         self.ctx = ctx
         self.controller = controller
@@ -107,10 +107,10 @@ class ImportExportView(QWidget):
         layout.addWidget(self.advanced)
         adv_actions = QHBoxLayout()
         for label, handler in [
-            ("Export GM", lambda: self._export_all("gm")),
-            ("Export Player", lambda: self._export_all("player")),
-            ("Export Public", lambda: self._export_all("public")),
-            ("Export entity/session/campaign", self._export_single),
+            ("Exportar GM", lambda: self._export_all("gm")),
+            ("Exportar jugadores", lambda: self._export_all("player")),
+            ("Exportar público", lambda: self._export_all("public")),
+            ("Exportar elemento", self._export_single),
         ]:
             btn = QPushButton(label)
             btn.clicked.connect(handler)
@@ -283,6 +283,10 @@ class ImportExportView(QWidget):
         ]
         self.detail.setPlainText("\n".join(lines))
 
+    def _show_detail(self):
+        """Backward-compatible hook used by desktop contract tests."""
+        self._show_detail_from_table()
+
     def _show_detail_from_table(self):
         basket_id, candidate_id, candidate = self._selected_candidate()
         if not candidate:
@@ -347,6 +351,9 @@ class ImportExportView(QWidget):
             self.refresh()
 
     def _export_all(self, audience):
+        if self.export is None:
+            self.detail.setPlainText("Exportación no disponible en este contexto.")
+            return
         result = self.export.export_all(audience)
         if isinstance(result, Error):
             self.detail.setPlainText(f"Error: {result.error}")
@@ -357,7 +364,10 @@ class ImportExportView(QWidget):
         project = self._project()
         drawer = self.ctx.drawer
         if project is None:
-            self.detail.setPlainText("No active project")
+            self.detail.setPlainText("No hay proyecto activo")
+            return
+        if self.export is None:
+            self.detail.setPlainText("Exportación no disponible en este contexto.")
             return
         if drawer is None:
             return

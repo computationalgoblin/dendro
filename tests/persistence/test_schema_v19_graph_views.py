@@ -54,8 +54,8 @@ def _base_v18() -> dict:
 
 
 def test_schema_v19_constants() -> None:
-    assert CURRENT_SCHEMA_VERSION == 19
-    assert MAX_SUPPORTED_VERSION == 19
+    assert CURRENT_SCHEMA_VERSION == 20
+    assert MAX_SUPPORTED_VERSION == 20
 
 
 def test_v18_migration_adds_saved_graph_views_without_inventing_views(tmp_path) -> None:
@@ -65,7 +65,7 @@ def test_v18_migration_adds_saved_graph_views_without_inventing_views(tmp_path) 
     result = load_project_data(path)
 
     assert isinstance(result, Ok)
-    assert result.value["schema_version"] == 19
+    assert result.value["schema_version"] == 20
     assert result.value["saved_graph_views"] == []
 
 

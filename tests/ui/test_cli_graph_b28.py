@@ -15,7 +15,7 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 def _base_project() -> dict:
     now = datetime.now(timezone.utc).isoformat()
     return {
-        "schema_version": 19,
+        "schema_version": 20,
         "id": "cli_graph",
         "name": "CLI Graph",
         "created_at": now,

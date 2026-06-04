@@ -26,16 +26,66 @@ class AIContextController:
     def node_action(self, entity_id: str, action_type: str, prompt_hint: str = ""):
         return self.service.run_node_action(entity_id, action_type, prompt_hint=prompt_hint, audience="gm")
 
+    def node_text_suggestion(self, entity_id: str, prompt_hint: str = "", language: str = "es"):
+        """Text-only entity improvement for inline UI suggestions.
+
+        This deliberately bypasses candidate creation: no graph nodes, no
+        relations, no canon mutation.
+        """
+        return self.service.run_node_text_suggestion(
+            entity_id,
+            prompt_hint=prompt_hint,
+            audience="gm",
+            language=language,
+        )
+
+    def chat(self, system_prompt: str, user_message: str):
+        """Direct chat with the underlying AI provider. Returns (text, error_string)."""
+        provider = getattr(self.service, "provider", None)
+        if provider is None or not hasattr(provider, "chat"):
+            return None, "Proveedor IA no disponible para chat directo."
+        timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", "300"))
+        return provider.chat(system_prompt, user_message, timeout=timeout)
+
     def relation_action(self, relation_id: str, action_type: str, prompt_hint: str = ""):
         return self.service.run_relation_action(relation_id, action_type, prompt_hint=prompt_hint, audience="gm")
 
-    def graph_action(self, action_type: str, entity_ids=None, relation_ids=None, prompt_hint: str = ""):
+    def relation_text_suggestion(self, relation_id: str, prompt_hint: str = "", language: str = "es"):
+        """Text-only relation improvement for inline UI suggestions."""
+        return self.service.run_relation_text_suggestion(
+            relation_id,
+            prompt_hint=prompt_hint,
+            audience="gm",
+            language=language,
+        )
+
+    def graph_action(self, action_type: str, entity_ids=None, relation_ids=None, prompt_hint: str = "", language: str = "es"):
         return self.service.run_graph_action(
             action_type,
             entity_ids=list(entity_ids or []),
             relation_ids=list(relation_ids or []),
             prompt_hint=prompt_hint,
             audience="gm",
+            language=language,
+        )
+
+    def analyze_coherence(self, entity_ids=None, relation_ids=None, prompt_hint: str = "", language: str = "es"):
+        return self.service.run_selection_coherence_analysis(
+            entity_ids=list(entity_ids or []),
+            relation_ids=list(relation_ids or []),
+            prompt_hint=prompt_hint,
+            audience="gm",
+            language=language,
+        )
+
+    def repair_coherence(self, entity_ids=None, relation_ids=None, proposal: str = "", prompt_hint: str = "", language: str = "es"):
+        return self.service.run_selection_coherence_repair(
+            entity_ids=list(entity_ids or []),
+            relation_ids=list(relation_ids or []),
+            proposal=proposal,
+            prompt_hint=prompt_hint,
+            audience="gm",
+            language=language,
         )
 
     def result_summary(self, result) -> str:

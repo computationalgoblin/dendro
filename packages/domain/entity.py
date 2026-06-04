@@ -22,7 +22,7 @@ from packages.domain.custom_types import CustomFieldValue
 
 
 class EntityType(str, Enum):
-    """Taxonomía de tipos de entidad narrativa — §3.3 (20 valores)."""
+    """Taxonomía de tipos de entidad narrativa — §3.3 (21 valores)."""
 
     PERSONAJE = "personaje"
     LOCALIZACION = "localizacion"
@@ -43,6 +43,7 @@ class EntityType(str, Enum):
     INSTITUCION = "institucion"
     CRIATURA = "criatura"
     TRAMA = "trama"
+    CONTENEDOR = "contenedor"
     NOTA = "nota"
 
 

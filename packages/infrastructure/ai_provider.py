@@ -9,6 +9,30 @@ from packages.domain.ai_models import AIMode, AIOperation, AIResponse
 
 class AIProvider(ABC):
     @abstractmethod
+
+    def chat(self, system_prompt: str, user_message: str, timeout=None):
+        """Deterministic local chat fallback for UI smoke tests.
+
+        It returns text only and never creates candidates. The wording mirrors
+        the user's instruction enough to reveal routing bugs without using a key.
+        """
+        lower = (system_prompt + "\n" + user_message).lower()
+        if "fosco" in lower:
+            return (
+                "Fosco atravesó caminos de polvo, posadas medio olvidadas y fronteras donde cada promesa "
+                "tenía un precio. Sus aventuras no nacieron de la gloria, sino de una obstinación tranquila: "
+                "seguir adelante incluso cuando el mapa dejaba de ser fiable. En cada viaje ganó una cicatriz, "
+                "una historia y una deuda pendiente que todavía tira de él hacia el próximo umbral.",
+                None,
+            )
+        if "english" in lower or "respond in english" in lower:
+            return ("Draft a focused narrative passage from the selected entity, respecting its current name, type, and project tone.", None)
+        return (
+            "Desarrolla el contenido de la entidad seleccionada con un tono coherente con el proyecto, "
+            "aprovechando el nombre, el tipo y el texto ya escrito sin crear nodos ni relaciones nuevas.",
+            None,
+        )
+
     def invoke(self, operation: AIOperation) -> AIResponse:
         ...
 
@@ -17,9 +41,37 @@ class AIProvider(ABC):
     def provider_name(self) -> str:
         ...
 
+    def chat(self, system_prompt: str, user_message: str, timeout=None):
+        """Direct chat with custom system prompt. Returns (text, error)."""
+        return None, "Not implemented"
+
 
 class SimulatedAIProvider(AIProvider):
     provider_name = "simulated"
+
+
+    def chat(self, system_prompt: str, user_message: str, timeout=None):
+        """Deterministic local chat fallback for UI smoke tests.
+
+        It returns text only and never creates candidates. The wording mirrors
+        the user's instruction enough to reveal routing bugs without using a key.
+        """
+        lower = (system_prompt + "\n" + user_message).lower()
+        if "fosco" in lower:
+            return (
+                "Fosco atravesó caminos de polvo, posadas medio olvidadas y fronteras donde cada promesa "
+                "tenía un precio. Sus aventuras no nacieron de la gloria, sino de una obstinación tranquila: "
+                "seguir adelante incluso cuando el mapa dejaba de ser fiable. En cada viaje ganó una cicatriz, "
+                "una historia y una deuda pendiente que todavía tira de él hacia el próximo umbral.",
+                None,
+            )
+        if "english" in lower or "respond in english" in lower:
+            return ("Draft a focused narrative passage from the selected entity, respecting its current name, type, and project tone.", None)
+        return (
+            "Desarrolla el contenido de la entidad seleccionada con un tono coherente con el proyecto, "
+            "aprovechando el nombre, el tipo y el texto ya escrito sin crear nodos ni relaciones nuevas.",
+            None,
+        )
 
     def invoke(self, operation: AIOperation) -> AIResponse:
         mode = operation.mode
@@ -44,8 +96,8 @@ class SimulatedAIProvider(AIProvider):
         elif mode == AIMode.SUMMARIZE:
             raw = "Simulated summary of the entity."
         elif mode == AIMode.REWRITE_DESCRIPTION:
-            raw = "Rewritten description in a different style."
-            candidates = [{"description": "Rewritten description text"}]
+            raw = "Sugerencia de reescritura simulada. Revisa y acepta solo si encaja con el canon."
+            candidates = [{"description": "Texto de reescritura simulado"}]
         elif mode == AIMode.SUGGEST_TAGS:
             raw = "Suggested tags: magia, anciano, torre"
             candidates = [{"tags": ["magia", "anciano", "torre"]}]

@@ -71,7 +71,7 @@ def test_backup_restore_and_list_json(tmp_path: Path) -> None:
     backup_path = Path(backup_data["backup_path"])
     assert backup_path.exists()
 
-    project.write_text('{"schema_version": 19, "id": "broken"}', encoding="utf-8")
+    project.write_text('{"schema_version": 20, "id": "broken"}', encoding="utf-8")
     restore = _cli(f"maintenance restore --backup {backup_path} --json", project=project)
     assert restore.returncode == 0, restore.stderr
     restore_data = json.loads(restore.stdout)

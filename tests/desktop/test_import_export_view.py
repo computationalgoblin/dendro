@@ -67,6 +67,7 @@ def test_import_export_rows_use_import_candidates_not_legacy_candidates(qapp):
         ],
     )
     ctx = AppContext()
+    ctx.set_advanced_mode(False)
     view = ImportExportView(ctx, FakeController())
     view.ic = FakeImportController(basket)
 
@@ -83,11 +84,19 @@ def test_import_export_rows_use_import_candidates_not_legacy_candidates(qapp):
     assert view.table.item(0, 7).text() == "0.73"
     assert view.table.item(0, 8).text() == "D:1 C:1"
 
-    # Select row and ensure detail uses real B17 field names.
+    # Normal mode keeps technical ids hidden.
     view.table.selectRow(0)
+    view._show_detail()
+    clean_detail = view.detail.toPlainText()
+    assert "Source segment: segment-full-id-789" not in clean_detail
+    assert "datos técnicos" in clean_detail.lower()
+
+    # Advanced mode exposes real B17 field names.
+    ctx.set_advanced_mode(True)
+    view.set_advanced_mode(True)
     view._show_detail()
     detail = view.detail.toPlainText()
     assert "Source segment: segment-full-id-789" in detail
-    assert "Duplicates: ['entity-1']" in detail
-    assert "Contradictions: ['issue-1']" in detail
-    assert '"name": "Aria"' in detail
+    assert "candidate-full-id-999" in detail
+    assert "entity-1" in detail
+    assert "issue-1" in detail

@@ -28,3 +28,6 @@ class RelationController:
 
     def restore(self, relation_id):
         return self.rs.restore_relation(relation_id)
+
+    def delete(self, relation_id):
+        return self.rs.delete_relation(relation_id)

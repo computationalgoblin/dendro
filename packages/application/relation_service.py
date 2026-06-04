@@ -601,5 +601,17 @@ class RelationService:
             return Error(proj.error)
         return Ok([r for r in proj.value.relations if layer_id in r.layer_ids])
 
+    def delete_relation(self, relation_id: str) -> Result[None, str]:
+        """Delete a relation by id."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+        before = len(proj.value.relations)
+        proj.value.relations = [r for r in proj.value.relations if r.id != relation_id]
+        if len(proj.value.relations) == before:
+            return Error(f"Relation '{relation_id}' not found")
+        proj.value.touch()
+        return Ok(None)
+
 
 __all__ = ["RelationService"]
