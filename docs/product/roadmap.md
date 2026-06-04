@@ -6,6 +6,10 @@
 
 - B01-B24: Fundación, dominio, persistencia, importación, CLI.
 - B25-B26: Análisis, importación avanzada.
+- B27-B29: Desktop UI, navegación, Grafo.
+- B30-B31: UX visual, Home, Creación, Configuración, Proyecto.
+- B32-B34: Árboles jerárquicos, pertenencia, contexto IA, z-order/hit-testing.
+- **B35: Coherencia de subgrafo.** Análisis, reparación, aceptar/descartar, 17 tests.
 - B27: IA provider, escritura asistida.
 - B28: CLI robustez, candidates.
 - B29-B30: Timeline, robustez general.
