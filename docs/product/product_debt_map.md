@@ -1,57 +1,47 @@
-# B32 — Product debt map
+# Product Debt Map — Dendro / Narrative Architect
 
-Estado tras B32-DEBT: actualizado 2026-06-04.
+Última actualización: B34 completado, B35 pendiente.
 
-## P0 — bloquea uso
+## Convenciones
 
-No queda P0 conocido dentro del alcance validado localmente.
+- **ID**: DC-{bloque}-{secuencial} para deuda de bloque, DC-{global} para deuda transversal.
+- **Prioridad**: bloqueante / media / baja.
+- **Estado**: abierta / mitigada / cerrada.
+- **Destino**: bloque o hito donde se planea resolver.
 
-Histórico resuelto durante B32-DEBT:
+## Deuda activa
 
-- pytest no disponible en WSL: resuelto instalando dependencias dev y validando arquitectura.
-- contratos estáticos de `TreeDetailPanel`: resuelto con `membershipChanged`, métodos mínimos y campos reales `source_id/target_id`.
-- IA inline con riesgo de fallback a candidatos: protegido por contrato/test estático.
+| ID | Descripción | Prioridad | Estado | Origen | Destino |
+|----|-------------|-----------|--------|--------|---------|
+| DC-001..DC-024 | Sin evidencia documental individual (rango arrastrado desde B1-B16) | baja | abierta | B01-B16 | Sin destino |
+| DC-026 | import review edit no implementado | baja | abierta | B17 | B26+ |
+| DC-027 | import review merge no implementado | baja | abierta | B17 | B26+ |
+| DC-028 | PDFExtractor requiere pymupdf no en dependencias | baja | abierta | B17 | B26+ |
+| DC-033 | get_ordered_events sin partial_order real | baja | abierta | B27 | B29+ |
+| DC-034 | TimelineEvent sync con NarrativeEntity(EVENTO) | baja | abierta | B27 | B29+ |
+| DC-035 | IA writing provider simulado, falta integración real | baja | abierta | B27 | B27+ |
+| DC-036 | get_tree no escala >1000 entidades | baja | abierta | B27 | B29+ |
+| DC-040 | CLI flakes secrets/clues (5) | baja | abierta | — | hardening |
+| DC-044 | improvise fallback determinista | baja | abierta | B27 | B27+ |
+| DC-045 | AnalysisService sin tests unitarios dedicados | media | abierta | B25 | B29+ |
+| DC-B28-UI-WIN | B28 sin validación Desktop nativa Windows | media | abierta | B28 | B30+ |
+| DC-034-01 | Layout contenedores no persiste posiciones entre sesiones | baja | abierta | B34 | Futuro |
+| DC-034-02 | _tree_context NarrativeContextBuilder sin cache, lento en proyectos grandes | baja | abierta | B34 | Futuro |
+| DC-034-03 | Collapse/expand visual se pierde al refrescar grafo (intencional) | baja | abierta | B34 | Futuro |
+| DC-034-04 | Layout jerárquico Windows imperfecto: artefactos en collapse/expand anidado, relaciones inconsistentes, degradación de layout en algunos casos | media | abierta | B34 | Pasada graph layout/scene graph |
 
-## P1 — rompe UX principal
+## Deuda cerrada
 
-No queda P1 conocido dentro del alcance validado localmente.
+| ID | Descripción | Cerrada en | Notas |
+|----|-------------|------------|-------|
+| DC-008 | Sin detalle | B05 | Cerrada por usuario |
+| DC-009 | Persistencia v5 tests history | B06 | test_dc009_coverage.py |
+| DC-016 | Absorbida | B12 | Absorbida en B12 |
+| DC-022 | CandidateService sin tests | B15.8 | test_candidate_service.py |
+| DC-024 | OrchestratorService sin tests | B15.8 | test_orchestrator_service.py |
 
-Histórico resuelto/mitigado:
+## Regla
 
-- Superficie normal con rutas técnicas: tests actualizados para proteger que no reaparezcan `Corpus técnico`, `Relaciones técnicas`, `Candidatos técnicos` como copy normal.
-- Importación mezclando detalle técnico en normal: test cubre normal limpio y avanzado técnico.
-- Provider simulado devolviendo texto genérico inglés de rewrite: eliminado.
-
-## P2 — incómodo pero usable
-
-- Validación visual Windows pendiente.
-- Galería necesita definición de producto antes de inversión visual.
-- Sesión/campaña necesita visibilidad gobernada por tipo de proyecto.
-- Worldbuilding por capas debe esperar a contrato de árboles/contexto estable.
-
-## P3 — mejora futura
-
-- Refinar copy de todos los módulos later.
-- Añadir pruebas visuales automatizadas si el entorno lo permite.
-- Reducir más dependencias entre vistas legacy y workspaces.
-
-## Funcionalidades ocultas o avanzadas
-
-- CorpusView tabular.
-- RelationView tabular.
-- CandidateView técnica.
-- SourceView.
-- FrameworkView.
-- LayerView cuando `worldbuilding_active=false`.
-- IDs, JSON, schema y logs técnicos.
-
-## Funcionalidades eliminables candidatas
-
-No eliminar todavía. Mantener ocultas/avanzadas hasta estabilizar B33-B34 y confirmar que no hacen falta para migración/QA.
-
-## Decisiones pendientes
-
-1. Definir producto de Galería.
-2. Definir cuándo se muestra Sesión según tipo de proyecto.
-3. Definir contrato persistente final de árboles y membresía.
-4. Definir worldbuilding por capas causales después de árboles.
+- No renumerar IDs.
+- "Mitigado" != "resuelto".
+- Toda deuda nueva sigue el formato DC-{bloque}-{secuencial}.
