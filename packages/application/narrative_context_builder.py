@@ -194,6 +194,11 @@ class NarrativeContextBuilder:
                 "tone": _safe_obj(getattr(project, "tone", None)),
                 "genre": _safe_obj(getattr(project, "genre", None)),
                 "realism": _safe_obj(getattr(project, "realism", None)),
+                "creative_config": _safe_obj(getattr(project, "creative_config", None)),
+                "creative_project_config": _safe_obj(getattr(project, "creative_project_config", None)),
+                "project_type": getattr(project, "project_type", ""),
+                "narrative_style": getattr(project, "narrative_style", ""),
+                "creative_rules": getattr(project, "creative_rules", ""),
                 "general": _safe_obj(getattr(project, "general", None)),
                 "world_layers": [self._layer_summary(layer) for layer in _list(getattr(project, "world_layers", []))],
                 "domains": list(getattr(project, "domains", []) or []),
@@ -270,13 +275,19 @@ class NarrativeContextBuilder:
     def _relation_summary(self, relation, audience: str) -> dict[str, Any]:
         source = self._entity_by_id(getattr(relation, "source_id", ""))
         target = self._entity_by_id(getattr(relation, "target_id", ""))
+        meta = getattr(relation, "custom_metadata", {}) or {}
         return {
             "id": getattr(relation, "id", ""),
             "source": self._entity_ref(source),
             "target": self._entity_ref(target),
+            "source_full": self._entity_summary(source, audience) if source is not None else None,
+            "target_full": self._entity_summary(target, audience) if target is not None else None,
             "relation_type": _string_value(getattr(relation, "relation_type", "")),
             "direction": _string_value(getattr(relation, "direction", "")),
             "description": getattr(relation, "description", ""),
+            "body": meta.get("_body", ""),
+            "notes": meta.get("_notes", "") if self._audience_kind(audience) == "gm" else "",
+            "edge_color": meta.get("_edge_color", ""),
             "intensity": _string_value(getattr(relation, "intensity", "")),
             "temporality": getattr(relation, "temporality", ""),
             "causality": getattr(relation, "causality", ""),

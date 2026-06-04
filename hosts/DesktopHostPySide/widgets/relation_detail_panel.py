@@ -94,6 +94,19 @@ def _default_color_for_type(relation_type_str: str) -> str:
     return _EDGE_COLORS.get((relation_type_str or "").lower(), "#A4AEC0")
 
 
+def _safe_ai_error(message: str) -> str:
+    raw = str(message or "Error IA desconocido.").strip()
+    lower = raw.lower()
+    if "traceback" in lower:
+        raw = raw.splitlines()[-1] if raw.splitlines() else "Error IA."
+    for token in ("api_key", "apikey", "authorization", "bearer ", "token"):
+        if token in lower:
+            return "Error IA: credenciales o conexión no válidas. Revisa Configuración > IA."
+    if len(raw) > 220:
+        raw = raw[:220].rstrip() + "…"
+    return raw or "Error IA desconocido."
+
+
 # ---------------------------------------------------------------------------
 # Non-blocking AI worker for relation text suggestion
 # ---------------------------------------------------------------------------
@@ -394,7 +407,7 @@ class RelationDetailPanel(QWidget):
         self.ai_prompt_edit = QLineEdit()
         self.ai_prompt_edit.setPlaceholderText("Ej: Haz la relación más tensa, añade conflicto…")
         prompt_row.addWidget(self.ai_prompt_edit, 1)
-        self.ai_generate_btn = QPushButton("Generar sugerencia")
+        self.ai_generate_btn = QPushButton("Mejorar / desarrollar relación")
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
         self.ai_generate_btn.clicked.connect(self._start_ai_suggestion)
         prompt_row.addWidget(self.ai_generate_btn)
@@ -451,6 +464,8 @@ class RelationDetailPanel(QWidget):
         self.discard_btn = QPushButton("Descartar")
         self.discard_btn.setFixedHeight(28)
         self.discard_btn.clicked.connect(self._discard_suggestion)
+        self.refine_btn.setVisible(False)
+        self.refine_btn.setEnabled(False)
         sug_actions.addStretch()
         sug_actions.addWidget(self.refine_btn)
         sug_actions.addWidget(self.accept_btn)
@@ -598,7 +613,7 @@ class RelationDetailPanel(QWidget):
             self._show_ai_error(f"No se pudo preparar la petición IA: {exc}")
             return
         self.ai_generate_btn.setEnabled(False)
-        self.ai_generate_btn.setText("Generando…")
+        self.ai_generate_btn.setText("Generando sugerencia…")
         self.suggestion_text.setPlainText("Generando sugerencia…")
         self.suggestion_frame.setVisible(True)
         self.accept_btn.setEnabled(False)
@@ -614,23 +629,24 @@ class RelationDetailPanel(QWidget):
         self._ai_worker.start()
 
     def _show_ai_error(self, message: str):
+        safe_message = _safe_ai_error(message)
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
-        self.ai_generate_btn.setText("Generar sugerencia")
-        self.refine_btn.setEnabled(True)
-        self.suggestion_text.setPlainText(f"Error IA: {message}")
+        self.ai_generate_btn.setText("Mejorar / desarrollar relación")
+        self.refine_btn.setEnabled(False)
+        self.suggestion_text.setPlainText(f"Error IA: {safe_message}")
         self.suggestion_frame.setVisible(True)
         self.accept_btn.setEnabled(False)
         if self.ctx is not None:
-            self.ctx.log("warning", f"IA relación: {message}")
+            self.ctx.log("warning", f"IA relación: {safe_message}")
 
     def _on_ai_finished(self, text: str, error: str):
         self.ai_generate_btn.setEnabled(True)
-        self.ai_generate_btn.setText("Generar sugerencia")
+        self.ai_generate_btn.setText("Mejorar / desarrollar relación")
         if error:
             self._show_ai_error(error)
             return
         self.accept_btn.setEnabled(True)
-        self.refine_btn.setEnabled(True)
+        self.refine_btn.setEnabled(False)
         if not text:
             self._show_ai_error("La IA no devolvió texto.")
             return

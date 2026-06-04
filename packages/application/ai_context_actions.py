@@ -177,25 +177,22 @@ _ENTITY_TEXT_SYSTEM_PROMPT_EN = (
 
 _RELATION_TEXT_SYSTEM_PROMPT_ES = (
     "Eres un asistente de escritura integrado en Dendro. Tu tarea es mejorar o completar "
-    "el contenido textual de la relación seleccionada. Usa el nodo origen, el nodo destino, "
-    "el tipo de relación, la descripción actual, el cuerpo actual, las notas y el contexto "
-    "del proyecto. Respeta género, tono, realismo, estilo narrativo e idioma configurados. "
-    "Sigue especialmente la instrucción opcional del usuario si existe. Devuelve únicamente "
-    "el texto sugerido para incorporar a la descripción o cuerpo de la relación. No devuelvas "
-    "JSON. No devuelvas una ficha técnica. No crees nuevas entidades, nuevas relaciones, "
-    "secretos ni canon nuevo salvo que el usuario lo pida explícitamente. No modifiques el "
-    "proyecto. Responde en español."
+    "el contenido textual de una relación narrativa entre dos entidades. Usa el origen, "
+    "destino, tipo de relación, dirección, descripción, cuerpo, notas y contexto creativo "
+    "del proyecto. Respeta idioma, género, tono, realismo y estilo narrativo. Sigue "
+    "especialmente la instrucción opcional del usuario si existe. Devuelve únicamente el "
+    "texto sugerido para la relación. No devuelvas JSON. No devuelvas una ficha técnica. "
+    "No crees entidades, relaciones, árboles, secretos ni canon nuevo. No modifiques el proyecto."
 )
 
 _RELATION_TEXT_SYSTEM_PROMPT_EN = (
     "You are a writing assistant integrated into Dendro. Your task is to improve or complete "
-    "the textual content of the selected relationship. Use the source node, target node, "
-    "relationship type, current description, current body, notes, and project context. Respect "
-    "the configured genre, tone, realism, narrative style, and language. Follow the optional "
-    "user instruction especially when it exists. Return only the suggested text to incorporate "
-    "into the relationship description or body. Do not return JSON. Do not return a technical "
-    "sheet. Do not create new entities, relationships, secrets, or new canon unless the user "
-    "explicitly asks for it. Do not modify the project. Respond in English."
+    "the textual content of a narrative relationship between two entities. Use source, target, "
+    "relationship type, direction, current description, body, notes, and project creative context. "
+    "Respect language, genre, tone, realism, and narrative style. Follow the optional user "
+    "instruction especially when it exists. Return only the suggested text for the relationship. "
+    "Do not return JSON. Do not return a technical sheet. Do not create entities, relationships, "
+    "trees, secrets, or new canon. Do not modify the project."
 )
 
 _COHERENCE_SYSTEM_PROMPT_ES = (
@@ -346,12 +343,16 @@ def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, langua
 
     source = target.get("source") or {}
     target_node = target.get("target_node") or target.get("target") or {}
+    source_full = target.get("source_full") or source
+    target_full = target.get("target_full") or target_node
+    narrative_style = creative.get("narrative_style") or project.get("narrative_style") or "—"
+    creative_rules = creative.get("creative_rules") or project.get("creative_rules") or "—"
 
     if language == "en":
         no_instruction = "No extra instruction: improve or complete the existing text coherently."
         parts = [
-            f"Source entity: {source.get('name') or 'Untitled'} ({source.get('entity_type') or source.get('type') or 'entity'})",
-            f"Target entity: {target_node.get('name') or 'Untitled'} ({target_node.get('entity_type') or target_node.get('type') or 'entity'})",
+            f"Source entity: {_compact_for_prompt(source_full, 1200)}",
+            f"Target entity: {_compact_for_prompt(target_full, 1200)}",
             f"Relation type: {target.get('relation_type') or target.get('type') or '—'}",
             f"Direction: {target.get('direction') or '—'}",
             f"Current description:\n{_compact_for_prompt(target.get('description') or '—', 800)}",
@@ -370,11 +371,12 @@ def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, langua
             parts.append(f"Notes:\n{_compact_for_prompt(notes, 800)}")
         parts += [
             f"Project: {project.get('name') or '—'}",
+            f"Language: {project.get('primary_language') or 'en'}",
             f"Genre: {_compact_for_prompt(genre, 500)}",
             f"Tone: {_compact_for_prompt(tone, 500)}",
             f"Realism: {_compact_for_prompt(realism, 500)}",
-            f"Narrative style: {creative.get('narrative_style') or '—'}",
-            f"Creative rules: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}",
+            f"Narrative style: {narrative_style}",
+            f"Creative rules: {_compact_for_prompt(creative_rules, 800)}",
             f"Worldbuilding active: {project.get('worldbuilding_active', False)}",
             f"Neighborhood context: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}",
             f"User instruction: {instruction or no_instruction}",
@@ -383,8 +385,8 @@ def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, langua
 
     no_instruction = "Sin instrucción extra: mejora o completa el texto existente con coherencia."
     parts = [
-        f"Entidad origen: {source.get('name') or 'Sin título'} ({source.get('entity_type') or source.get('type') or 'entidad'})",
-        f"Entidad destino: {target_node.get('name') or 'Sin título'} ({target_node.get('entity_type') or target_node.get('type') or 'entidad'})",
+        f"Entidad origen: {_compact_for_prompt(source_full, 1200)}",
+        f"Entidad destino: {_compact_for_prompt(target_full, 1200)}",
         f"Tipo de relación: {target.get('relation_type') or target.get('type') or '—'}",
         f"Dirección: {target.get('direction') or '—'}",
         f"Descripción actual:\n{_compact_for_prompt(target.get('description') or '—', 800)}",
@@ -403,11 +405,12 @@ def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, langua
         parts.append(f"Notas:\n{_compact_for_prompt(notes, 800)}")
     parts += [
         f"Proyecto: {project.get('name') or '—'}",
+        f"Idioma: {project.get('primary_language') or 'es'}",
         f"Género: {_compact_for_prompt(genre, 500)}",
         f"Tono: {_compact_for_prompt(tone, 500)}",
         f"Realismo: {_compact_for_prompt(realism, 500)}",
-        f"Estilo narrativo: {creative.get('narrative_style') or '—'}",
-        f"Reglas creativas: {_compact_for_prompt(creative.get('creative_rules') or '—', 800)}",
+        f"Estilo narrativo: {narrative_style}",
+        f"Reglas creativas: {_compact_for_prompt(creative_rules, 800)}",
         f"Worldbuilding activo: {project.get('worldbuilding_active', False)}",
         f"Contexto de relaciones: {_compact_for_prompt(context.get('neighborhood') or {}, 1200)}",
         f"Instrucción del usuario: {instruction or no_instruction}",
