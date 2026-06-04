@@ -229,6 +229,7 @@ class TreeDetailPanel(QWidget):
         parent: QWidget | None = None,
         *,
         is_new: bool = False,
+        on_focus_tree: Callable[[str], None] | None = None,
     ):
         super().__init__(parent)
         self.ctx = ctx
@@ -237,6 +238,7 @@ class TreeDetailPanel(QWidget):
         self.entity_id = entity_id
         self.on_saved = on_saved
         self.ai_controller = ai_controller
+        self.on_focus_tree = on_focus_tree
         self._ai_worker: _TreeAIWorker | None = None
         self._tree_meta = TreeMeta()
         self._is_new = is_new
@@ -261,6 +263,11 @@ class TreeDetailPanel(QWidget):
             f"color: {_TITLE_COLOR}; font-weight: 700; font-size: 16px; background: transparent;"
         )
         root.addWidget(self.header_label)
+        if self.on_focus_tree is not None:
+            focus_btn = QPushButton("Enfocar árbol")
+            focus_btn.setToolTip("Ver solo este árbol y su contenido directo")
+            focus_btn.clicked.connect(lambda: self.on_focus_tree(self.entity_id))
+            root.addWidget(focus_btn)
 
         # ═══ 1. IDENTIDAD ═══
         id_card, id_layout = _section_card("Identidad")

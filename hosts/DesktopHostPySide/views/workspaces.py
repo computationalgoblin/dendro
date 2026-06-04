@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
-from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState
+from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState, relation_family
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
@@ -442,17 +442,21 @@ class CreationFilterPanel(_SimpleFormPanel):
         form = QFormLayout()
         self.entity_type = QComboBox()
         self.relation_type = QComboBox()
+        self.relation_family = QComboBox()
         self.tree = QComboBox()
         self.layer = QComboBox()
         self.canon = QComboBox()
         self.visibility = QComboBox()
         self.show_relations = QCheckBox("Mostrar relaciones")
         self.show_relations.setChecked(True)
-        for combo in (self.entity_type, self.relation_type, self.tree, self.layer, self.canon, self.visibility):
+        for combo in (self.entity_type, self.relation_type, self.relation_family, self.tree, self.layer, self.canon, self.visibility):
             combo.addItem("— Cualquiera —", "")
+        for label, value in (("Pertenencia estructural", "estructural"), ("Narrativa", "narrativa"), ("Causal", "causal"), ("Coherencia/incidencias", "coherencia")):
+            self.relation_family.addItem(label, value)
         self._populate()
         form.addRow("Tipo entidad", self.entity_type)
         form.addRow("Tipo relación", self.relation_type)
+        form.addRow("Familia relación", self.relation_family)
         form.addRow("Árbol", self.tree)
         if self._worldbuilding_active():
             form.addRow("Capa", self.layer)
@@ -460,7 +464,7 @@ class CreationFilterPanel(_SimpleFormPanel):
         form.addRow("Visibilidad", self.visibility)
         form.addRow("Relaciones", self.show_relations)
         self.layout.addLayout(form)
-        for widget in (self.entity_type, self.relation_type, self.tree, self.layer, self.canon, self.visibility):
+        for widget in (self.entity_type, self.relation_type, self.relation_family, self.tree, self.layer, self.canon, self.visibility):
             widget.currentIndexChanged.connect(self._apply)
         self.show_relations.toggled.connect(self._apply)
         row = QHBoxLayout()
@@ -515,6 +519,7 @@ class CreationFilterPanel(_SimpleFormPanel):
         return VisualFilterState(
             entity_types=one(self.entity_type),
             relation_types=one(self.relation_type),
+            relation_families=one(self.relation_family),
             tree_id=str(self.tree.currentData() or ""),
             layer_ids=one(self.layer) if self._worldbuilding_active() else (),
             canon_states=one(self.canon),
@@ -529,6 +534,7 @@ class CreationFilterPanel(_SimpleFormPanel):
     def _clear(self):
         self.entity_type.setCurrentIndex(0)
         self.relation_type.setCurrentIndex(0)
+        self.relation_family.setCurrentIndex(0)
         self.tree.setCurrentIndex(0)
         self.layer.setCurrentIndex(0)
         self.canon.setCurrentIndex(0)
@@ -743,6 +749,36 @@ class CreationWorkspace(QWidget):
         self._filter_btn.clicked.connect(self._open_filter_panel)
         layout.addWidget(self._filter_btn)
 
+        self._global_focus_btn = QPushButton("Global")
+        self._global_focus_btn.setToolTip("Volver a vista global")
+        self._global_focus_btn.setStyleSheet(btn_style)
+        self._global_focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._global_focus_btn.clicked.connect(self.clear_focus_scope)
+        self._global_focus_btn.setVisible(False)
+        layout.addWidget(self._global_focus_btn)
+
+        self._focus_label = QLabel("Global")
+        self._focus_label.setStyleSheet("color: #6F6A42; font-size: 11px; padding: 0 8px;")
+        layout.addWidget(self._focus_label)
+
+        center_btn = QPushButton("◎")
+        center_btn.setToolTip("Centrar selección")
+        center_btn.setStyleSheet(btn_style)
+        center_btn.clicked.connect(self.center_selection)
+        layout.addWidget(center_btn)
+
+        fit_btn = QPushButton("□")
+        fit_btn.setToolTip("Encajar todo")
+        fit_btn.setStyleSheet(btn_style)
+        fit_btn.clicked.connect(self.fit_all)
+        layout.addWidget(fit_btn)
+
+        reset_btn = QPushButton("↺")
+        reset_btn.setToolTip("Reset vista")
+        reset_btn.setStyleSheet(btn_style)
+        reset_btn.clicked.connect(self.reset_view)
+        layout.addWidget(reset_btn)
+
         layout.addStretch()
 
         # Delete selected entity/relation/container
@@ -842,6 +878,47 @@ class CreationWorkspace(QWidget):
         if result.item_kind == "tree":
             return self.graph.focus_tree(result.item_id)
         return self.graph.focus_node(result.item_id)
+
+    def _set_focus_breadcrumb(self, text: str, *, active: bool):
+        if hasattr(self, "_focus_label"):
+            self._focus_label.setText(text)
+        if hasattr(self, "_global_focus_btn"):
+            self._global_focus_btn.setVisible(active)
+
+    def _entity_name(self, entity_id: str) -> str:
+        entity = self._entity_by_id(entity_id)
+        return str(getattr(entity, "name", entity_id)) if entity is not None else "Elemento"
+
+    def focus_tree_scope(self, tree_id: str) -> bool:
+        ok = self.graph.focus_tree_scope(tree_id)
+        if ok:
+            self._set_focus_breadcrumb(f"Global > {self._entity_name(tree_id)}", active=True)
+            self.ctx.log("info", "Vista enfocada de árbol activa")
+        return ok
+
+    def focus_neighborhood(self, item_id: str, *, kind: str = "entity") -> bool:
+        ok = self.graph.focus_neighborhood(item_id)
+        if ok:
+            label = self._entity_name(item_id) if kind != "relation" else "Relación seleccionada"
+            self._set_focus_breadcrumb(f"Global > Vecindad > {label}", active=True)
+            self.ctx.log("info", "Vista enfocada de vecindad activa")
+        return ok
+
+    def clear_focus_scope(self):
+        self.graph.clear_focus_scope()
+        self._set_focus_breadcrumb("Global", active=False)
+        self._sync_filter_indicator()
+        self.ctx.log("info", "Vista global restaurada")
+
+    def fit_all(self):
+        self.graph.fit_all()
+
+    def reset_view(self):
+        self.graph.reset_view()
+
+    def center_selection(self):
+        if not self.graph.center_selection():
+            self.ctx.log("info", "No hay selección que centrar")
 
     # ── Utility openers ────────────────────────────────────────────────────
 
@@ -1153,6 +1230,7 @@ class CreationWorkspace(QWidget):
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
             is_new=is_new,
+            on_focus_tree=self.focus_tree_scope,
         )
         self.ctx.drawer.set_content(panel, title="Contenedor")
         self.ctx.drawer.open()
@@ -1256,6 +1334,7 @@ class CreationWorkspace(QWidget):
             ai_controller=self.ai_context_controller,
             relation_controller=self.relation_controller,
             is_new=is_new,
+            on_focus_neighborhood=lambda eid=entity_id: self.focus_neighborhood(eid, kind="entity"),
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()
@@ -1272,6 +1351,7 @@ class CreationWorkspace(QWidget):
             ai_controller=self.ai_context_controller,
             entity_controller=self.entity_controller,
             is_new=is_new,
+            on_focus_neighborhood=lambda rid=relation_id: self.focus_neighborhood(rid, kind="relation"),
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()

@@ -249,6 +249,7 @@ class NodeDetailPanel(QWidget):
         ai_controller=None,
         relation_controller=None,
         is_new: bool = False,
+        on_focus_neighborhood=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -257,6 +258,7 @@ class NodeDetailPanel(QWidget):
         self.on_saved = on_saved
         self.ai_controller = ai_controller
         self.relation_controller = relation_controller
+        self.on_focus_neighborhood = on_focus_neighborhood
         self.is_new = bool(is_new)
         self._entity = None
         self._current_color: str = ""
@@ -291,6 +293,11 @@ class NodeDetailPanel(QWidget):
         self.type_badge = Badge("Entidad", "info")
         head.addWidget(self.type_badge)
         root.addLayout(head)
+        if self.on_focus_neighborhood is not None:
+            focus_btn = QPushButton("Enfocar vecindad")
+            focus_btn.setToolTip("Ver este nodo y sus relaciones cercanas")
+            focus_btn.clicked.connect(self.on_focus_neighborhood)
+            root.addWidget(focus_btn)
 
         # -- Compact summary line --
         self.summary = QLabel("")

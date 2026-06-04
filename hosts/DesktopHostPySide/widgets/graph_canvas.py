@@ -133,8 +133,10 @@ class VisualFilterState:
 
     entity_types: tuple[str, ...] = ()
     relation_types: tuple[str, ...] = ()
+    relation_families: tuple[str, ...] = ()
     tree_id: str = ""
     layer_ids: tuple[str, ...] = ()
+    focus_entity_ids: tuple[str, ...] = ()
     canon_states: tuple[str, ...] = ()
     visibility_states: tuple[str, ...] = ()
     show_relations: bool = True
@@ -143,8 +145,10 @@ class VisualFilterState:
         return bool(
             self.entity_types
             or self.relation_types
+            or self.relation_families
             or self.tree_id
             or self.layer_ids
+            or self.focus_entity_ids
             or self.canon_states
             or self.visibility_states
             or not self.show_relations
@@ -993,6 +997,22 @@ class GraphEdgeItem(QGraphicsPathItem):
         super().mousePressEvent(event)
 
 
+
+_STRUCTURAL_RELATIONS = {"contiene", "pertenece_a"}
+_CAUSAL_RELATIONS = {"deriva_de", "condiciona", "explica", "contradice", "produce_consecuencia_en"}
+_COHERENCE_RELATIONS = {"incidencia", "contradiccion", "hueco", "reparacion"}
+
+
+def relation_family(kind: str) -> str:
+    value = (kind or "").lower()
+    if value in _STRUCTURAL_RELATIONS:
+        return "estructural"
+    if value in _CAUSAL_RELATIONS:
+        return "causal"
+    if value in _COHERENCE_RELATIONS or "coher" in value or "incid" in value:
+        return "coherencia"
+    return "narrativa"
+
 class GraphCanvasView(QGraphicsView):
     """Interactive view: pan/zoom with selectable nodes and edges."""
 
@@ -1046,6 +1066,7 @@ class GraphCanvasView(QGraphicsView):
         return self.selected_entity_ids(), self.selected_relation_ids()
 
     def _emit_selection_changed(self):
+        self._apply_relation_emphasis()
         self.graphSelectionChanged.emit(self.selected_entity_ids(), self.selected_relation_ids())
 
     def clear_selection(self, *, emit: bool = True):
@@ -1109,6 +1130,19 @@ class GraphCanvasView(QGraphicsView):
         self._selected_relation_ids.add(edge.edge.relation_id)
         edge.set_coherence_selected(True)
         self._emit_selection_changed()
+
+    def _apply_relation_emphasis(self):
+        if not self._selected_entity_ids and not self._selected_relation_ids:
+            for edge in self._edges:
+                edge.setOpacity(1.0)
+            return
+        for edge in self._edges:
+            related = (
+                edge.edge.relation_id in self._selected_relation_ids
+                or edge.edge.source_id in self._selected_entity_ids
+                or edge.edge.target_id in self._selected_entity_ids
+            )
+            edge.setOpacity(1.0 if related else 0.22)
 
     def _toggle_node_selection(self, node: GraphNodeItem):
         entity_id = node.node.entity_id
@@ -1383,6 +1417,8 @@ class GraphCanvasView(QGraphicsView):
         vf = self._visual_filter
         if allowed_tree_ids is not None and node.entity_id not in allowed_tree_ids:
             return False
+        if vf.focus_entity_ids and node.entity_id not in vf.focus_entity_ids:
+            return False
         if vf.entity_types and node.kind.lower() not in vf.entity_types:
             return False
         if vf.layer_ids and (node.layer_id or "") not in vf.layer_ids:
@@ -1400,6 +1436,8 @@ class GraphCanvasView(QGraphicsView):
         if edge.kind.lower() == "contiene":
             return True
         if not vf.show_relations:
+            return False
+        if vf.relation_families and relation_family(edge.kind) not in vf.relation_families:
             return False
         if vf.relation_types and edge.kind.lower() not in vf.relation_types:
             return False
@@ -1710,7 +1748,7 @@ class GraphCanvasView(QGraphicsView):
 
     def active_filter_count(self) -> int:
         vf = self._visual_filter
-        return sum(1 for active in [vf.entity_types, vf.relation_types, vf.tree_id, vf.layer_ids, vf.canon_states, vf.visibility_states, not vf.show_relations] if active)
+        return sum(1 for active in [vf.entity_types, vf.relation_types, vf.relation_families, vf.tree_id, vf.layer_ids, vf.focus_entity_ids, vf.canon_states, vf.visibility_states, not vf.show_relations] if active)
 
     def center_on_item(self, item: QGraphicsItem):
         self.centerOn(item)
@@ -1792,6 +1830,53 @@ class GraphCanvasView(QGraphicsView):
                     summary=summary,
                 ))
         return results[:40]
+
+    def focus_tree_scope(self, tree_id: str) -> bool:
+        ids = {tree_id} | self._descendant_ids_for_tree(tree_id)
+        self.apply_visual_filter(VisualFilterState(focus_entity_ids=tuple(sorted(ids))))
+        return self.focus_tree(tree_id)
+
+    def focus_neighborhood(self, item_id: str) -> bool:
+        ids: set[str] = set()
+        relation = next((edge for edge in self._all_edges if edge.relation_id == item_id), None)
+        center_relation = ""
+        if relation is not None:
+            ids.update([relation.source_id, relation.target_id])
+            center_relation = item_id
+        else:
+            ids.add(item_id)
+            for edge in self._all_edges:
+                if edge.source_id == item_id or edge.target_id == item_id:
+                    ids.update([edge.source_id, edge.target_id])
+        self.apply_visual_filter(VisualFilterState(focus_entity_ids=tuple(sorted(ids))))
+        if center_relation:
+            return self.focus_relation(center_relation)
+        return self.focus_node(item_id)
+
+    def clear_focus_scope(self):
+        self.clear_visual_filters()
+
+    def fit_all(self):
+        rect = self.scene_obj.itemsBoundingRect()
+        if rect.isValid() and not rect.isEmpty():
+            self.fitInView(rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def reset_view(self):
+        self.resetTransform()
+        self.centerOn(0, 0)
+
+    def center_selection(self) -> bool:
+        selected_items = []
+        selected_items.extend(item for eid, item in self._nodes.items() if eid in self._selected_entity_ids)
+        selected_items.extend(item for eid, item in self._trees.items() if eid in self._selected_entity_ids)
+        selected_items.extend(edge for edge in self._edges if edge.edge.relation_id in self._selected_relation_ids)
+        if not selected_items:
+            return False
+        rect = selected_items[0].sceneBoundingRect()
+        for item in selected_items[1:]:
+            rect = rect.united(item.sceneBoundingRect())
+        self.fitInView(rect.adjusted(-180, -160, 180, 160), Qt.AspectRatioMode.KeepAspectRatio)
+        return True
 
     def focus_entity(self, entity_id: str):
         self.focus_node(entity_id)
@@ -1897,6 +1982,33 @@ class GraphCanvasWidget(QWidget):
 
     def active_filter_count(self) -> int:
         return self.canvas.active_filter_count()
+
+    def focus_tree_scope(self, tree_id: str) -> bool:
+        ok = self.canvas.focus_tree_scope(tree_id)
+        if ok:
+            self._entity_selected(tree_id)
+        return ok
+
+    def focus_neighborhood(self, item_id: str) -> bool:
+        ok = self.canvas.focus_neighborhood(item_id)
+        if ok:
+            if item_id in {rel.relation_id for rel in self.canvas._all_edges}:
+                self._relation_selected(item_id)
+            else:
+                self._entity_selected(item_id)
+        return ok
+
+    def clear_focus_scope(self):
+        self.canvas.clear_focus_scope()
+
+    def fit_all(self):
+        self.canvas.fit_all()
+
+    def reset_view(self):
+        self.canvas.reset_view()
+
+    def center_selection(self) -> bool:
+        return self.canvas.center_selection()
 
     def run_graph_ai_action(self, action_type: str):
         if self.ai_controller is None:

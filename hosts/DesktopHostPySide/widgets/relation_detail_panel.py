@@ -219,6 +219,7 @@ class RelationDetailPanel(QWidget):
         ai_controller=None,
         entity_controller=None,
         is_new: bool = False,
+        on_focus_neighborhood=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -227,6 +228,7 @@ class RelationDetailPanel(QWidget):
         self.on_saved = on_saved
         self.ai_controller = ai_controller
         self.entity_controller = entity_controller
+        self.on_focus_neighborhood = on_focus_neighborhood
         self.is_new = is_new
         self._relation = None
         self._current_color: str = ""
@@ -261,6 +263,11 @@ class RelationDetailPanel(QWidget):
         self.type_badge = Badge("Relación", "info")
         head.addWidget(self.type_badge)
         root.addLayout(head)
+        if self.on_focus_neighborhood is not None:
+            focus_btn = QPushButton("Enfocar vecindad")
+            focus_btn.setToolTip("Ver los extremos de esta relación sin todo el grafo")
+            focus_btn.clicked.connect(self.on_focus_neighborhood)
+            root.addWidget(focus_btn)
 
         # -- Direction summary --
         self.summary = QLabel("")

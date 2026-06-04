@@ -171,3 +171,53 @@ def test_b37_filters_do_not_mutate_node_models(qapp):
     view.clear_visual_filters()
     after = [(n.entity_id, n.name, n.kind, n.canon, n.visibility, n.layer_id) for n in nodes]
     assert after == before
+
+
+def test_b37_focus_tree_scope_limits_view_to_tree_content(qapp):
+    view, _, _ = build_view(qapp)
+    assert view.focus_tree_scope("tree-hermandad") is True
+    assert set(view._nodes) == {"tree-hermandad", "ent-devian"}
+    assert view.selected_entity_ids() == ["tree-hermandad"]
+
+
+def test_b37_focus_neighborhood_shows_center_and_neighbors(qapp):
+    view, _, _ = build_view(qapp)
+    assert view.focus_neighborhood("ent-devian") is True
+    assert {"ent-devian", "ent-forja", "tree-hermandad"}.issubset(set(view._nodes))
+    assert view.selected_entity_ids() == ["ent-devian"]
+
+
+def test_b37_focus_relation_scope_selects_relation(qapp):
+    view, _, _ = build_view(qapp)
+    assert view.focus_neighborhood("rel-alianza") is True
+    assert set(view._nodes) == {"ent-devian", "ent-forja"}
+    assert view.selected_relation_ids() == ["rel-alianza"]
+
+
+def test_b37_clear_focus_scope_restores_global(qapp):
+    view, _, _ = build_view(qapp)
+    view.focus_tree_scope("tree-hermandad")
+    view.clear_focus_scope()
+    assert {"tree-hermandad", "ent-devian", "ent-forja"}.issubset(set(view._nodes))
+
+
+def test_b37_relation_family_filter_causal(qapp):
+    view, _, _ = build_view(qapp)
+    view.apply_visual_filter(VisualFilterState(relation_families=("causal",)))
+    assert all(item.edge.kind in {"contiene", "deriva_de"} for item in view._edges)
+
+
+def test_b37_selected_node_emphasizes_adjacent_relations(qapp):
+    view, _, _ = build_view(qapp)
+    assert view.focus_node("ent-forja") is True
+    related = {edge.edge.relation_id: edge.opacity() for edge in view._edges}
+    assert related["rel-alianza"] == 1.0
+    assert related["rel-causal"] == 1.0
+
+
+def test_b37_camera_helpers_do_not_error(qapp):
+    view, _, _ = build_view(qapp)
+    view.fit_all()
+    view.reset_view()
+    assert view.focus_node("ent-devian") is True
+    assert view.center_selection() is True
