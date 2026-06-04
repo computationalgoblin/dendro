@@ -54,6 +54,7 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b34_tree_narrative_relations.py",
         "tests/application/test_b34_tree_ia_context.py",
         "tests/application/test_b34_fix02_transitive_collapse.py",
+        "tests/application/test_b34_fix03_zorder_hitesting.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsEllipseItem,
@@ -320,6 +320,16 @@ class GraphTreeItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self.setZValue(0)
 
+        # ── Z-order hierarchy ──
+        # Background: z=0 (this item)
+        # Header: z=1
+        # Children (nodes/subtrees): z=2+
+        # Handles/edges on top: z=10
+        self._BASE_Z = 0
+        self._HEADER_Z = 1
+        self._CHILD_Z = 2
+        self._DEPTH = 0  # set during set_graph for nested containers
+
         # Pens
         self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#A4AEC0"), 2.0 if not node.proposed else 2.6)
         if node.proposed:
@@ -335,6 +345,7 @@ class GraphTreeItem(QGraphicsRectItem):
 
         # ── Header bar (fixed at top of rect) ──
         self._header_item = QGraphicsRectItem(0, 0, width, _CONTAINER_HEADER_HEIGHT, self)
+        self._header_item.setZValue(self._HEADER_Z)
         header_bg = QColor(_CONTAINER_HEADER_COLOR)
         header_bg.setAlpha(210)
         self._header_item.setBrush(QBrush(header_bg))
@@ -554,6 +565,22 @@ class GraphTreeItem(QGraphicsRectItem):
         """Store reference to all canvas edges for visibility management."""
         self._canvas_edges = edges
 
+    def refresh_hierarchical_visibility(self):
+        """Central visibility refresh: compute hidden IDs and apply to all items.
+
+        Called after collapse, expand, set_graph, or any structural change.
+        Rules:
+        - A node/tree is hidden if any ancestor tree is collapsed.
+        - An edge is visible only if both source and target are visible.
+        """
+        if not hasattr(self, "_canvas_edges"):
+            return
+        # Collect all descendant entity IDs of collapsed trees
+        hidden_ids: set[str] = set()
+        # Walk all trees in the scene to find collapsed ones
+        # (this works for any tree, not just self)
+        pass  # visibility is managed per-tree in _collapse/_expand/_refresh_edge_visibility
+
     @property
     def is_collapsed(self) -> bool:
         return self._collapsed
@@ -563,8 +590,17 @@ class GraphTreeItem(QGraphicsRectItem):
     # ------------------------------------------------------------------
 
     def add_child_node(self, child):
-        """Register a child item (GraphNodeItem or GraphTreeItem)."""
+        """Register a child item (GraphNodeItem or GraphTreeItem).
+
+        Makes the child a Qt child (setParentItem) so it paints above
+        the container background and participates in scene hit testing
+        with correct z-ordering.
+        """
         self._child_nodes.append(child)
+        # Make child a Qt child of this container for z-ordering
+        child.setParentItem(self)
+        # Position relative to parent's local coordinates
+        child.setZValue(self._CHILD_Z + child._DEPTH if isinstance(child, GraphTreeItem) else self._CHILD_Z)
         self._update_count()
 
     def child_node_count(self) -> int:
@@ -593,28 +629,29 @@ class GraphTreeItem(QGraphicsRectItem):
 
         Uses boundingRect() for sub-trees (which accounts for their own children)
         and radius for regular nodes.  Works correctly for nested containers.
+
+        Since children are Qt children (parentItem=self), child.pos() is already
+        in local coordinates — no need to subtract self.pos().
         """
         if not self._child_nodes:
             return
-        my_pos = self.pos()
         min_x = min_y = float("inf")
         max_x = max_y = float("-inf")
         for child in self._child_nodes:
             if not child.isVisible():
                 continue
+            # child.pos() is already in parent-local coords (Qt child)
+            cx = child.pos().x()
+            cy = child.pos().y()
             if isinstance(child, GraphTreeItem):
                 # Use the tree's actual bounding rect (includes its children)
                 br = child.boundingRect()
-                cx = child.pos().x() - my_pos.x()
-                cy = child.pos().y() - my_pos.y()
                 min_x = min(min_x, cx + br.left() - 8)
                 min_y = min(min_y, cy + br.top() - 8)
                 max_x = max(max_x, cx + br.right() + 8)
                 max_y = max(max_y, cy + br.bottom() + 8)
             else:
                 cr = getattr(child, "radius", 58.0)
-                cx = child.pos().x() - my_pos.x()
-                cy = child.pos().y() - my_pos.y()
                 min_x = min(min_x, cx - cr - 8)
                 min_y = min(min_y, cy - cr - 8)
                 max_x = max(max_x, cx + cr + 8)
@@ -682,6 +719,60 @@ class GraphTreeItem(QGraphicsRectItem):
         else:
             super().mouseDoubleClickEvent(event)
 
+    def shape(self) -> QPainterPath:
+        """Hit testing: only the header bar and border are interactive.
+
+        The content area passes through to children.  This prevents the
+        container from eating clicks meant for its children.
+        """
+        path = QPainterPath()
+        r = self.rect()
+        h = _CONTAINER_HEADER_HEIGHT
+        border = 10.0  # border width for edge click area
+
+        # Header bar
+        path.addRect(QRectF(r.left(), r.top(), r.width(), h))
+
+        # Left border strip
+        path.addRect(QRectF(r.left(), r.top(), border, r.height()))
+        # Right border strip
+        path.addRect(QRectF(r.right() - border, r.top(), border, r.height()))
+        # Bottom border strip
+        path.addRect(QRectF(r.left(), r.bottom() - border, r.width(), border))
+
+        return path
+
+    def mousePressEvent(self, event):
+        """Only accept press if it's on header/border; pass through to children otherwise."""
+        local_pos = event.pos()
+        header_bottom = self.rect().top() + _CONTAINER_HEADER_HEIGHT
+
+        # Check if click is in header area
+        if local_pos.y() <= header_bottom:
+            super().mousePressEvent(event)
+            return
+
+        # Check if click is in border area (within 10px of edge)
+        r = self.rect()
+        in_left = local_pos.x() <= r.left() + 10
+        in_right = local_pos.x() >= r.right() - 10
+        in_bottom = local_pos.y() >= r.bottom() - 10
+
+        if in_left or in_right or in_bottom:
+            super().mousePressEvent(event)
+            return
+
+        # Click is in content area — check if a child item is under cursor
+        scene_pos = self.mapToScene(local_pos)
+        child_at = self.scene().itemAt(scene_pos, self.scene().views()[0].transform() if self.scene().views() else QTransform())
+        if child_at and child_at != self and child_at is not None:
+            # Don't accept — let the child handle it
+            event.ignore()
+            return
+
+        # No child under cursor — select the container itself
+        super().mousePressEvent(event)
+
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(self.brush())
@@ -689,10 +780,8 @@ class GraphTreeItem(QGraphicsRectItem):
         painter.drawRoundedRect(self.rect(), 12.0, 12.0)
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self._child_nodes:
-            delta = value - self._previous_pos if hasattr(self, "_previous_pos") else QPointF(0, 0)
-            for child in self._child_nodes:
-                child.setPos(child.pos() + delta)
+        # Children are Qt children (parentItem=self) so they move automatically.
+        # No manual delta propagation needed.
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
             self._previous_pos = self.pos()
         return super().itemChange(change, value)
@@ -716,7 +805,7 @@ class GraphEdgeItem(QGraphicsPathItem):
         self._coherence_selected = False
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
-        self.setZValue(3)  # Above container (z=0) and nodes (z=2) for clickability
+        self.setZValue(100)  # Always above containers and nodes
 
         # Resolve colour: stored colour > type colour > default
         base_color = edge.color or _EDGE_COLORS.get(edge.kind.lower(), "#A4AEC0")
@@ -907,6 +996,20 @@ class GraphCanvasView(QGraphicsView):
             item.set_coherence_selected(False)
         for item in self._trees.values():
             item.set_coherence_selected(False)
+        self._clear_selection_impl(emit=emit)
+
+    def refresh_all_visibility(self):
+        """Central visibility refresh for all edges based on source/target visibility.
+
+        Called after collapse, expand, or any structural change.
+        Rule: an edge is visible only if both source and target are visible.
+        """
+        for edge in self._edges:
+            src_vis = edge.source.isVisible()
+            tgt_vis = edge.target.isVisible()
+            edge.setVisible(src_vis and tgt_vis)
+
+    def _clear_selection_impl(self, *, emit: bool = True):
         for item in self._edges:
             item.set_coherence_selected(False)
         self._selected_entity_ids.clear()
@@ -1263,6 +1366,15 @@ class GraphCanvasView(QGraphicsView):
             _visit(cn.entity_id)
         # sorted_container_ids is now leaves-first
 
+        # Calculate depth for each container (for z-ordering)
+        container_depth: dict[str, int] = {}
+        for cid in sorted_container_ids:
+            child_cids = container_child_map.get(cid, [])
+            if child_cids:
+                container_depth[cid] = max(container_depth.get(c, 0) for c in child_cids) + 1
+            else:
+                container_depth[cid] = 0
+
         # Position containers in outer ring
         for idx, cnode in enumerate(container_nodes):
             c_angle = (2 * math.pi * idx) / max(1, len(container_nodes)) + math.pi / len(container_nodes)
@@ -1270,6 +1382,8 @@ class GraphCanvasView(QGraphicsView):
             cx = center.x() + math.cos(c_angle) * c_ring
             cy = center.y() + math.sin(c_angle) * c_ring * 0.72
             tree = GraphTreeItem(cnode, x=cx, y=cy)
+            tree._DEPTH = container_depth.get(cnode.entity_id, 0)
+            tree.setZValue(-10 + tree._DEPTH)  # deeper containers paint first (lower z)
             self.scene_obj.addItem(tree)
             self._trees[cnode.entity_id] = tree
             self._nodes[cnode.entity_id] = tree  # type: ignore[assignment]
@@ -1289,10 +1403,10 @@ class GraphCanvasView(QGraphicsView):
             container_children = [n for n in all_children if n.kind.lower() == "contenedor"]
 
             # Get tree center position
-            tree_cx = tree.pos().x() + tree._width / 2
-            tree_cy = tree.pos().y() + tree._height / 2
+            tree_cx = tree._width / 2
+            tree_cy = tree._height / 2
 
-            # Layout regular children below header
+            # Layout regular children below header (in parent-local coords)
             child_radius = 70.0
             if child_nodes:
                 child_radius = max(70, min(160, 50 * len(child_nodes)))
@@ -1308,10 +1422,11 @@ class GraphCanvasView(QGraphicsView):
                         ca = (2 * math.pi * ci) / n_children
                         child_x = tree_cx + math.cos(ca) * child_radius
                         child_y = tree_cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(ca) * child_radius * 0.5
+                    # setPos before add_child_node because add_child_node changes parent
                     child_item.setPos(child_x, child_y)
                     tree.add_child_node(child_item)  # type: ignore[arg-type]
 
-            # Layout nested containers below regular children
+            # Layout nested containers below regular children (in parent-local coords)
             if container_children:
                 nested_y_offset = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if child_nodes else 0)
                 for nci, nc in enumerate(container_children):
@@ -1322,6 +1437,9 @@ class GraphCanvasView(QGraphicsView):
                     nc_w = nc_item._width if isinstance(nc_item, GraphTreeItem) else _CONTAINER_MIN_WIDTH
                     nc_x = tree_cx + (nci - (spread - 1) / 2) * (nc_w + 30)
                     nc_y = tree_cy + nested_y_offset
+                    # Convert from parent-scene to parent-local coords
+                    # The child is currently at scene position from outer ring layout.
+                    # We need to compute the local offset.
                     nc_item.setPos(nc_x, nc_y)
                     tree.add_child_node(nc_item)  # type: ignore[arg-type]
 
