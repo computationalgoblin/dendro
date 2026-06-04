@@ -127,6 +127,49 @@ class _EdgeView:
     color: str = ""
     proposed: bool = False
 
+@dataclass(frozen=True)
+class VisualFilterState:
+    """Ephemeral B37 visual filters. Never persisted and never mutates canon."""
+
+    entity_types: tuple[str, ...] = ()
+    relation_types: tuple[str, ...] = ()
+    tree_id: str = ""
+    layer_ids: tuple[str, ...] = ()
+    canon_states: tuple[str, ...] = ()
+    visibility_states: tuple[str, ...] = ()
+    show_relations: bool = True
+
+    def is_active(self) -> bool:
+        return bool(
+            self.entity_types
+            or self.relation_types
+            or self.tree_id
+            or self.layer_ids
+            or self.canon_states
+            or self.visibility_states
+            or not self.show_relations
+        )
+
+
+@dataclass(frozen=True)
+class GraphSearchResult:
+    """Clean search result for Creación. IDs stay internal and are not display text."""
+
+    item_id: str
+    item_kind: str  # entity | tree | relation
+    title: str
+    type_label: str
+    category: str
+    summary: str = ""
+    parent_tree_name: str = ""
+    parent_tree_id: str = ""
+    is_inside_collapsed_tree: bool = False
+
+    def display_lines(self) -> tuple[str, str, str]:
+        where = f"Dentro de {self.parent_tree_name}" if self.parent_tree_name else self.category
+        details = " · ".join(part for part in [self.type_label, where] if part)
+        return (self.title, details, self.summary)
+
 
 def _enum_value(value: Any, default: str = "") -> str:
     if value is None:
@@ -974,6 +1017,11 @@ class GraphCanvasView(QGraphicsView):
         self._nodes: dict[str, GraphNodeItem] = {}
         self._trees: dict[str, GraphTreeItem] = {}
         self._edges: list[GraphEdgeItem] = []
+        self._all_nodes: list[_NodeView] = []
+        self._all_edges: list[_EdgeView] = []
+        self._all_layers: list[Any] = []
+        self._layer_mode_active = False
+        self._visual_filter = VisualFilterState()
         self._membership: dict[str, str] = {}  # entity_id -> tree_entity_id
         self._pending_source: GraphNodeItem | None = None
         self._drag_source: GraphNodeItem | None = None
@@ -1010,13 +1058,13 @@ class GraphCanvasView(QGraphicsView):
     def refresh_all_visibility(self):
         """Central visibility refresh for all edges based on source/target visibility.
 
-        Called after collapse, expand, or any structural change.
-        Rule: an edge is visible only if both source and target are visible.
+        Called after collapse, expand, filters, or any structural change.
+        Rule: an edge is visible only if both source and target are visible and relations are enabled.
         """
         for edge in self._edges:
             src_vis = edge.source.isVisible()
             tgt_vis = edge.target.isVisible()
-            edge.setVisible(src_vis and tgt_vis)
+            edge.setVisible(src_vis and tgt_vis and self._visual_filter.show_relations)
 
     def _clear_selection_impl(self, *, emit: bool = True):
         for item in self._edges:
@@ -1300,6 +1348,74 @@ class GraphCanvasView(QGraphicsView):
         """Return the tree entity_id that contains entity_id, or None."""
         return self._membership.get(entity_id)
 
+    def _descendant_ids_for_tree(self, tree_id: str) -> set[str]:
+        descendants: set[str] = set()
+        stack = [tree_id]
+        while stack:
+            parent = stack.pop()
+            for child, current_parent in self._membership.items():
+                if current_parent == parent and child not in descendants:
+                    descendants.add(child)
+                    stack.append(child)
+        return descendants
+
+    def _ancestor_tree_ids(self, entity_id: str) -> list[str]:
+        ancestors: list[str] = []
+        current = self._membership.get(entity_id)
+        seen: set[str] = set()
+        while current and current not in seen:
+            ancestors.append(current)
+            seen.add(current)
+            current = self._membership.get(current)
+        return ancestors
+
+    def _parent_tree_info(self, entity_id: str) -> tuple[str, str, bool]:
+        parent_id = self._membership.get(entity_id) or ""
+        if not parent_id:
+            return "", "", False
+        parent_node = next((node for node in self._all_nodes if node.entity_id == parent_id), None)
+        parent_name = parent_node.name if parent_node is not None else "Árbol"
+        parent_item = self._trees.get(parent_id)
+        collapsed = bool(getattr(parent_item, "_collapsed", False)) if parent_item is not None else False
+        return parent_id, parent_name, collapsed
+
+    def _node_passes_filter(self, node: _NodeView, allowed_tree_ids: set[str] | None = None) -> bool:
+        vf = self._visual_filter
+        if allowed_tree_ids is not None and node.entity_id not in allowed_tree_ids:
+            return False
+        if vf.entity_types and node.kind.lower() not in vf.entity_types:
+            return False
+        if vf.layer_ids and (node.layer_id or "") not in vf.layer_ids:
+            return False
+        if vf.canon_states and node.canon.lower() not in vf.canon_states:
+            return False
+        if vf.visibility_states and node.visibility.lower() not in vf.visibility_states:
+            return False
+        return True
+
+    def _edge_passes_filter(self, edge: _EdgeView, visible_node_ids: set[str]) -> bool:
+        vf = self._visual_filter
+        if edge.source_id not in visible_node_ids or edge.target_id not in visible_node_ids:
+            return False
+        if edge.kind.lower() == "contiene":
+            return True
+        if not vf.show_relations:
+            return False
+        if vf.relation_types and edge.kind.lower() not in vf.relation_types:
+            return False
+        return True
+
+    def _filtered_graph(self, nodes: list[_NodeView], edges: list[_EdgeView]) -> tuple[list[_NodeView], list[_EdgeView]]:
+        # Build membership from the full edge set before applying visual filters.
+        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        tree_scope: set[str] | None = None
+        if self._visual_filter.tree_id:
+            tree_scope = {self._visual_filter.tree_id} | self._descendant_ids_for_tree(self._visual_filter.tree_id)
+        filtered_nodes = [node for node in nodes if self._node_passes_filter(node, tree_scope)]
+        visible_node_ids = {node.entity_id for node in filtered_nodes}
+        filtered_edges = [edge for edge in edges if self._edge_passes_filter(edge, visible_node_ids)]
+        return filtered_nodes, filtered_edges
+
     def clear_graph(self):
         self.clear_selection(emit=False)
         self.scene_obj.clear()
@@ -1395,6 +1511,11 @@ class GraphCanvasView(QGraphicsView):
         self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_graph(self, nodes: list[_NodeView], edges: list[_EdgeView], *, layer_mode: bool = False, layers: list[Any] | None = None):
+        self._all_nodes = list(nodes or [])
+        self._all_edges = list(edges or [])
+        self._all_layers = list(layers or [])
+        self._layer_mode_active = bool(layer_mode)
+        nodes, edges = self._filtered_graph(self._all_nodes, self._all_edges)
         if layer_mode:
             self._set_graph_by_layers(nodes, edges, layers or [])
             return
@@ -1574,12 +1695,106 @@ class GraphCanvasView(QGraphicsView):
 
         self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def focus_entity(self, entity_id: str):
+    def recompute_edge_visibility(self):
+        self.refresh_all_visibility()
+
+    def apply_visual_filter(self, filter_state: VisualFilterState):
+        self._visual_filter = filter_state
+        self.set_graph(self._all_nodes, self._all_edges, layer_mode=self._layer_mode_active, layers=self._all_layers)
+
+    def clear_visual_filters(self):
+        self.apply_visual_filter(VisualFilterState())
+
+    def get_filter_state(self) -> VisualFilterState:
+        return self._visual_filter
+
+    def active_filter_count(self) -> int:
+        vf = self._visual_filter
+        return sum(1 for active in [vf.entity_types, vf.relation_types, vf.tree_id, vf.layer_ids, vf.canon_states, vf.visibility_states, not vf.show_relations] if active)
+
+    def center_on_item(self, item: QGraphicsItem):
+        self.centerOn(item)
+        rect = item.sceneBoundingRect().adjusted(-180, -160, 180, 160)
+        if rect.isValid() and not rect.isEmpty():
+            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def focus_node(self, entity_id: str, *, expand_path: bool = True) -> bool:
+        if expand_path:
+            for ancestor_id in reversed(self._ancestor_tree_ids(entity_id)):
+                tree = self._trees.get(ancestor_id)
+                if tree is not None and getattr(tree, "_collapsed", False):
+                    tree._expand()
         item = self._nodes.get(entity_id) or self._trees.get(entity_id)
         if item is None:
-            return
-        self.centerOn(item)
-        item.setSelected(True)
+            return False
+        self.clear_selection(emit=False)
+        self._selected_entity_ids.add(entity_id)
+        item.set_coherence_selected(True)
+        self.center_on_item(item)
+        self._emit_selection_changed()
+        return True
+
+    def focus_tree(self, tree_id: str) -> bool:
+        return self.focus_node(tree_id, expand_path=True)
+
+    def focus_relation(self, relation_id: str) -> bool:
+        edge = next((edge for edge in self._edges if edge.edge.relation_id == relation_id), None)
+        if edge is None:
+            return False
+        self.clear_selection(emit=False)
+        self._selected_relation_ids.add(relation_id)
+        edge.set_coherence_selected(True)
+        self.center_on_item(edge)
+        self._emit_selection_changed()
+        return True
+
+    def clear_search_focus(self):
+        self.clear_selection()
+
+    def search(self, query: str, *, worldbuilding_active: bool = False) -> list[GraphSearchResult]:
+        terms = [term for term in str(query or "").lower().split() if term]
+        if not terms:
+            return []
+        layer_names = {str(getattr(layer, "id", "")): str(getattr(layer, "name", "")) for layer in self._all_layers}
+        results: list[GraphSearchResult] = []
+        for node in self._all_nodes:
+            layer_name = layer_names.get(node.layer_id, "") if worldbuilding_active else ""
+            haystack = " ".join([node.name, node.kind, node.subtitle, layer_name]).lower()
+            if all(term in haystack for term in terms):
+                parent_id, parent_name, collapsed = self._parent_tree_info(node.entity_id)
+                item_kind = "tree" if node.kind.lower() == "contenedor" else "entity"
+                results.append(GraphSearchResult(
+                    item_id=node.entity_id,
+                    item_kind=item_kind,
+                    title=node.name,
+                    type_label=enum_human(node.kind),
+                    category="Árbol" if item_kind == "tree" else "Entidad",
+                    summary=_fit_text(node.subtitle, 90),
+                    parent_tree_name=parent_name,
+                    parent_tree_id=parent_id,
+                    is_inside_collapsed_tree=collapsed,
+                ))
+        for edge in self._all_edges:
+            if edge.kind.lower() == "contiene":
+                continue
+            source = next((node for node in self._all_nodes if node.entity_id == edge.source_id), None)
+            target = next((node for node in self._all_nodes if node.entity_id == edge.target_id), None)
+            title = edge.label or enum_human(edge.kind)
+            haystack = " ".join([title, edge.kind, source.name if source else "", target.name if target else ""]).lower()
+            if all(term in haystack for term in terms):
+                summary = " → ".join(part for part in [source.name if source else "Origen", target.name if target else "Destino"] if part)
+                results.append(GraphSearchResult(
+                    item_id=edge.relation_id,
+                    item_kind="relation",
+                    title=title,
+                    type_label=enum_human(edge.kind),
+                    category="Relación",
+                    summary=summary,
+                ))
+        return results[:40]
+
+    def focus_entity(self, entity_id: str):
+        self.focus_node(entity_id)
 
 
 class GraphCanvasWidget(QWidget):
@@ -1636,6 +1851,52 @@ class GraphCanvasWidget(QWidget):
 
     def clear_selection(self):
         self.canvas.clear_selection()
+
+    def search(self, query: str) -> list[GraphSearchResult]:
+        project = self._project()
+        return self.canvas.search(
+            query,
+            worldbuilding_active=bool(getattr(project, "worldbuilding_active", False)) if project is not None else False,
+        )
+
+    def focus_node(self, entity_id: str) -> bool:
+        ok = self.canvas.focus_node(entity_id)
+        if ok:
+            self._entity_selected(entity_id)
+        return ok
+
+    def focus_tree(self, tree_id: str) -> bool:
+        ok = self.canvas.focus_tree(tree_id)
+        if ok:
+            self._entity_selected(tree_id)
+        return ok
+
+    def focus_relation(self, relation_id: str) -> bool:
+        ok = self.canvas.focus_relation(relation_id)
+        if ok:
+            self._relation_selected(relation_id)
+        return ok
+
+    def center_on_item(self, item):
+        self.canvas.center_on_item(item)
+
+    def clear_search_focus(self):
+        self.canvas.clear_search_focus()
+
+    def apply_visual_filter(self, filter_state: VisualFilterState):
+        self.canvas.apply_visual_filter(filter_state)
+
+    def clear_visual_filters(self):
+        self.canvas.clear_visual_filters()
+
+    def get_filter_state(self) -> VisualFilterState:
+        return self.canvas.get_filter_state()
+
+    def recompute_edge_visibility(self):
+        self.canvas.recompute_edge_visibility()
+
+    def active_filter_count(self) -> int:
+        return self.canvas.active_filter_count()
 
     def run_graph_ai_action(self, action_type: str):
         if self.ai_controller is None:

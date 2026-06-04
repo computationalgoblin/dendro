@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
-from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
+from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
@@ -373,6 +374,174 @@ class NarrativeWorkbench(QWidget):
         self._chips_layout.addStretch(1)
 
 
+class CreationSearchPanel(_SimpleFormPanel):
+    """B37-T01 clean graph search panel inside the right drawer."""
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__("Buscar en Creación", "Encuentra nodos, árboles o relaciones sin tablas técnicas.")
+        self.workspace = workspace
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Buscar por nombre, tipo, descripción, árbol, relación o capa")
+        self.search.textChanged.connect(self._run_search)
+        self.layout.addWidget(self.search)
+        self.status = self.add_status()
+        self.results_layout = QVBoxLayout()
+        self.results_layout.setSpacing(6)
+        self.layout.addLayout(self.results_layout)
+        self.layout.addStretch(1)
+        self._run_search("")
+
+    def _clear_results(self):
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _run_search(self, text: str):
+        self._clear_results()
+        query = (text or "").strip()
+        if not query:
+            self.status.setText("Escribe para buscar en el grafo actual.")
+            return
+        results = self.workspace.graph.search(query)
+        if not results:
+            self.status.setText("Sin resultados.")
+            return
+        self.status.setText(f"{len(results)} resultado(s). Selecciona uno para enfocarlo.")
+        for result in results:
+            self.results_layout.addWidget(self._result_button(result))
+
+    def _result_button(self, result: GraphSearchResult) -> QPushButton:
+        title, details, summary = result.display_lines()
+        collapsed_hint = "\nDentro de árbol colapsado: se expandirá la ruta al enfocar." if result.is_inside_collapsed_tree else ""
+        button = QPushButton(f"{title}\n{details}{collapsed_hint}\n{summary}".strip())
+        button.setStyleSheet(
+            "QPushButton { text-align: left; background: #F8F5EA; border: 1px solid #D8D2BF; "
+            "border-radius: 10px; padding: 8px; color: #4F4D38; } "
+            "QPushButton:hover { background: #FFFDF6; border-color: #AFA77A; }"
+        )
+        button.clicked.connect(lambda _=False, r=result: self._focus_result(r))
+        return button
+
+    def _focus_result(self, result: GraphSearchResult):
+        ok = self.workspace.focus_search_result(result)
+        if ok:
+            self.status.setText(f"Enfocado: {result.title}")
+        else:
+            self.status.setText("No se pudo enfocar. Puede estar oculto por filtros activos; limpia filtros e inténtalo de nuevo.")
+
+
+class CreationFilterPanel(_SimpleFormPanel):
+    """B37-T02 visual filters. Ephemeral: never writes project/canon."""
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__("Filtros visuales", "Reduce la vista sin modificar el proyecto ni el canon.")
+        self.workspace = workspace
+        self.status = self.add_status()
+        form = QFormLayout()
+        self.entity_type = QComboBox()
+        self.relation_type = QComboBox()
+        self.tree = QComboBox()
+        self.layer = QComboBox()
+        self.canon = QComboBox()
+        self.visibility = QComboBox()
+        self.show_relations = QCheckBox("Mostrar relaciones")
+        self.show_relations.setChecked(True)
+        for combo in (self.entity_type, self.relation_type, self.tree, self.layer, self.canon, self.visibility):
+            combo.addItem("— Cualquiera —", "")
+        self._populate()
+        form.addRow("Tipo entidad", self.entity_type)
+        form.addRow("Tipo relación", self.relation_type)
+        form.addRow("Árbol", self.tree)
+        if self._worldbuilding_active():
+            form.addRow("Capa", self.layer)
+        form.addRow("Estado", self.canon)
+        form.addRow("Visibilidad", self.visibility)
+        form.addRow("Relaciones", self.show_relations)
+        self.layout.addLayout(form)
+        for widget in (self.entity_type, self.relation_type, self.tree, self.layer, self.canon, self.visibility):
+            widget.currentIndexChanged.connect(self._apply)
+        self.show_relations.toggled.connect(self._apply)
+        row = QHBoxLayout()
+        clear = QPushButton("Limpiar filtros")
+        clear.clicked.connect(self._clear)
+        row.addStretch(1)
+        row.addWidget(clear)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+        self._sync_status()
+
+    def _worldbuilding_active(self) -> bool:
+        project = self.workspace._get_active_project()
+        return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
+
+    def _add_unique(self, combo: QComboBox, label: str, value: str, seen: set[str]):
+        value = str(value or "").lower()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        combo.addItem(label, value)
+
+    def _populate(self):
+        project = self.workspace._get_active_project()
+        entities = list(getattr(project, "entities", []) or []) if project is not None else []
+        relations = list(getattr(project, "relations", []) or []) if project is not None else []
+        seen_entity: set[str] = set()
+        seen_canon: set[str] = set()
+        seen_vis: set[str] = set()
+        for entity in entities:
+            kind = str(getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "")) or "")
+            self._add_unique(self.entity_type, enum_human(kind), kind, seen_entity)
+            canon = str(getattr(getattr(entity, "canon_state", None), "value", getattr(entity, "canon_state", "")) or "")
+            self._add_unique(self.canon, enum_human(canon), canon, seen_canon)
+            visibility = str(getattr(getattr(entity, "visibility_state", None), "value", getattr(entity, "visibility_state", "")) or "")
+            self._add_unique(self.visibility, enum_human(visibility), visibility, seen_vis)
+            if kind.lower() == "contenedor":
+                self.tree.addItem(str(getattr(entity, "name", "Árbol")), str(getattr(entity, "id", "")))
+        seen_rel: set[str] = set()
+        for relation in relations:
+            kind = str(getattr(getattr(relation, "relation_type", None), "value", getattr(relation, "relation_type", "")) or "")
+            self._add_unique(self.relation_type, enum_human(kind), kind, seen_rel)
+        if self._worldbuilding_active():
+            for layer in list(getattr(project, "world_layers", []) or []):
+                if getattr(layer, "is_visible", True):
+                    self.layer.addItem(str(getattr(layer, "name", "Capa")), str(getattr(layer, "id", "")))
+
+    def _state(self) -> VisualFilterState:
+        def one(combo: QComboBox) -> tuple[str, ...]:
+            value = str(combo.currentData() or "")
+            return (value,) if value else ()
+        return VisualFilterState(
+            entity_types=one(self.entity_type),
+            relation_types=one(self.relation_type),
+            tree_id=str(self.tree.currentData() or ""),
+            layer_ids=one(self.layer) if self._worldbuilding_active() else (),
+            canon_states=one(self.canon),
+            visibility_states=one(self.visibility),
+            show_relations=bool(self.show_relations.isChecked()),
+        )
+
+    def _apply(self):
+        self.workspace.apply_creation_filter(self._state())
+        self._sync_status()
+
+    def _clear(self):
+        self.entity_type.setCurrentIndex(0)
+        self.relation_type.setCurrentIndex(0)
+        self.tree.setCurrentIndex(0)
+        self.layer.setCurrentIndex(0)
+        self.canon.setCurrentIndex(0)
+        self.visibility.setCurrentIndex(0)
+        self.show_relations.setChecked(True)
+        self.workspace.clear_creation_filters()
+        self._sync_status()
+
+    def _sync_status(self):
+        count = self.workspace.graph.active_filter_count()
+        self.status.setText(f"{count} filtro(s) activo(s)." if count else "Sin filtros activos.")
+
+
 class CreationWorkspace(QWidget):
     """Creation space: graph-first immersive experience."""
 
@@ -560,6 +729,20 @@ class CreationWorkspace(QWidget):
         self._layers_view_btn.setVisible(False)
         layout.addWidget(self._layers_view_btn)
 
+        search_btn = QPushButton("⌕")
+        search_btn.setToolTip("Buscar y enfocar elementos")
+        search_btn.setStyleSheet(btn_style)
+        search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        search_btn.clicked.connect(self._open_search_panel)
+        layout.addWidget(search_btn)
+
+        self._filter_btn = QPushButton("◫")
+        self._filter_btn.setToolTip("Filtros visuales")
+        self._filter_btn.setStyleSheet(btn_style)
+        self._filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._filter_btn.clicked.connect(self._open_filter_panel)
+        layout.addWidget(self._filter_btn)
+
         layout.addStretch()
 
         # Delete selected entity/relation/container
@@ -616,6 +799,49 @@ class CreationWorkspace(QWidget):
             self.graph.set_worldbuilding_active(True)
         else:
             self.refresh()
+
+    def _open_search_panel(self):
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        panel = CreationSearchPanel(self)
+        drawer.set_content(panel, title="Buscar")
+        drawer.open()
+
+    def _open_filter_panel(self):
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        panel = CreationFilterPanel(self)
+        drawer.set_content(panel, title="Filtros")
+        drawer.open()
+
+    def _sync_filter_indicator(self):
+        btn = getattr(self, "_filter_btn", None)
+        if btn is None:
+            return
+        count = self.graph.active_filter_count()
+        if count:
+            btn.setText(f"◫{count}")
+            btn.setToolTip(f"Filtros visuales ({count} activo(s))")
+        else:
+            btn.setText("◫")
+            btn.setToolTip("Filtros visuales")
+
+    def apply_creation_filter(self, filter_state: VisualFilterState):
+        self.graph.apply_visual_filter(filter_state)
+        self._sync_filter_indicator()
+
+    def clear_creation_filters(self):
+        self.graph.clear_visual_filters()
+        self._sync_filter_indicator()
+
+    def focus_search_result(self, result: GraphSearchResult) -> bool:
+        if result.item_kind == "relation":
+            return self.graph.focus_relation(result.item_id)
+        if result.item_kind == "tree":
+            return self.graph.focus_tree(result.item_id)
+        return self.graph.focus_node(result.item_id)
 
     # ── Utility openers ────────────────────────────────────────────────────
 

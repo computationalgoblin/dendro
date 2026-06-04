@@ -19,6 +19,7 @@ Suites:
     b34         Tree semantic contract smoke/regression tests
     b35         Coherencia de subgrafo smoke/regression tests
     b36         Worldbuilding causal layer contract tests
+    b37         Creación complexity search/filter tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
@@ -65,6 +66,9 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b36_causal_layer_contract.py",
         "tests/application/test_b36_causal_layers_integration.py",
     ],
+    "b37": [
+        "tests/desktop/test_b37_creation_search_filters.py",
+    ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }
@@ -82,6 +86,7 @@ def _clean_env() -> dict[str, str]:
 def run_suite(label: str, paths: list[str], timeout: int = 600) -> tuple[bool, float, int]:
     cmd = [sys.executable, "-m", "pytest", "-q", "--tb=short", *paths]
     env = {**_clean_env(), "PYTHONPATH": str(WORKSPACE)}
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
     t0 = time.perf_counter()
     try:
         result = subprocess.run(
