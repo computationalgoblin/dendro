@@ -607,6 +607,7 @@ class GraphCanvasView(QGraphicsView):
     relationCreateRequested = Signal(str, str)
     graphSelectionChanged = Signal(list, list)
     nodeAssignToTreeRequested = Signal(str, str)  # entity_id, tree_entity_id
+    relationCreateRejected = Signal(str)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -627,7 +628,7 @@ class GraphCanvasView(QGraphicsView):
         self._drag_source: GraphNodeItem | None = None
         self._drag_target: GraphNodeItem | None = None
         self._drag_origin_view_pos = QPointF()
-        self._drag_line: QGraphicsLineItem | None = None
+        self._drag_line: QGraphicsPathItem | None = None
         self._selected_entity_ids: set[str] = set()
         self._selected_relation_ids: set[str] = set()
         # Alt+Drag state for assigning nodes to tree containers
@@ -794,8 +795,13 @@ class GraphCanvasView(QGraphicsView):
             source = self._drag_source
             target = self._item_node_at(event.position())
             self._finish_relation_drag(target)
-            if target is not None and target is not source:
-                self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
+            if target is not None:
+                if target is source:
+                    self.relationCreateRejected.emit("No se puede crear una relación sobre la misma entidad")
+                else:
+                    self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
+            else:
+                self.relationCreateRejected.emit("Relación cancelada")
             event.accept()
             return
         self._pending_source = None
@@ -805,11 +811,12 @@ class GraphCanvasView(QGraphicsView):
     def _start_relation_drag(self, source: GraphNodeItem | GraphTreeItem):
         self._drag_source = source
         self._drag_target = None
-        line = QGraphicsLineItem()
+        line = QGraphicsPathItem()
         pen = QPen(QColor("#D08770"), 2.5, Qt.PenStyle.DashLine)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         line.setPen(pen)
         line.setZValue(3)
+        line.setToolTip("Flecha provisional de relación")
         self._drag_line = line
         self.scene_obj.addItem(line)
         source.set_drag_highlight(True)
@@ -818,7 +825,7 @@ class GraphCanvasView(QGraphicsView):
         if self._drag_source is None or self._drag_line is None:
             return
         start = self._drag_source.scenePos()
-        self._drag_line.setLine(QLineF(start, scene_pos))
+        self._drag_line.setPath(self._relation_drag_arrow_path(start, scene_pos))
         if target is self._drag_source:
             target = None
         if target is not self._drag_target:
@@ -827,6 +834,27 @@ class GraphCanvasView(QGraphicsView):
             self._drag_target = target
             if self._drag_target is not None:
                 self._drag_target.set_drag_highlight(True)
+
+    def _relation_drag_arrow_path(self, start: QPointF, end: QPointF) -> QPainterPath:
+        path = QPainterPath(start)
+        path.lineTo(end)
+        line = QLineF(start, end)
+        if line.length() > 4:
+            angle = math.atan2(-(end.y() - start.y()), end.x() - start.x())
+            arrow_size = 16
+            p1 = QPointF(
+                end.x() - arrow_size * math.cos(angle - math.pi / 6),
+                end.y() + arrow_size * math.sin(angle - math.pi / 6),
+            )
+            p2 = QPointF(
+                end.x() - arrow_size * math.cos(angle + math.pi / 6),
+                end.y() + arrow_size * math.sin(angle + math.pi / 6),
+            )
+            path.moveTo(end)
+            path.lineTo(p1)
+            path.moveTo(end)
+            path.lineTo(p2)
+        return path
 
     def _finish_relation_drag(self, target: GraphNodeItem | GraphTreeItem | None):
         if self._drag_source is not None:
@@ -1023,6 +1051,7 @@ class GraphCanvasWidget(QWidget):
     relationCreateRequested = Signal(str, str)
     graphSelectionChanged = Signal(list, list)
     nodeAssignToTreeRequested = Signal(str, str)
+    relationCreateRejected = Signal(str)
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -1046,6 +1075,7 @@ class GraphCanvasWidget(QWidget):
         self.canvas.entitySelected.connect(self._entity_selected)
         self.canvas.relationSelected.connect(self._relation_selected)
         self.canvas.relationCreateRequested.connect(self.relationCreateRequested.emit)
+        self.canvas.relationCreateRejected.connect(self.relationCreateRejected.emit)
         self.canvas.graphSelectionChanged.connect(self.graphSelectionChanged.emit)
         self.canvas.nodeAssignToTreeRequested.connect(self.nodeAssignToTreeRequested.emit)
         layout.addWidget(self.canvas, 1)

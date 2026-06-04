@@ -16,6 +16,8 @@ from typing import Any
 from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, VisibilityState
 from packages.domain.relation import (
+    Direction,
+    IntensityLevel,
     NarrativeRelation,
     RelationType,
     validate_relation,
@@ -67,6 +69,24 @@ class RelationService:
             if e.id == entity_id:
                 return e
         return None
+
+    def _normalize_relation_enums(self, relation: NarrativeRelation) -> None:
+        """Coerce UI payload strings into domain enums without creating parallel models."""
+        enum_specs = (
+            ("relation_type", RelationType, RelationType.ESTA_RELACIONADO_CON),
+            ("direction", Direction, Direction.UNIDIRECCIONAL),
+            ("intensity", IntensityLevel, IntensityLevel.MEDIA),
+            ("canon_state", CanonState, CanonState.BORRADOR),
+            ("visibility_state", VisibilityState, VisibilityState.VISIBLE_USUARIO),
+        )
+        for attr, enum_cls, default in enum_specs:
+            value = getattr(relation, attr, default)
+            if isinstance(value, enum_cls):
+                continue
+            try:
+                setattr(relation, attr, enum_cls(value))
+            except Exception:
+                setattr(relation, attr, default)
 
     # ------------------------------------------------------------------
     # CRUD
@@ -120,9 +140,17 @@ class RelationService:
         )
 
         if data:
-            for key in ("description", "temporality", "causality", "conditions", "source"):
+            scalar_fields = (
+                "description", "temporality", "causality", "conditions", "source",
+                "direction", "intensity", "canon_state", "visibility_state",
+                "validity_conditions", "tags", "source_id", "target_id",
+            )
+            for key in scalar_fields:
                 if key in data:
                     setattr(relation, key, data[key])
+            if "relation_type" in data:
+                relation.relation_type = data["relation_type"]
+            self._normalize_relation_enums(relation)
             if "custom_metadata" in data and isinstance(data["custom_metadata"], dict):
                 relation.custom_metadata.update(data["custom_metadata"])
 
@@ -154,12 +182,22 @@ class RelationService:
 
         for r in proj.value.relations:
             if r.id == relation_id:
-                for key in ("description", "temporality", "causality",
-                             "conditions", "source"):
+                scalar_fields = (
+                    "source_id", "target_id", "description", "temporality", "causality",
+                    "conditions", "source", "direction", "intensity", "canon_state",
+                    "visibility_state", "validity_conditions", "tags",
+                )
+                for key in scalar_fields:
                     if key in data:
                         setattr(r, key, data[key])
+                if "relation_type" in data:
+                    setattr(r, "relation_type", data["relation_type"])
+                self._normalize_relation_enums(r)
                 if "custom_metadata" in data and isinstance(data["custom_metadata"], dict):
-                    r.custom_metadata.update(data["custom_metadata"])
+                    r.custom_metadata = dict(data["custom_metadata"])
+                issues = validate_relation(r)
+                if issues:
+                    return Error(f"Relation validation failed: {'; '.join(issues)}")
                 r.touch()
                 proj.value.touch()
                 if history_service is not None:

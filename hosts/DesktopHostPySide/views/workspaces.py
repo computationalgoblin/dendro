@@ -29,7 +29,6 @@ from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
-from hosts.DesktopHostPySide.widgets.relation_create_panel import RelationCreatePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
@@ -427,6 +426,7 @@ class CreationWorkspace(QWidget):
         self.graph.entitySelected.connect(self._open_node_panel)
         self.graph.relationSelected.connect(self._open_relation_panel)
         self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
+        self.graph.relationCreateRejected.connect(self._on_relation_create_rejected)
         self.graph.graphSelectionChanged.connect(self._on_graph_selection_changed)
         self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
         layout.addWidget(self.graph, 1)
@@ -1081,44 +1081,42 @@ class CreationWorkspace(QWidget):
                     return True
         return False
 
+    def _on_relation_create_rejected(self, message: str):
+        if message and message != "Relación cancelada":
+            self.ctx.log("warning", message)
+
     def _open_relation_create_panel(self, source_id: str, target_id: str):
         controller = self.relation_controller
-        drawer = self.ctx.drawer
-        if controller is None or drawer is None:
+        if controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo crear relación: servicio no disponible")
             return
         if source_id == target_id:
-            self.ctx.log("error", "No se puede crear una relación sobre la misma entidad")
+            self.ctx.log("warning", "No se puede crear una relación sobre la misma entidad")
             return
         if self._relation_exists(source_id, target_id):
-            self.ctx.log("error", "Ya existe una relación entre esas entidades")
+            self.ctx.log("warning", "Ya existe una relación entre esas entidades")
             return
-
-        def create_relation(relation_type: str, description: str):
-            result = controller.create(
-                source_id,
-                target_id,
-                relation_type,
-                {"description": description} if description else {},
-            )
-            if isinstance(result, Error):
-                self.ctx.log("error", result.error)
-                return
-            relation = result.value
-            relation_id = getattr(relation, "id", "")
-            self.ctx.log("info", "Relación creada desde el grafo")
-            self.refresh()
-            if relation_id:
-                self._open_relation_panel(relation_id, is_new=True)
-
-        panel = RelationCreatePanel(
-            self._entity_label(source_id),
-            self._entity_label(target_id),
-            on_create=create_relation,
-            on_cancel=drawer.close,
+        result = controller.create(
+            source_id,
+            target_id,
+            "esta_relacionado_con",
+            {
+                "description": "",
+                "custom_metadata": {
+                    "_visual_draft": True,
+                    "_edge_color": "#A4AEC0",
+                },
+            },
         )
-        drawer.set_content(panel, title="Crear relación")
-        drawer.open()
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        relation = result.value
+        relation_id = getattr(relation, "id", "")
+        self.ctx.log("info", "Relación provisional creada")
+        self.refresh()
+        if relation_id:
+            self._open_relation_panel(relation_id, is_new=True)
 
 
 class GalleryWorkspace(QWidget):

@@ -12,10 +12,8 @@ import json
 from typing import Any
 
 from PySide6.QtCore import QTimer, QThread, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
-    QColorDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -31,7 +29,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
 from packages.domain.entity import CanonState, VisibilityState
-from packages.domain.relation import Direction, IntensityLevel, RelationType
+from packages.domain.relation import IntensityLevel, RelationType
 from packages.domain.result import Error
 
 # ---------------------------------------------------------------------------
@@ -309,8 +307,9 @@ class RelationDetailPanel(QWidget):
         dir_label = QLabel("Dirección:")
         dir_label.setStyleSheet(_label_ss)
         self.direction_combo = QComboBox()
-        for item in Direction:
-            self.direction_combo.addItem(enum_human(item.value), item.value)
+        self.direction_combo.addItem("Origen → destino", "source_to_target")
+        self.direction_combo.addItem("Destino → origen", "target_to_source")
+        self.direction_combo.addItem("Bidireccional", "bidireccional")
         form.addRow(dir_label, self.direction_combo)
 
         # Description (brief)
@@ -326,6 +325,12 @@ class RelationDetailPanel(QWidget):
         self.body_edit = QTextEdit()
         self.body_edit.setMaximumHeight(120)
         form.addRow(body_label, self.body_edit)
+
+        note_label = QLabel("Notas:")
+        note_label.setStyleSheet(_label_ss)
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setMaximumHeight(70)
+        form.addRow(note_label, self.notes_edit)
 
         # Estado (simplified canon)
         canon_label = QLabel("Estado:")
@@ -369,13 +374,6 @@ class RelationDetailPanel(QWidget):
             self.visibility_combo.addItem(enum_human(item.value), item.value)
         form.addRow(adv_vis_label, self.visibility_combo)
         self._advanced_widgets += [adv_vis_label, self.visibility_combo]
-
-        adv_note_label = QLabel("Notas:")
-        adv_note_label.setStyleSheet(_label_ss)
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setMaximumHeight(70)
-        form.addRow(adv_note_label, self.notes_edit)
-        self._advanced_widgets += [adv_note_label, self.notes_edit]
 
         # -- AI suggestion section --
         ai_card = QFrame()
@@ -514,11 +512,16 @@ class RelationDetailPanel(QWidget):
         self.color_btn.setToolTip(f"Color: {hex_color}")
 
     def _pick_color(self):
-        current = QColor(self._current_color)
-        color = QColorDialog.getColor(current, self, "Color de la arista")
-        if color.isValid():
-            self._update_color_swatch(color.name())
-            self._schedule_autosave()
+        """Cycle through relation palette colors without opening external dialogs."""
+        palette = list(dict.fromkeys(_EDGE_COLORS.values()))
+        if not palette:
+            return
+        try:
+            idx = palette.index(self._current_color)
+        except ValueError:
+            idx = -1
+        self._update_color_swatch(palette[(idx + 1) % len(palette)])
+        self._schedule_autosave()
 
     def _on_type_changed(self, _index: int = -1):
         type_val = self.type_combo.currentData() or self.type_combo.currentText().strip().lower()
@@ -555,7 +558,7 @@ class RelationDetailPanel(QWidget):
         self._schedule_autosave()
 
     def _autosave(self):
-        if self._refreshing or self._relation is None:
+        if self._refreshing or self._relation is None or self.is_new:
             return
         self._do_save(refresh_after=False)
 
@@ -708,7 +711,13 @@ class RelationDetailPanel(QWidget):
     def _cancel(self):
         self._discard_suggestion()
         if self.is_new:
-            # Cancel on new relation: close drawer (relation was already created by create panel)
+            # Cancel on new relation: remove the unsaved visual draft, then close drawer.
+            if self.relation_controller is not None:
+                result = self.relation_controller.delete(self.relation_id)
+                if isinstance(result, Error):
+                    self.ctx.log("warning", result.error)
+                elif self.on_saved is not None:
+                    self.on_saved()
             parent = self.parent()
             while parent is not None:
                 if type(parent).__name__ == "RightDrawer":
@@ -780,7 +789,10 @@ class RelationDetailPanel(QWidget):
             self.source_label.setText(f"Origen: {source_ref}")
             self.target_label.setText(f"Destino: {target_ref}")
             self._set_combo_value(self.type_combo, kind)
-            self._set_combo_value(self.direction_combo, direction)
+            if direction == "bidireccional":
+                self._set_combo_value(self.direction_combo, "bidireccional")
+            else:
+                self._set_combo_value(self.direction_combo, "source_to_target")
             self._set_combo_value(self.intensity_combo, _enum_value(getattr(relation, "intensity", None), ""))
             self.description_edit.setPlainText(getattr(relation, "description", "") or "")
             # Body: store in custom_metadata._body or temporality field as proxy
@@ -872,9 +884,20 @@ class RelationDetailPanel(QWidget):
         else:
             meta.pop("_notes", None)
 
+        meta.pop("_visual_draft", None)
+
+        direction_choice = self.direction_combo.currentData() or "source_to_target"
+        source_id = getattr(self._relation, "source_id", "")
+        target_id = getattr(self._relation, "target_id", "")
+        direction_value = "bidireccional" if direction_choice == "bidireccional" else "unidireccional"
+        if direction_choice == "target_to_source":
+            source_id, target_id = target_id, source_id
+
         payload = {
+            "source_id": source_id,
+            "target_id": target_id,
             "relation_type": relation_type_value,
-            "direction": self.direction_combo.currentData(),
+            "direction": direction_value,
             "intensity": self.intensity_combo.currentData(),
             "description": self.description_edit.toPlainText().strip(),
             "temporality": self.temporality_edit.toPlainText().strip(),
