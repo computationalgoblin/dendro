@@ -56,11 +56,27 @@ class ProjectType:
 
 @dataclass
 class CreativeProjectConfig:
-    """Creative project configuration (B31-T03)."""
+    """Creative project configuration (B31-T03, expanded B40)."""
+    # ── Original fields (B31-T03) ──
     narrative_style: str = ""
     main_themes: list[str] = field(default_factory=list)
     target_audience: str = ""
     creative_rules: list[str] = field(default_factory=list)
+
+    # ── New scalar fields (B40) ──
+    core_premise: str = ""
+    short_summary: str = ""
+    development_status: str = ""  # idea/borrador/expansion/revision/activa/archivado
+    format: str = ""  # novela/campana/videojuego/serie/comic/mundo_abierto/antologia/otro
+
+    # ── New structured sub-objects (B40) ──
+    creative_intent: dict = field(default_factory=dict)
+    narrative_engine: dict = field(default_factory=dict)
+    poetics: dict = field(default_factory=dict)
+    canon: dict = field(default_factory=dict)
+    negative_space: dict = field(default_factory=dict)
+    taste_memory: dict = field(default_factory=dict)
+    presets_applied: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -68,6 +84,17 @@ class CreativeProjectConfig:
             "main_themes": self.main_themes,
             "target_audience": self.target_audience,
             "creative_rules": self.creative_rules,
+            "core_premise": self.core_premise,
+            "short_summary": self.short_summary,
+            "development_status": self.development_status,
+            "format": self.format,
+            "creative_intent": self.creative_intent,
+            "narrative_engine": self.narrative_engine,
+            "poetics": self.poetics,
+            "canon": self.canon,
+            "negative_space": self.negative_space,
+            "taste_memory": self.taste_memory,
+            "presets_applied": self.presets_applied,
         }
 
     @classmethod
@@ -77,6 +104,17 @@ class CreativeProjectConfig:
             main_themes=data.get("main_themes", []),
             target_audience=data.get("target_audience", ""),
             creative_rules=data.get("creative_rules", []),
+            core_premise=data.get("core_premise", ""),
+            short_summary=data.get("short_summary", ""),
+            development_status=data.get("development_status", ""),
+            format=data.get("format", ""),
+            creative_intent=data.get("creative_intent", {}),
+            narrative_engine=data.get("narrative_engine", {}),
+            poetics=data.get("poetics", {}),
+            canon=data.get("canon", {}),
+            negative_space=data.get("negative_space", {}),
+            taste_memory=data.get("taste_memory", {}),
+            presets_applied=data.get("presets_applied", []),
         )
 
 

@@ -80,6 +80,9 @@ SUITES: dict[str, list[str]] = {
         "tests/project_control/test_b39_project_control_artifacts.py",
         "tests/application/test_b39_visible_model.py",
     ],
+    "b40": [
+        "tests/application/test_b40_creative_config.py",
+    ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }

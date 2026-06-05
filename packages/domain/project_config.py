@@ -114,11 +114,25 @@ class AIConfig:
         enabled: Whether AI assistance is active.
         model_preference: Preferred model identifier.
         creativity_level: Creativity / temperature setting.
+        default_role: Default AI role for suggestions.
+        change_aggressiveness: How aggressively AI proposes changes (0-10).
+        default_num_options: Number of alternative options to generate (1-5).
+        output_mode: Format of AI output.
+        uncertainty_policy: How AI handles uncertain situations.
+        default_strategy: Default narrative strategy.
+        context_depth: How much context AI considers.
     """
 
     enabled: bool = False
     model_preference: str = "default"
     creativity_level: str = "medium"
+    default_role: str = "coauthor"  # coauthor/editor/dramaturgo/supervisor/worldbuilder/analista/explorador/corrector
+    change_aggressiveness: int = 5  # 0-10 slider
+    default_num_options: int = 3  # 1-5
+    output_mode: str = "contrastive_options"  # single/contrastive/diagnosis/questions/minimal/structured
+    uncertainty_policy: str = "conservative_proposal"  # ask/conservative/invent/mark_gaps/interpretations
+    default_strategy: str = "profundizar"  # profundizar/contrastar/complicar/extranar/conectar/reducir/intensificar/subvertir/coherente/ambiguo/emocional/extraño
+    context_depth: str = "balanced"  # quick/balanced/deep
 
 
 # ---------------------------------------------------------------------------

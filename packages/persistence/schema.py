@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B31-T04: semantic tree containers)
-CURRENT_SCHEMA_VERSION: int = 21
+# Current schema version for new projects (B40: expanded creative config)
+CURRENT_SCHEMA_VERSION: int = 22
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 21
+MAX_SUPPORTED_VERSION: int = 22
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +658,45 @@ def _apply_migration_v20_to_v21(data):
     """v20 → v21: no structural changes — CONTENEDOR entity_type is enum-only (B31-T04)."""
     migrated = dict(data)
     migrated['schema_version'] = 21
+    return migrated
+
+
+def _apply_migration_v21_to_v22(data):
+    """v21 → v22: expanded CreativeProjectConfig and AIConfig (B40).
+
+    Adds new sub-objects to creative_config with sensible defaults.
+    Old projects keep all existing fields and get empty defaults for new ones.
+    Does NOT remove any existing data.
+    """
+    migrated = dict(data)
+
+    # Expand creative_config with new B40 sub-objects
+    cc = migrated.get("creative_config", {})
+    cc.setdefault("core_premise", "")
+    cc.setdefault("short_summary", "")
+    cc.setdefault("development_status", "")
+    cc.setdefault("format", "")
+    cc.setdefault("creative_intent", {})
+    cc.setdefault("narrative_engine", {})
+    cc.setdefault("poetics", {})
+    cc.setdefault("canon", {})
+    cc.setdefault("negative_space", {})
+    cc.setdefault("taste_memory", {})
+    cc.setdefault("presets_applied", [])
+    migrated["creative_config"] = cc
+
+    # Expand ai config with new B40 fields
+    ai = migrated.get("ai", {})
+    ai.setdefault("default_role", "coauthor")
+    ai.setdefault("change_aggressiveness", 5)
+    ai.setdefault("default_num_options", 3)
+    ai.setdefault("output_mode", "contrastive_options")
+    ai.setdefault("uncertainty_policy", "conservative_proposal")
+    ai.setdefault("default_strategy", "profundizar")
+    ai.setdefault("context_depth", "balanced")
+    migrated["ai"] = ai
+
+    migrated["schema_version"] = 22
     return migrated
 
 # Structural validation
