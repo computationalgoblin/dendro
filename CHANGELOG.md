@@ -2,6 +2,22 @@
 
 Formato basado en bloques. Este archivo resume cambios relevantes para humanos; no sustituye a `git log`, Kanban ni cierres técnicos.
 
+## 2026-06-05 — B38-FIX-01 AI Command Bar real
+
+### Corregido
+
+- La command bar de Creación deja de generar plantillas fijas como éxito de producción.
+- Se separa el pipeline en clasificación, planificación, ejecución provider-backed y staging de resultados.
+- El prompt exacto del usuario viaja al provider como instrucción principal.
+- Si no hay provider IA real configurado, el job falla claramente en vez de simular contenido.
+- Se añade panel `Jobs` / `Tareas IA` con progreso por fases, estado, cancelación y ver resultado.
+- Los resultados siguen siendo candidatos/informes revisables; no hay canon automático.
+
+### Validación
+
+- Tests B38 específicos cubren sensibilidad al prompt, clasificación, lifecycle, errores, resultados y UI.
+- Checklist Windows: `docs/validation/b38-fix-01-ai-command-bar-windows-smoke.md`.
+
 ## 2026-06-05 — B39 Control operativo del proyecto
 
 Planificado/implementado como bloque de hardening documental y tooling mínimo.

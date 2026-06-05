@@ -472,6 +472,68 @@ class NarrativeWorkbench(QWidget):
         self._chips_layout.addStretch(1)
 
 
+
+class AIJobsPanel(_SimpleFormPanel):
+    """Visible queue/list for command-bar AI jobs."""
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__("Tareas IA", "Jobs de Dendro en segundo plano. Ninguno canoniza automáticamente.")
+        self.workspace = workspace
+        self.jobs_layout = QVBoxLayout()
+        self.jobs_layout.setSpacing(10)
+        self.layout.addLayout(self.jobs_layout)
+        self.layout.addStretch(1)
+        self.refresh()
+
+    def refresh(self):
+        while self.jobs_layout.count():
+            item = self.jobs_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        jobs = self.workspace.ai_job_service.list_jobs()
+        if not jobs:
+            self.jobs_layout.addWidget(EmptyState("Sin tareas IA", "Lanza una petición desde la command bar."))
+            return
+        for job in reversed(jobs):
+            card = Card(self._job_title(job), self._job_description(job))
+            progress = QProgressBar()
+            progress.setRange(0, 100)
+            progress.setValue(int(max(0.0, min(1.0, float(getattr(job, "progress", 0.0)))) * 100))
+            card.layout.addWidget(progress)
+            row = QHBoxLayout()
+            view = QPushButton("Ver resultado")
+            view.setEnabled(str(getattr(job, "status", "")) == "AIJobStatus.READY_FOR_REVIEW" or getattr(job, "status", "") == "ready_for_review")
+            view.clicked.connect(lambda _, jid=getattr(job, "id", ""): self.workspace._open_ai_job_result_by_id(jid))
+            cancel = QPushButton("Cancelar")
+            cancel.setEnabled(getattr(job, "cancellable", True) and str(getattr(job, "status", "")) not in {"AIJobStatus.READY_FOR_REVIEW", "AIJobStatus.FAILED", "AIJobStatus.CANCELLED"})
+            cancel.clicked.connect(lambda _, jid=getattr(job, "id", ""): self._cancel(jid))
+            row.addStretch(1)
+            row.addWidget(view)
+            row.addWidget(cancel)
+            card.layout.addLayout(row)
+            self.jobs_layout.addWidget(card)
+
+    def _job_title(self, job) -> str:
+        prompt = str(getattr(job, "prompt", "") or "Tarea IA").replace("\n", " ")
+        return prompt[:80]
+
+    def _job_description(self, job) -> str:
+        status = getattr(getattr(job, "status", ""), "value", getattr(job, "status", ""))
+        job_type = getattr(getattr(job, "type", ""), "value", getattr(job, "type", ""))
+        message = getattr(job, "message", "") or ""
+        error = getattr(job, "error", "") or ""
+        if error:
+            message = f"{message}: {error}"
+        return f"{str(job_type).replace('_', ' ')} · {status} · {message}"
+
+    def _cancel(self, job_id: str):
+        result = self.workspace.ai_job_service.cancel_job(job_id)
+        if isinstance(result, Error):
+            self.workspace.ctx.log("warning", result.error)
+        self.workspace._sync_jobs_indicator()
+        self.refresh()
+
 class AIJobResultPanel(_SimpleFormPanel):
     """Review panel for a completed command-bar job.
 
@@ -546,7 +608,7 @@ class _AIJobWorker(QThread):
     def run(self):
         try:
             self._emit_job()
-            result = self.service.execute_job(self.job_id)
+            result = self.service.execute_job(self.job_id, progress_callback=lambda _job: self._emit_job())
             job = self._emit_job()
             if isinstance(result, Error):
                 self.failed.emit(self.job_id, result.error)
@@ -968,7 +1030,7 @@ class CreationWorkspace(QWidget):
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
         self.ai_job_service = AIJobService()
-        self._active_ai_worker = None
+        self._ai_workers = {}
         self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
@@ -1067,6 +1129,9 @@ class CreationWorkspace(QWidget):
         icon_btn("⌕", "Buscar y enfocar elementos", self._open_search_panel)
         self._filter_btn = icon_btn("◌", "Filtros visuales", self._open_filter_panel)
         self._suggestion_btn = icon_btn("⊹", "Bandeja de sugerencias", self._open_suggestion_inbox)
+        self._jobs_btn = icon_btn("Jobs", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
+        self._jobs_btn.setStyleSheet(text_btn_style)
+        self._jobs_btn.setFixedWidth(64)
         self._suggestion_count = 0
         self._layers_toggle_btn = icon_btn("Capas", "Abrir/cerrar panel de capas causales", self._toggle_layer_drawer)
         self._layers_toggle_btn.setStyleSheet(text_btn_style)
@@ -1208,9 +1273,6 @@ class CreationWorkspace(QWidget):
         if not prompt:
             self._job_status_label.setText("Escribe una orden para Dendro")
             return
-        if self._active_ai_worker is not None and self._active_ai_worker.isRunning():
-            self._job_status_label.setText("Dendro ya está trabajando en una tarea")
-            return
         scope = self._current_context_scope()
         job_type = classify_ai_job_intent(prompt, worldbuilding_active=bool(scope.get("worldbuilding_active")))
         result = self.ai_job_service.create_job(job_type, prompt, context_scope=scope)
@@ -1220,9 +1282,8 @@ class CreationWorkspace(QWidget):
             return
         job = result.value
         self._command_input.clear()
-        self._command_input.setEnabled(False)
-        self._command_submit_btn.setEnabled(False)
         self._job_status_label.setText(f"Job creado: {job.type.value.replace('_', ' ')}")
+        self._sync_jobs_indicator()
         self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
         self._start_ai_job_worker(job.id)
 
@@ -1232,12 +1293,13 @@ class CreationWorkspace(QWidget):
         worker.finishedOk.connect(self._on_ai_job_finished)
         worker.failed.connect(self._on_ai_job_failed)
         worker.finished.connect(self._on_ai_worker_stopped)
-        self._active_ai_worker = worker
+        self._ai_workers[job_id] = worker
         worker.start()
 
     def _on_ai_job_status(self, status: str, message: str, progress: float):
         percent = int(max(0.0, min(1.0, progress)) * 100)
         self._job_status_label.setText(f"Dendro: {message} ({percent}%)")
+        self._sync_jobs_indicator()
 
     def _on_ai_job_finished(self, job_id: str):
         result = self.ai_job_service.get_job(job_id)
@@ -1246,16 +1308,42 @@ class CreationWorkspace(QWidget):
             return
         job = result.value
         self._job_status_label.setText(job.message or "Resultado listo")
+        self._sync_jobs_indicator()
         self._open_ai_job_result(job)
 
     def _on_ai_job_failed(self, job_id: str, error: str):
         self._job_status_label.setText(f"Job fallido: {error}")
         self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
+        self._sync_jobs_indicator()
 
     def _on_ai_worker_stopped(self):
-        self._command_input.setEnabled(True)
-        self._command_submit_btn.setEnabled(True)
-        self._active_ai_worker = None
+        self._ai_workers = {jid: worker for jid, worker in self._ai_workers.items() if worker.isRunning()}
+        self._sync_jobs_indicator()
+
+    def _open_ai_jobs_panel(self):
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        panel = AIJobsPanel(self)
+        drawer.set_content(panel, title="Tareas IA")
+        drawer.open()
+
+    def _open_ai_job_result_by_id(self, job_id: str):
+        result = self.ai_job_service.get_job(job_id)
+        if isinstance(result, Error):
+            self.ctx.log("warning", result.error)
+            return
+        self._open_ai_job_result(result.value)
+
+    def _sync_jobs_indicator(self):
+        btn = getattr(self, "_jobs_btn", None)
+        if btn is None:
+            return
+        jobs = self.ai_job_service.list_jobs()
+        active = [j for j in jobs if getattr(getattr(j, "status", ""), "value", getattr(j, "status", "")) in {"queued", "building_context", "planning", "waiting_for_model", "running", "postprocessing"}]
+        ready = [j for j in jobs if getattr(getattr(j, "status", ""), "value", getattr(j, "status", "")) == "ready_for_review"]
+        total = len(active) + len(ready)
+        btn.setText(f"Jobs {total}" if total else "Jobs")
 
     def _open_ai_job_result(self, job):
         drawer = self.ctx.drawer

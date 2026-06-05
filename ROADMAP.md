@@ -11,11 +11,11 @@ Fuente operativa: este archivo resume el estado de trabajo. No sustituye a:
 
 | Campo | Valor |
 |---|---|
-| Fase activa | B39 — Control operativo del proyecto |
-| Tipo | Hardening documental/tooling, sin features narrativas nuevas |
-| Contrato | `docs/contracts/bloque-39-contrato.md` |
+| Fase activa | B38-FIX-01 — AI Command Bar real |
+| Tipo | Corrección bloqueante de producto/IA |
+| Contrato | `PHASE_CURRENT.md` |
 | Fase detallada | `PHASE_CURRENT.md` |
-| Kanban padre | `t_4b60170c` |
+| Kanban padre | `t_6002f6c8` |
 | Estado Windows | Validaciones visuales B36/B37/B38 pendientes de Windows nativo |
 
 ## Bloques cerrados recientes

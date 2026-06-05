@@ -39,11 +39,12 @@ def test_b39_required_control_artifacts_exist_and_are_non_empty() -> None:
 
 def test_phase_current_declares_single_active_phase_and_scope_boundaries() -> None:
     content = _read("PHASE_CURRENT.md")
-    assert "B39 — Control operativo del proyecto" in content
+    assert "## Fase activa" in content
+    assert content.count("## Fase activa") == 1
     assert "## Incluye" in content
     assert "## Excluye" in content
     assert "## Definition of Done" in content
-    assert "Si una petición nueva no encaja" in content
+    assert "No avanzar" in content or "Si una petición nueva no encaja" in content
     assert "validación Windows ficticia" in content
 
 

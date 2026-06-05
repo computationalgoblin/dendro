@@ -1,11 +1,17 @@
-"""B38 AI job contract and in-memory service.
+"""B38 AI command-bar jobs.
 
-AI jobs are the command-bar unit of work.  They never mutate canon directly;
-results become reviewable candidates/suggestions; they never mutate canon directly.
+AI jobs are the command-bar unit of work. They never mutate canon directly:
+results are staged as reviewable candidates, reports, suggestions or open
+questions. The command-bar pipeline is intentionally split into:
 
-MVP persistence decision: in-memory only.  This avoids schema churn for B38-T04
-and keeps job runtime state out of project canon.  Durable job persistence can be
-added later if long-running/background jobs need to survive app restarts.
+1. classify_intent(prompt, context)
+2. build_job_plan(intent, prompt, context)
+3. execute_job(plan) through a provider-backed job service
+4. stage_results(result)
+
+Production execution must use the exact user prompt as the primary instruction.
+If no real provider is configured, command-bar jobs fail clearly instead of
+returning fake success. Tests may inject explicit mock providers.
 """
 from __future__ import annotations
 
@@ -13,19 +19,41 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+import json
+import re
 import uuid
 
 from packages.domain.result import Error, Ok, Result
+from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+COMMAND_BAR_SYSTEM_PROMPT_ES = """Eres el planificador y asistente central de creación de Dendro. Tu tarea es interpretar la petición del usuario y producir un plan o resultado útil sobre el grafo narrativo. Debes respetar el prompt exacto del usuario, el idioma del proyecto, el género, tono, realismo, estilo narrativo, worldbuilding activo, capas, árboles, relaciones y canon existente. No debes modificar canon directamente. Si generas nuevos elementos, deben ser candidatos revisables. Si analizas el grafo, devuelve un informe estructurado. Si la petición es ambigua, propón una interpretación y pide confirmación o crea un plan revisable. No devuelvas plantillas fijas. No ignores detalles del prompt.
+
+Devuelve SOLO JSON válido con esta forma:
+{
+  "summary": "resumen humano breve",
+  "report": "informe o explicación visible para el usuario",
+  "entities": [{"name": "...", "entity_type": "personaje|localizacion|objeto|evento|faccion|contenedor|ley|nota", "brief_description": "...", "body": "... opcional", "layer_ids": []}],
+  "trees": [{"name": "...", "brief_description": "...", "layer_ids": []}],
+  "relations": [{"source_id": "id real si existe", "target_id": "id real si existe", "relation_type": "esta_relacionado_con", "description": "..."}],
+  "issues": [{"title": "...", "description": "...", "severity": "baja|media|alta"}],
+  "proposals": [{"title": "...", "description": "..."}],
+  "open_questions": ["..."]
+}
+No incluyas IDs inventados. Si no conoces endpoints reales para relaciones, escribe propuestas en 'proposals' u 'open_questions', no en 'relations'.
+"""
+
+
 class AIJobStatus(str, Enum):
     QUEUED = "queued"
     BUILDING_CONTEXT = "building_context"
-    RUNNING = "running"
+    PLANNING = "planning"
+    WAITING_FOR_MODEL = "waiting_for_model"
+    RUNNING = "running"  # backward-compatible alias for older tests/UI
     POSTPROCESSING = "postprocessing"
     READY_FOR_REVIEW = "ready_for_review"
     FAILED = "failed"
@@ -40,6 +68,54 @@ class AIJobType(str, Enum):
     EXPAND_WORLDBUILDING = "expand_worldbuilding"
     EXPLAIN_FROM_CAUSES = "explain_from_causes"
     REVIEW_GRAPH = "review_graph"
+    FREEFORM_PLANNING = "freeform_planning"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class CommandBarIntent:
+    intent_type: AIJobType
+    confidence: float
+    target_scope: str
+    expected_output_type: str
+    needs_confirmation: bool = False
+    rationale: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "intent_type": self.intent_type.value,
+            "confidence": self.confidence,
+            "target_scope": self.target_scope,
+            "expected_output_type": self.expected_output_type,
+            "needs_confirmation": self.needs_confirmation,
+            "rationale": self.rationale,
+        }
+
+
+@dataclass
+class AIJobPlan:
+    job_id: str
+    intent: CommandBarIntent
+    prompt: str
+    context: dict[str, Any]
+    title: str
+    steps: list[str]
+    target_scope: str
+    expected_result: str
+    creates: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "intent": self.intent.to_dict(),
+            "prompt": self.prompt,
+            "context": dict(self.context),
+            "title": self.title,
+            "steps": list(self.steps),
+            "target_scope": self.target_scope,
+            "expected_result": self.expected_result,
+            "creates": list(self.creates),
+        }
 
 
 @dataclass
@@ -58,6 +134,8 @@ class AIJob:
     result: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     cancellable: bool = True
+    intent: dict[str, Any] = field(default_factory=dict)
+    plan: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +151,8 @@ class AIJob:
             "result": dict(self.result),
             "error": self.error,
             "cancellable": self.cancellable,
+            "intent": dict(self.intent),
+            "plan": dict(self.plan),
         }
 
     @classmethod
@@ -90,7 +170,110 @@ class AIJob:
             result=dict(data.get("result") or {}),
             error=data.get("error", ""),
             cancellable=bool(data.get("cancellable", True)),
+            intent=dict(data.get("intent") or {}),
+            plan=dict(data.get("plan") or {}),
         )
+
+
+def _norm(prompt: str) -> str:
+    return (prompt or "").strip().lower()
+
+
+def _has_any(text: str, words: list[str]) -> bool:
+    return any(word in text for word in words)
+
+
+def _scope_from_context(text: str, context: dict[str, Any]) -> str:
+    selected = context.get("selected_entity_ids") or []
+    focus = context.get("focus_label") or ""
+    if selected:
+        return "selection"
+    if "devian" in text or "hermandad" in text:
+        return "named_entities"
+    if focus and str(focus).lower() != "global":
+        return "focused_view"
+    if "todo" in text or "grafo" in text or "proyecto" in text:
+        return "project_summary"
+    return "visible_graph"
+
+
+def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> CommandBarIntent:
+    """Classify command-bar intent without generating final content."""
+    context = dict(context or {})
+    text = _norm(prompt)
+    worldbuilding = bool(context.get("worldbuilding_active", False))
+    scope = _scope_from_context(text, context)
+
+    if not text:
+        return CommandBarIntent(AIJobType.UNKNOWN, 0.0, scope, "none", True, "Prompt vacío")
+
+    if _has_any(text, ["relacion", "relación", "relaciones", "vínculo", "vinculo"]):
+        return CommandBarIntent(AIJobType.SUGGEST_RELATIONS, 0.82, scope, "relation_candidates", False, "La petición pide relaciones o vínculos")
+
+    if _has_any(text, ["incoher", "coherencia", "contradic"]):
+        return CommandBarIntent(AIJobType.ANALYZE_COHERENCE, 0.82, scope, "analysis_report", False, "La petición pide coherencia/contradicciones")
+
+    if _has_any(text, ["revisa", "revisión", "revision", "mejoras", "analiza", "audita"]):
+        return CommandBarIntent(AIJobType.REVIEW_GRAPH, 0.78, scope, "analysis_report", False, "La petición pide revisión o mejoras")
+
+    if _has_any(text, ["explica", "justifica", "causas superiores", "desde causas"]):
+        return CommandBarIntent(AIJobType.EXPLAIN_FROM_CAUSES, 0.75, scope, "explanation_report", False, "La petición pide explicación causal")
+
+    if _has_any(text, ["metafís", "metafis", "worldbuilding", "capa", "causal", "agujero negro", "agujeros negros"]):
+        intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
+        return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide sistema/worldbuilding")
+
+    if _has_any(text, ["sistema", "árbol", "arbol", "estructura"]):
+        return CommandBarIntent(AIJobType.GENERATE_TREE, 0.72, scope, "tree_candidates", False, "La petición pide sistema/árbol/estructura")
+
+    if _has_any(text, ["personaje", "personajes", "entidad", "entidades", "nodo", "nodos", "científico", "cientific", "herman"]):
+        return CommandBarIntent(AIJobType.GENERATE_ENTITIES, 0.78, scope, "entity_candidates", False, "La petición pide entidades/personajes")
+
+    if _has_any(text, ["plan", "idea", "organiza", "ayúdame", "ayudame"]):
+        return CommandBarIntent(AIJobType.FREEFORM_PLANNING, 0.55, scope, "plan_report", False, "Petición abierta de planificación")
+
+    return CommandBarIntent(AIJobType.UNKNOWN, 0.35, scope, "clarification_or_plan", True, "No hay intención clara")
+
+
+def classify_ai_job_intent(prompt: str, *, worldbuilding_active: bool = False) -> AIJobType:
+    """Backward-compatible wrapper returning only the job type."""
+    return classify_intent(prompt, {"worldbuilding_active": worldbuilding_active}).intent_type
+
+
+def _creates_for_intent(intent_type: AIJobType) -> list[str]:
+    if intent_type == AIJobType.GENERATE_ENTITIES:
+        return ["candidatos de entidad"]
+    if intent_type == AIJobType.GENERATE_TREE:
+        return ["candidato de árbol", "candidatos de nodos internos opcionales"]
+    if intent_type == AIJobType.SUGGEST_RELATIONS:
+        return ["candidatos de relación"]
+    if intent_type in (AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES):
+        return ["informe", "propuestas", "preguntas abiertas"]
+    if intent_type == AIJobType.EXPAND_WORLDBUILDING:
+        return ["candidatos de nodo/árbol", "relaciones causales candidatas"]
+    return ["plan revisable"]
+
+
+def build_job_plan(intent: CommandBarIntent, prompt: str, context: dict[str, Any] | None = None, *, job_id: str = "") -> AIJobPlan:
+    context = dict(context or {})
+    label = prompt.strip().replace("\n", " ")[:72] or "Tarea IA"
+    steps = [
+        "Construir contexto autorizado de proyecto/grafo",
+        "Interpretar la petición completa del usuario",
+        "Consultar IA con prompt exacto y contexto relevante",
+        "Convertir salida en resultado revisable sin canonizar",
+    ]
+    return AIJobPlan(
+        job_id=job_id,
+        intent=intent,
+        prompt=prompt.strip(),
+        context=context,
+        title=f"{intent.intent_type.value.replace('_', ' ')} — {label}",
+        steps=steps,
+        target_scope=intent.target_scope,
+        expected_result=intent.expected_output_type,
+        creates=_creates_for_intent(intent.intent_type),
+    )
 
 
 def _first_active_layer(context_scope: dict[str, Any]) -> str:
@@ -126,188 +309,201 @@ def _candidate(
             "prompt": job.prompt,
             "context_scope": dict(job.context_scope),
             "canon_auto_mutation": False,
+            "provider_backed": True,
         },
     }
 
 
-def build_ai_job_result(job: AIJob) -> dict[str, Any]:
-    """Build deterministic MVP output for a job without calling an external model.
+def _extract_json(text: str) -> dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {"report": raw}
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else {"report": raw}
+        except Exception:
+            pass
+    return {"summary": "Respuesta no estructurada", "report": raw}
 
-    B38-T08 intentionally starts with useful offline candidates/reports.  Later
-    blocks can replace this with provider-backed structured output behind the
-    same job/result contract.
-    """
-    prompt = job.prompt.strip()
+
+def _safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
+    """Convert model payload to reviewable candidates/report. Never mutates canon."""
+    payload = dict(model_payload or {})
     layer_id = _first_active_layer(job.context_scope)
-    base_meta = {"origin_prompt": prompt, "layer_ids": [layer_id] if layer_id else []}
+    candidates: list[dict[str, Any]] = []
 
-    if job.type == AIJobType.GENERATE_ENTITIES:
-        candidates = [
-            _candidate(
-                title="Mara, cartógrafa exiliada",
-                candidate_type="entidad",
-                proposed_data={
-                    "name": "Mara",
-                    "entity_type": "personaje",
-                    "brief_description": "Cartógrafa exiliada que conoce rutas prohibidas y conserva mapas incompletos.",
-                    "layer_ids": [layer_id] if layer_id else [],
-                    "custom_metadata": {**base_meta, "role": "personaje_inicial"},
-                },
-                job=job,
-                justification="Personaje inicial con movilidad narrativa y secretos explorables.",
-            ),
-            _candidate(
-                title="Iren, heredero de una casa menor",
-                candidate_type="entidad",
-                proposed_data={
-                    "name": "Iren",
-                    "entity_type": "personaje",
-                    "brief_description": "Heredero de una casa menor que busca legitimidad sin poder suficiente para imponerla.",
-                    "layer_ids": [layer_id] if layer_id else [],
-                    "custom_metadata": {**base_meta, "role": "tension_social"},
-                },
-                job=job,
-                justification="Introduce conflicto de estatus y alianzas frágiles.",
-            ),
-            _candidate(
-                title="Vosco, sacerdote de la caída",
-                candidate_type="entidad",
-                proposed_data={
-                    "name": "Vosco",
-                    "entity_type": "personaje",
-                    "brief_description": "Sacerdote que interpreta cada derrumbe como una señal de equilibrio divino.",
-                    "layer_ids": [layer_id] if layer_id else [],
-                    "custom_metadata": {**base_meta, "role": "voz_ideologica"},
-                },
-                job=job,
-                justification="Conecta personaje con mito, culto y consecuencias culturales.",
-            ),
-        ]
-        return {
-            "kind": "candidate_batch",
-            "summary": "3 candidatos de personaje listos para revisión.",
-            "candidates": candidates,
-            "report": "Se proponen tres personajes complementarios. Ninguno se crea hasta aceptar su candidato.",
+    for entity in _safe_list(payload.get("entities")):
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "Entidad propuesta").strip()
+        if not name:
+            continue
+        layer_ids = entity.get("layer_ids") if isinstance(entity.get("layer_ids"), list) else ([layer_id] if layer_id else [])
+        proposed = {
+            "name": name,
+            "entity_type": str(entity.get("entity_type") or "personaje"),
+            "brief_description": str(entity.get("brief_description") or entity.get("description") or "").strip(),
+            "body": str(entity.get("body") or "").strip(),
+            "layer_ids": layer_ids,
+            "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id},
         }
+        candidates.append(_candidate(
+            title=f"Entidad candidata: {name}",
+            candidate_type="entidad",
+            proposed_data=proposed,
+            job=job,
+            justification=str(entity.get("rationale") or "Propuesta generada desde el prompt exacto del usuario."),
+        ))
 
-    if job.type in (AIJobType.GENERATE_TREE, AIJobType.EXPAND_WORLDBUILDING):
-        title = "Sistema metafísico: conflicto gravitacional"
-        candidates = [
-            _candidate(
-                title=title,
-                candidate_type="entidad",
-                proposed_data={
-                    "name": "Sistema metafísico del conflicto gravitacional",
-                    "entity_type": "contenedor",
-                    "brief_description": "Árbol candidato para organizar causas primeras, leyes y consecuencias del mundo.",
-                    "layer_ids": [layer_id] if layer_id else [],
-                    "custom_metadata": {**base_meta, "tree_type": "sistema_metafisico", "candidate_tree": True},
-                },
-                job=job,
-                justification="Crea un contenedor revisable para ordenar causalmente el worldbuilding.",
-                expected_impact="Al aceptar, se crea solo el contenedor; nodos internos futuros siguen siendo candidatos separados.",
-            ),
-            _candidate(
-                title="Ley candidata: toda gravedad expresa conflicto",
-                candidate_type="entidad",
-                proposed_data={
-                    "name": "Toda gravedad expresa conflicto",
-                    "entity_type": "ley",
-                    "brief_description": "La atracción entre cuerpos no es neutra: manifiesta tensiones entre fuerzas superiores.",
-                    "layer_ids": [layer_id] if layer_id else [],
-                    "custom_metadata": {**base_meta, "causal_candidate": True},
-                },
-                job=job,
-                justification="Da una regla concreta desde la que derivar naturaleza, cultura y conflicto.",
-            ),
-        ]
-        return {
-            "kind": "candidate_batch",
-            "summary": "Sistema/árbol candidato y ley inicial listos para revisión.",
-            "candidates": candidates,
-            "report": "El sistema se entrega como candidatos revisables; no se crean árboles/nodos automáticamente.",
+    for tree in _safe_list(payload.get("trees")):
+        if not isinstance(tree, dict):
+            continue
+        name = str(tree.get("name") or "Árbol propuesto").strip()
+        layer_ids = tree.get("layer_ids") if isinstance(tree.get("layer_ids"), list) else ([layer_id] if layer_id else [])
+        proposed = {
+            "name": name,
+            "entity_type": "contenedor",
+            "brief_description": str(tree.get("brief_description") or tree.get("description") or "").strip(),
+            "layer_ids": layer_ids,
+            "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id, "candidate_tree": True},
         }
+        candidates.append(_candidate(
+            title=f"Árbol candidato: {name}",
+            candidate_type="entidad",
+            proposed_data=proposed,
+            job=job,
+            justification=str(tree.get("rationale") or "Árbol/contenedor propuesto para revisión."),
+        ))
 
-    if job.type in (AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH):
-        selected = job.context_scope.get("selected_entity_ids") or []
-        scope = "selección actual" if selected else "grafo visible/proyecto"
-        report = (
-            f"Revisión MVP sobre {scope}:\n"
-            "1. Buscar elementos sin causa superior clara si Worldbuilding está activo.\n"
-            "2. Revisar relaciones contradictorias o sin justificación visible.\n"
-            "3. Convertir propuestas de reparación en candidatos antes de canonizar."
-        )
-        candidates = [
-            _candidate(
-                title="Informe revisable de coherencia",
-                candidate_type="sugerencia_ia",
-                proposed_data={
-                    "report": report,
-                    "prompt": prompt,
-                    "scope": dict(job.context_scope),
-                },
-                job=job,
-                justification="Informe analítico generado por job; aceptar solo registra la sugerencia, no modifica el grafo.",
-                confidence=0.55,
-                expected_impact="Ayuda a decidir mejoras sin aplicar cambios automáticos.",
-            )
-        ]
-        return {
-            "kind": "analysis_report",
-            "summary": "Informe de revisión listo.",
-            "report": report,
-            "candidates": candidates,
-        }
+    selected = set(str(x) for x in (job.context_scope.get("selected_entity_ids") or []))
+    relevant = job.context_scope.get("relevant_entities") or []
+    relevant_ids = {str(e.get("id")) for e in relevant if isinstance(e, dict) and e.get("id")}
+    allowed_ids = selected | relevant_ids
+    for rel in _safe_list(payload.get("relations")):
+        if not isinstance(rel, dict):
+            continue
+        source_id = str(rel.get("source_id") or "")
+        target_id = str(rel.get("target_id") or "")
+        if not source_id or not target_id:
+            continue
+        if allowed_ids and (source_id not in allowed_ids or target_id not in allowed_ids):
+            continue
+        candidates.append(_candidate(
+            title="Relación candidata",
+            candidate_type="relacion",
+            proposed_data={
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": str(rel.get("relation_type") or "esta_relacionado_con"),
+                "description": str(rel.get("description") or "Relación propuesta desde command bar."),
+            },
+            job=job,
+            justification=str(rel.get("rationale") or "Relación propuesta con endpoints reales del contexto."),
+        ))
 
-    if job.type == AIJobType.SUGGEST_RELATIONS:
-        selected = list(job.context_scope.get("selected_entity_ids") or [])
-        report = "Selecciona al menos dos nodos para convertir sugerencias de relación en candidatos con endpoints reales."
-        candidates: list[dict[str, Any]] = []
-        if len(selected) >= 2:
-            candidates.append(_candidate(
-                title="Relación candidata entre elementos seleccionados",
-                candidate_type="relacion",
-                proposed_data={
-                    "source_id": selected[0],
-                    "target_id": selected[1],
-                    "relation_type": "esta_relacionado_con",
-                    "description": "Relación propuesta desde command bar; revisar tipo y dirección antes de aceptar.",
-                },
-                job=job,
-                justification="Usa la selección actual como endpoints explícitos para evitar relaciones fantasma.",
-            ))
-            report = "Relación candidata creada sobre endpoints seleccionados."
-        return {"kind": "candidate_batch", "summary": report, "report": report, "candidates": candidates}
+    report = str(payload.get("report") or payload.get("summary") or "Resultado IA listo para revisión.")
+    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN}
+    if analytical or payload.get("issues") or payload.get("proposals") or payload.get("open_questions"):
+        candidates.append(_candidate(
+            title=str(payload.get("summary") or "Informe revisable de IA"),
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "report": report,
+                "issues": _safe_list(payload.get("issues")),
+                "proposals": _safe_list(payload.get("proposals")),
+                "open_questions": _safe_list(payload.get("open_questions")),
+                "prompt": job.prompt,
+                "scope": dict(job.context_scope),
+            },
+            job=job,
+            justification="Informe/propuesta revisable; aceptar no aplica cambios estructurales al grafo.",
+            confidence=0.55,
+            expected_impact="Ayuda a decidir mejoras sin aplicar cambios automáticos.",
+        ))
 
+    kind = "analysis_report" if analytical else "candidate_batch"
     return {
-        "kind": "analysis_report",
-        "summary": "Job interpretado como ayuda libre/revisión.",
-        "report": "No se ha producido ningún cambio. Reformula o revisa el contexto antes de crear candidatos.",
-        "candidates": [],
+        "kind": kind,
+        "summary": str(payload.get("summary") or ("Informe listo" if analytical else "Candidatos listos para revisión")),
+        "report": report,
+        "candidates": candidates,
+        "open_questions": _safe_list(payload.get("open_questions")),
+        "model_payload": payload,
     }
 
 
-class AIJobService:
-    """In-memory AI job registry for B38 command bar MVP."""
+def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    # Keep only serializable, non-secret data. Context summaries should not expose JSON in normal UI.
+    return dict(context or {})
 
-    def __init__(self):
+
+def build_model_user_message(plan: AIJobPlan) -> str:
+    return json.dumps({
+        "prompt_exacto_usuario": plan.prompt,
+        "intent": plan.intent.to_dict(),
+        "plan": plan.to_dict(),
+        "contexto_autorizado": _context_for_prompt(plan.context),
+        "restricciones": {
+            "no_canon_automatico": True,
+            "solo_candidatos_revisables": True,
+            "no_ids_inventados": True,
+            "usar_prompt_exacto_como_instruccion_principal": True,
+        },
+    }, ensure_ascii=False, indent=2)
+
+
+# Backward-compatible helper kept only for tests that inject explicit mock jobs.
+def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow_simulated: bool = True) -> dict[str, Any]:
+    service = AIJobService(provider=provider or SimulatedAIProvider(), allow_simulated=allow_simulated)
+    service._jobs[job.id] = job
+    result = service.execute_job(job.id)
+    if isinstance(result, Error):
+        raise RuntimeError(result.error)
+    return result.value.result
+
+
+class AIJobService:
+    """In-memory AI job registry and command-bar runner."""
+
+    def __init__(self, provider: AIProvider | None = None, *, allow_simulated: bool = False):
         self._jobs: dict[str, AIJob] = {}
+        self._provider = provider if provider is not None else create_provider()
+        self.allow_simulated = allow_simulated
 
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None) -> Result:
         prompt = (prompt or "").strip()
         if not prompt:
             return Error("El prompt no puede estar vacío")
+        context = dict(context_scope or {})
         try:
             resolved_type = job_type if isinstance(job_type, AIJobType) else AIJobType(str(job_type))
         except ValueError:
             resolved_type = AIJobType.REVIEW_GRAPH
+        intent = classify_intent(prompt, context)
+        if resolved_type not in (AIJobType.UNKNOWN, intent.intent_type):
+            # UI may pass a legacy heuristic type; keep explicit type but preserve classifier rationale.
+            intent.intent_type = resolved_type
         job = AIJob(
-            type=resolved_type,
+            type=intent.intent_type,
             prompt=prompt,
-            context_scope=dict(context_scope or {}),
+            context_scope=context,
             message="Job creado. Pendiente de ejecución.",
             progress=0.0,
+            intent=intent.to_dict(),
         )
+        plan = build_job_plan(intent, prompt, context, job_id=job.id)
+        job.plan = plan.to_dict()
         self._jobs[job.id] = job
         return Ok(job)
 
@@ -344,35 +540,64 @@ class AIJobService:
         if result is not None:
             job.result = dict(result)
         if error:
-            job.error = error
+            job.error = _sanitize_error(error)
         job.updated_at = _now_iso()
         return Ok(job)
 
-    def execute_job(self, job_id: str) -> Result:
-        """Run the deterministic MVP job pipeline synchronously.
-
-        PySide calls this from a QThread, keeping the UI thread responsive.
-        """
+    def execute_job(self, job_id: str, progress_callback=None) -> Result:
         job = self._jobs.get(job_id)
         if job is None:
             return Error("Job IA no encontrado")
         if job.status == AIJobStatus.CANCELLED:
             return Error("Job IA cancelado")
-        self.update_status(job_id, AIJobStatus.BUILDING_CONTEXT, message="Construyendo contexto", progress=0.15)
-        self.update_status(job_id, AIJobStatus.RUNNING, message="Generando propuesta revisable", progress=0.55)
+        provider_name = str(getattr(self._provider, "provider_name", "ai"))
+        if provider_name == "simulated" and not self.allow_simulated:
+            msg = "Configura un proveedor IA real para la command bar; no se generará contenido simulado."
+            self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
+            return Error(msg)
+
+        self.update_status(job_id, AIJobStatus.BUILDING_CONTEXT, message="Construyendo contexto…", progress=0.20)
+        if progress_callback:
+            progress_callback(job)
+        intent = classify_intent(job.prompt, job.context_scope)
+        job.intent = intent.to_dict()
+        self.update_status(job_id, AIJobStatus.PLANNING, message="Interpretando petición…", progress=0.35)
+        if progress_callback:
+            progress_callback(job)
+        plan = build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)
+        job.type = intent.intent_type
+        job.plan = plan.to_dict()
+        self.update_status(job_id, AIJobStatus.WAITING_FOR_MODEL, message="Consultando IA…", progress=0.60)
+        if progress_callback:
+            progress_callback(job)
         try:
-            result = build_ai_job_result(job)
-        except Exception as exc:  # defensive: errors become inline failures
-            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=str(exc), progress=1.0)
-            return Error("No se pudo ejecutar el job IA")
-        self.update_status(job_id, AIJobStatus.POSTPROCESSING, message="Preparando revisión", progress=0.85)
-        return self.update_status(
+            text, error = self._provider.chat(COMMAND_BAR_SYSTEM_PROMPT_ES, build_model_user_message(plan))
+        except Exception as exc:
+            text, error = None, str(exc)
+        if error:
+            safe = _sanitize_error(error)
+            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=safe, progress=1.0)
+            return Error(safe)
+        if not text:
+            msg = "El proveedor IA no devolvió contenido."
+            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=msg, progress=1.0)
+            return Error(msg)
+        self.update_status(job_id, AIJobStatus.POSTPROCESSING, message="Preparando candidatos…", progress=0.80)
+        if progress_callback:
+            progress_callback(job)
+        payload = _extract_json(text)
+        result = stage_results(payload, job)
+        result["provider"] = provider_name
+        updated = self.update_status(
             job_id,
             AIJobStatus.READY_FOR_REVIEW,
-            message=result.get("summary", "Resultado listo para revisión"),
+            message=result.get("summary", "Listo para revisar"),
             progress=1.0,
             result=result,
         )
+        if progress_callback and not isinstance(updated, Error):
+            progress_callback(updated.value)
+        return updated
 
     def cancel_job(self, job_id: str) -> Result:
         job = self._jobs.get(job_id)
@@ -382,24 +607,13 @@ class AIJobService:
             return Error("Este job no se puede cancelar")
         job.status = AIJobStatus.CANCELLED
         job.message = "Job cancelado"
+        job.progress = min(job.progress, 1.0)
         job.updated_at = _now_iso()
         return Ok(job)
 
 
-def classify_ai_job_intent(prompt: str, *, worldbuilding_active: bool = False) -> AIJobType:
-    """Heuristic MVP classifier for command-bar prompts.
-
-    The classifier is intentionally conservative and deterministic for tests.
-    Later tickets can add model-assisted classification, but this first contract
-    keeps UI behavior predictable and offline-capable.
-    """
-    text = (prompt or "").lower()
-    if any(word in text for word in ["coherencia", "incoher", "revisa", "mejoras", "analiza"]):
-        return AIJobType.ANALYZE_COHERENCE if "coher" in text else AIJobType.REVIEW_GRAPH
-    if "relacion" in text or "relación" in text or "relaciones" in text:
-        return AIJobType.SUGGEST_RELATIONS
-    if any(word in text for word in ["metafís", "metafis", "worldbuilding", "sistema", "árbol", "arbol"]):
-        return AIJobType.EXPAND_WORLDBUILDING if worldbuilding_active else AIJobType.GENERATE_TREE
-    if any(word in text for word in ["personaje", "personajes", "entidad", "entidades", "nodos", "nodo"]):
-        return AIJobType.GENERATE_ENTITIES
-    return AIJobType.REVIEW_GRAPH
+def _sanitize_error(error: str) -> str:
+    text = str(error or "Error IA")
+    text = re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer [REDACTED]", text)
+    text = re.sub(r"sk-[A-Za-z0-9._\-]+", "[REDACTED]", text)
+    return text[:500]
