@@ -128,9 +128,18 @@ class CandidateService:
         elif c.candidate_type == CandidateType.RELACION:
             if not self.relation_service:
                 return Error("RelationService not available")
-            # Validate endpoints
+            # Resolve endpoints: prefer direct IDs, fall back to name lookup
             sid = c.proposed_data.get("source_id", "")
             tid = c.proposed_data.get("target_id", "")
+            if not sid or not tid:
+                sid, tid = self._resolve_relation_endpoints_by_name(
+                    proj.value, c.proposed_data
+                )
+            if not sid or not tid:
+                return Error(
+                    "No se pudieron encontrar las entidades para esta relación. "
+                    "Asegúrate de que ambas entidades existen en el proyecto."
+                )
             found_s = any(e.id == sid for e in proj.value.entities)
             found_t = any(e.id == tid for e in proj.value.entities)
             if not found_s or not found_t:
@@ -268,6 +277,26 @@ class CandidateService:
             return proj
         self._add_history(proj.value, "candidato_archivado", candidate_id=c.id)
         return Ok(c)
+
+    @staticmethod
+    def _resolve_relation_endpoints_by_name(project: Any, proposed_data: dict) -> tuple[str, str]:
+        """Resolve source_name/target_name to real entity IDs by fuzzy name match."""
+        source_name = str(proposed_data.get("source_name") or "").strip().lower()
+        target_name = str(proposed_data.get("target_name") or "").strip().lower()
+        entities = list(getattr(project, "entities", []) or [])
+        sid = ""
+        tid = ""
+        for entity in entities:
+            name = str(getattr(entity, "name", "")).strip().lower()
+            if not sid and source_name and name == source_name:
+                sid = str(getattr(entity, "id", ""))
+            elif not sid and source_name and source_name in name:
+                sid = str(getattr(entity, "id", ""))
+            if not tid and target_name and name == target_name:
+                tid = str(getattr(entity, "id", ""))
+            elif not tid and target_name and target_name in name:
+                tid = str(getattr(entity, "id", ""))
+        return sid, tid
 
 
 __all__ = ["CandidateService"]

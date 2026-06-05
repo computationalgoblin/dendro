@@ -431,27 +431,6 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     relevant = job.context_scope.get("relevant_entities") or []
     relevant_ids = {str(e.get("id")) for e in relevant if isinstance(e, dict) and e.get("id")}
     allowed_ids = selected | relevant_ids
-    for rel in _safe_list(payload.get("relations")):
-        if not isinstance(rel, dict):
-            continue
-        source_id = str(rel.get("source_id") or "")
-        target_id = str(rel.get("target_id") or "")
-        if not source_id or not target_id:
-            continue
-        if allowed_ids and (source_id not in allowed_ids or target_id not in allowed_ids):
-            continue
-        candidates.append(_candidate(
-            title="Relación candidata",
-            candidate_type="relacion",
-            proposed_data={
-                "source_id": source_id,
-                "target_id": target_id,
-                "relation_type": str(rel.get("relation_type") or "esta_relacionado_con"),
-                "description": str(rel.get("description") or "Relación propuesta desde command bar."),
-            },
-            job=job,
-            justification=str(rel.get("rationale") or "Relación propuesta con endpoints reales del contexto."),
-        ))
 
     report = str(payload.get("report") or payload.get("summary") or "Resultado IA listo para revisión.")
     analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES}
@@ -479,39 +458,51 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             expected_impact="Ayuda a decidir mejoras sin aplicar cambios automáticos.",
         ))
 
-    # BUG 2 fix: for generative jobs with relations from the model that lack
-    # real IDs, convert them to proposals instead of silently dropping them.
-    # The model may return proposed relation *names* that need manual wiring.
+    # BUG 2 fix: for relations from the model that have names but lack real IDs,
+    # create relacion candidates with source_name/target_name. On accept, the
+    # service resolves names to entity IDs.
     for rel in _safe_list(payload.get("relations")):
         if not isinstance(rel, dict):
             continue
         source_id = str(rel.get("source_id") or "")
         target_id = str(rel.get("target_id") or "")
-        if not source_id or not target_id:
-            # Convert to a human-readable proposal
-            desc = str(rel.get("description") or "Relación propuesta.")
-            source_name = str(rel.get("source_name") or source_id or "?")
-            target_name = str(rel.get("target_name") or target_id or "?")
-            rel_type = str(rel.get("relation_type") or "esta_relacionado_con")
-            candidates.append(_candidate(
-                title=f"Relación propuesta: {source_name} → {target_name}",
-                candidate_type="sugerencia_ia",
-                proposed_data={
-                    "report": f"Relación propuesta: {source_name} ({rel_type}) → {target_name}. {desc}",
-                    "issues": [],
-                    "proposals": [{"title": f"{source_name} → {target_name}", "description": desc, "relation_type": rel_type}],
-                    "open_questions": [f"¿Existen {source_name} y {target_name} como entidades reales para crear esta relación?"],
-                    "prompt": job.prompt,
-                },
-                job=job,
-                justification="La IA propuso una relación pero no tiene IDs reales de endpoints. Revisión manual necesaria.",
-                confidence=0.40,
-                expected_impact="Propuesta de relación para conexión manual.",
-            ))
+        source_name = str(rel.get("source_name") or source_id or "")
+        target_name = str(rel.get("target_name") or target_id or "")
+        rel_type = str(rel.get("relation_type") or "esta_relacionado_con")
+        desc = str(rel.get("description") or "Relación propuesta.")
+
+        # Skip if both endpoints are already known real IDs and they pass the filter
+        if source_id and target_id:
+            if not allowed_ids or (source_id in allowed_ids and target_id in allowed_ids):
+                candidates.append(_candidate(
+                    title="Relación candidata",
+                    candidate_type="relacion",
+                    proposed_data={
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "relation_type": rel_type,
+                        "description": desc,
+                    },
+                    job=job,
+                    justification=str(rel.get("rationale") or "Relación propuesta con endpoints del contexto."),
+                ))
             continue
-        if allowed_ids and (source_id not in allowed_ids or target_id not in allowed_ids):
-            # Already handled above; don't double-process
+
+        # Relation has names but not IDs: create a relacion candidate with name-based lookup
+        if not source_name and not target_name:
             continue
+        candidates.append(_candidate(
+            title=f"Relación: {source_name or '?'} → {target_name or '?'}",
+            candidate_type="relacion",
+            proposed_data={
+                "source_name": source_name,
+                "target_name": target_name,
+                "relation_type": rel_type,
+                "description": desc,
+            },
+            job=job,
+            justification=f"Relación propuesta entre '{source_name}' y '{target_name}'. Se resolverá por nombre al aceptar.",
+        ))
 
     kind = "analysis_report" if analytical else "candidate_batch"
     return {
