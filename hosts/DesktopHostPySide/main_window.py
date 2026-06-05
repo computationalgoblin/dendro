@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QWizard,
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
@@ -46,6 +47,7 @@ from hosts.DesktopHostPySide.controllers.source_controller import SourceControll
 from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineController
 from hosts.DesktopHostPySide.controllers.writing_controller import WritingController
 from packages.application.export_service import ExportService
+from packages.domain.result import Ok
 from hosts.DesktopHostPySide.views.campaign_view import CampaignView, FactionFrontView, SecretsCluesView
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
@@ -527,31 +529,41 @@ class MainWindow(QMainWindow):
             self.creation_workspace.refresh_ai_controller()
 
     def _new_project(self):
-        drawer = self.ctx.drawer
-        if drawer is None:
+        """Nuevo proyecto — abre el wizard de creación."""
+        from hosts.DesktopHostPySide.widgets.project_wizard import ProjectWizard
+
+        wizard = ProjectWizard(self)
+        if wizard.exec() != QWizard.DialogCode.Accepted:
             return
 
-        def create_named_project(name: str):
-            path, _ = QFileDialog.getSaveFileName(
-                self, "Guardar proyecto", f"{name.strip()}.json", "JSON (*.json)"
-            )
-            if not path:
-                return
-            try:
-                self.controller.create(name.strip(), path)
-                self.controller.save()
-                self.ctx.remember_project(path)
-                self._refresh_recent_project_option()
-                self.log_msg(f"Proyecto creado: {Path(path).name}")
-                self._refresh_all_views()
-                if self.ctx.drawer:
-                    self.ctx.drawer.close()
-            except Exception as exc:
-                self.log_msg(f"Error creando proyecto: {exc}")
+        cfg = wizard.collect_config()
+        name = cfg.get("name", "Sin nombre").strip()
+        if not name:
+            name = "Sin nombre"
 
-        form = DrawerTextPrompt(self.ctx, "Nuevo proyecto", "Nombre del proyecto:", create_named_project)
-        drawer.set_content(form, title="Nuevo proyecto")
-        drawer.open()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Guardar proyecto", f"{name}.json", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            result = self.controller.create(name)
+            if not isinstance(result, Ok):
+                self.log_msg(f"Error creando proyecto: {result.error}")
+                return
+            # Apply wizard config to the newly created project
+            active = self.controller.ps.active_project
+            if active is not None:
+                wizard.apply_to_project(active)
+            self.controller.save()
+            self.ctx.remember_project(path)
+            self._refresh_recent_project_option()
+            self.log_msg(f"Proyecto creado: {Path(path).name}")
+            self._refresh_all_views()
+            if self.ctx.drawer:
+                self.ctx.drawer.close()
+        except Exception as exc:
+            self.log_msg(f"Error creando proyecto: {exc}")
 
     def _open_project(self):
         path, _ = QFileDialog.getOpenFileName(self, "Abrir proyecto", "", "JSON (*.json)")
