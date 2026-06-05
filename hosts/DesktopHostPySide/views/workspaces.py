@@ -353,7 +353,7 @@ class NarrativeWorkbench(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(14)
         actions = [
-            ("Hoja", "Crear personaje, lugar, objeto o concepto.", "Nueva entidad", self.workspace.open_entity_create),
+            ("Hoja", "Crear personaje, lugar, objeto o concepto.", "Nueva hoja", self.workspace.open_entity_create),
             ("Relaciones", "Conecta nodos visualmente desde el grafo.", "Ir al grafo", self.workspace.open_graph),
             ("Sugerencias", "Revisa candidatos como tarjetas.", "Revisar", self.workspace.open_candidates_clean),
             ("Fuentes", "Guarda referencias legibles.", "Nueva fuente", self.workspace.open_source_create),
@@ -1121,8 +1121,8 @@ class CreationWorkspace(QWidget):
             return button
 
         # Left: primary creative graph actions.
-        icon_btn(ICON_GLYPHS["add"], "Crear entidad", self._create_entity_on_graph)
-        icon_btn("⊞", "Crear árbol/contenedor", self._create_tree_on_graph)
+        icon_btn(ICON_GLYPHS["add"], "Crear hoja", self._create_entity_on_graph)
+        icon_btn("⊞", "Crear rama", self._create_tree_on_graph)
         self._connect_mode_btn = icon_btn("↔", "Crear relación / modo conexión", self._start_relation_mode)
         self._suggest_entity_btn = icon_btn("✨", "Sugerir hoja con IA", self._suggest_node)
         self._coherence_btn = icon_btn("⚠", "Selecciona nodos o relaciones para analizar coherencia", self._open_coherence_panel, enabled=False)

@@ -49,7 +49,7 @@ def test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy():
     for symbol in ["class CreationWorkspace", "class GalleryWorkspace", "class SessionWorkspace"]:
         assert symbol in text
     assert "Taller narrativo" in text
-    assert "Crear entidad" in text
+    assert "Crear hoja" in text
     assert "Ir al grafo" in text
     assert "Importar documento" in text
     assert "Corpus técnico" not in text

@@ -635,6 +635,47 @@ class EntityService:
             return Error(proj.error)
         return Ok([e for e in proj.value.entities if layer_id in e.layer_ids])
 
+    # ── B39: Transformations (Hoja→Rama, Rama→Anillo) ──────────
+
+    def convert_to_branch(self, entity_id: str) -> Result[NarrativeEntity, str]:
+        """Convert a leaf entity into a branch (container/rama).
+
+        Non-destructive: preserves name, description, body, relations,
+        layers, tags, and all other fields.  Only changes entity_type
+        to 'contenedor' and initialises TreeMeta in custom_metadata.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return Error(proj.error)
+
+        entity = self._find_entity(proj.value, entity_id)
+        if entity is None:
+            return Error(f"Entity '{entity_id}' not found")
+
+        from packages.application.tree_meta import TreeMeta
+
+        # Already a container — idempotent
+        if entity.entity_type == EntityType.CONTENEDOR:
+            return Ok(entity)
+
+        prev_type = entity.entity_type.value if entity.entity_type else "unknown"
+        entity.entity_type = EntityType.CONTENEDOR
+
+        # Initialise TreeMeta while preserving existing custom_metadata
+        meta = TreeMeta(tree_type=prev_type)
+        entity.custom_metadata = meta.merge_into(entity.custom_metadata or {})
+
+        entity.touch()
+        proj.value.touch()
+        return Ok(entity)
+
+    def _find_entity(self, project: Any, entity_id: str):
+        """Find entity by id in project.entities."""
+        for e in project.entities:
+            if e.id == entity_id:
+                return e
+        return None
+
     def delete_entity(self, entity_id: str) -> Result[None, str]:
         """Delete an entity by id. Also removes all relations involving it."""
         proj = self._active_project()

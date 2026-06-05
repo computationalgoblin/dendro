@@ -175,3 +175,19 @@ class WorldLayerService:
                 proj.value.touch()
                 return Ok(None)
         return Error(f"World layer '{layer_id}' not found")
+
+    # ── B39: Create ring (anillo) from branch ─────────────────────
+
+    def create_ring_from_branch(
+        self,
+        name: str,
+        description: str = "",
+        order: int | None = None,
+    ) -> Result[WorldLayer, str]:
+        """Create a new ring (anillo/WorldLayer) based on a branch.
+
+        This is non-destructive: the branch entity is preserved.
+        The caller may optionally create a 'deriva de' relation
+        between the branch and the new ring.
+        """
+        return self.create_layer(name=name, description=description, order=order)

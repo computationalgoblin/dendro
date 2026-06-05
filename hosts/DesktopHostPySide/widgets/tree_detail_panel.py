@@ -435,6 +435,7 @@ class TreeDetailPanel(QWidget):
             "QPushButton:hover { background: #504B2E; }"
         )
         self.create_ring_btn.setVisible(False)
+        self.create_ring_btn.clicked.connect(self._create_ring_from_branch)
         root.addWidget(self.create_ring_btn)
 
         # ═══ 5. IA ═══
@@ -675,6 +676,11 @@ class TreeDetailPanel(QWidget):
         self.questions_list.clear()
         for q in self._tree_meta.open_questions:
             self.questions_list.addItem(q)
+
+        # B39: Show "Crear anillo desde rama" if worldbuilding is active
+        project = self._project()
+        wb_on = getattr(project, "worldbuilding_enabled", False) if project else False
+        self.create_ring_btn.setVisible(bool(wb_on))
 
     # ------------------------------------------------------------------
     # Members / Relations
@@ -1101,6 +1107,34 @@ class TreeDetailPanel(QWidget):
             if combo.itemText(i) == value:
                 combo.setCurrentIndex(i)
                 return
+
+    # ------------------------------------------------------------------
+    # B39: Create ring from branch
+    # ------------------------------------------------------------------
+
+    def _create_ring_from_branch(self):
+        """Create a new anillo (WorldLayer) based on this branch."""
+        entity = self._entity_by_id(self.entity_id)
+        if entity is None:
+            return
+        pc = getattr(self.ctx, "project_controller", None)
+        if pc is None:
+            return
+        layer_service = getattr(pc, "ls", None)
+        if layer_service is None:
+            return
+        from packages.domain.result import Error
+        name = getattr(entity, "name", "Nuevo anillo") or "Nuevo anillo"
+        desc = getattr(entity, "brief_description", "") or ""
+        result = layer_service.create_ring_from_branch(name=name, description=desc)
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error creando anillo: {result.error}")
+            return
+        self.ctx.log("info", f"Anillo creado desde rama: {name}")
+        # Refresh workspace to show the new ring
+        workspace = getattr(self.ctx, "workspace", None)
+        if workspace is not None:
+            workspace.refresh()
 
     # ------------------------------------------------------------------
     # Data helpers

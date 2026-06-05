@@ -435,6 +435,7 @@ class NodeDetailPanel(QWidget):
             "QPushButton:hover { background: #504B2E; }"
         )
         self.convert_to_branch_btn.setVisible(False)
+        self.convert_to_branch_btn.clicked.connect(self._convert_to_branch)
         root.addWidget(self.convert_to_branch_btn)
 
         # -- AI suggestion section --
@@ -862,6 +863,38 @@ class NodeDetailPanel(QWidget):
         self.ctx.drawer.open()
 
     # ------------------------------------------------------------------
+    # B39: Convert to branch (Hoja → Rama)
+    # ------------------------------------------------------------------
+
+    def _convert_to_branch(self):
+        """Convert this leaf entity into a branch (container/rama)."""
+        if self.ctx is None:
+            return
+        # Use EntityService directly for the transformation
+        project_controller = getattr(self.ctx, "project_controller", None)
+        if project_controller is None:
+            return
+        entity_service = getattr(project_controller, "es", None)
+        if entity_service is None:
+            return
+        from packages.domain.result import Error
+        result = entity_service.convert_to_branch(self.entity_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error convirtiendo en rama: {result.error}")
+            return
+        self.ctx.log("info", "Hoja convertida en rama")
+        # Refresh graph and re-open as tree panel
+        if self.on_saved is not None:
+            self.on_saved()
+        # Close node panel and open tree panel instead
+        if self.ctx.drawer is not None:
+            self.ctx.drawer.close()
+        # Signal workspace to open tree panel
+        workspace = getattr(self.ctx, "workspace", None)
+        if workspace is not None:
+            workspace._open_tree_panel(self.entity_id)
+
+    # ------------------------------------------------------------------
     # Cancel
     # ------------------------------------------------------------------
 
@@ -1025,6 +1058,10 @@ class NodeDetailPanel(QWidget):
             self._refresh_context(entity)
             self._refresh_technical(entity)
             self.set_advanced_mode(self.ctx.advanced_mode)
+
+            # B39: Show "Convertir en rama" only for non-container entities
+            is_branch = kind.lower() in BRANCH_TYPES or kind.lower() == "contenedor"
+            self.convert_to_branch_btn.setVisible(not is_branch)
         finally:
             self._refreshing = False
 
