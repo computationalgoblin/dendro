@@ -15,6 +15,11 @@ class OpenAICompatibleProvider(AIProvider):
         self.timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", str(timeout or 300)))
 
     def invoke(self, operation):
+        """Legacy invoke — do not use in new features (B42+).
+
+        New code should use AIRequestGateway or provider.chat() instead.
+        This method uses a trivially basic prompt that loses all B40 context.
+        """
         t0 = time.time()
         if not self.base_url or not self.api_key:
             return self._fallback(operation, "Missing API key or base URL", t0)

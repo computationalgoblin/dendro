@@ -15,6 +15,12 @@ def _now() -> datetime:
 
 
 class OrchestratorService:
+    """Legacy orchestrator — do not use in new features (B42+).
+
+    New code should use AIRequestGateway + AIContextActions instead.
+    This service uses provider.invoke() with trivially basic prompts
+    that lose all B40 creative context.
+    """
     def __init__(
         self,
         project_service: Any,

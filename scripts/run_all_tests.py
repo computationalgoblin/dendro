@@ -103,6 +103,8 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b42_t01_ai_request_gateway.py",
         "tests/application/test_b42_t02_context_sanitizer.py",
         "tests/application/test_b42_t03_model_params.py",
+        "tests/application/test_b42_t07_legacy_hardening.py",
+        "tests/application/test_b42_t10_candidate_dedup.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
