@@ -44,7 +44,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 )
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
-from packages.application.ai_jobs import AIJobService, AIJobStatus, classify_ai_job_intent
+from packages.application.ai_jobs import AIJobService, classify_ai_job_intent
 
 
 class _SimpleFormPanel(QWidget):
@@ -472,6 +472,92 @@ class NarrativeWorkbench(QWidget):
         self._chips_layout.addStretch(1)
 
 
+class AIJobResultPanel(_SimpleFormPanel):
+    """Review panel for a completed command-bar job.
+
+    This panel summarizes the result and lets the user push structural output to
+    the existing suggestion inbox.  It never applies canon changes directly.
+    """
+
+    def __init__(self, job, candidate_controller, on_candidates_created):
+        super().__init__("Resultado de Dendro", "Revisa el resultado antes de aceptar cualquier cambio.")
+        self.job = job
+        self.candidate_controller = candidate_controller
+        self.on_candidates_created = on_candidates_created
+        result = getattr(job, "result", {}) or {}
+
+        self.layout.addWidget(Badge(str(getattr(job, "type", "")).replace("AIJobType.", "").replace("_", " ")))
+        report = QTextEdit()
+        report.setReadOnly(True)
+        report.setMinimumHeight(160)
+        report.setPlainText(str(result.get("report") or result.get("summary") or "Resultado listo para revisión."))
+        self.layout.addWidget(report)
+
+        count = len(result.get("candidates") or [])
+        self.status = self.add_status()
+        self.status.setText(f"{count} candidato(s) revisable(s). Nada se ha canonizado.")
+
+        row = QHBoxLayout()
+        send = QPushButton("Enviar a sugerencias")
+        send.setObjectName("primaryButton")
+        send.clicked.connect(self._send_candidates)
+        row.addStretch(1)
+        row.addWidget(send)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _send_candidates(self):
+        candidates = (getattr(self.job, "result", {}) or {}).get("candidates") or []
+        if not candidates:
+            self.status.setText("Este job no produjo candidatos estructurales.")
+            return
+        created = 0
+        for data in candidates:
+            result = self.candidate_controller.create(dict(data))
+            if isinstance(result, Error):
+                self.status.setText(result.error)
+                return
+            created += 1
+        self.status.setText(f"{created} candidato(s) enviados a la bandeja de sugerencias.")
+        self.on_candidates_created()
+
+
+class _AIJobWorker(QThread):
+    """Run an AI job outside the UI thread."""
+
+    statusChanged = Signal(str, str, float)
+    finishedOk = Signal(str)
+    failed = Signal(str, str)
+
+    def __init__(self, service: AIJobService, job_id: str):
+        super().__init__()
+        self.service = service
+        self.job_id = job_id
+
+    def _emit_job(self):
+        result = self.service.get_job(self.job_id)
+        if isinstance(result, Error):
+            self.failed.emit(self.job_id, result.error)
+            return None
+        job = result.value
+        self.statusChanged.emit(job.status.value, job.message, float(job.progress))
+        return job
+
+    def run(self):
+        try:
+            self._emit_job()
+            result = self.service.execute_job(self.job_id)
+            job = self._emit_job()
+            if isinstance(result, Error):
+                self.failed.emit(self.job_id, result.error)
+                return
+            if job is None:
+                return
+            self.finishedOk.emit(self.job_id)
+        except Exception as exc:  # pragma: no cover - defensive thread boundary
+            self.failed.emit(self.job_id, str(exc))
+
+
 class CreationSearchPanel(_SimpleFormPanel):
     """B37-T01 clean graph search panel inside the right drawer."""
 
@@ -882,6 +968,7 @@ class CreationWorkspace(QWidget):
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
         self.ai_job_service = AIJobService()
+        self._active_ai_worker = None
         self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
@@ -1121,6 +1208,9 @@ class CreationWorkspace(QWidget):
         if not prompt:
             self._job_status_label.setText("Escribe una orden para Dendro")
             return
+        if self._active_ai_worker is not None and self._active_ai_worker.isRunning():
+            self._job_status_label.setText("Dendro ya está trabajando en una tarea")
+            return
         scope = self._current_context_scope()
         job_type = classify_ai_job_intent(prompt, worldbuilding_active=bool(scope.get("worldbuilding_active")))
         result = self.ai_job_service.create_job(job_type, prompt, context_scope=scope)
@@ -1129,16 +1219,57 @@ class CreationWorkspace(QWidget):
             self.ctx.log("error", result.error)
             return
         job = result.value
-        # B38-T03/T04 only creates a reviewable job. Runner/results arrive in T05+.
-        self.ai_job_service.update_status(
-            job.id,
-            AIJobStatus.QUEUED,
-            message="Job creado. Pendiente de runner no bloqueante.",
-            progress=0.0,
-        )
         self._command_input.clear()
+        self._command_input.setEnabled(False)
+        self._command_submit_btn.setEnabled(False)
         self._job_status_label.setText(f"Job creado: {job.type.value.replace('_', ' ')}")
         self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
+        self._start_ai_job_worker(job.id)
+
+    def _start_ai_job_worker(self, job_id: str):
+        worker = _AIJobWorker(self.ai_job_service, job_id)
+        worker.statusChanged.connect(self._on_ai_job_status)
+        worker.finishedOk.connect(self._on_ai_job_finished)
+        worker.failed.connect(self._on_ai_job_failed)
+        worker.finished.connect(self._on_ai_worker_stopped)
+        self._active_ai_worker = worker
+        worker.start()
+
+    def _on_ai_job_status(self, status: str, message: str, progress: float):
+        percent = int(max(0.0, min(1.0, progress)) * 100)
+        self._job_status_label.setText(f"Dendro: {message} ({percent}%)")
+
+    def _on_ai_job_finished(self, job_id: str):
+        result = self.ai_job_service.get_job(job_id)
+        if isinstance(result, Error):
+            self._job_status_label.setText(result.error)
+            return
+        job = result.value
+        self._job_status_label.setText(job.message or "Resultado listo")
+        self._open_ai_job_result(job)
+
+    def _on_ai_job_failed(self, job_id: str, error: str):
+        self._job_status_label.setText(f"Job fallido: {error}")
+        self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
+
+    def _on_ai_worker_stopped(self):
+        self._command_input.setEnabled(True)
+        self._command_submit_btn.setEnabled(True)
+        self._active_ai_worker = None
+
+    def _open_ai_job_result(self, job):
+        drawer = self.ctx.drawer
+        controller = getattr(self.candidate_view, "cc", None)
+        if drawer is None or controller is None:
+            self.ctx.log("warning", "Resultado IA listo, pero no se pudo abrir el panel de revisión")
+            return
+        panel = AIJobResultPanel(job, controller, on_candidates_created=self._on_job_candidates_created)
+        drawer.set_content(panel, title="Resultado IA")
+        drawer.open()
+
+    def _on_job_candidates_created(self):
+        self._on_suggestion_changed()
+        self._open_suggestion_inbox()
 
     def resizeEvent(self, event):
         """Position persistent layer drawer along the left edge."""

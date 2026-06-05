@@ -8,6 +8,7 @@ from packages.application.ai_jobs import (
     AIJobService,
     AIJobStatus,
     AIJobType,
+    build_ai_job_result,
     classify_ai_job_intent,
 )
 from packages.domain.result import Error, Ok
@@ -148,3 +149,49 @@ def test_b38_layer_drawer_chip_applies_visual_filter(qapp):
     assert canvas.filter_state.layer_ids == ("layer_cultures",)
     panel._on_chip_clicked("layer_cultures")
     assert canvas.cleared is True
+
+
+class _CandidateControllerStub:
+    def __init__(self):
+        self.created = []
+    def create(self, data):
+        self.created.append(dict(data))
+        return Ok(SimpleNamespace(id=f"cand-{len(self.created)}", **data))
+
+
+def test_b38_job_result_panel_sends_candidates_to_inbox(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import AIJobResultPanel
+
+    service = AIJobService()
+    job = service.create_job(AIJobType.GENERATE_ENTITIES, "Créame tres personajes").value
+    job.result = build_ai_job_result(job)
+    controller = _CandidateControllerStub()
+    changed = {"count": 0}
+    panel = AIJobResultPanel(job, controller, on_candidates_created=lambda: changed.__setitem__("count", changed["count"] + 1))
+
+    panel._send_candidates()
+
+    assert len(controller.created) == 3
+    assert changed["count"] == 1
+    assert all(c["state"] == "pendiente" for c in controller.created)
+    assert all(c["metadata"]["canon_auto_mutation"] is False for c in controller.created)
+
+
+def test_b38_ai_job_worker_executes_without_touching_ui_thread(qapp):
+    from hosts.DesktopHostPySide.views.workspaces import _AIJobWorker
+
+    service = AIJobService()
+    job = service.create_job(AIJobType.REVIEW_GRAPH, "Revisa todo el grafo").value
+    worker = _AIJobWorker(service, job.id)
+    finished = []
+    failed = []
+    worker.finishedOk.connect(lambda jid: finished.append(jid))
+    worker.failed.connect(lambda jid, err: failed.append((jid, err)))
+
+    worker.run()
+
+    assert failed == []
+    assert finished == [job.id]
+    ready = service.get_job(job.id).value
+    assert ready.status is AIJobStatus.READY_FOR_REVIEW
+    assert ready.result["kind"] == "analysis_report"

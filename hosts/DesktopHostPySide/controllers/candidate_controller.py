@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from packages.application.candidate_service import CandidateService
+from packages.application.entity_service import EntityService
+from packages.application.relation_service import RelationService
 
 
 class CandidateController:
@@ -9,10 +11,17 @@ class CandidateController:
         if project_service is None:
             raise ValueError("CandidateController requires project_service")
         self.ps = project_service
-        self.cs = CandidateService(project_service=self.ps)
+        self.cs = CandidateService(
+            project_service=self.ps,
+            entity_service=EntityService(self.ps),
+            relation_service=RelationService(self.ps),
+        )
 
     def list_all(self):
         return list(self.ps.active_project.candidates) if self.ps.active_project else []
+
+    def create(self, data):
+        return self.cs.create_candidate(data)
 
     def accept(self, cid):
         return self.cs.accept_candidate(cid)
