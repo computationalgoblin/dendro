@@ -7,6 +7,7 @@ from packages.application.project_service import ProjectService
 from packages.application.entity_service import EntityService
 from packages.application.relation_service import RelationService
 from packages.domain.candidate_issue import CandidateType, CandidateState
+from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneType
 from packages.domain.entity import EntityType, NarrativeEntity
 from packages.domain.relation import RelationType
 from packages.domain.result import Error
@@ -107,3 +108,35 @@ class TestCandidateService:
         }).value
         result = svc.accept_candidate(c.id)
         assert isinstance(result, Error)
+
+    def test_create_causal_milestone_candidate_is_review_only(self):
+        ps, svc, _, _ = _setup()
+        milestone = CausalMilestone(
+            title="Fundación del Pacto de Peso",
+            description="Las ciudades aceptan venerar la gravedad como equilibrio.",
+            milestone_type=CausalMilestoneType.FUNDACION,
+            affected_entity_ids=["ent_cultura"],
+            caused_relation_ids=["rel_deriva"],
+            layer_ids=["layer_historia"],
+            rationale="Explica una institución desde causas superiores.",
+        )
+
+        result = svc.create_causal_milestone_candidate(
+            milestone,
+            source="ia",
+            confidence=0.8,
+            justification="Propuesta descendente desde worldbuilding.",
+        )
+
+        assert not isinstance(result, Error)
+        candidate = result.value
+        assert candidate.candidate_type == CandidateType.SUGERENCIA_IA
+        assert candidate.state == CandidateState.PENDIENTE
+        assert candidate.title == "Hito: Fundación del Pacto de Peso"
+        assert candidate.proposed_data["kind"] == "causal_milestone"
+        assert candidate.proposed_data["milestone"]["title"] == "Fundación del Pacto de Peso"
+        assert candidate.affected_entity_ids == ["ent_cultura"]
+        assert candidate.affected_relation_ids == ["rel_deriva"]
+        assert candidate.metadata["review_required"] is True
+        assert candidate.metadata["canonizes_automatically"] is False
+        assert len(ps.active_project.causal_milestones) == 0

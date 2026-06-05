@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import TypeVar
 
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
+from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
@@ -263,6 +264,9 @@ class Project:
     # ── Saved graph views (Bloque 28) ──
     saved_graph_views: list[dict] = field(default_factory=list)
 
+    # ── Causal milestones (Bloque 41) ──
+    causal_milestones: list[CausalMilestone] = field(default_factory=list)
+
     # ── Project type & creative config (B31-T03) ──
     project_type: str = "otro"  # campana, novela, otro
     worldbuilding_active: bool = False
@@ -371,6 +375,8 @@ class Project:
             "sessions": [s.to_dict() for s in self.sessions],
             # ── Saved graph views (Bloque 28) ──
             "saved_graph_views": [dict(v) for v in self.saved_graph_views],
+            # ── Causal milestones (Bloque 41) ──
+            "causal_milestones": [h.to_dict() for h in self.causal_milestones],
             # ── Project type & creative config (B31-T03) ──
             "project_type": self.project_type,
             "worldbuilding_active": self.worldbuilding_active,
@@ -579,6 +585,15 @@ class Project:
             **(
                 {"saved_graph_views": [dict(v) for v in data.get("saved_graph_views", []) if isinstance(v, dict)]}
                 if "saved_graph_views" in data else {}
+            ),
+            # ── Causal milestones (Bloque 41) ──
+            **(
+                {"causal_milestones": [
+                    CausalMilestone.from_dict(h)
+                    for h in data.get("causal_milestones", [])
+                    if isinstance(h, dict)
+                ]}
+                if "causal_milestones" in data else {}
             ),
             # ── Project type & creative config (B31-T03) ──
             project_type=data.get("project_type", "otro"),

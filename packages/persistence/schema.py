@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B40: expanded creative config)
-CURRENT_SCHEMA_VERSION: int = 22
+# Current schema version for new projects (B41: causal milestones)
+CURRENT_SCHEMA_VERSION: int = 23
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 22
+MAX_SUPPORTED_VERSION: int = 23
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +699,14 @@ def _apply_migration_v21_to_v22(data):
     migrated["schema_version"] = 22
     return migrated
 
+
+def _apply_migration_v22_to_v23(data):
+    """v22 → v23: adds causal_milestones collection (B41-T01)."""
+    migrated = dict(data)
+    migrated.setdefault("causal_milestones", [])
+    migrated["schema_version"] = 23
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -741,7 +749,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "campaigns", "player_character_profiles", "campaign_clocks",
         "secrets", "clues",
         "factions", "fronts",
-        "sessions", "saved_graph_views",
+        "sessions", "saved_graph_views", "causal_milestones",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):

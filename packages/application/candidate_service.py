@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
+from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.result import Error, Ok, Result
 
 
@@ -37,6 +38,42 @@ class CandidateService:
         c = Candidate.from_dict(data)
         proj.value.candidates.append(c)
         return Ok(c)
+
+    def create_causal_milestone_candidate(
+        self,
+        milestone: CausalMilestone,
+        source: str = "ia",
+        confidence: float = 0.5,
+        justification: str = "",
+    ) -> Result[Candidate, str]:
+        """Create a review-only candidate for a causal milestone.
+
+        This does not append to project.causal_milestones and therefore never
+        canonizes IA output automatically. Acceptance is handled by a later B41
+        service/UI ticket.
+        """
+        data = {
+            "title": f"Hito: {milestone.title}",
+            "candidate_type": CandidateType.SUGERENCIA_IA.value,
+            "state": CandidateState.PENDIENTE.value,
+            "proposed_data": {
+                "kind": "causal_milestone",
+                "milestone": milestone.to_dict(),
+            },
+            "affected_entity_ids": list(milestone.affected_entity_ids),
+            "affected_relation_ids": list(milestone.caused_relation_ids),
+            "source": source,
+            "confidence": confidence,
+            "justification": justification or milestone.rationale,
+            "expected_impact": "Propone un hito causal/histórico para revisión; no modifica canon.",
+            "metadata": {
+                "kind": "causal_milestone",
+                "review_required": True,
+                "canonizes_automatically": False,
+                "layer_ids": list(milestone.layer_ids),
+            },
+        }
+        return self.create_candidate(data)
 
     def get_candidate(self, cid: str) -> Result[Candidate, str]:
         proj = self._proj()

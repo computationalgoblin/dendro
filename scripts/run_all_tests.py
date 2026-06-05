@@ -22,6 +22,8 @@ Suites:
     b37         Creación complexity search/filter tests
     b38         Command bar AI jobs smoke/regression tests
     b39         Project control artifacts/tests
+    b40         Creative project config and wizard tests
+    b41         Causal milestones domain/persistence tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
@@ -85,6 +87,11 @@ SUITES: dict[str, list[str]] = {
         "tests/desktop/test_b40_project_panel_regression.py",
         "tests/desktop/test_b40_graph_candidates_regression.py",
         "tests/desktop/test_b40_project_wizard_save_regression.py",
+    ],
+    "b41": [
+        "tests/domain/test_b41_causal_milestone.py",
+        "tests/persistence/test_schema_v23_causal_milestones.py",
+        "tests/application/test_candidate_service.py::TestCandidateService::test_create_causal_milestone_candidate_is_review_only",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
