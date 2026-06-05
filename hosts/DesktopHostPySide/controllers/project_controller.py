@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from packages.application.project_service import ProjectService
+from packages.domain.result import Error
 
 class ProjectController:
     def __init__(self, store=None):
@@ -18,13 +19,18 @@ class ProjectController:
             raise ValueError(f"Cannot open project: {result.error}")
         self.current_path = path
 
-    def create(self, name: str, path: str):
-        self.ps.create(name=name)
-        self.current_path = path
+    def create(self, name: str, path: str | None = None):
+        result = self.ps.create(name=name)
+        if hasattr(result, "error"):
+            return result
+        if path:
+            self.current_path = str(path)
+        return result
 
     def save(self):
-        if self.current_path:
-            self.ps.save(Path(self.current_path))
+        if not self.current_path:
+            return Error("No project file path selected")
+        return self.ps.save(Path(self.current_path))
 
     def close(self):
         self.ps.close()

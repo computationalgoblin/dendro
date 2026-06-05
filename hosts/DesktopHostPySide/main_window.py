@@ -547,7 +547,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            result = self.controller.create(name)
+            result = self.controller.create(name, path)
             if not isinstance(result, Ok):
                 self.log_msg(f"Error creando proyecto: {result.error}")
                 return
@@ -555,7 +555,10 @@ class MainWindow(QMainWindow):
             active = self.controller.ps.active_project
             if active is not None:
                 wizard.apply_to_project(active)
-            self.controller.save()
+            save_result = self.controller.save()
+            if not isinstance(save_result, Ok):
+                self.log_msg(f"Error guardando proyecto: {save_result.error}")
+                return
             self.ctx.remember_project(path)
             self._refresh_recent_project_option()
             self.log_msg(f"Proyecto creado: {Path(path).name}")
