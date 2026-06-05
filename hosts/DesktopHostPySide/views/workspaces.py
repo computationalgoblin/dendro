@@ -6,7 +6,7 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QPointF, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -44,6 +44,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 )
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
+from packages.application.ai_jobs import AIJobService, AIJobStatus, classify_ai_job_intent
 
 
 class _SimpleFormPanel(QWidget):
@@ -649,10 +650,10 @@ class CreationFilterPanel(_SimpleFormPanel):
 # ── Left-edge layer flyout ──────────────────────────────────────────────
 
 class _LayerEdgeFlyout(QFrame):
-    """Left-edge flyout that shows causal layers when Worldbuilding is ON.
-    
-    Appears when cursor approaches the left edge of the canvas.
-    Shows a vertical list of causal layers; clicking one toggles it.
+    """Persistent left drawer for causal layers when Worldbuilding is ON.
+
+    B38 replaces fragile hover reveal with an explicit top-bar button.
+    The drawer stays open until the user toggles it closed.
     """
 
     LAYER_BG = "rgba(248,246,237,0.96)"
@@ -690,7 +691,7 @@ class _LayerEdgeFlyout(QFrame):
         )
         layout.addWidget(header)
 
-        hint = QLabel("Clic para filtrar por capa")
+        hint = QLabel("Clic para enfocar capa · contador visible")
         hint.setStyleSheet(
             f"font-size: 10px; color: {self.MUTED}; background: transparent; "
             f"border: none; font-style: italic;"
@@ -747,6 +748,26 @@ class _LayerEdgeFlyout(QFrame):
         self.setVisible(False)
         self._layers_loaded = False
 
+    def _layer_counts(self) -> dict[str, int]:
+        """Count visible project elements per layer without exposing IDs."""
+        project = self._workspace._get_active_project()
+        counts: dict[str, int] = {}
+        if project is None:
+            return counts
+        collections = [
+            getattr(project, "entities", None),
+            getattr(project, "relations", None),
+        ]
+        for collection in collections:
+            if collection is None:
+                continue
+            values = collection.values() if hasattr(collection, "values") else collection
+            for item in values or []:
+                for lid in getattr(item, "layer_ids", []) or []:
+                    if lid:
+                        counts[str(lid)] = counts.get(str(lid), 0) + 1
+        return counts
+
     def populate_layers(self):
         """Fill chip list from project layers or defaults."""
         # Clear existing
@@ -765,13 +786,15 @@ class _LayerEdgeFlyout(QFrame):
 
         # Sort by order
         layers = sorted(layers, key=lambda l: getattr(l, "order", 99))
+        counts = self._layer_counts()
 
         for layer in layers:
             lid = str(getattr(layer, "id", ""))
             name = str(getattr(layer, "name", ""))
             if not lid or not name:
                 continue
-            chip = QPushButton(name)
+            total = counts.get(lid, 0)
+            chip = QPushButton(f"{name}  ·  {total}")
             chip.setCheckable(True)
             chip.setProperty("layer_id", lid)
             chip.setStyleSheet(
@@ -858,6 +881,8 @@ class CreationWorkspace(QWidget):
         self.entity_controller = getattr(corpus_view, "ec", None)
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
+        self.ai_job_service = AIJobService()
+        self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
         project_service = getattr(project_controller, "ps", None)
@@ -877,10 +902,10 @@ class CreationWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Top hover toolbar (hidden by default, appears on cursor near top)
+        # Persistent top toolbar: creative graph actions left, utilities right.
         self._top_toolbar = self._build_top_toolbar()
-        self._top_toolbar.setFixedHeight(0)  # collapsed
-        self._top_toolbar.setVisible(False)
+        self._top_toolbar.setFixedHeight(48)
+        self._top_toolbar.setVisible(True)
         layout.addWidget(self._top_toolbar)
 
         # Graph canvas (takes all space)
@@ -894,166 +919,75 @@ class CreationWorkspace(QWidget):
         self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
         layout.addWidget(self.graph, 1)
 
-        # Bottom toolbar (always visible, symbol-only buttons)
-        bottom_bar = self._build_bottom_toolbar()
-        layout.addWidget(bottom_bar)
+        # Command bar area replaces the old bottom button toolbar.
+        command_bar = self._build_command_bar()
+        layout.addWidget(command_bar)
 
-        # Left-edge layer flyout (overlay, positioned absolutely in resizeEvent)
+        # Left layer drawer is persistent: explicit button toggles it.
         self._layer_flyout = _LayerEdgeFlyout(self)
         self._layer_flyout.setVisible(False)
 
-        # Enable mouse tracking for hover toolbar and layer flyout
         self.setMouseTracking(True)
         self.graph.setMouseTracking(True)
-        # Install event filter on graph and its children so we can detect
-        # mouse position even when the cursor is over the canvas child widget.
-        self.graph.installEventFilter(self)
-        # Also filter on the QGraphicsView inside GraphCanvasWidget
-        if hasattr(self.graph, "canvas") and self.graph.canvas is not None:
-            self.graph.canvas.setMouseTracking(True)
-            self.graph.canvas.viewport().setMouseTracking(True)
-            self.graph.canvas.installEventFilter(self)
-            self.graph.canvas.viewport().installEventFilter(self)
 
     def _build_top_toolbar(self) -> QWidget:
-        """Hover-triggered utilities bar at the top."""
+        """Persistent B38 toolbar: creative actions left, utilities right."""
         bar = QFrame()
         bar.setObjectName("topUtilsBar")
         bar.setStyleSheet(
-            "QFrame#topUtilsBar { background: rgba(238,236,221,0.95); "
+            "QFrame#topUtilsBar { background: rgba(238,236,221,0.96); "
             "border-bottom: 1px solid #D8D6C8; }"
         )
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(8)
-
-        util_btn_style = (
-            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
-            "border-radius: 12px; padding: 4px 12px; color: #6F6A42; font-size: 12px; } "
-            "QPushButton:hover { background: #F8F5EA; }"
-        )
-
-        # Import TXT
-        import_btn = QPushButton("Importar documento")
-        import_btn.setStyleSheet(util_btn_style)
-        import_btn.clicked.connect(lambda: self._open_utility(self.import_export_view))
-        layout.addWidget(import_btn)
-
-        # Writing
-        writing_btn = QPushButton("Escritura")
-        writing_btn.setStyleSheet(util_btn_style)
-        writing_btn.clicked.connect(lambda: self._open_utility(self.writing_view))
-        layout.addWidget(writing_btn)
-
-        # Timeline
-        timeline_btn = QPushButton("Timeline")
-        timeline_btn.setStyleSheet(util_btn_style)
-        timeline_btn.clicked.connect(lambda: self._open_utility(self.timeline_view))
-        layout.addWidget(timeline_btn)
-
-        # Frameworks
-        framework_btn = QPushButton("Frameworks")
-        framework_btn.setStyleSheet(util_btn_style)
-        framework_btn.clicked.connect(lambda: self._open_utility(self.framework_view))
-        layout.addWidget(framework_btn)
-
-        layout.addStretch()
-        return bar
-
-    def _build_bottom_toolbar(self) -> QWidget:
-        """Minimal symbol-only action bar at the bottom of the graph."""
-        bar = QFrame()
-        bar.setObjectName("creationToolbar")
-        bar.setStyleSheet(
-            "QFrame#creationToolbar { background: rgba(248,246,237,0.90); "
-            "border-top: 1px solid #D8D6C8; }"
-        )
-        bar.setFixedHeight(48)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(24, 6, 24, 6)
+        layout.setContentsMargins(14, 6, 14, 6)
         layout.setSpacing(6)
 
         btn_style = (
-            "QPushButton { background: rgba(255,255,255,0.45); border: 1px solid #D8D6C8; "
-            "border-radius: 16px; padding: 4px; color: #6F6A42; font-size: 18px; "
-            "min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; } "
+            "QPushButton { background: rgba(255,255,255,0.48); border: 1px solid #D8D6C8; "
+            "border-radius: 15px; padding: 4px; color: #6F6A42; font-size: 16px; "
+            "min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; } "
             "QPushButton:hover { background: #F8F5EA; border: 1px solid #AFA77A; color: #504B2E; }"
         )
         disabled_style = (
             "QPushButton { background: rgba(255,255,255,0.25); border: 1px solid #E0DDD0; "
-            "border-radius: 16px; padding: 4px; color: #B8B5A8; font-size: 18px; "
-            "min-width: 36px; max-width: 36px; min-height: 36px; max-height: 36px; } "
+            "border-radius: 15px; padding: 4px; color: #B8B5A8; font-size: 16px; "
+            "min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; } "
+        )
+        text_btn_style = (
+            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
+            "border-radius: 12px; padding: 4px 12px; color: #6F6A42; font-size: 12px; } "
+            "QPushButton:hover { background: #F8F5EA; }"
         )
         self._toolbar_btn_style = btn_style
         self._toolbar_disabled_style = disabled_style
 
-        # Create entity (IMPLEMENTED)
-        create_btn = QPushButton(ICON_GLYPHS["add"])
-        create_btn.setToolTip("Crear entidad")
-        create_btn.setStyleSheet(btn_style)
-        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        create_btn.clicked.connect(self._create_entity_on_graph)
-        layout.addWidget(create_btn)
+        def icon_btn(text: str, tip: str, callback, *, enabled: bool = True) -> QPushButton:
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setStyleSheet(btn_style if enabled else disabled_style)
+            button.setEnabled(enabled)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(callback)
+            layout.addWidget(button)
+            return button
 
-        # Create tree/container
-        create_tree_btn = QPushButton("⊞")
-        create_tree_btn.setToolTip("Crear contenedor")
-        create_tree_btn.setStyleSheet(btn_style)
-        create_tree_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        create_tree_btn.clicked.connect(self._create_tree_on_graph)
-        layout.addWidget(create_tree_btn)
-
-        # Suggest entity via AI (selection-aware)
-        suggest_entity_btn = QPushButton("✦")
-        suggest_entity_btn.setToolTip("Sugerir entidad con IA (selecciona nodos como contexto)")
-        suggest_entity_btn.setStyleSheet(btn_style)
-        suggest_entity_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        suggest_entity_btn.clicked.connect(self._suggest_node)
-        self._suggest_entity_btn = suggest_entity_btn
-        layout.addWidget(suggest_entity_btn)
-
-        # Suggest relation via AI (selection-aware)
-        suggest_rel_btn = QPushButton("⟷")
-        suggest_rel_btn.setToolTip("Sugerir relación con IA (selecciona nodos como contexto)")
-        suggest_rel_btn.setStyleSheet(btn_style)
-        suggest_rel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        suggest_rel_btn.clicked.connect(self._suggest_relation)
-        self._suggest_relation_btn = suggest_rel_btn
-        layout.addWidget(suggest_rel_btn)
-
-        # Analyze joint coherence
-        self._coherence_btn = QPushButton("⚖")
-        self._coherence_btn.setToolTip("Analizar coherencia de la selección")
-        self._coherence_btn.setStyleSheet(disabled_style)
-        self._coherence_btn.setEnabled(False)
-        self._coherence_btn.clicked.connect(self._open_coherence_panel)
-        layout.addWidget(self._coherence_btn)
-
-        self._layers_view_btn = QPushButton("▤")
-        self._layers_view_btn.setToolTip("Vista Capas causales")
-        self._layers_view_btn.setStyleSheet(btn_style)
-        self._layers_view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._layers_view_btn.clicked.connect(self._activate_layers_view)
-        self._layers_view_btn.setVisible(False)
-        layout.addWidget(self._layers_view_btn)
-
-        search_btn = QPushButton("⌕")
-        search_btn.setToolTip("Buscar y enfocar elementos")
-        search_btn.setStyleSheet(btn_style)
-        search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        search_btn.clicked.connect(self._open_search_panel)
-        layout.addWidget(search_btn)
-
-        self._filter_btn = QPushButton("◫")
-        self._filter_btn.setToolTip("Filtros visuales")
-        self._filter_btn.setStyleSheet(btn_style)
-        self._filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._filter_btn.clicked.connect(self._open_filter_panel)
-        layout.addWidget(self._filter_btn)
+        # Left: primary creative graph actions.
+        icon_btn(ICON_GLYPHS["add"], "Crear entidad", self._create_entity_on_graph)
+        icon_btn("⊞", "Crear árbol/contenedor", self._create_tree_on_graph)
+        self._connect_mode_btn = icon_btn("↔", "Crear relación / modo conexión", self._start_relation_mode)
+        self._suggest_entity_btn = icon_btn("✨", "Sugerir entidad con IA", self._suggest_node)
+        self._coherence_btn = icon_btn("⚠", "Selecciona nodos o relaciones para analizar coherencia", self._open_coherence_panel, enabled=False)
+        icon_btn("⌕", "Buscar y enfocar elementos", self._open_search_panel)
+        self._filter_btn = icon_btn("◌", "Filtros visuales", self._open_filter_panel)
+        self._suggestion_btn = icon_btn("⊹", "Bandeja de sugerencias", self._open_suggestion_inbox)
+        self._suggestion_count = 0
+        self._layers_toggle_btn = icon_btn("Capas", "Abrir/cerrar panel de capas causales", self._toggle_layer_drawer)
+        self._layers_toggle_btn.setStyleSheet(text_btn_style)
+        self._layers_toggle_btn.setFixedWidth(72)
 
         self._global_focus_btn = QPushButton("Global")
         self._global_focus_btn.setToolTip("Volver a vista global")
-        self._global_focus_btn.setStyleSheet(btn_style)
+        self._global_focus_btn.setStyleSheet(text_btn_style)
         self._global_focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._global_focus_btn.clicked.connect(self.clear_focus_scope)
         self._global_focus_btn.setVisible(False)
@@ -1063,38 +997,34 @@ class CreationWorkspace(QWidget):
         self._focus_label.setStyleSheet("color: #6F6A42; font-size: 11px; padding: 0 8px;")
         layout.addWidget(self._focus_label)
 
-        center_btn = QPushButton("◎")
-        center_btn.setToolTip("Centrar selección")
-        center_btn.setStyleSheet(btn_style)
-        center_btn.clicked.connect(self.center_selection)
-        layout.addWidget(center_btn)
+        layout.addStretch(1)
 
-        fit_btn = QPushButton("□")
+        # Right: secondary management / view tools.
+        import_btn = QPushButton("Importar documento")
+        import_btn.setStyleSheet(text_btn_style)
+        import_btn.clicked.connect(lambda: self._open_utility(self.import_export_view))
+        layout.addWidget(import_btn)
+
+        self._layers_view_btn = QPushButton("Vista libre/capas")
+        self._layers_view_btn.setToolTip("Alternar vista por bandas causales")
+        self._layers_view_btn.setStyleSheet(text_btn_style)
+        self._layers_view_btn.clicked.connect(self._toggle_layers_view_from_toolbar)
+        layout.addWidget(self._layers_view_btn)
+
+        fit_btn = QPushButton("Fit all")
         fit_btn.setToolTip("Encajar todo")
-        fit_btn.setStyleSheet(btn_style)
+        fit_btn.setStyleSheet(text_btn_style)
         fit_btn.clicked.connect(self.fit_all)
         layout.addWidget(fit_btn)
 
-        reset_btn = QPushButton("↺")
+        reset_btn = QPushButton("Reset")
         reset_btn.setToolTip("Reset vista")
-        reset_btn.setStyleSheet(btn_style)
+        reset_btn.setStyleSheet(text_btn_style)
         reset_btn.clicked.connect(self.reset_view)
         layout.addWidget(reset_btn)
 
-        layout.addStretch()
-
-        # Suggestion inbox button
-        self._suggestion_btn = QPushButton("💡")
-        self._suggestion_btn.setToolTip("Bandeja de sugerencias")
-        self._suggestion_btn.setStyleSheet(btn_style)
-        self._suggestion_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._suggestion_btn.clicked.connect(self._open_suggestion_inbox)
-        self._suggestion_count = 0
-        layout.addWidget(self._suggestion_btn)
-
-        # Delete selected entity/relation/container
         delete_btn = QPushButton("🗑")
-        delete_btn.setToolTip("Eliminar selección (nodo, contenedor o relación)")
+        delete_btn.setToolTip("Selecciona algo para eliminar")
         delete_btn.setStyleSheet(disabled_style)
         delete_btn.setEnabled(False)
         delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1102,74 +1032,120 @@ class CreationWorkspace(QWidget):
         self._delete_btn = delete_btn
         layout.addWidget(delete_btn)
 
-        # Fit view
-        fit_btn = QPushButton(ICON_GLYPHS["expand"])
-        fit_btn.setToolTip("Enfocar todo")
-        fit_btn.setStyleSheet(btn_style)
-        fit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fit_btn.clicked.connect(self.graph._fit_all)
-        layout.addWidget(fit_btn)
-
         return bar
 
-    # ── Mouse tracking for top toolbar hover reveal and left layer flyout ──
+    def _build_command_bar(self) -> QWidget:
+        """Bottom B38 contextual AI command bar. Creates jobs, never mutates canon."""
+        bar = QFrame()
+        bar.setObjectName("aiCommandBar")
+        bar.setStyleSheet(
+            "QFrame#aiCommandBar { background: rgba(248,246,237,0.94); "
+            "border-top: 1px solid #D8D6C8; }"
+        )
+        bar.setFixedHeight(62)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(80, 10, 80, 10)
+        layout.setSpacing(8)
 
-    def eventFilter(self, obj, event):
-        """Intercept mouse move from child widgets (graph canvas, viewport)."""
-        if event.type() == event.Type.MouseMove:
-            # Map the child-local position to this workspace's coordinates
-            child_pos = event.position().toPoint()
-            global_pos = obj.mapToGlobal(child_pos)
-            ws_pos = self.mapFromGlobal(global_pos)
-            self._handle_hover(QPointF(ws_pos))
-        return super().eventFilter(obj, event)
+        self._command_input = QLineEdit()
+        self._command_input.setObjectName("aiCommandInput")
+        self._command_input.setPlaceholderText("Pídele a Dendro que actúe sobre el grafo…")
+        self._command_input.setStyleSheet(
+            "QLineEdit#aiCommandInput { background: rgba(255,255,255,0.82); "
+            "border: 1px solid #D0CCB8; border-radius: 18px; padding: 8px 14px; "
+            "font-size: 13px; color: #504B2E; }"
+        )
+        self._command_input.returnPressed.connect(self._submit_ai_command)
+        layout.addWidget(self._command_input, 1)
 
-    def _handle_hover(self, pos: "QPointF"):
-        """Centralised hover logic for top toolbar and left layer flyout."""
-        # ── Top toolbar ──
-        top_threshold = 40
-        if pos.y() < top_threshold:
-            if not self._top_toolbar.isVisible():
-                self._top_toolbar.setVisible(True)
-                self._top_toolbar.setFixedHeight(44)
-        elif self._top_toolbar.isVisible():
-            toolbar_rect = self._top_toolbar.rect()
-            toolbar_global = self._top_toolbar.mapFrom(self, pos.toPoint())
-            if not toolbar_rect.contains(toolbar_global):
-                self._top_toolbar.setFixedHeight(0)
-                self._top_toolbar.setVisible(False)
+        self._command_submit_btn = QPushButton("↵")
+        self._command_submit_btn.setToolTip("Crear job IA revisable")
+        self._command_submit_btn.setStyleSheet(
+            "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
+            "border-radius: 17px; min-width: 38px; min-height: 34px; font-size: 16px; } "
+            "QPushButton:hover { background: #504B2E; }"
+        )
+        self._command_submit_btn.clicked.connect(self._submit_ai_command)
+        layout.addWidget(self._command_submit_btn)
 
-        # ── Left layer flyout ──
-        left_threshold = 30
-        if pos.x() < left_threshold:
-            if not self._layer_flyout.isVisible():
-                self._layer_flyout.show_flyout()
-        elif self._layer_flyout.isVisible():
-            flyout_rect = self._layer_flyout.rect()
-            flyout_global = self._layer_flyout.mapFrom(self, pos.toPoint())
-            if not flyout_rect.contains(flyout_global):
-                self._layer_flyout.hide_flyout()
+        self._job_status_label = QLabel("Sin tareas IA activas")
+        self._job_status_label.setStyleSheet("color: #6F6A42; font-size: 11px; min-width: 170px;")
+        layout.addWidget(self._job_status_label)
+        return bar
 
-    def mouseMoveEvent(self, event):
-        """Fallback for direct mouse moves on the workspace itself."""
-        self._handle_hover(event.position())
-        super().mouseMoveEvent(event)
+    # ── B38 persistent layer drawer and command bar ───────────────────────
 
-    def leaveEvent(self, event):
-        """Hide top toolbar and layer flyout when mouse leaves the widget."""
-        if self._top_toolbar.isVisible():
-            self._top_toolbar.setFixedHeight(0)
-            self._top_toolbar.setVisible(False)
-        if hasattr(self, "_layer_flyout") and self._layer_flyout.isVisible():
+    def _start_relation_mode(self):
+        """Guide the existing drag-to-connect relation flow; no parallel mode."""
+        self.ctx.log("info", "Para crear relación: arrastra desde un nodo o árbol hacia otro elemento del grafo.")
+
+    def _toggle_layer_drawer(self):
+        """Persistent explicit drawer: stays open until user toggles it again."""
+        project = self._get_active_project()
+        active = bool(project and getattr(project, "worldbuilding_active", False))
+        if not active:
+            self.ctx.log("warning", "Activa Worldbuilding en el proyecto para usar capas causales")
+            return
+        if self._layer_flyout.isVisible():
             self._layer_flyout.hide_flyout()
-        super().leaveEvent(event)
+        else:
+            self._layer_flyout.show_flyout()
+
+    def _toggle_layers_view_from_toolbar(self):
+        project = self._get_active_project()
+        active = bool(project and getattr(project, "worldbuilding_active", False))
+        if not active:
+            self.ctx.log("warning", "La vista por capas requiere Worldbuilding activado")
+            return
+        layer_mode = bool(getattr(getattr(self.graph, "canvas", None), "_layer_mode_active", False))
+        if layer_mode:
+            self._deactivate_layers_view()
+        else:
+            self._activate_layers_view()
+
+    def _current_context_scope(self) -> dict:
+        project = self._get_active_project()
+        layer_ids = tuple(getattr(getattr(self.graph, "canvas", None), "_visual_filter", VisualFilterState()).layer_ids)
+        return {
+            "project_id": str(getattr(project, "id", "")) if project is not None else "",
+            "worldbuilding_active": bool(getattr(project, "worldbuilding_active", False)) if project is not None else False,
+            "selected_entity_ids": self.graph.selected_entity_ids() if hasattr(self, "graph") else [],
+            "selected_relation_ids": self.graph.selected_relation_ids() if hasattr(self, "graph") else [],
+            "active_layer_ids": list(layer_ids),
+            "focus_label": self._focus_label.text() if hasattr(self, "_focus_label") else "Global",
+            "visual_filters_active": self.graph.active_filter_count() if hasattr(self, "graph") else 0,
+        }
+
+    def _submit_ai_command(self):
+        prompt = self._command_input.text().strip()
+        if not prompt:
+            self._job_status_label.setText("Escribe una orden para Dendro")
+            return
+        scope = self._current_context_scope()
+        job_type = classify_ai_job_intent(prompt, worldbuilding_active=bool(scope.get("worldbuilding_active")))
+        result = self.ai_job_service.create_job(job_type, prompt, context_scope=scope)
+        if isinstance(result, Error):
+            self._job_status_label.setText(result.error)
+            self.ctx.log("error", result.error)
+            return
+        job = result.value
+        # B38-T03/T04 only creates a reviewable job. Runner/results arrive in T05+.
+        self.ai_job_service.update_status(
+            job.id,
+            AIJobStatus.QUEUED,
+            message="Job creado. Pendiente de runner no bloqueante.",
+            progress=0.0,
+        )
+        self._command_input.clear()
+        self._job_status_label.setText(f"Job creado: {job.type.value.replace('_', ' ')}")
+        self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
 
     def resizeEvent(self, event):
-        """Position layer flyout along the left edge."""
+        """Position persistent layer drawer along the left edge."""
         super().resizeEvent(event)
         if hasattr(self, "_layer_flyout"):
-            h = self.height() - 48 - 44  # subtract bottom bar + top toolbar
-            self._layer_flyout.setGeometry(0, 44, 240, max(h, 200))
+            h = self.height() - 48 - 62  # top toolbar + command bar
+            self._layer_flyout.setGeometry(0, 48, 260, max(h, 220))
 
     def _activate_layers_view(self):
         project = self._get_active_project()
@@ -1662,12 +1638,20 @@ class CreationWorkspace(QWidget):
         return None
 
     def set_worldbuilding_active(self, active: bool):
-        """Show/hide worldbuilding-related UI elements."""
+        """Show/hide worldbuilding-related UI elements without forcing layer view."""
         active = bool(active)
         if hasattr(self, "_layers_view_btn"):
             self._layers_view_btn.setVisible(active)
-        if hasattr(self, "graph") and hasattr(self.graph, "set_worldbuilding_active"):
-            self.graph.set_worldbuilding_active(active)
+        if hasattr(self, "_layers_toggle_btn"):
+            self._layers_toggle_btn.setVisible(active)
+            self._layers_toggle_btn.setEnabled(active)
+            self._layers_toggle_btn.setToolTip(
+                "Abrir/cerrar panel de capas causales" if active else "Activa Worldbuilding para usar capas causales"
+            )
+        if not active and hasattr(self, "_layer_flyout"):
+            self._layer_flyout.hide_flyout()
+        if not active and hasattr(self, "graph") and hasattr(self.graph, "set_worldbuilding_active"):
+            self.graph.set_worldbuilding_active(False)
 
     def refresh(self):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,

@@ -70,6 +70,10 @@ SUITES: dict[str, list[str]] = {
         "tests/desktop/test_b37_creation_search_filters.py",
         "tests/desktop/test_b37_t07_smoke.py",
     ],
+    "b38": [
+        "tests/application/test_b38_ai_jobs.py",
+        "tests/desktop/test_b38_command_bar_jobs.py",
+    ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }
