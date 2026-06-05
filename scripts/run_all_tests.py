@@ -20,6 +20,8 @@ Suites:
     b35         Coherencia de subgrafo smoke/regression tests
     b36         Worldbuilding causal layer contract tests
     b37         Creación complexity search/filter tests
+    b38         Command bar AI jobs smoke/regression tests
+    b39         Project control artifacts/tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)
@@ -73,6 +75,9 @@ SUITES: dict[str, list[str]] = {
     "b38": [
         "tests/application/test_b38_ai_jobs.py",
         "tests/desktop/test_b38_command_bar_jobs.py",
+    ],
+    "b39": [
+        "tests/project_control/test_b39_project_control_artifacts.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
