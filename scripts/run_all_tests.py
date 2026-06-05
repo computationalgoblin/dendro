@@ -95,6 +95,7 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b41_causal_milestone_service.py",
         "tests/desktop/test_b41_causal_milestone_ui_static.py",
         "tests/desktop/test_b41_t04_hito_from_selection.py",
+        "tests/application/test_b41_t05_ai_milestones.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],

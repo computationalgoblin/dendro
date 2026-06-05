@@ -95,6 +95,7 @@ class AIJobType(str, Enum):
     REVIEW_GRAPH = "review_graph"
     FREEFORM_PLANNING = "freeform_planning"
     EDIT_ENTITIES = "edit_entities"
+    PROPOSE_MILESTONES = "propose_milestones"
     UNKNOWN = "unknown"
 
 
@@ -246,6 +247,10 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
         intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
         return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide anillo/estrato causal/worldbuilding")
 
+    # B41: detect milestone/hito intent — must come before relations/generation
+    if _has_any(text, ["hito", "hitos", "cadena historica", "cadena histórica", "status quo", "acontecimiento", "origen para"]):
+        return CommandBarIntent(AIJobType.PROPOSE_MILESTONES, 0.80, scope, "milestone_candidates", False, "La petición pide hitos causales/históricos")
+
     if _has_any(text, ["relacion", "relación", "relaciones", "vínculo", "vinculo"]):
         return CommandBarIntent(AIJobType.SUGGEST_RELATIONS, 0.82, scope, "relation_candidates", False, "La petición pide relaciones o vínculos")
 
@@ -294,6 +299,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["candidatos de anillo/rama", "relaciones causales candidatas"]
     if intent_type == AIJobType.EDIT_ENTITIES:
         return ["candidatos de edición de cuerpo/campos de hojas o ramas existentes"]
+    if intent_type == AIJobType.PROPOSE_MILESTONES:
+        return ["candidatos de hito causal", "relaciones causales candidatas"]
     return ["plan revisable"]
 
 
