@@ -15,6 +15,7 @@ from packages.domain.ai_models import AIMode, AIOperation, AuthorizedContext
 from packages.domain.candidate_issue import Candidate, CandidateType
 from packages.domain.result import Error, Ok, Result
 from packages.infrastructure.ai_provider import AIProvider, create_provider
+from packages.application.prompt_registry import get_prompt
 
 
 _NODE_ACTIONS: dict[str, AIMode] = {
@@ -160,88 +161,19 @@ class AIContextActionResult:
 
 
 
-_ENTITY_TEXT_SYSTEM_PROMPT_ES = (
-    "Eres un asistente de escritura integrado en Dendro. Tu tarea es mejorar o completar "
-    "el contenido textual de la entidad seleccionada. Usa el nombre, tipo, descripción, "
-    "cuerpo actual, notas y contexto del proyecto. Respeta el género, tono, realismo, "
-    "estilo narrativo e idioma configurados. Sigue especialmente la instrucción opcional "
-    "del usuario si existe. Devuelve únicamente el texto sugerido para incorporar al cuerpo "
-    "o descripción de la entidad. No devuelvas JSON. No devuelvas una ficha Entity/Name/Type. "
-    "No crees entidades, relaciones, secretos ni canon nuevo salvo que el usuario lo pida "
-    "explícitamente. No modifiques el proyecto. Responde en español."
-)
+# Prompts migrated to Prompt Registry (B43-T02)
+_ENTITY_TEXT_SYSTEM_PROMPT_ES = get_prompt("inline_leaf", lang="es") or ""
+_ENTITY_TEXT_SYSTEM_PROMPT_EN = get_prompt("inline_leaf", lang="en") or ""
 
-_ENTITY_TEXT_SYSTEM_PROMPT_EN = (
-    "You are a writing assistant integrated into Dendro. Your task is to improve or complete "
-    "the textual content of the selected entity. Use the name, type, current description, "
-    "current body, notes, and project context. Respect the configured genre, tone, realism, "
-    "narrative style, and language. Follow the optional user instruction especially when it "
-    "exists. Return only the suggested text to incorporate into the entity body or description. "
-    "Do not return JSON. Do not return an Entity/Name/Type sheet. Do not create entities, "
-    "relationships, secrets, or new canon unless the user explicitly asks for it. Do not modify "
-    "the project. Respond in English."
-)
+_RELATION_TEXT_SYSTEM_PROMPT_ES = get_prompt("inline_relation", lang="es") or ""
 
-_RELATION_TEXT_SYSTEM_PROMPT_ES = (
-    "Eres un asistente de escritura integrado en Dendro. Tu tarea es mejorar o completar "
-    "el contenido textual de una relación narrativa entre dos entidades. Usa el origen, "
-    "destino, tipo de relación, dirección, descripción, cuerpo, notas y contexto creativo "
-    "del proyecto. Respeta idioma, género, tono, realismo y estilo narrativo. Sigue "
-    "especialmente la instrucción opcional del usuario si existe. Devuelve únicamente el "
-    "texto sugerido para la relación. No devuelvas JSON. No devuelvas una ficha técnica. "
-    "No crees entidades, relaciones, árboles, secretos ni canon nuevo. No modifiques el proyecto."
-)
+_RELATION_TEXT_SYSTEM_PROMPT_EN = get_prompt("inline_relation", lang="en") or ""
 
-_RELATION_TEXT_SYSTEM_PROMPT_EN = (
-    "You are a writing assistant integrated into Dendro. Your task is to improve or complete "
-    "the textual content of a narrative relationship between two entities. Use source, target, "
-    "relationship type, direction, current description, body, notes, and project creative context. "
-    "Respect language, genre, tone, realism, and narrative style. Follow the optional user "
-    "instruction especially when it exists. Return only the suggested text for the relationship. "
-    "Do not return JSON. Do not return a technical sheet. Do not create entities, relationships, "
-    "trees, secrets, or new canon. Do not modify the project."
-)
+_COHERENCE_SYSTEM_PROMPT_ES = get_prompt("coherence", lang="es") or ""
+_COHERENCE_SYSTEM_PROMPT_EN = get_prompt("coherence", lang="en") or ""
 
-_COHERENCE_SYSTEM_PROMPT_ES = (
-    "Eres un editor de coherencia narrativa integrado en Dendro. Tu tarea es analizar si un "
-    "conjunto de entidades y relaciones encaja con el canon existente, la motivación de los "
-    "personajes y la configuración creativa del proyecto. Usa especialmente creative_brief: "
-    "canon.hard_rules, canon.continuity_strictness, negative_space, taste_memory y preferencias IA. No debes modificar contenido durante "
-    "el análisis. No debes crear entidades ni relaciones. Devuelve observaciones claras y "
-    "propuestas de reparación. Respeta el idioma configurado. Prioriza coherencia causal, "
-    "motivacional, tonal y dramática. Estructura la respuesta con secciones: Veredicto global, "
-    "Observaciones por entidad, Observaciones por relación, Contradicciones, Huecos de motivación, "
-    "Continuidad, Riesgos tonales, Oportunidades dramáticas, Propuestas de reparación y Preguntas abiertas."
-)
-
-_COHERENCE_SYSTEM_PROMPT_EN = (
-    "You are a narrative coherence editor integrated into Dendro. Analyze whether a selected set "
-    "of entities and relationships fits the existing canon, character motivation, and project "
-    "creative configuration. Use creative_brief explicitly: canon.hard_rules, "
-    "canon.continuity_strictness, negative_space, taste_memory, and AI preferences. Do not modify content during analysis. Do not create entities or "
-    "relationships. Return clear observations and repair proposals. Prioritize causal, motivational, "
-    "tonal, and dramatic coherence. Structure the response with sections: Global verdict, Entity "
-    "observations, Relationship observations, Contradictions, Motivation gaps, Continuity, Tonal "
-    "risks, Dramatic opportunities, Repair proposals, and Open questions. "
-    "If Worldbuilding is active, explicitly use causal_context: include relevant upper causes, orphan elements "
-    "without upper cause/justification, and contradictions between layers."
-)
-
-_COHERENCE_REPAIR_SYSTEM_PROMPT_ES = (
-    "Eres un editor de coherencia narrativa integrado en Dendro. Genera una reparación aplicable "
-    "solo a los nodos y relaciones seleccionados. No crees entidades ni relaciones. Devuelve primero "
-    "un resumen narrativo breve y después un bloque JSON estricto entre <PATCH_JSON> y </PATCH_JSON>. "
-    "El JSON debe tener: {\"entities\":[{\"id\":...,\"brief_description\":...,\"extended_description\":...}], "
-    "\"relations\":[{\"id\":...,\"description\":...,\"body\":...}]}. Incluye solo campos que deban cambiar."
-)
-
-_COHERENCE_REPAIR_SYSTEM_PROMPT_EN = (
-    "You are a narrative coherence editor integrated into Dendro. Generate an applicable repair "
-    "only for selected nodes and relationships. Do not create entities or relationships. Return a "
-    "brief narrative summary first, then a strict JSON block between <PATCH_JSON> and </PATCH_JSON>. "
-    "The JSON must have: {\"entities\":[{\"id\":...,\"brief_description\":...,\"extended_description\":...}], "
-    "\"relations\":[{\"id\":...,\"description\":...,\"body\":...}]}. Include only fields that should change."
-)
+_COHERENCE_REPAIR_SYSTEM_PROMPT_ES = get_prompt("coherence_repair", lang="es") or ""
+_COHERENCE_REPAIR_SYSTEM_PROMPT_EN = get_prompt("coherence_repair", lang="en") or ""
 
 
 def _context_get(data: dict[str, Any], *keys: str, default: Any = "") -> Any:

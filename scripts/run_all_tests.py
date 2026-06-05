@@ -111,6 +111,12 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b42_t09_observability.py",
         "tests/application/test_b42_t10_candidate_dedup.py",
     ],
+    "b43": [
+        "tests/application/test_b43_t01_command_bar_migration.py",
+        "tests/application/test_b43_t02_t05_inline_migration.py",
+        "tests/application/test_b43_t06_static_guard.py",
+        "tests/application/test_b43_t07_smoke.py",
+    ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
 }

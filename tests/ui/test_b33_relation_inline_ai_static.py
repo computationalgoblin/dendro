@@ -55,13 +55,10 @@ def test_relation_panel_discard_and_error_do_not_modify_relation_fields():
 
 def test_relation_ai_prompt_uses_specific_contract_and_context():
     actions = AI_ACTIONS.read_text(encoding="utf-8")
+    # After B43 migration, prompts come from Prompt Registry
+    # Verify that the module uses get_prompt for relation text
     for phrase in [
-        "relación narrativa entre dos entidades",
-        "origen, ",
-        "destino, tipo de relación, dirección, descripción, cuerpo, notas",
-        "No devuelvas JSON",
-        "No devuelvas una ficha técnica",
-        "No crees entidades, relaciones, árboles, secretos ni canon nuevo",
+        'get_prompt("inline_relation"',
         "source_full",
         "target_full",
         "Idioma:",
