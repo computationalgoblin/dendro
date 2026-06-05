@@ -167,17 +167,10 @@ class ProjectPanel(QWidget):
         # ── Section C: Worldbuilding ──
         self._build_worldbuilding_section()
 
-        # ── Section D: Creative Config ──
-        self._build_creative_config_section()
-
-        # ── Section E: Genre / Tone / Realism ──
-        self._build_genre_tone_realism_section()
-
-        # ── Section F: Campaign Config ──
-        self._build_campaign_config_section()
-
-        # ── Section G: Novela Config ──
-        self._build_novela_config_section()
+        # ── Section D-G: Creative Config (B40 tabbed panel) ──
+        from hosts.DesktopHostPySide.widgets.creative_config_panel import CreativeConfigPanel
+        self.creative_tabs = CreativeConfigPanel(self.project, self)
+        self.root_layout.addWidget(self.creative_tabs)
 
         # ── Save button ──
         self.save_btn = QPushButton("Guardar proyecto")
@@ -439,48 +432,15 @@ class ProjectPanel(QWidget):
             # Project type
             p.project_type = self._current_type_value()
 
-            # Worldbuilding
+            # Worldbuilding (from worldbuilding section, not tabs)
             p.worldbuilding_active = self.wb_check.isChecked()
 
-            # Creative config
-            cc = p.creative_config
-            cc.narrative_style = self.narrative_style_edit.text().strip()
-            cc.main_themes = [
-                t.strip() for t in self.main_themes_edit.text().split(",") if t.strip()
-            ]
-            cc.target_audience = self.target_audience_edit.text().strip()
-            cc.creative_rules = [
-                r.strip() for r in self.creative_rules_edit.text().split(",") if r.strip()
-            ]
-
-            # Genre
-            p.genre.primary_genre = self.genre_edit.text().strip()
-
-            # Tone
-            tone_map = {"Serio": "serious", "Equilibrado": "neutral", "Ligero": "light"}
-            p.tone.narrative_tone = tone_map.get(self.tone_combo.currentText(), "neutral")
+            # Apply all creative config from tabbed panel (B40)
+            self.creative_tabs.apply_to_project(p)
 
             # Realism
             realism_map = {"Bajo": "low", "Medio": "medium", "Alto": "high"}
             p.realism.realism_level = realism_map.get(self.realism_combo.currentText(), "medium")
-
-            # Campaign config (only relevant fields)
-            p.general.theme = self.campaign_system_edit.text().strip()
-
-            # Novela config
-            fmt_map = {"Novela": "novela", "Relato": "relato", "Saga": "saga", "Antología": "antologia"}
-            pov_map = {"Primera persona": "primera_persona", "Tercera persona": "tercera_persona", "Omnisciente": "omnisciente"}
-            tense_map = {"Pasado": "pasado", "Presente": "presente"}
-            length_map = {"Corto": "corto", "Medio": "medio", "Largo": "largo"}
-
-            if p.project_type == "novela":
-                from packages.domain.project import NovelaConfig
-                if p.novela_config is None:
-                    p.novela_config = NovelaConfig()
-                p.novela_config.format = fmt_map.get(self.novela_format_combo.currentText(), "")
-                p.novela_config.point_of_view = pov_map.get(self.novela_pov_combo.currentText(), "")
-                p.novela_config.tense = tense_map.get(self.novela_tense_combo.currentText(), "")
-                p.novela_config.target_length = length_map.get(self.novela_length_combo.currentText(), "")
 
             # Persist
             self.callbacks["save_project"]()
