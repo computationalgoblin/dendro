@@ -45,6 +45,15 @@ REGLAS DE CLASIFICACIÓN:
 
 NUNCA generes notes, visibility, metadata internos ni muestres JSON crudo al usuario. El usuario solo ve el report y summary en texto natural.
 
+CONFIGURACIÓN CREATIVA B40:
+- El contexto puede incluir creative_brief, creative_context y branch_creative_context.
+- creative_brief.canon.hard_rules son canon duro: no los contradigas; si una petición los contradice, marca issue/proposal, no lo corrijas automáticamente.
+- creative_brief.negative_space indica tropos, soluciones, tonos o frases que debes evitar.
+- creative_brief.taste_memory indica patrones aceptados/rechazados por el usuario.
+- creative_brief.ai_preferences define rol, agresividad, estrategia, número de opciones y modo de respuesta.
+- branch_creative_context contiene overrides efectivos de ramas seleccionadas; si existe, tiene prioridad sobre la configuración global para esas ramas.
+- En worldbuilding activo, usa anillos/capas superiores como prioridad explicativa descendente.
+
 Si el usuario pide EDITAR o RELLENAR el cuerpo/historia/motivaciones de hojas o ramas EXISTENTES, NO crees elementos nuevos. En vez de eso, devuelve un objeto "entity_edits" con propuestas de edición para cada elemento existente identificado. Formato:
 "entity_edits": [{"entity_name": "nombre exacto de la hoja o rama existente", "field": "body", "proposed_value": "texto propuesto para el cuerpo", "rationale": "por qué este cambio"}]
 
@@ -551,12 +560,52 @@ def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
     return dict(context or {})
 
 
+def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
+    """Derive model-facing behaviour instructions from B40 creative config."""
+    ctx = dict(context or {})
+    brief = ctx.get("creative_brief") or {}
+    if not isinstance(brief, dict):
+        brief = {}
+    canon_raw = brief.get("canon")
+    negative_raw = brief.get("negative_space")
+    memory_raw = brief.get("taste_memory")
+    ai_raw = brief.get("ai_preferences")
+    canon = canon_raw if isinstance(canon_raw, dict) else {}
+    negative = negative_raw if isinstance(negative_raw, dict) else {}
+    memory = memory_raw if isinstance(memory_raw, dict) else {}
+    ai = ai_raw if isinstance(ai_raw, dict) else {}
+    return {
+        "role": ai.get("default_role", "coauthor"),
+        "strategy": ai.get("default_strategy", "profundizar"),
+        "output_mode": ai.get("output_mode", "contrastive_options"),
+        "default_num_options": ai.get("default_num_options", 3),
+        "change_aggressiveness": ai.get("change_aggressiveness", 5),
+        "uncertainty_policy": ai.get("uncertainty_policy", "conservative_proposal"),
+        "context_depth": ai.get("context_depth", "balanced"),
+        "hard_rules": canon.get("hard_rules", []),
+        "soft_preferences": canon.get("soft_preferences", []),
+        "continuity_strictness": canon.get("continuity_strictness", 5),
+        "avoid": negative,
+        "taste_memory": memory,
+        "selected_effective_configs": ctx.get("creative_context", []),
+        "selected_branch_overrides": ctx.get("branch_creative_context", []),
+        "instructions": [
+            "Respeta canon duro y continuidad configurada; si el usuario pide algo incompatible, proponlo como problema/reparación, no como canon.",
+            "Evita tropos, soluciones, tonos y frases listados en negative_space.",
+            "Usa taste_memory para aproximarte al gusto aceptado y evitar patrones rechazados.",
+            "Si hay branch_creative_context, prioriza esos overrides locales sobre el perfil global.",
+            "Toda salida estructural debe ser candidato revisable; nunca asumas canon automático.",
+        ],
+    }
+
+
 def build_model_user_message(plan: AIJobPlan) -> str:
     return json.dumps({
         "prompt_exacto_usuario": plan.prompt,
         "intent": plan.intent.to_dict(),
         "plan": plan.to_dict(),
         "contexto_autorizado": _context_for_prompt(plan.context),
+        "perfil_creativo_b40": _b40_prompt_profile(plan.context),
         "restricciones": {
             "no_canon_automatico": True,
             "solo_candidatos_revisables": True,

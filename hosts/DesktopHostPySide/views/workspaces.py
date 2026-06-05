@@ -1258,14 +1258,32 @@ class CreationWorkspace(QWidget):
     def _current_context_scope(self) -> dict:
         project = self._get_active_project()
         layer_ids = tuple(getattr(getattr(self.graph, "canvas", None), "_visual_filter", VisualFilterState()).layer_ids)
+        selected_entity_ids = self.graph.selected_entity_ids() if hasattr(self, "graph") else []
+        selected_relation_ids = self.graph.selected_relation_ids() if hasattr(self, "graph") else []
+        creative_brief = {}
+        creative_context = []
+        if project is not None:
+            from packages.application.creative_context import (
+                project_creative_brief,
+                selected_entity_creative_context,
+                selected_branch_creative_context,
+            )
+            creative_brief = project_creative_brief(project)
+            creative_context = selected_entity_creative_context(project, selected_entity_ids)
+            branch_context = selected_branch_creative_context(project, selected_entity_ids)
+        else:
+            branch_context = []
         return {
             "project_id": str(getattr(project, "id", "")) if project is not None else "",
             "worldbuilding_active": bool(getattr(project, "worldbuilding_active", False)) if project is not None else False,
-            "selected_entity_ids": self.graph.selected_entity_ids() if hasattr(self, "graph") else [],
-            "selected_relation_ids": self.graph.selected_relation_ids() if hasattr(self, "graph") else [],
+            "selected_entity_ids": selected_entity_ids,
+            "selected_relation_ids": selected_relation_ids,
             "active_layer_ids": list(layer_ids),
             "focus_label": self._focus_label.text() if hasattr(self, "_focus_label") else "Global",
             "visual_filters_active": self.graph.active_filter_count() if hasattr(self, "graph") else 0,
+            "creative_brief": creative_brief,
+            "creative_context": creative_context,
+            "branch_creative_context": branch_context,
         }
 
     def _submit_ai_command(self):

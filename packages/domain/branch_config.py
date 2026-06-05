@@ -94,43 +94,98 @@ def clear_all_branch_overrides(entity) -> None:
 def resolve_effective_config(project, entity) -> dict[str, Any]:
     """Resolve the effective creative config for an entity.
 
-    Resolution order: Project > Anillo > Rama > Hoja
-    Each level can inherit or override specific fields.
+    Resolution order: Project > Anillo > Rama padre > Rama/Hoja local.
+    Each level can inherit or override specific fields. Overrides may be nested
+    dictionaries or dotted-path keys such as ``poetics.description_density``.
 
-    Returns the merged config dict.
+    Returns the merged config dict. Does not mutate project or entity.
     """
-    from packages.domain.creative_presets import apply_preset_to_project
+    if project is None or entity is None:
+        return {}
 
     # Start with project-level config
     base = project.creative_config.to_dict()
 
-    # Check for anillo (world layer) overrides
-    if hasattr(entity, "layer_ids") and entity.layer_ids:
-        for layer_id in entity.layer_ids:
-            for layer in project.world_layers:
-                if layer.id == layer_id:
-                    layer_overrides = layer.custom_data.get("branch_config", {}).get("overrides", {})
-                    _deep_merge(base, layer_overrides)
+    # Anillo/world-layer overrides. WorldLayer stores extensibility in metadata.
+    for layer_id in list(getattr(entity, "layer_ids", []) or []):
+        for layer in list(getattr(project, "world_layers", []) or []):
+            if getattr(layer, "id", "") != layer_id:
+                continue
+            metadata = dict(getattr(layer, "metadata", {}) or {})
+            layer_cfg = metadata.get("branch_config") or metadata.get("creative_config") or {}
+            if isinstance(layer_cfg, dict):
+                _deep_merge(base, layer_cfg.get("overrides", layer_cfg))
 
-    # Check for rama (entity with entity_type CONTENEDOR) overrides
-    if hasattr(entity, "entity_type") and entity.entity_type.value == "CONTENEDOR":
-        branch_cfg = get_branch_config(entity)
-        _deep_merge(base, branch_cfg.get("overrides", {}))
+    # Parent ramas via structural CONTIENE relations.
+    for parent in _parent_branches(project, entity):
+        branch_cfg = get_branch_config(parent)
+        if not branch_cfg.get("inherits_from_project", True) or branch_cfg.get("overrides"):
+            _deep_merge(base, branch_cfg.get("overrides", {}))
 
-    # Check if entity is a hoja inside a rama
+    # Local rama/hoja overrides.
     if hasattr(entity, "custom_metadata"):
-        branch_cfg = entity.custom_metadata.get("branch_config", {})
-        if branch_cfg:
+        branch_cfg = get_branch_config(entity)
+        if not branch_cfg.get("inherits_from_project", True) or branch_cfg.get("overrides"):
             _deep_merge(base, branch_cfg.get("overrides", {}))
 
     return base
 
 
+def _parent_branches(project, entity) -> list[Any]:
+    """Return direct/ancestor parent ramas ordered from root-ish to immediate."""
+    entity_id = str(getattr(entity, "id", ""))
+    if not entity_id:
+        return []
+    entities = {str(getattr(e, "id", "")): e for e in list(getattr(project, "entities", []) or [])}
+    relations = list(getattr(project, "relations", []) or [])
+    parents: list[Any] = []
+    visited: set[str] = set()
+    frontier = [entity_id]
+    while frontier:
+        current = frontier.pop(0)
+        for rel in relations:
+            rtype = _enum_value(getattr(rel, "relation_type", ""))
+            if rtype != "contiene" or str(getattr(rel, "target_id", "")) != current:
+                continue
+            parent_id = str(getattr(rel, "source_id", ""))
+            if not parent_id or parent_id in visited:
+                continue
+            visited.add(parent_id)
+            parent = entities.get(parent_id)
+            if parent is None:
+                continue
+            if _enum_value(getattr(parent, "entity_type", "")) == "contenedor":
+                parents.insert(0, parent)
+            frontier.append(parent_id)
+    return parents
+
+
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "")
+
+
 def _deep_merge(base: dict, overrides: dict) -> dict:
     """Merge overrides into base dict in-place. Lists are replaced, not extended."""
-    for k, v in overrides.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
+    for k, v in (overrides or {}).items():
+        if "." in str(k):
+            _set_dotted(base, str(k), v)
+        elif isinstance(v, dict) and isinstance(base.get(k), dict):
             _deep_merge(base[k], v)
         else:
             base[k] = v
     return base
+
+
+def _set_dotted(base: dict, path: str, value: Any) -> None:
+    """Set dotted path inside a nested dict."""
+    parts = [p for p in path.split(".") if p]
+    if not parts:
+        return
+    cursor = base
+    for part in parts[:-1]:
+        next_value = cursor.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            cursor[part] = next_value
+        cursor = next_value
+    cursor[parts[-1]] = value

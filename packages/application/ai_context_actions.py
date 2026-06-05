@@ -118,6 +118,11 @@ def _authorized_context(context: dict[str, Any]) -> AuthorizedContext:
             "tone": project.get("tone", {}),
             "genre": project.get("genre", {}),
             "realism": project.get("realism", {}),
+            "creative_config": project.get("creative_config", {}),
+            "creative_brief": project.get("creative_brief", {}),
+            "ai": project.get("ai", {}),
+            "creative_context": context.get("creative_context", []),
+            "causal_context": context.get("causal_context", {}),
             "constraints": context.get("constraints", {}),
             "context_hash": _context_hash(context),
         },
@@ -200,7 +205,8 @@ _RELATION_TEXT_SYSTEM_PROMPT_EN = (
 _COHERENCE_SYSTEM_PROMPT_ES = (
     "Eres un editor de coherencia narrativa integrado en Dendro. Tu tarea es analizar si un "
     "conjunto de entidades y relaciones encaja con el canon existente, la motivación de los "
-    "personajes y la configuración creativa del proyecto. No debes modificar contenido durante "
+    "personajes y la configuración creativa del proyecto. Usa especialmente creative_brief: "
+    "canon.hard_rules, canon.continuity_strictness, negative_space, taste_memory y preferencias IA. No debes modificar contenido durante "
     "el análisis. No debes crear entidades ni relaciones. Devuelve observaciones claras y "
     "propuestas de reparación. Respeta el idioma configurado. Prioriza coherencia causal, "
     "motivacional, tonal y dramática. Estructura la respuesta con secciones: Veredicto global, "
@@ -211,7 +217,8 @@ _COHERENCE_SYSTEM_PROMPT_ES = (
 _COHERENCE_SYSTEM_PROMPT_EN = (
     "You are a narrative coherence editor integrated into Dendro. Analyze whether a selected set "
     "of entities and relationships fits the existing canon, character motivation, and project "
-    "creative configuration. Do not modify content during analysis. Do not create entities or "
+    "creative configuration. Use creative_brief explicitly: canon.hard_rules, "
+    "canon.continuity_strictness, negative_space, taste_memory, and AI preferences. Do not modify content during analysis. Do not create entities or "
     "relationships. Return clear observations and repair proposals. Prioritize causal, motivational, "
     "tonal, and dramatic coherence. Structure the response with sections: Global verdict, Entity "
     "observations, Relationship observations, Contradictions, Motivation gaps, Continuity, Tonal "

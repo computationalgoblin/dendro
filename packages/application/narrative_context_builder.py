@@ -10,6 +10,10 @@ from enum import Enum
 from typing import Any, Iterable
 
 from packages.application.world_layer_causal import causal_layer_summary, get_causal_rank, sort_layers_by_causal_rank
+from packages.application.creative_context import (
+    project_creative_brief,
+    selected_entity_creative_context,
+)
 
 
 _GM_AUDIENCES = {"gm", "master", "director", "author", "autor"}
@@ -148,6 +152,7 @@ class NarrativeContextBuilder:
             },
         }
         context["causal_context"] = self._causal_context(selected_entities, audience)
+        context["creative_context"] = selected_entity_creative_context(self.project, expanded_entity_ids)
         return context
 
     def build_context(self, target_type: str, target_id: str | None = None, *, audience: str = "gm") -> dict[str, Any]:
@@ -203,6 +208,8 @@ class NarrativeContextBuilder:
                 "realism": _safe_obj(getattr(project, "realism", None)),
                 "creative_config": _safe_obj(getattr(project, "creative_config", None)),
                 "creative_project_config": _safe_obj(getattr(project, "creative_project_config", None)),
+                "creative_brief": project_creative_brief(project),
+                "ai": _safe_obj(getattr(project, "ai", None)),
                 "project_type": getattr(project, "project_type", ""),
                 "narrative_style": getattr(project, "narrative_style", ""),
                 "creative_rules": getattr(project, "creative_rules", ""),
