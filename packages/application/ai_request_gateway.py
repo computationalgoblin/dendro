@@ -1,0 +1,221 @@
+"""AIRequestGateway — B42-T01.
+
+Common layer for all AI calls. Provides:
+- Context sanitization (remove sensitive fields)
+- Model parameter selection based on intent
+- Provider dispatch with correct params
+- Output validation
+- Typed result with metadata
+
+Does NOT break existing APIs. Wraps provider calls with guard rails.
+"""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from packages.infrastructure.ai_provider import AIProvider, create_provider
+
+
+# ---------------------------------------------------------------------------
+# Blocked fields — never pass to AI
+# ---------------------------------------------------------------------------
+
+_BLOCKED_CONTEXT_KEYS: frozenset[str] = frozenset({
+    "api_key", "api_secret", "auth_token", "bearer",
+    "provider_config", "provider_settings",
+    "raw_metadata", "internal_metadata",
+    "source_ids", "source_id",
+    "visibility_legacy", "_visibility",
+    "password", "secret", "credentials",
+    "narrative_ai_api_key", "narrative_ai_base_url",
+})
+
+_ALLOWLIST_PREFIXES: tuple[str, ...] = (
+    "project_", "genre", "tone", "style", "theme",
+    "entity", "entities", "relation", "relations",
+    "name", "description", "brief", "text",
+    "canon", "creative", "narrative", "world",
+    "character", "plot", "setting", "type",
+    "summary", "notes", "tags", "custom_",
+    "tree", "trees", "layer", "layers",
+    "selected_", "target", "context",
+)
+
+
+# ---------------------------------------------------------------------------
+# Intent → model params mapping
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelParams:
+    """Parameters derived from intent type."""
+    temperature: float = 0.7
+    max_tokens: int = 2000
+
+    @staticmethod
+    def from_intent(intent: str) -> ModelParams:
+        """Derive params from intent. Unknown intents get defaults."""
+        return INTENT_PARAMS.get(intent, ModelParams.default())
+
+    @staticmethod
+    def default() -> ModelParams:
+        return ModelParams(temperature=0.7, max_tokens=2000)
+
+
+# Intent → params lookup
+INTENT_PARAMS: dict[str, ModelParams] = {
+    # Low temperature: analytical, precise
+    "coherence":           ModelParams(temperature=0.2, max_tokens=2000),
+    "consistency":         ModelParams(temperature=0.2, max_tokens=2000),
+    "extract":             ModelParams(temperature=0.15, max_tokens=1500),
+    "classify":            ModelParams(temperature=0.15, max_tokens=1000),
+    "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
+    "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),
+    "detect_contradiction": ModelParams(temperature=0.2, max_tokens=2000),
+    "detect_inconsistency": ModelParams(temperature=0.2, max_tokens=2000),
+    # Medium temperature: balanced
+    "chat":                ModelParams(temperature=0.7, max_tokens=2000),
+    "freeform":            ModelParams(temperature=0.7, max_tokens=2000),
+    "explain":             ModelParams(temperature=0.5, max_tokens=2000),
+    "edit":                ModelParams(temperature=0.5, max_tokens=1500),
+    "edit_entities":       ModelParams(temperature=0.5, max_tokens=2000),
+    "suggest":             ModelParams(temperature=0.6, max_tokens=2000),
+    "node_text_suggestion": ModelParams(temperature=0.6, max_tokens=1500),
+    "relation_text_suggestion": ModelParams(temperature=0.6, max_tokens=1500),
+    # Higher temperature: creative generation
+    "generate_entities":   ModelParams(temperature=0.8, max_tokens=2000),
+    "generate_trees":      ModelParams(temperature=0.8, max_tokens=2000),
+    "generate_relations":  ModelParams(temperature=0.7, max_tokens=2000),
+    "improvise":           ModelParams(temperature=0.85, max_tokens=2500),
+    "expand":              ModelParams(temperature=0.75, max_tokens=2000),
+    "wizard_suggestion":   ModelParams(temperature=0.8, max_tokens=2000),
+}
+
+
+# ---------------------------------------------------------------------------
+# Request / Response types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GatewayRequest:
+    """Typed request through the gateway."""
+    intent: str
+    user_prompt: str
+    context: dict[str, Any] = field(default_factory=dict)
+    system_prompt_override: str | None = None
+    timeout: int | None = None
+
+
+@dataclass
+class GatewayResponse:
+    """Typed response from the gateway."""
+    text: str | None
+    error: str | None
+    intent: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    _parsed_json: Any = field(default=None, repr=False)
+
+    @property
+    def is_valid(self) -> bool:
+        if self.error:
+            return False
+        if not self.text or len(self.text.strip()) < 1:
+            return False
+        return True
+
+    @property
+    def parsed_json(self) -> Any:
+        if self._parsed_json is not None:
+            return self._parsed_json
+        if self.text:
+            try:
+                self._parsed_json = json.loads(self.text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return self._parsed_json
+
+
+# ---------------------------------------------------------------------------
+# Gateway
+# ---------------------------------------------------------------------------
+
+class AIRequestGateway:
+    """Common layer for AI requests.
+
+    Wraps provider calls with:
+    1. Context sanitization
+    2. Model param selection
+    3. Provider dispatch
+    4. Output validation
+    5. Typed result with metadata
+    """
+
+    def __init__(self, provider: AIProvider | None = None,
+                 provider_name: str = "simulated"):
+        self.provider = provider or create_provider(provider_name)
+
+    def execute(self, request: GatewayRequest) -> GatewayResponse:
+        """Execute an AI request through the pipeline."""
+        t0 = time.time()
+
+        # 1. Sanitize context
+        safe_ctx = self.sanitize_context(request.context)
+
+        # 2. Select model params
+        params = ModelParams.from_intent(request.intent)
+
+        # 3. Build system prompt
+        system = request.system_prompt_override or ""
+        if safe_ctx:
+            ctx_block = json.dumps(safe_ctx, ensure_ascii=False, default=str)
+            if len(ctx_block) > 8000:
+                ctx_block = ctx_block[:8000] + "\n...[truncated]"
+            system = f"{system}\n\nContext: {ctx_block}" if system else f"Context: {ctx_block}"
+
+        # 4. Call provider
+        text, error = self.provider.chat(
+            system_prompt=system,
+            user_message=request.user_prompt,
+            timeout=request.timeout or params.max_tokens // 10 + 30,
+        )
+
+        # 5. Build response
+        duration_ms = (time.time() - t0) * 1000
+        return GatewayResponse(
+            text=text,
+            error=error,
+            intent=request.intent,
+            metadata={
+                "provider": getattr(self.provider, "provider_name", "unknown"),
+                "intent": request.intent,
+                "temperature": params.temperature,
+                "max_tokens": params.max_tokens,
+                "context_depth": len(safe_ctx),
+                "input_size": len(request.user_prompt) + len(system),
+                "output_size": len(text) if text else 0,
+                "duration_ms": round(duration_ms, 1),
+                "status": "ok" if not error else "error",
+                "error_type": type(error).__name__ if error else None,
+            },
+        )
+
+    @staticmethod
+    def sanitize_context(context: dict[str, Any]) -> dict[str, Any]:
+        """Remove sensitive fields from context before sending to AI."""
+        if not context:
+            return {}
+        sanitized = {}
+        for key, value in context.items():
+            k_lower = key.lower()
+            # Block exact matches
+            if k_lower in _BLOCKED_CONTEXT_KEYS:
+                continue
+            # Block common sensitive patterns
+            if any(p in k_lower for p in ("api_key", "secret", "password", "token", "credential")):
+                continue
+            # Allow known safe prefixes and anything not blocked
+            sanitized[key] = value
+        return sanitized

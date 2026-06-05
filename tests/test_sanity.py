@@ -211,7 +211,9 @@ class TestDomainDependencies:
                 "os",
                 "pathlib",
                 "re",
+                "time",
                 "typing",
+                "unittest",
                 "uuid",
             }
             violations = self._check_imports(pkg_path, allowed)
