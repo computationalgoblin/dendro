@@ -44,6 +44,9 @@ _MUTED_COLOR = "#7C806E"
 _SUGGESTION_BG = "#FFFDF7"
 
 # Default node colours per entity type (mirrors graph_canvas._NODE_COLORS)
+# B39 terminology: branch types show as "Rama", all others as "Hoja"
+BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
+
 _NODE_COLORS: dict[str, str] = {
     "personaje": "#7C9BFF",
     "lugar": "#7EC8A5",
@@ -283,14 +286,14 @@ class NodeDetailPanel(QWidget):
 
         # -- Header --
         head = QHBoxLayout()
-        self.title = QLabel("Entidad")
+        self.title = QLabel("Hoja")
         self.title.setStyleSheet(
             f"font-size: 18px; font-weight: 700; color: {_TITLE_COLOR}; "
             f"font-family: Georgia, 'Courier New', serif; background: transparent;"
         )
         self.title.setWordWrap(True)
         head.addWidget(self.title, 1)
-        self.type_badge = Badge("Entidad", "info")
+        self.type_badge = Badge("Hoja", "info")
         head.addWidget(self.type_badge)
         root.addLayout(head)
         if self.on_focus_neighborhood is not None:
@@ -366,10 +369,10 @@ class NodeDetailPanel(QWidget):
             self.canon_combo.addItem(enum_human(val), val)
         form_layout.addRow(canon_label, self.canon_combo)
 
-        self.layer_label = QLabel("Capa:")
+        self.layer_label = QLabel("Anillo:")
         self.layer_label.setStyleSheet(_label_ss)
         self.layer_combo = QComboBox()
-        self.layer_combo.addItem("— Sin capa —", "")
+        self.layer_combo.addItem("— Sin anillo —", "")
         form_layout.addRow(self.layer_label, self.layer_combo)
 
         root.addWidget(form_card)
@@ -423,6 +426,17 @@ class NodeDetailPanel(QWidget):
             context_layout.addWidget(w)
         root.addWidget(self.context_box)
 
+        # -- B39: Convert to branch button (hidden by default, wired in T02) --
+        self.convert_to_branch_btn = QPushButton("Convertir en rama")
+        self.convert_to_branch_btn.setFixedHeight(32)
+        self.convert_to_branch_btn.setStyleSheet(
+            "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
+            "border-radius: 8px; padding: 4px 12px; font-size: 12px; } "
+            "QPushButton:hover { background: #504B2E; }"
+        )
+        self.convert_to_branch_btn.setVisible(False)
+        root.addWidget(self.convert_to_branch_btn)
+
         # -- AI suggestion section --
         ai_card = QFrame()
         ai_card.setObjectName("aiCard")
@@ -462,11 +476,11 @@ class NodeDetailPanel(QWidget):
         causal_row.setSpacing(6)
         self.target_layer_label = QLabel("Destino causal:")
         self.target_layer_combo = QComboBox()
-        self.target_layer_combo.addItem("— Capa inferior —", "")
+        self.target_layer_combo.addItem("— Anillo inferior —", "")
         causal_row.addWidget(self.target_layer_label)
         causal_row.addWidget(self.target_layer_combo, 1)
         ai_layout.addLayout(causal_row)
-        self.expand_down_btn = QPushButton("Expandir hacia capa inferior")
+        self.expand_down_btn = QPushButton("Expandir hacia anillo inferior")
         self.expand_down_btn.setEnabled(self.ai_controller is not None)
         self.expand_down_btn.clicked.connect(self._start_expand_down)
         ai_layout.addWidget(self.expand_down_btn)
@@ -648,7 +662,7 @@ class NodeDetailPanel(QWidget):
         return (
             f"Nombre actual: {entity_name}\n"
             f"Tipo actual: {type_value}\n"
-            f"Capa causal actual: {layer_name}\n"
+            f"Anillo causal actual: {layer_name}\n"
             f"Descripción breve actual del formulario:\n{brief or '—'}\n\n"
             f"Cuerpo actual del formulario:\n{body or '—'}\n\n"
             f"Notas actuales:\n{private_notes or exportable_notes or '—'}\n\n"
@@ -656,7 +670,7 @@ class NodeDetailPanel(QWidget):
         )
 
     def _target_layer_text(self) -> str:
-        return self.target_layer_combo.currentText().strip() or "capa inferior adecuada"
+        return self.target_layer_combo.currentText().strip() or "anillo inferior adecuado"
 
     def _start_expand_down(self):
         if self.ai_controller is None:
@@ -895,7 +909,7 @@ class NodeDetailPanel(QWidget):
             current = str((getattr(entity, "layer_ids", []) or [""])[0] or "")
         self.layer_combo.blockSignals(True)
         self.layer_combo.clear()
-        self.layer_combo.addItem("— Sin capa —", "")
+        self.layer_combo.addItem("— Sin anillo —", "")
         project = self._project()
         layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
         for layer in sort_layers_by_causal_rank(layers):
@@ -922,7 +936,7 @@ class NodeDetailPanel(QWidget):
             current_rank = get_causal_rank(current_layer) if current_layer is not None else None
         self.target_layer_combo.blockSignals(True)
         self.target_layer_combo.clear()
-        self.target_layer_combo.addItem("— Capa inferior —", "")
+        self.target_layer_combo.addItem("— Anillo inferior —", "")
         for layer in sort_layers_by_causal_rank(layers):
             if not getattr(layer, "is_visible", True):
                 continue
@@ -967,7 +981,7 @@ class NodeDetailPanel(QWidget):
         try:
             result = self.entity_controller.get(self.entity_id)
             if isinstance(result, Error):
-                self.title.setText("Entidad no encontrada")
+                self.title.setText("Elemento no encontrado")
                 self.summary.setText(result.error)
                 self.save_btn.setEnabled(False)
                 return
@@ -975,7 +989,9 @@ class NodeDetailPanel(QWidget):
             self._entity = entity
             kind = _enum_value(getattr(entity, "entity_type", None), "entidad")
             self.title.setText(getattr(entity, "name", "Sin nombre") or "Sin nombre")
-            self.type_badge.setText(enum_human(kind))
+            # B39: badge shows "Rama" for branch types, "Hoja" otherwise
+            b39_label = "Rama" if kind.lower() in BRANCH_TYPES else "Hoja"
+            self.type_badge.setText(b39_label)
             canon_val = _enum_value(getattr(entity, "canon_state", None), "")
             self.summary.setText(
                 f"{enum_human(kind)} · {enum_human(canon_val)}"
@@ -1030,7 +1046,7 @@ class NodeDetailPanel(QWidget):
                     enum_human(_enum_value(getattr(other, "entity_type", None), "")),
                 )
                 if other
-                else "Entidad vinculada"
+                else "Elemento vinculado"
             )
             relation_lines.append(
                 f"{enum_human(_enum_value(getattr(relation, 'relation_type', None), 'relación'))}: {other_ref}"
@@ -1126,7 +1142,7 @@ class NodeDetailPanel(QWidget):
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
             return
-        self.ctx.log("info", "Entidad guardada")
+        self.ctx.log("info", "Elemento guardado")
         self.is_new = False
         self.ctx.selected_entity_id = self.entity_id
         if refresh_after:

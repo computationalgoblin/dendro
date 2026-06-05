@@ -18,7 +18,7 @@ def test_graph_drag_emits_visual_relation_create_and_rejection_paths():
     assert "QGraphicsPathItem" in text
     assert "Flecha provisional de relación" in text
     assert "set_drag_highlight(True)" in text
-    assert "No se puede crear una relación sobre la misma entidad" in text
+    assert "No se puede crear una relación sobre el mismo elemento" in text
     assert "Relación cancelada" in text
 
 

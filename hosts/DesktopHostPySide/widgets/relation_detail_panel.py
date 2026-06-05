@@ -804,7 +804,7 @@ class RelationDetailPanel(QWidget):
     def _human_entity_ref(self, entity_id: str) -> str:
         entity = self._entity_by_id(entity_id)
         if entity is None:
-            return "Entidad no encontrada"
+            return "Elemento no encontrado"
         return human_ref(
             getattr(entity, "name", "Sin nombre"),
             enum_human(_enum_value(getattr(entity, "entity_type", None), "entidad")),

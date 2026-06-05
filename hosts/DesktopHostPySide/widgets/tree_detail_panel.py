@@ -258,14 +258,14 @@ class TreeDetailPanel(QWidget):
         root.setSpacing(10)
 
         # -- Header --
-        self.header_label = QLabel("Contenedor")
+        self.header_label = QLabel("Rama")
         self.header_label.setStyleSheet(
             f"color: {_TITLE_COLOR}; font-weight: 700; font-size: 16px; background: transparent;"
         )
         root.addWidget(self.header_label)
         if self.on_focus_tree is not None:
-            focus_btn = QPushButton("Enfocar árbol")
-            focus_btn.setToolTip("Ver solo este árbol y su contenido directo")
+            focus_btn = QPushButton("Enfocar rama")
+            focus_btn.setToolTip("Ver solo esta rama y su contenido directo")
             focus_btn.clicked.connect(lambda: self.on_focus_tree(self.entity_id))
             root.addWidget(focus_btn)
 
@@ -274,11 +274,11 @@ class TreeDetailPanel(QWidget):
         form = QFormLayout()
         form.setSpacing(6)
 
-        self.name_edit = _styled_edit("Nombre del árbol...")
+        self.name_edit = _styled_edit("Nombre de la rama...")
         form.addRow("Nombre", self.name_edit)
 
         self.tree_type_combo = _styled_combo(TREE_TYPES, "— Sin tipo —")
-        form.addRow("Tipo de árbol", self.tree_type_combo)
+        form.addRow("Tipo de rama", self.tree_type_combo)
 
         # Color row
         color_row = QHBoxLayout()
@@ -370,8 +370,8 @@ class TreeDetailPanel(QWidget):
         self.certainty_combo = _styled_combo([e.value for e in CertaintyLevel], "")
         wc_form.addRow("Certeza", self.certainty_combo)
 
-        self.layer_combo = _styled_combo([], "— Sin capa —")
-        self.layer_label = QLabel("Capa causal")
+        self.layer_combo = _styled_combo([], "— Sin anillo —")
+        self.layer_label = QLabel("Anillo causal")
         self.layer_label.setStyleSheet(f"color: {_LABEL_COLOR}; background: transparent;")
         wc_form.addRow(self.layer_label, self.layer_combo)
 
@@ -426,9 +426,20 @@ class TreeDetailPanel(QWidget):
 
         root.addWidget(wc_card)
 
+        # -- B39: Create ring from branch button (hidden by default, wired in T02) --
+        self.create_ring_btn = QPushButton("Crear anillo desde rama")
+        self.create_ring_btn.setFixedHeight(32)
+        self.create_ring_btn.setStyleSheet(
+            "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
+            "border-radius: 8px; padding: 4px 12px; font-size: 12px; } "
+            "QPushButton:hover { background: #504B2E; }"
+        )
+        self.create_ring_btn.setVisible(False)
+        root.addWidget(self.create_ring_btn)
+
         # ═══ 5. IA ═══
         ai_card, ai_layout = _section_card("IA")
-        ai_title = QLabel("Acciones IA del árbol")
+        ai_title = QLabel("Acciones IA de la rama")
         ai_title.setStyleSheet(
             f"color: {_LABEL_COLOR}; font-weight: 600; font-size: 12px; background: transparent;"
         )
@@ -440,7 +451,7 @@ class TreeDetailPanel(QWidget):
 
         self.ai_desc_btn = QPushButton("Descripción")
         self.ai_desc_btn.setFixedHeight(28)
-        self.ai_desc_btn.setToolTip("Generar descripción del árbol con contexto de miembros")
+        self.ai_desc_btn.setToolTip("Generar descripción de la rama con contexto de miembros")
         self.ai_desc_btn.clicked.connect(lambda: self._start_ai("description"))
 
         self.ai_members_btn = QPushButton("Miembros")
@@ -455,12 +466,12 @@ class TreeDetailPanel(QWidget):
 
         self.ai_coherence_btn = QPushButton("Coherencia")
         self.ai_coherence_btn.setFixedHeight(28)
-        self.ai_coherence_btn.setToolTip("Analizar coherencia interna del árbol")
+        self.ai_coherence_btn.setToolTip("Analizar coherencia interna de la rama")
         self.ai_coherence_btn.clicked.connect(lambda: self._start_ai("coherence"))
 
         self.ai_questions_btn = QPushButton("Preguntas")
         self.ai_questions_btn.setFixedHeight(28)
-        self.ai_questions_btn.setToolTip("Generar preguntas abiertas sobre el árbol")
+        self.ai_questions_btn.setToolTip("Generar preguntas abiertas sobre la rama")
         self.ai_questions_btn.clicked.connect(lambda: self._start_ai("questions"))
 
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
@@ -561,7 +572,7 @@ class TreeDetailPanel(QWidget):
         current = str((getattr(entity, "layer_ids", []) or [""])[0] or "") if entity is not None else ""
         self.layer_combo.blockSignals(True)
         self.layer_combo.clear()
-        self.layer_combo.addItem("— Sin capa —", "")
+        self.layer_combo.addItem("— Sin anillo —", "")
         project = self._project()
         for layer in sort_layers_by_causal_rank(list(getattr(project, "world_layers", []) or []) if project is not None else []):
             if not getattr(layer, "is_visible", True):
@@ -585,7 +596,7 @@ class TreeDetailPanel(QWidget):
         current_rank = get_causal_rank(current_layer) if current_layer is not None else None
         self.target_layer_combo.blockSignals(True)
         self.target_layer_combo.clear()
-        self.target_layer_combo.addItem("— Capa inferior —", "")
+        self.target_layer_combo.addItem("— Anillo inferior —", "")
         for layer in sort_layers_by_causal_rank(layers):
             if not getattr(layer, "is_visible", True):
                 continue
@@ -606,11 +617,11 @@ class TreeDetailPanel(QWidget):
     def refresh(self):
         entity = self._entity_by_id(self.entity_id)
         if entity is None:
-            self.header_label.setText("Contenedor no encontrado")
+            self.header_label.setText("Rama no encontrada")
             return
 
         # Header
-        self.header_label.setText(entity.name or "Contenedor sin nombre")
+        self.header_label.setText(entity.name or "Rama sin nombre")
 
         # Identidad
         self.name_edit.setText(entity.name)
@@ -756,7 +767,7 @@ class TreeDetailPanel(QWidget):
             self.entity_id, {"name": self.name_edit.text().strip()}
         )
         if isinstance(result, Error) and self.ctx:
-            self.ctx.log("error", f"Error guardando nombre del árbol: {result.error}")
+            self.ctx.log("error", f"Error guardando nombre de la rama: {result.error}")
             return
         if self.on_saved:
             self.on_saved()
@@ -767,7 +778,7 @@ class TreeDetailPanel(QWidget):
             self.entity_id, {"brief_description": self.brief_edit.text().strip()}
         )
         if isinstance(result, Error) and self.ctx:
-            self.ctx.log("error", f"Error guardando descripción del árbol: {result.error}")
+            self.ctx.log("error", f"Error guardando descripción de la rama: {result.error}")
             return
         if self.on_saved:
             self.on_saved()
@@ -839,11 +850,11 @@ class TreeDetailPanel(QWidget):
         result = self.entity_controller.update(self.entity_id, data)
         if isinstance(result, Error):
             if self.ctx:
-                self.ctx.log("error", f"Error guardando árbol: {result.error}")
+                self.ctx.log("error", f"Error guardando rama: {result.error}")
             return
         self._is_new = False
         if self.ctx:
-            self.ctx.log("info", "Árbol guardado")
+            self.ctx.log("info", "Rama guardada")
         if self.on_saved:
             self.on_saved()
         self.refresh()
@@ -872,7 +883,7 @@ class TreeDetailPanel(QWidget):
 
     def _pick_color(self):
         current = QColor(self.color_edit.text().strip() or "#D0D8E0")
-        color = QColorDialog.getColor(current, self, "Color del árbol")
+        color = QColorDialog.getColor(current, self, "Color de la rama")
         if color.isValid():
             self.color_edit.setText(color.name())
             self.color_btn.setStyleSheet(
@@ -924,7 +935,7 @@ class TreeDetailPanel(QWidget):
         return "; ".join(rules) if rules else "ninguna definida"
 
     def _target_layer_text(self) -> str:
-        return self.target_layer_combo.currentText().strip() or "capa inferior adecuada"
+        return self.target_layer_combo.currentText().strip() or "anillo inferior adecuado"
 
     def _start_expand_down(self):
         target_layer = self._target_layer_text()
@@ -1057,7 +1068,7 @@ class TreeDetailPanel(QWidget):
         self.suggestion_frame.setVisible(True)
         self.accept_btn.setEnabled(False)
         if self.ctx:
-            self.ctx.log("warning", f"IA árbol: {message}")
+            self.ctx.log("warning", f"IA rama: {message}")
 
     def _accept_suggestion(self):
         text = self.suggestion_text.toPlainText().strip()

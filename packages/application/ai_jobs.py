@@ -1,4 +1,4 @@
-"""B38 AI command-bar jobs.
+"""B39 AI command-bar jobs.
 
 AI jobs are the command-bar unit of work. They never mutate canon directly:
 results are staged as reviewable candidates, reports, suggestions or open
@@ -31,24 +31,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-COMMAND_BAR_SYSTEM_PROMPT_ES = """Eres el planificador y asistente central de creación de Dendro. Tu tarea es interpretar la petición del usuario y producir un plan o resultado útil sobre el grafo narrativo. Debes respetar el prompt exacto del usuario, el idioma del proyecto, el género, tono, realismo, estilo narrativo, worldbuilding activo, capas, árboles, relaciones y canon existente. No debes modificar canon directamente. Si generas nuevos elementos, deben ser candidatos revisables. Si analizas el grafo, devuelve un informe estructurado. Si la petición es ambigua, propón una interpretación y pide confirmación o crea un plan revisable. No devuelvas plantillas fijas. No ignores detalles del prompt.
+COMMAND_BAR_SYSTEM_PROMPT_ES = """Eres el planificador y asistente central de creación de Dendro. Tu tarea es interpretar la petición del usuario y producir un plan o resultado útil sobre el grafo narrativo. Debes respetar el prompt exacto del usuario, el idioma del proyecto, el género, tono, realismo, estilo narrativo, worldbuilding activo, anillos (estratos causales), ramas (grupos/sistemas), relaciones y canon existente. No debes modificar canon directamente. Si generas nuevos elementos, deben ser candidatos revisables. Si analizas el grafo, devuelve un informe estructurado. Si la petición es ambigua, propón una interpretación y pide confirmación o crea un plan revisable. No devuelvas plantillas fijas. No ignores detalles del prompt.
 
-Si el usuario pide EDITAR o RELLENAR el cuerpo/historia/motivaciones de entidades EXISTENTES, NO crees entidades nuevas. En vez de eso, devuelve un objeto "entity_edits" con propuestas de edición para cada entidad existente identificada. Formato:
-"entity_edits": [{"entity_name": "nombre exacto de la entidad existente", "field": "body", "proposed_value": "texto propuesto para el cuerpo", "rationale": "por qué este cambio"}]
+TERMINOLOGÍA DE DENDRO:
+- Hoja: un elemento individual del mundo narrativo (personaje, objeto, lugar singular, evento, concepto, ley, nota). Cada hoja es un nodo único en el grafo.
+- Rama: un grupo, sistema o colectivo (facción, cultura, religión, institución, trama, organización, sistema, país, reino). Las ramas agrupan hojas y otras ramas.
+- Anillo: un estrato causal de worldbuilding. Los anillos definen las capas metafísicas o causales del mundo.
+
+REGLAS DE CLASIFICACIÓN:
+- Cuando el usuario pide facción, cultura, religión, institución, trama, organización, sistema, país o reino → crea una RAMA.
+- Cuando el usuario pide personaje, objeto, lugar singular, concepto, evento, ley o nota → crea una HOJA.
+- Cuando el usuario pide estrato causal, capa metafísica o worldbuilding → crea o propone un ANILLO.
+
+NUNCA generes notes, visibility, metadata internos ni muestres JSON crudo al usuario. El usuario solo ve el report y summary en texto natural.
+
+Si el usuario pide EDITAR o RELLENAR el cuerpo/historia/motivaciones de hojas o ramas EXISTENTES, NO crees elementos nuevos. En vez de eso, devuelve un objeto "entity_edits" con propuestas de edición para cada elemento existente identificado. Formato:
+"entity_edits": [{"entity_name": "nombre exacto de la hoja o rama existente", "field": "body", "proposed_value": "texto propuesto para el cuerpo", "rationale": "por qué este cambio"}]
 
 Devuelve SOLO JSON válido con esta forma:
 {
   "summary": "resumen humano breve",
   "report": "informe o explicación visible para el usuario",
-  "entities": [{"name": "...", "entity_type": "personaje|localizacion|objeto|evento|faccion|contenedor|ley|nota", "brief_description": "...", "body": "... opcional", "layer_ids": []}],
-  "trees": [{"name": "...", "brief_description": "...", "layer_ids": []}],
-  "relations": [{"source_name": "nombre de la entidad origen", "target_name": "nombre de la entidad destino", "source_id": "id real si se conoce", "target_id": "id real si se conoce", "relation_type": "esta_relacionado_con", "description": "..."}],
+  "hojas": [{"name": "...", "entity_type": "personaje|localizacion|objeto|evento|concepto|ley|nota", "brief_description": "...", "extended_description": "... opcional", "display_type": "hoja"}],
+  "ramas": [{"name": "...", "entity_type": "faccion|cultura|religion|institucion|trama|contenedor|sistema_magico", "brief_description": "...", "extended_description": "... opcional", "display_type": "rama"}],
+  "relations": [{"source_name": "nombre del elemento origen", "target_name": "nombre del elemento destino", "relation_type": "esta_relacionado_con", "description": "..."}],
   "entity_edits": [{"entity_name": "...", "field": "body|brief_description", "proposed_value": "...", "rationale": "..."}],
   "issues": [{"title": "...", "description": "...", "severity": "baja|media|alta"}],
   "proposals": [{"title": "...", "description": "..."}],
   "open_questions": ["..."]
 }
-No incluyas IDs inventados. Si no conoces endpoints reales para relaciones, usa source_name/target_name sin IDs y escribe propuestas en 'proposals' u 'open_questions'. Para relaciones entre entidades generadas en la misma respuesta, usa source_name/target_name.
+No incluyas IDs inventados. Si no conoces endpoints reales para relaciones, usa source_name/target_name sin IDs y escribe propuestas en 'proposals' u 'open_questions'. Para relaciones entre elementos generados en la misma respuesta, usa source_name/target_name.
 """
 
 
@@ -180,6 +192,9 @@ class AIJob:
         )
 
 
+BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
+
+
 def _norm(prompt: str) -> str:
     return (prompt or "").strip().lower()
 
@@ -213,8 +228,14 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
         return CommandBarIntent(AIJobType.UNKNOWN, 0.0, scope, "none", True, "Prompt vacío")
 
     # BUG 4 fix: detect edit/body fill intent before generation
-    if _has_any(text, ["rellena", "rellenar", "completa", "completar", "cuerpo", "historia", "motivación", "motivaciones", "descripción", "desarrolla", "desarrollar", "expande", "expandir", "editar", "modifica", "modificar"]) and _has_any(text, ["entidad", "entidades", "existente", "existentes", "creada", "creadas", "nodo", "nodos", "personaje", "personajes"]):
-        return CommandBarIntent(AIJobType.EDIT_ENTITIES, 0.80, scope, "edit_candidates", False, "La petición pide editar/rellenar entidades existentes, no crear nuevas")
+    # Updated for B39: include hoja/rama terminology alongside legacy terms
+    if _has_any(text, ["rellena", "rellenar", "completa", "completar", "cuerpo", "historia", "motivación", "motivaciones", "descripción", "desarrolla", "desarrollar", "expande", "expandir", "editar", "modifica", "modificar"]) and _has_any(text, ["entidad", "entidades", "existente", "existentes", "creada", "creadas", "nodo", "nodos", "personaje", "personajes", "hoja", "hojas", "rama", "ramas"]):
+        return CommandBarIntent(AIJobType.EDIT_ENTITIES, 0.80, scope, "edit_candidates", False, "La petición pide editar/rellenar hojas o ramas existentes, no crear nuevas")
+
+    # B39: detect "anillo" keyword for worldbuilding/causal strata
+    if _has_any(text, ["anillo", "anillos", "estrato causal", "estratos causales", "capa metafísica"]):
+        intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
+        return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide anillo/estrato causal/worldbuilding")
 
     if _has_any(text, ["relacion", "relación", "relaciones", "vínculo", "vinculo"]):
         return CommandBarIntent(AIJobType.SUGGEST_RELATIONS, 0.82, scope, "relation_candidates", False, "La petición pide relaciones o vínculos")
@@ -232,11 +253,13 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
         intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
         return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide sistema/worldbuilding")
 
-    if _has_any(text, ["sistema", "árbol", "arbol", "estructura"]):
-        return CommandBarIntent(AIJobType.GENERATE_TREE, 0.72, scope, "tree_candidates", False, "La petición pide sistema/árbol/estructura")
+    # B39: "rama" keyword and branch-type words → GENERATE_TREE (rama = tree internally)
+    if _has_any(text, ["rama", "ramas", "facción", "faccion", "cultura", "religión", "religion", "institución", "institucion", "trama", "tramas", "organización", "organizacion", "país", "pais", "reino", "reinos", "sistema", "árbol", "arbol", "estructura"]):
+        return CommandBarIntent(AIJobType.GENERATE_TREE, 0.72, scope, "tree_candidates", False, "La petición pide rama/sistema/árbol/estructura")
 
-    if _has_any(text, ["personaje", "personajes", "entidad", "entidades", "nodo", "nodos", "científico", "cientific", "herman"]):
-        return CommandBarIntent(AIJobType.GENERATE_ENTITIES, 0.78, scope, "entity_candidates", False, "La petición pide entidades/personajes")
+    # B39: "hoja" keyword → GENERATE_ENTITIES
+    if _has_any(text, ["hoja", "hojas", "personaje", "personajes", "entidad", "entidades", "nodo", "nodos", "científico", "cientific", "herman"]):
+        return CommandBarIntent(AIJobType.GENERATE_ENTITIES, 0.78, scope, "entity_candidates", False, "La petición pide hojas/personajes/entidades")
 
     if _has_any(text, ["plan", "idea", "organiza", "ayúdame", "ayudame"]):
         return CommandBarIntent(AIJobType.FREEFORM_PLANNING, 0.55, scope, "plan_report", False, "Petición abierta de planificación")
@@ -251,17 +274,17 @@ def classify_ai_job_intent(prompt: str, *, worldbuilding_active: bool = False) -
 
 def _creates_for_intent(intent_type: AIJobType) -> list[str]:
     if intent_type == AIJobType.GENERATE_ENTITIES:
-        return ["candidatos de entidad"]
+        return ["candidatos de hoja"]
     if intent_type == AIJobType.GENERATE_TREE:
-        return ["candidato de árbol", "candidatos de nodos internos opcionales"]
+        return ["candidato de rama", "candidatos de nodos internos opcionales"]
     if intent_type == AIJobType.SUGGEST_RELATIONS:
         return ["candidatos de relación"]
     if intent_type in (AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES):
         return ["informe", "propuestas", "preguntas abiertas"]
     if intent_type == AIJobType.EXPAND_WORLDBUILDING:
-        return ["candidatos de nodo/árbol", "relaciones causales candidatas"]
+        return ["candidatos de anillo/rama", "relaciones causales candidatas"]
     if intent_type == AIJobType.EDIT_ENTITIES:
-        return ["candidatos de edición de cuerpo/campos de entidades existentes"]
+        return ["candidatos de edición de cuerpo/campos de hojas o ramas existentes"]
     return ["plan revisable"]
 
 
@@ -354,47 +377,55 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     layer_id = _first_active_layer(job.context_scope)
     candidates: list[dict[str, Any]] = []
 
-    for entity in _safe_list(payload.get("entities")):
+    # Process hojas (B39) — also accept legacy "entities" key for backward compatibility
+    for entity in _safe_list(payload.get("hojas") or payload.get("entities")):
         if not isinstance(entity, dict):
             continue
-        name = str(entity.get("name") or "Entidad propuesta").strip()
+        name = str(entity.get("name") or "Hoja propuesta").strip()
         if not name:
             continue
+        entity_type = str(entity.get("entity_type") or "personaje")
+        display_type = str(entity.get("display_type") or "hoja")
         layer_ids = entity.get("layer_ids") if isinstance(entity.get("layer_ids"), list) else ([layer_id] if layer_id else [])
         proposed = {
             "name": name,
-            "entity_type": str(entity.get("entity_type") or "personaje"),
+            "entity_type": entity_type,
             "brief_description": str(entity.get("brief_description") or entity.get("description") or "").strip(),
-            "body": str(entity.get("body") or "").strip(),
+            "body": str(entity.get("body") or entity.get("extended_description") or "").strip(),
             "layer_ids": layer_ids,
+            "display_type": display_type,
             "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id},
         }
         candidates.append(_candidate(
-            title=f"Entidad candidata: {name}",
+            title=f"Hoja candidata: {name}",
             candidate_type="entidad",
             proposed_data=proposed,
             job=job,
             justification=str(entity.get("rationale") or "Propuesta generada desde el prompt exacto del usuario."),
         ))
 
-    for tree in _safe_list(payload.get("trees")):
+    # Process ramas (B39) — also accept legacy "trees" key for backward compatibility
+    for tree in _safe_list(payload.get("ramas") or payload.get("trees")):
         if not isinstance(tree, dict):
             continue
-        name = str(tree.get("name") or "Árbol propuesto").strip()
+        name = str(tree.get("name") or "Rama propuesta").strip()
+        entity_type = str(tree.get("entity_type") or "contenedor")
+        display_type = "rama"
         layer_ids = tree.get("layer_ids") if isinstance(tree.get("layer_ids"), list) else ([layer_id] if layer_id else [])
         proposed = {
             "name": name,
-            "entity_type": "contenedor",
+            "entity_type": entity_type,
             "brief_description": str(tree.get("brief_description") or tree.get("description") or "").strip(),
             "layer_ids": layer_ids,
+            "display_type": display_type,
             "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id, "candidate_tree": True},
         }
         candidates.append(_candidate(
-            title=f"Árbol candidato: {name}",
+            title=f"Rama candidata: {name}",
             candidate_type="entidad",
             proposed_data=proposed,
             job=job,
-            justification=str(tree.get("rationale") or "Árbol/contenedor propuesto para revisión."),
+            justification=str(tree.get("rationale") or "Rama propuesta para revisión."),
         ))
 
     # BUG 4 fix: stage entity edits as reviewable candidates (not new entities)
@@ -422,7 +453,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                 "prompt": job.prompt,
             },
             job=job,
-            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para entidad existente."),
+            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para hoja o rama existente."),
             confidence=0.65,
             expected_impact=f"Editar {field} de '{entity_name}' tras revisión humana.",
         ))

@@ -1244,7 +1244,7 @@ class GraphCanvasView(QGraphicsView):
             self._finish_relation_drag(target)
             if target is not None:
                 if target is source:
-                    self.relationCreateRejected.emit("No se puede crear una relación sobre la misma entidad")
+                    self.relationCreateRejected.emit("No se puede crear una relación sobre el mismo elemento")
                 else:
                     self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
             else:
@@ -1508,7 +1508,7 @@ class GraphCanvasView(QGraphicsView):
             rect.setPen(QPen(QColor("#D8D2BF"), 1.0, Qt.PenStyle.DashLine))
             rect.setZValue(-50)
             self.scene_obj.addItem(rect)
-            label = QGraphicsSimpleTextItem("Sin capa asignada")
+            label = QGraphicsSimpleTextItem("Sin anillo asignado")
             label.setBrush(QBrush(QColor("#6F6A42")))
             self.scene_obj.addItem(label)
             label.setPos(x0 + 18, y - band_h / 2 + 18)
@@ -1806,7 +1806,7 @@ class GraphCanvasView(QGraphicsView):
                     item_kind=item_kind,
                     title=node.name,
                     type_label=enum_human(node.kind),
-                    category="Árbol" if item_kind == "tree" else "Entidad",
+                    category="Rama" if item_kind == "tree" else "Entidad",
                     summary=_fit_text(node.subtitle, 90),
                     parent_tree_name=parent_name,
                     parent_tree_id=parent_id,

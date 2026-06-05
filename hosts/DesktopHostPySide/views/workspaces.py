@@ -67,7 +67,7 @@ class _SimpleFormPanel(QWidget):
 
 class EntityQuickCreatePanel(_SimpleFormPanel):
     def __init__(self, controller, on_created):
-        super().__init__("Nueva entidad", "Crea una pieza narrativa sin ver campos técnicos.")
+        super().__init__("Nueva hoja", "Crea una pieza narrativa sin ver campos técnicos.")
         self.controller = controller
         self.on_created = on_created
         form = QFormLayout()
@@ -84,7 +84,7 @@ class EntityQuickCreatePanel(_SimpleFormPanel):
         self.layout.addLayout(form)
         self.status = self.add_status()
         row = QHBoxLayout()
-        save = QPushButton("Crear entidad")
+        save = QPushButton("Crear hoja")
         save.setObjectName("primaryButton")
         save.clicked.connect(self._save)
         row.addStretch(1)
@@ -102,7 +102,7 @@ class EntityQuickCreatePanel(_SimpleFormPanel):
             self.status.setText(result.error)
             return
         entity = result.value
-        self.status.setText(f"Entidad creada: {getattr(entity, 'name', 'sin nombre')}")
+        self.status.setText(f"Hoja creada: {getattr(entity, 'name', 'sin nombre')}")
         self.on_created()
 
 
@@ -150,7 +150,7 @@ class SourceQuickCreatePanel(_SimpleFormPanel):
 
 class LayerQuickCreatePanel(_SimpleFormPanel):
     def __init__(self, controller, on_created):
-        super().__init__("Nueva capa", "Organiza el worldbuilding como estratos visuales.")
+        super().__init__("Nuevo anillo", "Organiza el worldbuilding como estratos visuales.")
         self.controller = controller
         self.on_created = on_created
         form = QFormLayout()
@@ -164,7 +164,7 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
         self.layout.addLayout(form)
         self.status = self.add_status()
         row = QHBoxLayout()
-        save = QPushButton("Crear capa")
+        save = QPushButton("Crear anillo")
         save.setObjectName("primaryButton")
         save.clicked.connect(self._save)
         row.addStretch(1)
@@ -181,7 +181,7 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
             self.status.setText(result.error)
             return
         layer = result.value
-        self.status.setText(f"Capa creada: {getattr(layer, 'name', 'sin nombre')}")
+        self.status.setText(f"Anillo creado: {getattr(layer, 'name', 'sin nombre')}")
         self.on_created()
 
 
@@ -353,11 +353,11 @@ class NarrativeWorkbench(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(14)
         actions = [
-            ("Entidad", "Crear personaje, lugar, objeto o concepto.", "Nueva entidad", self.workspace.open_entity_create),
+            ("Hoja", "Crear personaje, lugar, objeto o concepto.", "Nueva entidad", self.workspace.open_entity_create),
             ("Relaciones", "Conecta nodos visualmente desde el grafo.", "Ir al grafo", self.workspace.open_graph),
             ("Sugerencias", "Revisa candidatos como tarjetas.", "Revisar", self.workspace.open_candidates_clean),
             ("Fuentes", "Guarda referencias legibles.", "Nueva fuente", self.workspace.open_source_create),
-            ("Capas", "Ordena el worldbuilding por estratos.", "Nueva capa", self.workspace.open_layer_create),
+            ("Anillos", "Organiza el worldbuilding por estratos.", "Nuevo anillo", self.workspace.open_layer_create),
         ]
         self._cards: dict[str, tuple[QWidget, int, int]] = {}
         for idx, (title, desc, button, callback) in enumerate(actions):
@@ -373,7 +373,7 @@ class NarrativeWorkbench(QWidget):
         layout.addWidget(grid_host)
 
         # Store layer card data for worldbuilding visibility control
-        self._layer_card_data = self._cards.get("Capas")
+        self._layer_card_data = self._cards.get("Anillos")
 
         # Worldbuilding layer chips section
         self._layer_section = QWidget()
@@ -381,7 +381,7 @@ class NarrativeWorkbench(QWidget):
         layer_section_layout.setContentsMargins(0, 8, 0, 0)
         layer_section_layout.setSpacing(6)
 
-        layer_header = QLabel("Capas de worldbuilding")
+        layer_header = QLabel("Anillos de worldbuilding")
         layer_header.setStyleSheet(
             "font-size: 12px; font-weight: 600; color: #7A733D; background: transparent; border: none;"
         )
@@ -393,7 +393,7 @@ class NarrativeWorkbench(QWidget):
         self._chips_layout.setSpacing(8)
         layer_section_layout.addWidget(self._layer_chips_container)
 
-        self._layer_empty = QLabel("Worldbuilding activo. Aún no hay capas.")
+        self._layer_empty = QLabel("Worldbuilding activo. Aún no hay anillos.")
         self._layer_empty.setStyleSheet(
             "font-size: 11px; color: #8C8A74; background: transparent; border: none; font-style: italic;"
         )
@@ -461,7 +461,7 @@ class NarrativeWorkbench(QWidget):
         self._layer_chips_container.setVisible(True)
 
         for layer in layers[:8]:  # max 8 chips
-            name = getattr(layer, "name", getattr(layer, "title", "Capa"))
+            name = getattr(layer, "name", getattr(layer, "title", "Anillo"))
             chip = QLabel(f"  {name}  ")
             chip.setStyleSheet(
                 "background: #E8E5D4; border: 1px solid #C9C5B1; border-radius: 10px; "
@@ -627,7 +627,7 @@ class CreationSearchPanel(_SimpleFormPanel):
         super().__init__("Buscar en Creación", "Encuentra nodos, árboles o relaciones sin tablas técnicas.")
         self.workspace = workspace
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar por nombre, tipo, descripción, árbol, relación o capa")
+        self.search.setPlaceholderText("Buscar por nombre, tipo, descripción, rama, relación o anillo")
         self.search.textChanged.connect(self._run_search)
         self.layout.addWidget(self.search)
         self.status = self.add_status()
@@ -700,12 +700,12 @@ class CreationFilterPanel(_SimpleFormPanel):
         for label, value in (("Pertenencia estructural", "estructural"), ("Narrativa", "narrativa"), ("Causal", "causal"), ("Coherencia/incidencias", "coherencia")):
             self.relation_family.addItem(label, value)
         self._populate()
-        form.addRow("Tipo entidad", self.entity_type)
+        form.addRow("Tipo", self.entity_type)
         form.addRow("Tipo relación", self.relation_type)
         form.addRow("Familia relación", self.relation_family)
-        form.addRow("Árbol", self.tree)
+        form.addRow("Rama", self.tree)
         if self._worldbuilding_active():
-            form.addRow("Capa", self.layer)
+            form.addRow("Anillo", self.layer)
         form.addRow("Estado", self.canon)
         form.addRow("Visibilidad", self.visibility)
         form.addRow("Relaciones", self.show_relations)
@@ -748,7 +748,7 @@ class CreationFilterPanel(_SimpleFormPanel):
             visibility = str(getattr(getattr(entity, "visibility_state", None), "value", getattr(entity, "visibility_state", "")) or "")
             self._add_unique(self.visibility, enum_human(visibility), visibility, seen_vis)
             if kind.lower() == "contenedor":
-                self.tree.addItem(str(getattr(entity, "name", "Árbol")), str(getattr(entity, "id", "")))
+                self.tree.addItem(str(getattr(entity, "name", "Rama")), str(getattr(entity, "id", "")))
         seen_rel: set[str] = set()
         for relation in relations:
             kind = str(getattr(getattr(relation, "relation_type", None), "value", getattr(relation, "relation_type", "")) or "")
@@ -756,7 +756,7 @@ class CreationFilterPanel(_SimpleFormPanel):
         if self._worldbuilding_active():
             for layer in list(getattr(project, "world_layers", []) or []):
                 if getattr(layer, "is_visible", True):
-                    self.layer.addItem(str(getattr(layer, "name", "Capa")), str(getattr(layer, "id", "")))
+                    self.layer.addItem(str(getattr(layer, "name", "Anillo")), str(getattr(layer, "id", "")))
 
     def _state(self) -> VisualFilterState:
         def one(combo: QComboBox) -> tuple[str, ...]:
@@ -832,14 +832,14 @@ class _LayerEdgeFlyout(QFrame):
         layout.setSpacing(6)
 
         # Header
-        header = QLabel("Capas causales")
+        header = QLabel("Anillos causales")
         header.setStyleSheet(
             f"font-size: 13px; font-weight: bold; color: {self.TEXT_ACTIVE}; "
             f"background: transparent; border: none;"
         )
         layout.addWidget(header)
 
-        hint = QLabel("Clic para enfocar capa · contador visible")
+        hint = QLabel("Clic para enfocar anillo · contador visible")
         hint.setStyleSheet(
             f"font-size: 10px; color: {self.MUTED}; background: transparent; "
             f"border: none; font-style: italic;"
@@ -1124,7 +1124,7 @@ class CreationWorkspace(QWidget):
         icon_btn(ICON_GLYPHS["add"], "Crear entidad", self._create_entity_on_graph)
         icon_btn("⊞", "Crear árbol/contenedor", self._create_tree_on_graph)
         self._connect_mode_btn = icon_btn("↔", "Crear relación / modo conexión", self._start_relation_mode)
-        self._suggest_entity_btn = icon_btn("✨", "Sugerir entidad con IA", self._suggest_node)
+        self._suggest_entity_btn = icon_btn("✨", "Sugerir hoja con IA", self._suggest_node)
         self._coherence_btn = icon_btn("⚠", "Selecciona nodos o relaciones para analizar coherencia", self._open_coherence_panel, enabled=False)
         icon_btn("⌕", "Buscar y enfocar elementos", self._open_search_panel)
         self._filter_btn = icon_btn("◌", "Filtros visuales", self._open_filter_panel)
@@ -1133,7 +1133,7 @@ class CreationWorkspace(QWidget):
         self._jobs_btn.setStyleSheet(text_btn_style)
         self._jobs_btn.setFixedWidth(64)
         self._suggestion_count = 0
-        self._layers_toggle_btn = icon_btn("Capas", "Abrir/cerrar panel de capas causales", self._toggle_layer_drawer)
+        self._layers_toggle_btn = icon_btn("Anillos", "Abrir/cerrar panel de anillos causales", self._toggle_layer_drawer)
         self._layers_toggle_btn.setStyleSheet(text_btn_style)
         self._layers_toggle_btn.setFixedWidth(72)
 
@@ -1157,7 +1157,7 @@ class CreationWorkspace(QWidget):
         import_btn.clicked.connect(lambda: self._open_utility(self.import_export_view))
         layout.addWidget(import_btn)
 
-        self._layers_view_btn = QPushButton("Vista libre/capas")
+        self._layers_view_btn = QPushButton("Vista libre/anillos")
         self._layers_view_btn.setToolTip("Alternar vista por bandas causales")
         self._layers_view_btn.setStyleSheet(text_btn_style)
         self._layers_view_btn.clicked.connect(self._toggle_layers_view_from_toolbar)
@@ -1236,7 +1236,7 @@ class CreationWorkspace(QWidget):
         project = self._get_active_project()
         active = bool(project and getattr(project, "worldbuilding_active", False))
         if not active:
-            self.ctx.log("warning", "Activa Worldbuilding en el proyecto para usar capas causales")
+            self.ctx.log("warning", "Activa Worldbuilding en el proyecto para usar anillos causales")
             return
         if self._layer_flyout.isVisible():
             self._layer_flyout.hide_flyout()
@@ -1247,7 +1247,7 @@ class CreationWorkspace(QWidget):
         project = self._get_active_project()
         active = bool(project and getattr(project, "worldbuilding_active", False))
         if not active:
-            self.ctx.log("warning", "La vista por capas requiere Worldbuilding activado")
+            self.ctx.log("warning", "La vista de anillos requiere Worldbuilding activado")
             return
         layer_mode = bool(getattr(getattr(self.graph, "canvas", None), "_layer_mode_active", False))
         if layer_mode:
@@ -1369,9 +1369,9 @@ class CreationWorkspace(QWidget):
     def _activate_layers_view(self):
         project = self._get_active_project()
         if project is None or not bool(getattr(project, "worldbuilding_active", False)):
-            self.ctx.log("warning", "La vista Capas solo está disponible con Worldbuilding activado")
+            self.ctx.log("warning", "La vista Anillos solo está disponible con Worldbuilding activado")
             return
-        self.ctx.log("info", "Vista Capas causales activa")
+        self.ctx.log("info", "Vista Anillos causales activa")
         if hasattr(self.graph, "set_worldbuilding_active"):
             self.graph.set_worldbuilding_active(True)
         else:
@@ -1535,7 +1535,7 @@ class CreationWorkspace(QWidget):
                 button.setToolTip("Selecciona nodos o relaciones para analizar coherencia")
 
         # Suggest entity / relation buttons: always enabled, but update tooltip with context info
-        for attr, base in [("_suggest_entity_btn", "Sugerir entidad"), ("_suggest_relation_btn", "Sugerir relación")]:
+        for attr, base in [("_suggest_entity_btn", "Sugerir hoja"), ("_suggest_relation_btn", "Sugerir relación")]:
             btn = getattr(self, attr, None)
             if btn is not None and btn.isEnabled():
                 if has_selection:
@@ -1662,7 +1662,7 @@ class CreationWorkspace(QWidget):
         )
         self._suggest_worker.finished.connect(lambda: self._on_suggest_done("nodo", "_suggest_entity_btn", "_suggest_worker"))
         self._suggest_worker.start()
-        self.ctx.log("info", f"Consultando IA para sugerir entidades (contexto: {context_label})...")
+        self.ctx.log("info", f"Consultando IA para sugerir hojas (contexto: {context_label})...")
 
     def _suggest_relation(self):
         """Ask AI to suggest missing relations. Uses graph selection as context if available."""
@@ -1705,7 +1705,7 @@ class CreationWorkspace(QWidget):
         btn = getattr(self, btn_attr, None)
         if btn:
             btn.setEnabled(True)
-            tooltip_base = "Sugerir entidad" if kind == "nodo" else "Sugerir relación"
+            tooltip_base = "Sugerir hoja" if kind == "nodo" else "Sugerir relación"
             btn.setToolTip(f"{tooltip_base} con IA (selecciona nodos como contexto)")
 
         worker = getattr(self, worker_attr, None)
@@ -1740,21 +1740,21 @@ class CreationWorkspace(QWidget):
     def _create_entity_on_graph(self):
         """Create a new entity, add node to graph center, open detail panel."""
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear entidad: servicio no disponible")
+            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
             return
         result = self.entity_controller.create({
-            "name": "Nueva entidad",
+            "name": "Nueva hoja",
             "entity_type": "nota",
             "brief_description": "",
             "canon_state": "borrador",
             "custom_metadata": {"_visual_draft": True},
         })
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando entidad: {result.error}")
+            self.ctx.log("error", f"Error creando hoja: {result.error}")
             return
         entity = result.value
         entity_id = getattr(entity, "id", "")
-        self.ctx.log("info", "Entidad creada en modo borrador")
+        self.ctx.log("info", "Hoja creada en modo borrador")
         self.refresh()
         # Focus the new node
         self.graph.canvas.focus_entity(entity_id)
@@ -1764,21 +1764,21 @@ class CreationWorkspace(QWidget):
     def _create_tree_on_graph(self):
         """Create a new contenedor entity and open tree detail panel."""
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear contenedor: servicio no disponible")
+            self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
             return
         result = self.entity_controller.create({
-            "name": "Nuevo contenedor",
+            "name": "Nueva rama",
             "entity_type": "contenedor",
             "brief_description": "",
             "canon_state": "borrador",
             "custom_metadata": {"_visual_draft": True},
         })
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando contenedor: {result.error}")
+            self.ctx.log("error", f"Error creando rama: {result.error}")
             return
         entity = result.value
         entity_id = getattr(entity, "id", "")
-        self.ctx.log("info", "Contenedor creado en modo borrador")
+        self.ctx.log("info", "Rama creada en modo borrador")
         self.refresh()
         self.graph.canvas.focus_entity(entity_id)
         self._open_tree_panel(entity_id, is_new=True)
@@ -1786,37 +1786,37 @@ class CreationWorkspace(QWidget):
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
         if self.relation_controller is None:
-            self.ctx.log("error", "No se pudo asignar al contenedor: servicio no disponible")
+            self.ctx.log("error", "No se pudo asignar a la rama: servicio no disponible")
             return
         # Check for cycle
         if entity_id == tree_id:
-            self.ctx.log("error", "Un contenedor no puede contenerse a sí mismo")
+            self.ctx.log("error", "Una rama no puede contenerse a sí misma")
             return
         # Check for nesting cycle: tree_id must not be inside entity_id
         if self._is_nested_in(tree_id, entity_id):
-            self.ctx.log("error", "Anidamiento cíclico: el contenedor destino ya pertenece al origen")
+            self.ctx.log("error", "Anidamiento cíclico: la rama destino ya pertenece al origen")
             return
         # Remove any existing 'contiene' relation pointing to this entity
         self._remove_tree_membership(entity_id)
         # Check if already in this tree
         if self._relation_exists(tree_id, entity_id):
-            self.ctx.log("info", "Esta entidad ya pertenece al contenedor")
+            self.ctx.log("info", "Esta hoja ya pertenece a la rama")
             return
         result = self.relation_controller.create(
             tree_id,
             entity_id,
             "contiene",
-            "Pertenencia semántica (árbol)",
+            "Pertenencia semántica (rama)",
         )
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error asignando al contenedor: {result.error}")
+            self.ctx.log("error", f"Error asignando a la rama: {result.error}")
             return
-        self.ctx.log("info", "Entidad asignada al contenedor")
+        self.ctx.log("info", "Hoja asignada a la rama")
         self.refresh()
 
     def _open_tree_panel(self, entity_id: str, *, is_new: bool = False):
         if self.entity_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo abrir el panel de contenedor")
+            self.ctx.log("error", "No se pudo abrir el panel de rama")
             return
         from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
         panel = TreeDetailPanel(
@@ -1829,7 +1829,7 @@ class CreationWorkspace(QWidget):
             is_new=is_new,
             on_focus_tree=self.focus_tree_scope,
         )
-        self.ctx.drawer.set_content(panel, title="Contenedor")
+        self.ctx.drawer.set_content(panel, title="Rama")
         self.ctx.drawer.open()
 
     # ── Existing workspace methods (preserved) ─────────────────────────────
@@ -1865,7 +1865,7 @@ class CreationWorkspace(QWidget):
             self._layers_toggle_btn.setVisible(active)
             self._layers_toggle_btn.setEnabled(active)
             self._layers_toggle_btn.setToolTip(
-                "Abrir/cerrar panel de capas causales" if active else "Activa Worldbuilding para usar capas causales"
+                "Abrir/cerrar panel de anillos causales" if active else "Activa Worldbuilding para usar capas causales"
             )
         if not active and hasattr(self, "_layer_flyout"):
             self._layer_flyout.hide_flyout()
@@ -1886,10 +1886,10 @@ class CreationWorkspace(QWidget):
     def open_entity_create(self):
         drawer = self.ctx.drawer
         if self.entity_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear entidad: servicio no disponible")
+            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
             return
         panel = EntityQuickCreatePanel(self.entity_controller, on_created=self.refresh)
-        drawer.set_content(panel, title="Nueva entidad")
+        drawer.set_content(panel, title="Nueva hoja")
         drawer.open()
 
     def open_candidates_clean(self):
@@ -1914,10 +1914,10 @@ class CreationWorkspace(QWidget):
     def open_layer_create(self):
         drawer = self.ctx.drawer
         if self.layer_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear capa: servicio no disponible")
+            self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
             return
         panel = LayerQuickCreatePanel(self.layer_controller, on_created=self.refresh)
-        drawer.set_content(panel, title="Nueva capa")
+        drawer.set_content(panel, title="Nuevo anillo")
         drawer.open()
 
     def _open_node_panel(self, entity_id: str, *, is_new: bool = False):
@@ -1974,7 +1974,7 @@ class CreationWorkspace(QWidget):
     def _entity_label(self, entity_id: str) -> str:
         entity = self._entity_by_id(entity_id)
         if entity is None:
-            return "Entidad no encontrada"
+            return "Elemento no encontrado"
         kind = getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "entidad"))
         return human_ref(getattr(entity, "name", "Sin nombre"), enum_human(str(kind)))
 

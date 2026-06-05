@@ -133,11 +133,11 @@ def test_desktop_ui_exposes_b36_layer_view_controls_without_modals() -> None:
     tree_panel = (root / "hosts" / "DesktopHostPySide" / "widgets" / "tree_detail_panel.py").read_text(encoding="utf-8")
     graph_canvas = (root / "hosts" / "DesktopHostPySide" / "widgets" / "graph_canvas.py").read_text(encoding="utf-8")
 
-    assert "Vista Capas causales" in workspace
+    assert "Vista Anillos causales" in workspace
     assert "set_worldbuilding_active" in workspace
-    assert "Expandir hacia capa inferior" in node_panel
+    assert "Expandir hacia anillo inferior" in node_panel
     assert "Explicar desde causas superiores" in node_panel
-    assert "Capa causal" in tree_panel
+    assert "Anillo causal" in tree_panel
     assert "_set_graph_by_layers" in graph_canvas
     combined = workspace + node_panel + tree_panel
     assert "QInputDialog" not in combined
