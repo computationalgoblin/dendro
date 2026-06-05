@@ -417,9 +417,14 @@ class ProjectPanel(QWidget):
             self.save_btn.setStyleSheet("QPushButton { font-weight: bold; }")
 
     def _update_type_visibility(self):
-        ptype = self._current_type_value()
-        self.campaign_card.setVisible(ptype == "campana")
-        self.novela_card.setVisible(ptype == "novela")
+        """Update project-type dependent controls.
+
+        B40 replaced the old campaign/novela cards with a unified tabbed
+        creative configuration panel. Keep this hook because type changes still
+        trigger preview/pending state, but do not assume the removed cards
+        exist.
+        """
+        return
 
     # ── Save ──
 
@@ -437,10 +442,6 @@ class ProjectPanel(QWidget):
 
             # Apply all creative config from tabbed panel (B40)
             self.creative_tabs.apply_to_project(p)
-
-            # Realism
-            realism_map = {"Bajo": "low", "Medio": "medium", "Alto": "high"}
-            p.realism.realism_level = realism_map.get(self.realism_combo.currentText(), "medium")
 
             # Persist
             self.callbacks["save_project"]()

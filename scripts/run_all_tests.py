@@ -82,6 +82,7 @@ SUITES: dict[str, list[str]] = {
     ],
     "b40": [
         "tests/application/test_b40_creative_config.py",
+        "tests/desktop/test_b40_project_panel_regression.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
