@@ -18,7 +18,18 @@ class CandidateController:
         )
 
     def list_all(self):
-        return list(self.ps.active_project.candidates) if self.ps.active_project else []
+        """List candidates pending review (not accepted/rejected/postponed)."""
+        project = self.ps.active_project
+        if not project:
+            return []
+        from packages.domain.candidate_issue import CandidateState
+        excluded = {
+            CandidateState.ACEPTADO,
+            CandidateState.RECHAZADO,
+            CandidateState.EDITADO_ACEPTADO,
+            CandidateState.PARCIALMENTE_ACEPTADO,
+        }
+        return [c for c in project.candidates if getattr(c, "state", None) not in excluded]
 
     def create(self, data):
         return self.cs.create_candidate(data)

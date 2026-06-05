@@ -33,18 +33,22 @@ def _now_iso() -> str:
 
 COMMAND_BAR_SYSTEM_PROMPT_ES = """Eres el planificador y asistente central de creación de Dendro. Tu tarea es interpretar la petición del usuario y producir un plan o resultado útil sobre el grafo narrativo. Debes respetar el prompt exacto del usuario, el idioma del proyecto, el género, tono, realismo, estilo narrativo, worldbuilding activo, capas, árboles, relaciones y canon existente. No debes modificar canon directamente. Si generas nuevos elementos, deben ser candidatos revisables. Si analizas el grafo, devuelve un informe estructurado. Si la petición es ambigua, propón una interpretación y pide confirmación o crea un plan revisable. No devuelvas plantillas fijas. No ignores detalles del prompt.
 
+Si el usuario pide EDITAR o RELLENAR el cuerpo/historia/motivaciones de entidades EXISTENTES, NO crees entidades nuevas. En vez de eso, devuelve un objeto "entity_edits" con propuestas de edición para cada entidad existente identificada. Formato:
+"entity_edits": [{"entity_name": "nombre exacto de la entidad existente", "field": "body", "proposed_value": "texto propuesto para el cuerpo", "rationale": "por qué este cambio"}]
+
 Devuelve SOLO JSON válido con esta forma:
 {
   "summary": "resumen humano breve",
   "report": "informe o explicación visible para el usuario",
   "entities": [{"name": "...", "entity_type": "personaje|localizacion|objeto|evento|faccion|contenedor|ley|nota", "brief_description": "...", "body": "... opcional", "layer_ids": []}],
   "trees": [{"name": "...", "brief_description": "...", "layer_ids": []}],
-  "relations": [{"source_id": "id real si existe", "target_id": "id real si existe", "relation_type": "esta_relacionado_con", "description": "..."}],
+  "relations": [{"source_name": "nombre de la entidad origen", "target_name": "nombre de la entidad destino", "source_id": "id real si se conoce", "target_id": "id real si se conoce", "relation_type": "esta_relacionado_con", "description": "..."}],
+  "entity_edits": [{"entity_name": "...", "field": "body|brief_description", "proposed_value": "...", "rationale": "..."}],
   "issues": [{"title": "...", "description": "...", "severity": "baja|media|alta"}],
   "proposals": [{"title": "...", "description": "..."}],
   "open_questions": ["..."]
 }
-No incluyas IDs inventados. Si no conoces endpoints reales para relaciones, escribe propuestas en 'proposals' u 'open_questions', no en 'relations'.
+No incluyas IDs inventados. Si no conoces endpoints reales para relaciones, usa source_name/target_name sin IDs y escribe propuestas en 'proposals' u 'open_questions'. Para relaciones entre entidades generadas en la misma respuesta, usa source_name/target_name.
 """
 
 
@@ -69,6 +73,7 @@ class AIJobType(str, Enum):
     EXPLAIN_FROM_CAUSES = "explain_from_causes"
     REVIEW_GRAPH = "review_graph"
     FREEFORM_PLANNING = "freeform_planning"
+    EDIT_ENTITIES = "edit_entities"
     UNKNOWN = "unknown"
 
 
@@ -207,6 +212,10 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
     if not text:
         return CommandBarIntent(AIJobType.UNKNOWN, 0.0, scope, "none", True, "Prompt vacío")
 
+    # BUG 4 fix: detect edit/body fill intent before generation
+    if _has_any(text, ["rellena", "rellenar", "completa", "completar", "cuerpo", "historia", "motivación", "motivaciones", "descripción", "desarrolla", "desarrollar", "expande", "expandir", "editar", "modifica", "modificar"]) and _has_any(text, ["entidad", "entidades", "existente", "existentes", "creada", "creadas", "nodo", "nodos", "personaje", "personajes"]):
+        return CommandBarIntent(AIJobType.EDIT_ENTITIES, 0.80, scope, "edit_candidates", False, "La petición pide editar/rellenar entidades existentes, no crear nuevas")
+
     if _has_any(text, ["relacion", "relación", "relaciones", "vínculo", "vinculo"]):
         return CommandBarIntent(AIJobType.SUGGEST_RELATIONS, 0.82, scope, "relation_candidates", False, "La petición pide relaciones o vínculos")
 
@@ -251,6 +260,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["informe", "propuestas", "preguntas abiertas"]
     if intent_type == AIJobType.EXPAND_WORLDBUILDING:
         return ["candidatos de nodo/árbol", "relaciones causales candidatas"]
+    if intent_type == AIJobType.EDIT_ENTITIES:
+        return ["candidatos de edición de cuerpo/campos de entidades existentes"]
     return ["plan revisable"]
 
 
@@ -386,6 +397,36 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             justification=str(tree.get("rationale") or "Árbol/contenedor propuesto para revisión."),
         ))
 
+    # BUG 4 fix: stage entity edits as reviewable candidates (not new entities)
+    for edit in _safe_list(payload.get("entity_edits")):
+        if not isinstance(edit, dict):
+            continue
+        entity_name = str(edit.get("entity_name") or "").strip()
+        if not entity_name:
+            continue
+        field = str(edit.get("field") or "body").strip()
+        proposed_value = str(edit.get("proposed_value") or "").strip()
+        if not proposed_value:
+            continue
+        candidates.append(_candidate(
+            title=f"Editar {field} de {entity_name}",
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "report": f"Propuesta de edición para '{entity_name}':\n\n{proposed_value}",
+                "edit_target_name": entity_name,
+                "edit_field": field,
+                "edit_proposed_value": proposed_value,
+                "issues": [],
+                "proposals": [{"title": f"Editar {field} de {entity_name}", "description": proposed_value[:200]}],
+                "open_questions": [],
+                "prompt": job.prompt,
+            },
+            job=job,
+            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para entidad existente."),
+            confidence=0.65,
+            expected_impact=f"Editar {field} de '{entity_name}' tras revisión humana.",
+        ))
+
     selected = set(str(x) for x in (job.context_scope.get("selected_entity_ids") or []))
     relevant = job.context_scope.get("relevant_entities") or []
     relevant_ids = {str(e.get("id")) for e in relevant if isinstance(e, dict) and e.get("id")}
@@ -413,8 +454,14 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         ))
 
     report = str(payload.get("report") or payload.get("summary") or "Resultado IA listo para revisión.")
-    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN}
-    if analytical or payload.get("issues") or payload.get("proposals") or payload.get("open_questions"):
+    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES}
+    # BUG 1 fix: only add sugerencia_ia candidate for truly analytical jobs.
+    # For generative jobs (entities/trees/relations), the structural candidates
+    # are the real output; a synthetic "proposal" card is noise.
+    has_structural_candidates = any(
+        c.get("candidate_type") in ("entidad", "relacion") for c in candidates
+    )
+    if analytical and not has_structural_candidates:
         candidates.append(_candidate(
             title=str(payload.get("summary") or "Informe revisable de IA"),
             candidate_type="sugerencia_ia",
@@ -431,6 +478,40 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             confidence=0.55,
             expected_impact="Ayuda a decidir mejoras sin aplicar cambios automáticos.",
         ))
+
+    # BUG 2 fix: for generative jobs with relations from the model that lack
+    # real IDs, convert them to proposals instead of silently dropping them.
+    # The model may return proposed relation *names* that need manual wiring.
+    for rel in _safe_list(payload.get("relations")):
+        if not isinstance(rel, dict):
+            continue
+        source_id = str(rel.get("source_id") or "")
+        target_id = str(rel.get("target_id") or "")
+        if not source_id or not target_id:
+            # Convert to a human-readable proposal
+            desc = str(rel.get("description") or "Relación propuesta.")
+            source_name = str(rel.get("source_name") or source_id or "?")
+            target_name = str(rel.get("target_name") or target_id or "?")
+            rel_type = str(rel.get("relation_type") or "esta_relacionado_con")
+            candidates.append(_candidate(
+                title=f"Relación propuesta: {source_name} → {target_name}",
+                candidate_type="sugerencia_ia",
+                proposed_data={
+                    "report": f"Relación propuesta: {source_name} ({rel_type}) → {target_name}. {desc}",
+                    "issues": [],
+                    "proposals": [{"title": f"{source_name} → {target_name}", "description": desc, "relation_type": rel_type}],
+                    "open_questions": [f"¿Existen {source_name} y {target_name} como entidades reales para crear esta relación?"],
+                    "prompt": job.prompt,
+                },
+                job=job,
+                justification="La IA propuso una relación pero no tiene IDs reales de endpoints. Revisión manual necesaria.",
+                confidence=0.40,
+                expected_impact="Propuesta de relación para conexión manual.",
+            ))
+            continue
+        if allowed_ids and (source_id not in allowed_ids or target_id not in allowed_ids):
+            # Already handled above; don't double-process
+            continue
 
     kind = "analysis_report" if analytical else "candidate_batch"
     return {
