@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
+from hosts.DesktopHostPySide.controllers.causal_milestone_controller import CausalMilestoneController
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState, relation_family
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
@@ -1007,6 +1008,92 @@ class _LayerEdgeFlyout(QFrame):
         self._toggle_btn.setChecked(layers_active)
 
 
+class CausalMilestonePanel(_SimpleFormPanel):
+    """Drawer panel for creating and reviewing causal milestones (B41-T03).
+
+    Uses cards, not tables. No IDs or JSON shown to the user.
+    All mutations go through CausalMilestoneController → CausalMilestoneService.
+    """
+
+    def __init__(self, controller, on_created=None):
+        super().__init__("Hito causal", "Evento histórico que explica el estado actual del mundo.")
+        self.controller = controller
+        self.on_created = on_created
+        form = QFormLayout()
+        self._title = QLineEdit()
+        self._title.setPlaceholderText("Nombre del hito")
+        self._type = QComboBox()
+        self._type.addItems([
+            "origen", "fundacion", "ruptura", "guerra", "pacto",
+            "traicion", "descubrimiento", "catastrofe", "reforma",
+            "prohibicion", "revelacion", "migracion", "ascenso",
+            "caida", "transformacion", "consecuencia", "estado_actual",
+        ])
+        self._desc = QTextEdit()
+        self._desc.setPlaceholderText("Descripción del hito")
+        self._desc.setMinimumHeight(80)
+        self._rationale = QTextEdit()
+        self._rationale.setPlaceholderText("Por qué este hito es importante (opcional)")
+        self._rationale.setMaximumHeight(60)
+        form.addRow("Nombre", self._title)
+        form.addRow("Tipo", self._type)
+        form.addRow("Descripción", self._desc)
+        form.addRow("Razón", self._rationale)
+        self.layout.addLayout(form)
+        self._status = self.add_status()
+
+        # Cards for existing milestones
+        self._cards_container = QVBoxLayout()
+        self._cards_container.setSpacing(6)
+        self.layout.addLayout(self._cards_container)
+        self._refresh_cards()
+
+        row = QHBoxLayout()
+        save = QPushButton("Crear hito")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _refresh_cards(self):
+        while self._cards_container.count():
+            item = self._cards_container.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        hitos = self.controller.list_all()
+        for hito in hitos:
+            card = Card(
+                title=getattr(hito, "title", "Sin nombre"),
+                subtitle=str(getattr(getattr(hito, "milestone_type", ""), "value", "")),
+            )
+            desc = getattr(hito, "description", "")
+            if desc:
+                card.add_text(desc, muted=True)
+            self._cards_container.addWidget(card)
+
+    def _save(self):
+        title = self._title.text().strip()
+        if not title:
+            self._status.setText("El nombre es obligatorio")
+            return
+        result = self.controller.create_manual({
+            "title": title,
+            "milestone_type": self._type.currentText(),
+            "description": self._desc.toPlainText().strip(),
+            "rationale": self._rationale.toPlainText().strip(),
+        })
+        if isinstance(result, Error):
+            self._status.setText(result.error)
+            return
+        self._status.setText(f"Hito creado: {title}")
+        self._refresh_cards()
+        if self.on_created:
+            self.on_created()
+
+
 class CreationWorkspace(QWidget):
     """Creation space: graph-first immersive experience."""
 
@@ -1037,6 +1124,9 @@ class CreationWorkspace(QWidget):
         project_service = getattr(project_controller, "ps", None)
         if project_service is not None:
             self.ai_context_controller = AIContextController(project_service)
+            self._milestone_ctrl = CausalMilestoneController(project_service)
+        else:
+            self._milestone_ctrl = None
 
         self._build_ui()
 
@@ -1136,6 +1226,13 @@ class CreationWorkspace(QWidget):
         self._layers_toggle_btn = icon_btn("Anillos", "Abrir/cerrar panel de anillos causales", self._toggle_layer_drawer)
         self._layers_toggle_btn.setStyleSheet(text_btn_style)
         self._layers_toggle_btn.setFixedWidth(72)
+
+        self._milestone_btn = QPushButton("Crear hito")
+        self._milestone_btn.setToolTip("Crear un hito causal/histórico")
+        self._milestone_btn.setStyleSheet(text_btn_style)
+        self._milestone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._milestone_btn.clicked.connect(self._open_hito_panel)
+        layout.addWidget(self._milestone_btn)
 
         self._global_focus_btn = QPushButton("Global")
         self._global_focus_btn.setToolTip("Volver a vista global")
@@ -1851,6 +1948,16 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.open()
 
     # ── Existing workspace methods (preserved) ─────────────────────────────
+
+    def _open_hito_panel(self):
+        """Open the causal milestone creation/review drawer (B41-T03)."""
+        drawer = self.ctx.drawer
+        if self._milestone_ctrl is None or drawer is None:
+            self.ctx.log("error", "No se pudo abrir hitos: servicio no disponible")
+            return
+        panel = CausalMilestonePanel(self._milestone_ctrl, on_created=self.refresh)
+        drawer.set_content(panel, title="Hitos causales")
+        drawer.open()
 
     def refresh_ai_controller(self):
         """Rebuild contextual AI controller after provider/settings changes."""

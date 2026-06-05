@@ -93,6 +93,7 @@ SUITES: dict[str, list[str]] = {
         "tests/persistence/test_schema_v23_causal_milestones.py",
         "tests/application/test_candidate_service.py::TestCandidateService::test_create_causal_milestone_candidate_is_review_only",
         "tests/application/test_b41_causal_milestone_service.py",
+        "tests/desktop/test_b41_causal_milestone_ui_static.py",
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
