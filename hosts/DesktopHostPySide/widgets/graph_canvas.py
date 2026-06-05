@@ -2063,21 +2063,12 @@ class GraphCanvasWidget(QWidget):
                 continue
             seen_relation_ids.add(relation_id)
             relations.append(_relation_view(relation))
-        known_entity_ids = {node.entity_id for node in entities}
-        proposed_nodes = []
-        proposed_edges = []
-        for candidate in getattr(project, "candidates", []) or []:
-            if not _candidate_is_pending_ai(candidate):
-                continue
-            edge = _candidate_edge_view(candidate, known_entity_ids)
-            if edge is not None:
-                proposed_edges.append(edge)
-                continue
-            node = _candidate_node_view(candidate)
-            if node is not None:
-                proposed_nodes.append(node)
-        entities.extend(proposed_nodes)
-        relations.extend(proposed_edges)
+        # B40-FIX: do not inject pending AI candidates into the graph canvas as
+        # visual nodes. They are not canon, are not removable through the normal
+        # entity deletion flow, and in new projects they look like auto-created
+        # empty entities. Candidate review/acceptance belongs in the candidate
+        # tray or explicit AI suggestion UI; only accepted/canonical entities and
+        # relations are rendered here.
         if not entities:
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
