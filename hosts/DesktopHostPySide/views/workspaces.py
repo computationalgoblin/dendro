@@ -1015,10 +1015,11 @@ class CausalMilestonePanel(_SimpleFormPanel):
     All mutations go through CausalMilestoneController → CausalMilestoneService.
     """
 
-    def __init__(self, controller, on_created=None):
+    def __init__(self, controller, on_created=None, prefill: dict | None = None):
         super().__init__("Hito causal", "Evento histórico que explica el estado actual del mundo.")
         self.controller = controller
         self.on_created = on_created
+        self._prefill = prefill or {}
         form = QFormLayout()
         self._title = QLineEdit()
         self._title.setPlaceholderText("Nombre del hito")
@@ -1084,6 +1085,7 @@ class CausalMilestonePanel(_SimpleFormPanel):
             "milestone_type": self._type.currentText(),
             "description": self._desc.toPlainText().strip(),
             "rationale": self._rationale.toPlainText().strip(),
+            **self._prefill,
         })
         if isinstance(result, Error):
             self._status.setText(result.error)
@@ -1233,6 +1235,13 @@ class CreationWorkspace(QWidget):
         self._milestone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._milestone_btn.clicked.connect(self._open_hito_panel)
         layout.addWidget(self._milestone_btn)
+
+        self._hito_from_sel_btn = QPushButton("Hito desde selección")
+        self._hito_from_sel_btn.setToolTip("Crear hito explicativo desde la selección actual")
+        self._hito_from_sel_btn.setStyleSheet(text_btn_style)
+        self._hito_from_sel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hito_from_sel_btn.clicked.connect(self._create_hito_from_selection)
+        layout.addWidget(self._hito_from_sel_btn)
 
         self._global_focus_btn = QPushButton("Global")
         self._global_focus_btn.setToolTip("Volver a vista global")
@@ -1957,6 +1966,43 @@ class CreationWorkspace(QWidget):
             return
         panel = CausalMilestonePanel(self._milestone_ctrl, on_created=self.refresh)
         drawer.set_content(panel, title="Hitos causales")
+        drawer.open()
+
+    def _create_hito_from_selection(self):
+        """Create a hito from current graph selection (B41-T04).
+
+        Reads the current selection from the graph canvas, builds a prefill
+        dict with affected entity/relation/layer ids, and opens the
+        CausalMilestonePanel pre-populated.
+        """
+        drawer = self.ctx.drawer
+        if self._milestone_ctrl is None or drawer is None:
+            self.ctx.log("error", "No se pudo crear hito desde selección: servicio no disponible")
+            return
+
+        prefill: dict = {}
+        # Gather selected entities
+        sel_entity_ids = getattr(self.graph, "selected_entity_ids", lambda: [])()
+        if sel_entity_ids:
+            prefill["affected_entity_ids"] = list(sel_entity_ids)
+        # Gather selected relations
+        sel_relation_ids = getattr(self.graph, "selected_relation_ids", lambda: [])()
+        if sel_relation_ids:
+            prefill["caused_relation_ids"] = list(sel_relation_ids)
+        # Active layer if applicable
+        if self._active_layer_id:
+            prefill.setdefault("layer_ids", [self._active_layer_id])
+
+        if not prefill:
+            self.ctx.log("warning", "Selecciona hojas, relaciones o anillos para crear un hito explicativo")
+            return
+
+        panel = CausalMilestonePanel(
+            self._milestone_ctrl,
+            on_created=self.refresh,
+            prefill=prefill,
+        )
+        drawer.set_content(panel, title="Hito desde selección")
         drawer.open()
 
     def refresh_ai_controller(self):
