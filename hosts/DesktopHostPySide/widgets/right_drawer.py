@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hosts.DesktopHostPySide.widgets.design_system import fade_in
+
 
 class RightDrawer(QFrame):
     """Reusable right-side drawer panel.
@@ -126,6 +128,7 @@ class RightDrawer(QFrame):
         self._content = widget
         self._scroll.setWidget(widget)
         self._title.setText(title)
+        fade_in(widget, duration_ms=180, start_opacity=0.0)
 
     def open(self):
         """Show the drawer with a slide-in animation."""

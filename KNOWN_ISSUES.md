@@ -1,6 +1,6 @@
 # KNOWN_ISSUES — Deuda y bugs conocidos
 
-Última actualización: 2026-06-05
+Última actualización: 2026-06-07
 
 Este archivo es el índice operativo de deuda visible. No renumera ni reemplaza fuentes históricas.
 
@@ -11,27 +11,61 @@ Fuentes principales:
 - `docs/deuda_consolidada_B01_B28.md`
 - `docs/cierres/`
 - `docs/validation/`
+- `docs/agents/HANDOFF.md`
 - memoria operativa del proyecto confirmada en sesiones previas
 
 ## Convenciones
 
 | Campo | Uso |
 |---|---|
-| ID | No renumerar IDs existentes. Deuda nueva usa `DC-XXX` o `DC-BXX-*`. |
+| ID | No renumerar IDs existentes. Deuda nueva usa `DC-XXX`, `DC-BXX-*`, `DC-WIN-*` o prefijo documental explícito. |
 | Estado | abierta, mitigada, cerrada, absorbida, ambigua, pendiente-validación |
 | Severidad | bloqueante, media, baja |
 | Criterio de cierre | Evidencia concreta necesaria. |
 
 Regla: **mitigada no significa resuelta**.
 
-## Pendientes críticos de validación visual Windows
+## Bugs confirmados por validación visual Windows (2026-06-07)
+
+Resultado: 95 checks, 41 PASA, 11 FALLA, 0 PARCIAL, 43 N/A.
+Informe: `docs/pruebas/resultados/resultado_B30_B43_*.txt`
+
+| ID | Estado | Severidad | Origen | Descripción | Causa raíz | Criterio de cierre |
+|---|---|---|---|---|---|---|
+| BUG-B34-PANEL | fix-aplicado | alta | B34 | Panel de detalle no aparece al seleccionar una Rama. | `_notify_canvas_selected()` emite selección al view. `shape()` incluye rect completo cuando colapsado. | Validar en Windows. |
+| BUG-B34-BADGE | fix-aplicado | media | B34 | Badge de miembros flota fuera al colapsar rama. | `_collapse()` oculta `_count_item`, `_expand()` restaura. | Validar en Windows. |
+| BUG-B34-RELINT | fix-aplicado | alta | B34 | No se puede crear relación entre nodos internos y su rama contenedora. | `shape()` incluye rect completo cuando colapsado + `_notify_canvas_selected`. | Validar en Windows. |
+| BUG-B34-CYCLE | fix-aplicado | alta | B34 | Prevención de ciclos no funciona (sólo feedback visual rojo). | `mouseReleaseEvent` bloquea emit si `would_create_cycle()`. | Validar en Windows. |
+| BUG-B35-REPAIR | fix-aplicado | alta | B35 | Reparación de coherencia: preview no editable, no persiste, se pierde al cerrar drawer. | Preview editable + stash en `ctx` sobrevive drawer close + restore on reopen. | Validar en Windows. |
+| BUG-B36-WB | fix-aplicado | alta | B36 | Toggle Worldbuilding no activa capas en el grafo. | `set_worldbuilding_active(active)` propagado en ambos sentidos. | Validar en Windows. |
+| BUG-B36-TYPO | fix-aplicado | alta | B36 | Botón "Crear anillo desde rama" nunca aparece. | `worldbuilding_enabled` → `worldbuilding_active`. | Validar en Windows. |
+| BUG-B37-FOCUS | fix-aplicado | media | B37 | Focus vecindad hace desaparecer todo. | `focus_neighborhood` incluye ancestros contenedores via `_membership`. | Validar en Windows. |
+| BUG-B37-CAM | no-era-bug | — | B37 | Zoom/pan no funcionaba. | `wheelEvent` + `ScrollHandDrag` ya existen; era síntoma de BUG-B37-FOCUS. | Re-verificar tras fix FOCUS. |
+| BUG-B38-ERROR | fix-aplicado | baja | B38 | Error de provider no visible/prominente en UI. | Error en rojo durante 8s con `QTimer` que restaura estilo. | Validar en Windows. |
+
+## Pendientes de validación Windows — actualizados tras prueba 2026-06-07
 
 | ID | Estado | Severidad | Origen | Descripción | Criterio de cierre |
 |---|---|---|---|---|---|
-| DC-WIN-B36 | pendiente-validación | media | B36 | Worldbuilding por capas causales implementado en WSL; prueba visual Windows nativa pendiente. | Usuario ejecuta smoke Windows y confirma comportamiento o abre bugs específicos. |
-| DC-WIN-B37 | pendiente-validación | media | B37 | Creación a escala/filtros/flyout implementado en WSL; validación Windows nativa pendiente. | Usuario valida UI nativa Windows. |
-| DC-WIN-B38 | pendiente-validación | media | B38 | Command bar IA/jobs revisables implementado en WSL; checklist Windows pendiente. | Completar `docs/validation/b38-command-bar-windows-smoke.md`. |
-| DC-B28-UI-WIN | abierta | media | B28 | B28 sin validación Desktop nativa Windows según deuda histórica. | Validación Windows documentada o reemplazada por bloque de hardening visual. |
+| DC-WIN-B30-B35 | cerrada | — | B30-B35 | Validación visual Windows ejecutada 2026-06-07: B30-B33 PASA, B34 con bugs (ver arriba), B35 con bug reparación. | Bugs B34/B35 resueltos. |
+| DC-WIN-B36 | reabierta | alta | B36 | Bug confirmado: toggle worldbuilding no propaga al canvas + typo atributo. | BUG-B36-WB y BUG-B36-TYPO cerrados. |
+| DC-WIN-B37 | reabierta | media | B37 | Bugs confirmados: focus vecindad y cámara. | BUG-B37-FOCUS y BUG-B37-CAM cerrados. |
+| DC-WIN-B38 | mitigada | baja | B38 | Command bar funciona; error provider es gap de testabilidad, no bug funcional. | Mejorar prominencia de errores IA. |
+| DC-WIN-B39 | cerrada | — | B39 | Labels/controles validados OK en Windows. | — |
+| DC-WIN-B40 | cerrada | — | B40 | Wizard, config, presets validados OK en Windows. | — |
+| DC-WIN-B41 | pendiente-validación | media | B41 | Milestones causales: no se pudo probar (N/A en prueba, worldbuilding no funcional). | Revalidar tras fix B36. |
+| DC-WIN-B42 | pendiente-validación | baja | B42 | Hardening IA: no se pudo probar sin provider real configurado. | Smoke IA con provider real. |
+| DC-WIN-B43 | pendiente-validación | baja | B43 | Prompt Registry: N/A (sin provider real). | Smoke IA inline con provider real. |
+| DC-B28-UI-WIN | abierta | media | B28 | B28 sin validación Desktop nativa Windows según deuda histórica. | Validación Windows documentada. |
+
+## Deuda documental/operativa reciente
+
+| ID | Estado | Severidad | Origen | Descripción | Criterio de cierre |
+|---|---|---|---|---|---|
+| DOC-B37-CIERRE | cerrada | baja | B37 | Cierre técnico dedicado creado en `docs/cierres/bloque-37-cierre.md`. | Cerrada documentalmente; no implica Windows OK. |
+| DOC-B38-CIERRE | cerrada | baja | B38 | Cierre técnico dedicado creado en `docs/cierres/bloque-38-cierre.md`. | Cerrada documentalmente; no implica Windows OK. |
+| DOC-B39-CIERRE | cerrada | baja | B39 | Cierre técnico dedicado creado en `docs/cierres/bloque-39-cierre.md`. | Cerrada documentalmente; no implica Windows OK. |
+| DOC-B41-B43-CIERRE | cerrada | baja | B41-B43 | Cierres técnicos dedicados creados en `docs/cierres/bloque-41-cierre.md`, `docs/cierres/bloque-42-cierre.md` y `docs/cierres/bloque-43-cierre.md`. | Cerrada documentalmente; no implica Windows OK. |
 
 ## Deuda activa de producto/técnica
 

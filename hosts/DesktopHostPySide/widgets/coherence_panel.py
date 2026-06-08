@@ -105,6 +105,8 @@ class CoherencePanel(QWidget):
         self._repair_text = ""
         self._worker: _CoherenceAIWorker | None = None
         self._build()
+        # Restore pending repair from ctx if re-opening same selection
+        self._restore_pending_repair()
         self._run_analysis()
 
     def _build(self):
@@ -160,8 +162,8 @@ class CoherencePanel(QWidget):
         layout.addLayout(row)
 
         self.repair_preview = QTextEdit()
-        self.repair_preview.setReadOnly(True)
-        self.repair_preview.setPlaceholderText("La reparación aparecerá aquí como sugerencia IA diferenciada del canon.")
+        self.repair_preview.setReadOnly(False)
+        self.repair_preview.setPlaceholderText("La reparación aparecerá aquí como sugerencia IA diferenciada del canon.\nPuedes editar el texto antes de aceptar.")
         self.repair_preview.setMinimumHeight(170)
         layout.addWidget(self.repair_preview)
 
@@ -234,11 +236,13 @@ class CoherencePanel(QWidget):
             return
         self._repair_text = text
         self.repair_preview.setPlainText(self._repair_text)
+        self._stash_repair()
         self.status.setText("Reparación generada como sugerencia. Aún no se ha aplicado al canon.")
 
     def _discard_repair(self):
         self._repair_text = ""
         self.repair_preview.clear()
+        self._clear_stash()
         self.status.setText("Sugerencia descartada. No se cambió nada.")
 
     def _extract_patch(self) -> dict[str, Any] | None:
@@ -291,6 +295,35 @@ class CoherencePanel(QWidget):
         if changed == 0:
             self.status.setText("La reparación no contiene cambios aplicables a la selección actual.")
             return
+        # Clear stash since repair was accepted
+        self._clear_stash()
         if self.on_saved:
             self.on_saved()
         self.status.setText(f"Reparación aceptada y aplicada a {changed} elemento(s) seleccionado(s).")
+
+    # ── Repair persistence (survives drawer close/reopen) ──────────────
+
+    def _stash_key(self) -> str:
+        """Key for storing pending repair in ctx."""
+        return f"_pending_coherence_repair::{':'.join(sorted(self.entity_ids))}"
+
+    def _stash_repair(self):
+        """Save current repair text to ctx so it survives drawer close."""
+        text = self._repair_text or self.repair_preview.toPlainText()
+        if text.strip():
+            setattr(self.ctx, self._stash_key(), text)
+        else:
+            self._clear_stash()
+
+    def _restore_pending_repair(self):
+        """Restore repair text from previous session if selection matches."""
+        stashed = getattr(self.ctx, self._stash_key(), None)
+        if stashed:
+            self._repair_text = stashed
+            self.repair_preview.setPlainText(stashed)
+            self.status.setText("Reparación restaurada de sesión anterior. Revisa y acepta o descarta.")
+
+    def _clear_stash(self):
+        key = self._stash_key()
+        if hasattr(self.ctx, key):
+            delattr(self.ctx, key)

@@ -8,6 +8,7 @@ from packages.application.candidate_service import CandidateService
 from packages.application.orchestrator_service import OrchestratorService
 from packages.application.source_service import SourceService
 from packages.domain.ai_models import AIMode
+from hosts.DesktopHostPySide.app_trace import _apptrace
 
 
 def _safe_base_url(value: str) -> str:
@@ -35,6 +36,7 @@ class AIController:
         )
 
     def provider_status(self) -> dict[str, str | bool]:
+        _apptrace(f"CTRL AIController.provider_status"[:120])
         provider = os.environ.get("NARRATIVE_AI_PROVIDER", "") or "simulated"
         model = os.environ.get("NARRATIVE_AI_MODEL", "") or "?"
         base_url = _safe_base_url(os.environ.get("NARRATIVE_AI_BASE_URL", ""))
@@ -65,6 +67,7 @@ class AIController:
         }
 
     def provider_info(self):
+        _apptrace(f"CTRL AIController.provider_info"[:120])
         status = self.provider_status()
         provider = status["provider"]
         model = status["model"]
@@ -79,16 +82,20 @@ class AIController:
         return f"provider={provider} model={model} base={base_url} fallback={fallback} reason={reason}"
 
     def test_provider(self):
+        _apptrace(f"CTRL AIController.test_provider"[:120])
         return self.orchestrator.invoke(AIMode.GENERATE_ENTITY, prompt_hint="desktop ui provider test")
 
     def chat(self, system_prompt: str, user_message: str):
         """Send a chat message with custom system prompt. Returns (text, error_string)."""
+        _apptrace(f"CTRL AIController.chat prompt_len={len(system_prompt)} msg_len={len(user_message)}"[:120])
         provider = self.orchestrator._provider
         timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", "300"))
         return provider.chat(system_prompt, user_message, timeout=timeout)
 
     def generate_entity_candidates(self, prompt_hint):
+        _apptrace(f"CTRL AIController.generate_entity_candidates hint={prompt_hint!r}"[:120])
         return self.orchestrator.generate_candidates(AIMode.GENERATE_ENTITY, prompt_hint=prompt_hint)
 
     def rewrite_entity(self, entity_id, prompt_hint=""):
+        _apptrace(f"CTRL AIController.rewrite_entity entity_id={entity_id!r}"[:120])
         return self.orchestrator.generate_candidates(AIMode.REWRITE_DESCRIPTION, entity_id=entity_id, prompt_hint=prompt_hint)

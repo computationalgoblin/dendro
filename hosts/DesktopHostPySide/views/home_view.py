@@ -291,6 +291,9 @@ class HomeView(QWidget):
         self.creation_card.mousePressEvent = lambda event: self._navigate("creation")
         self.gallery_card.mousePressEvent = lambda event: self._navigate("gallery")
         self.session_card.mousePressEvent = lambda event: self._navigate("session")
+        self.creation_card.setToolTip("Entrar en Creación: grafo, hojas, ramas, relaciones y sugerencias IA")
+        self.gallery_card.setToolTip("Entrar en Galería: material narrativo, fuentes y referencias")
+        self.session_card.setToolTip("Entrar en Sesión: preparación, mesa viva y cierre")
 
         cards_col.addWidget(self.creation_card, 3)
         cards_col.addWidget(self._branch_line())

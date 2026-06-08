@@ -1,7 +1,7 @@
 # B41 — Hitos causales y memoria histórica del mundo
 
 Ticket: B41-T00 — Auditoría y diseño
-Estado: diseño aprobado para revisión, sin implementación de modelo/servicio/UI.
+Estado: aprobado, implementado y cerrado documentalmente. Ver `docs/cierres/bloque-41-cierre.md`.
 
 ## 1. Objetivo del bloque
 

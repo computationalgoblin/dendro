@@ -6,7 +6,7 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.controllers.causal_milestone_controller import CausalMilestoneController
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
@@ -42,6 +43,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     enum_human,
     human_ref,
     make_scroll_area,
+    pulse_feedback,
 )
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
@@ -66,11 +68,43 @@ class _SimpleFormPanel(QWidget):
         return label
 
 
+class RingInfoPanel(_SimpleFormPanel):
+    """B44 non-canonical ring info/actions panel."""
+
+    def __init__(self, *, display_name: str, count_label: str, causal_rank: object, state: str, on_enter=None, on_global=None):
+        super().__init__("Anillo", "Vista calculada; no modifica canon")
+        self.layout.addWidget(QLabel(f"<b>{display_name}</b>"))
+        details = QLabel(
+            f"Rango causal: {causal_rank if causal_rank is not None else 'Sin clasificar'}\n"
+            f"Contenido: {count_label or 'sin elementos'}\n"
+            f"Estado: {state or 'normal'}"
+        )
+        details.setWordWrap(True)
+        details.setStyleSheet("color: #5F5A3D; background: transparent; line-height: 1.35;")
+        self.layout.addWidget(details)
+
+        row = QHBoxLayout()
+        enter_btn = QPushButton("Entrar en anillo")
+        enter_btn.setToolTip("Trabajar solo con el contenido visual de este anillo")
+        if on_enter is not None:
+            enter_btn.clicked.connect(on_enter)
+        row.addWidget(enter_btn)
+        global_btn = QPushButton("Vista global")
+        global_btn.setToolTip("Volver a mostrar todo el grafo")
+        if on_global is not None:
+            global_btn.clicked.connect(on_global)
+        row.addWidget(global_btn)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+
 class EntityQuickCreatePanel(_SimpleFormPanel):
-    def __init__(self, controller, on_created):
+    def __init__(self, controller, on_created, *, layer_id: str = "", layer_name: str = ""):
         super().__init__("Nueva hoja", "Crea una pieza narrativa sin ver campos técnicos.")
         self.controller = controller
         self.on_created = on_created
+        self.layer_id = str(layer_id or "")
+        self.layer_name = str(layer_name or "")
         form = QFormLayout()
         self.name = QLineEdit()
         self.name.setPlaceholderText("Nombre visible")
@@ -81,6 +115,8 @@ class EntityQuickCreatePanel(_SimpleFormPanel):
         self.description.setMinimumHeight(90)
         form.addRow("Nombre", self.name)
         form.addRow("Tipo", self.kind)
+        if self.layer_id:
+            form.addRow("Anillo", QLabel(self.layer_name or self.layer_id))
         form.addRow("Descripción", self.description)
         self.layout.addLayout(form)
         self.status = self.add_status()
@@ -94,11 +130,15 @@ class EntityQuickCreatePanel(_SimpleFormPanel):
         self.layout.addStretch(1)
 
     def _save(self):
-        result = self.controller.create({
+        _apptrace(f"WS entity_quick_create name={self.name.text().strip()[:60]}")
+        data = {
             "name": self.name.text().strip(),
             "entity_type": self.kind.currentText(),
             "brief_description": self.description.toPlainText().strip(),
-        })
+        }
+        if self.layer_id:
+            data["layer_ids"] = [self.layer_id]
+        result = self.controller.create(data)
         if isinstance(result, Error):
             self.status.setText(result.error)
             return
@@ -225,6 +265,7 @@ class CandidateReviewPanel(_SimpleFormPanel):
         self.cards_layout.addStretch(1)
 
     def _accept(self, candidate_id: str):
+        _apptrace(f"WS candidate_review_accept id={candidate_id[:40]}")
         result = self.controller.accept(candidate_id)
         if isinstance(result, Error):
             self.layout.addWidget(QLabel(result.error))
@@ -233,6 +274,7 @@ class CandidateReviewPanel(_SimpleFormPanel):
         self.refresh()
 
     def _reject(self, candidate_id: str):
+        _apptrace(f"WS candidate_review_reject id={candidate_id[:40]}")
         result = self.controller.reject(candidate_id)
         if isinstance(result, Error):
             self.layout.addWidget(QLabel(result.error))
@@ -320,6 +362,7 @@ class SuggestionInboxPanel(_SimpleFormPanel):
                 break
 
     def _accept(self, candidate_id: str):
+        _apptrace(f"WS suggestion_accept id={candidate_id[:40]}")
         result = self.controller.accept(candidate_id)
         if isinstance(result, Error):
             self.layout.addWidget(QLabel(result.error))
@@ -328,6 +371,7 @@ class SuggestionInboxPanel(_SimpleFormPanel):
         self.refresh()
 
     def _reject(self, candidate_id: str):
+        _apptrace(f"WS suggestion_reject id={candidate_id[:40]}")
         result = self.controller.reject(candidate_id)
         if isinstance(result, Error):
             self.layout.addWidget(QLabel(result.error))
@@ -646,6 +690,7 @@ class CreationSearchPanel(_SimpleFormPanel):
                 widget.deleteLater()
 
     def _run_search(self, text: str):
+        _apptrace(f"WS run_search query={text[:60]}")
         self._clear_results()
         query = (text or "").strip()
         if not query:
@@ -775,10 +820,12 @@ class CreationFilterPanel(_SimpleFormPanel):
         )
 
     def _apply(self):
+        _apptrace("WS filter_apply")
         self.workspace.apply_creation_filter(self._state())
         self._sync_status()
 
     def _clear(self):
+        _apptrace("WS filter_clear")
         self.entity_type.setCurrentIndex(0)
         self.relation_type.setCurrentIndex(0)
         self.relation_family.setCurrentIndex(0)
@@ -1158,6 +1205,8 @@ class CreationWorkspace(QWidget):
         self.graph.relationCreateRejected.connect(self._on_relation_create_rejected)
         self.graph.graphSelectionChanged.connect(self._on_graph_selection_changed)
         self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
+        self.graph.ringSelected.connect(self._on_ring_selected)
+        self.graph.ringFocused.connect(self._on_ring_focused)
         layout.addWidget(self.graph, 1)
 
         # Command bar area replaces the old bottom button toolbar.
@@ -1221,9 +1270,9 @@ class CreationWorkspace(QWidget):
         icon_btn("⌕", "Buscar y enfocar elementos", self._open_search_panel)
         self._filter_btn = icon_btn("◌", "Filtros visuales", self._open_filter_panel)
         self._suggestion_btn = icon_btn("⊹", "Bandeja de sugerencias", self._open_suggestion_inbox)
-        self._jobs_btn = icon_btn("Jobs", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
+        self._jobs_btn = icon_btn("Tareas", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
         self._jobs_btn.setStyleSheet(text_btn_style)
-        self._jobs_btn.setFixedWidth(64)
+        self._jobs_btn.setFixedWidth(74)
         self._suggestion_count = 0
         self._layers_toggle_btn = icon_btn("Anillos", "Abrir/cerrar panel de anillos causales", self._toggle_layer_drawer)
         self._layers_toggle_btn.setStyleSheet(text_btn_style)
@@ -1243,15 +1292,15 @@ class CreationWorkspace(QWidget):
         self._hito_from_sel_btn.clicked.connect(self._create_hito_from_selection)
         layout.addWidget(self._hito_from_sel_btn)
 
-        self._global_focus_btn = QPushButton("Global")
-        self._global_focus_btn.setToolTip("Volver a vista global")
+        self._global_focus_btn = QPushButton("Vista global")
+        self._global_focus_btn.setToolTip("Volver a mostrar todo el grafo")
         self._global_focus_btn.setStyleSheet(text_btn_style)
         self._global_focus_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._global_focus_btn.clicked.connect(self.clear_focus_scope)
         self._global_focus_btn.setVisible(False)
         layout.addWidget(self._global_focus_btn)
 
-        self._focus_label = QLabel("Global")
+        self._focus_label = QLabel("Mostrando todo")
         self._focus_label.setStyleSheet("color: #6F6A42; font-size: 11px; padding: 0 8px;")
         layout.addWidget(self._focus_label)
 
@@ -1269,14 +1318,20 @@ class CreationWorkspace(QWidget):
         self._layers_view_btn.clicked.connect(self._toggle_layers_view_from_toolbar)
         layout.addWidget(self._layers_view_btn)
 
-        fit_btn = QPushButton("Fit all")
-        fit_btn.setToolTip("Encajar todo")
+        self._concentric_view_btn = QPushButton("Concéntrica")
+        self._concentric_view_btn.setToolTip("Mostrar anillos causales como coronas concéntricas calculadas")
+        self._concentric_view_btn.setStyleSheet(text_btn_style)
+        self._concentric_view_btn.clicked.connect(self._toggle_concentric_view_from_toolbar)
+        layout.addWidget(self._concentric_view_btn)
+
+        fit_btn = QPushButton("Encajar")
+        fit_btn.setToolTip("Encajar todo el grafo en pantalla")
         fit_btn.setStyleSheet(text_btn_style)
         fit_btn.clicked.connect(self.fit_all)
         layout.addWidget(fit_btn)
 
-        reset_btn = QPushButton("Reset")
-        reset_btn.setToolTip("Reset vista")
+        reset_btn = QPushButton("Centrar")
+        reset_btn.setToolTip("Centrar la vista y restaurar zoom")
         reset_btn.setStyleSheet(text_btn_style)
         reset_btn.clicked.connect(self.reset_view)
         layout.addWidget(reset_btn)
@@ -1297,37 +1352,51 @@ class CreationWorkspace(QWidget):
         bar = QFrame()
         bar.setObjectName("aiCommandBar")
         bar.setStyleSheet(
-            "QFrame#aiCommandBar { background: rgba(248,246,237,0.94); "
+            "QFrame#aiCommandBar { background: rgba(250,248,240,0.97); "
             "border-top: 1px solid #D8D6C8; }"
         )
-        bar.setFixedHeight(62)
+        bar.setFixedHeight(66)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(80, 10, 80, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(72, 10, 72, 10)
+        layout.setSpacing(10)
+
+        prompt_label = QLabel("Dendro")
+        prompt_label.setStyleSheet(
+            "color: #6F6A42; font-size: 12px; font-weight: 700; "
+            "background: transparent; border: none; padding-right: 4px;"
+        )
+        prompt_label.setToolTip("Las respuestas IA son candidatas revisables; no cambian canon automáticamente.")
+        layout.addWidget(prompt_label)
 
         self._command_input = QLineEdit()
         self._command_input.setObjectName("aiCommandInput")
-        self._command_input.setPlaceholderText("Pídele a Dendro que actúe sobre el grafo…")
+        self._command_input.setPlaceholderText("Pide una acción revisable: sugerir personaje, detectar contradicción, expandir causa…")
         self._command_input.setStyleSheet(
-            "QLineEdit#aiCommandInput { background: rgba(255,255,255,0.82); "
-            "border: 1px solid #D0CCB8; border-radius: 18px; padding: 8px 14px; "
-            "font-size: 13px; color: #504B2E; }"
+            "QLineEdit#aiCommandInput { background: rgba(255,255,255,0.90); "
+            "border: 1px solid #D0CCB8; border-radius: 20px; padding: 9px 16px; "
+            "font-size: 13px; color: #504B2E; } "
+            "QLineEdit#aiCommandInput:focus { border: 2px solid #AFA77A; padding: 8px 15px; background: #FFFFFF; }"
         )
         self._command_input.returnPressed.connect(self._submit_ai_command)
         layout.addWidget(self._command_input, 1)
 
-        self._command_submit_btn = QPushButton("↵")
-        self._command_submit_btn.setToolTip("Crear job IA revisable")
+        self._command_submit_btn = QPushButton("Crear")
+        self._command_submit_btn.setToolTip("Crear una tarea IA revisable")
         self._command_submit_btn.setStyleSheet(
             "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
-            "border-radius: 17px; min-width: 38px; min-height: 34px; font-size: 16px; } "
-            "QPushButton:hover { background: #504B2E; }"
+            "border-radius: 18px; min-width: 62px; min-height: 36px; font-size: 12px; font-weight: 700; } "
+            "QPushButton:hover { background: #504B2E; } "
+            "QPushButton:pressed { background: #403B24; padding-top: 2px; }"
         )
         self._command_submit_btn.clicked.connect(self._submit_ai_command)
         layout.addWidget(self._command_submit_btn)
 
         self._job_status_label = QLabel("Sin tareas IA activas")
-        self._job_status_label.setStyleSheet("color: #6F6A42; font-size: 11px; min-width: 170px;")
+        self._job_status_label.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; min-width: 190px; "
+            "background: transparent; border: none;"
+        )
+        self._job_status_label.setToolTip("Estado de las tareas IA. Todo resultado queda pendiente de revisión.")
         layout.addWidget(self._job_status_label)
         return bar
 
@@ -1338,6 +1407,7 @@ class CreationWorkspace(QWidget):
         self.ctx.log("info", "Para crear relación: arrastra desde un nodo o árbol hacia otro elemento del grafo.")
 
     def _toggle_layer_drawer(self):
+        _apptrace("WS toggle_layer_drawer")
         """Persistent explicit drawer: stays open until user toggles it again."""
         project = self._get_active_project()
         active = bool(project and getattr(project, "worldbuilding_active", False))
@@ -1350,6 +1420,7 @@ class CreationWorkspace(QWidget):
             self._layer_flyout.show_flyout()
 
     def _toggle_layers_view_from_toolbar(self):
+        _apptrace("WS toggle_layers_view")
         project = self._get_active_project()
         active = bool(project and getattr(project, "worldbuilding_active", False))
         if not active:
@@ -1361,9 +1432,57 @@ class CreationWorkspace(QWidget):
         else:
             self._activate_layers_view()
 
+    def _toggle_concentric_view_from_toolbar(self):
+        _apptrace("WS toggle_concentric_view")
+        """Toggle B44 calculated concentric rings layout."""
+        project = self._get_active_project()
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_toggle_concentric_enter "
+            f"project={project is not None} entities={len(getattr(project, 'entities', []) or []) if project is not None else 'na'} "
+            f"project_layers={len(getattr(project, 'world_layers', []) or []) if project is not None else 'na'} "
+            f"ctx_layout={getattr(self.ctx, 'creation_layout_mode', '')!r}",
+        )
+        if project is None:
+            self.ctx.log("warning", "Abre o crea un proyecto para usar la vista concéntrica")
+            return
+        canvas = getattr(self.graph, "canvas", None)
+        current = str(getattr(canvas, "_layout_mode_active", "free")) if canvas is not None else "free"
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_toggle_concentric_current "
+            f"canvas_exists={canvas is not None} canvas_layout={current!r} widget_layout={getattr(self.graph, '_layout_mode', '')!r} "
+            f"canvas_visible={self.graph.canvas.isVisible() if hasattr(self.graph, 'canvas') else 'na'} "
+            f"empty_visible={self.graph.empty.isVisible() if hasattr(self.graph, 'empty') else 'na'}",
+        )
+        if current == "concentric_rings":
+            if hasattr(self.graph, "set_layout_mode"):
+                self.graph.set_layout_mode("free")
+            else:
+                self.graph.set_worldbuilding_active(False)
+            self.ctx.log("info", "Vista libre activa")
+            return
+        if hasattr(self.graph, "set_layout_mode"):
+            self.graph.set_layout_mode("concentric_rings")
+        else:
+            self.graph.set_worldbuilding_active(True)
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_toggle_concentric_after "
+            f"widget_layout={getattr(self.graph, '_layout_mode', '')!r} "
+            f"canvas_layout={getattr(getattr(self.graph, 'canvas', None), '_layout_mode_active', '')!r} "
+            f"canvas_visible={self.graph.canvas.isVisible() if hasattr(self.graph, 'canvas') else 'na'} "
+            f"empty_visible={self.graph.empty.isVisible() if hasattr(self.graph, 'empty') else 'na'} "
+            f"ring_items={len(getattr(getattr(self.graph, 'canvas', None), '_ring_items', {}))}",
+        )
+        if hasattr(self, "_layer_flyout"):
+            self._layer_flyout.update_toggle_state(False)
+        self.ctx.log("info", "Vista concéntrica de anillos activa")
+
     def _current_context_scope(self) -> dict:
         project = self._get_active_project()
         layer_ids = tuple(getattr(getattr(self.graph, "canvas", None), "_visual_filter", VisualFilterState()).layer_ids)
+        focused_ring_id = self.graph.focused_ring_id() if hasattr(self.graph, "focused_ring_id") else ""
         selected_entity_ids = self.graph.selected_entity_ids() if hasattr(self, "graph") else []
         selected_relation_ids = self.graph.selected_relation_ids() if hasattr(self, "graph") else []
         creative_brief = {}
@@ -1385,6 +1504,8 @@ class CreationWorkspace(QWidget):
             "selected_entity_ids": selected_entity_ids,
             "selected_relation_ids": selected_relation_ids,
             "active_layer_ids": list(layer_ids),
+            "active_ring_id": focused_ring_id,
+            "focused_ring_id": focused_ring_id,
             "focus_label": self._focus_label.text() if hasattr(self, "_focus_label") else "Global",
             "visual_filters_active": self.graph.active_filter_count() if hasattr(self, "graph") else 0,
             "creative_brief": creative_brief,
@@ -1392,12 +1513,34 @@ class CreationWorkspace(QWidget):
             "branch_creative_context": branch_context,
         }
 
+    def _apply_command_scope_hints(self, prompt: str, scope: dict) -> tuple[str, dict] | None:
+        """B44 debt: understand lightweight ring scope phrases without deep NLP."""
+        lowered = prompt.lower()
+        ring_phrases = ("en este anillo", "dentro del anillo actual", "en el anillo actual")
+        if not any(phrase in lowered for phrase in ring_phrases):
+            return prompt, scope
+        focused_ring_id = str(scope.get("focused_ring_id") or scope.get("active_ring_id") or "")
+        if not focused_ring_id:
+            self._job_status_label.setText("Entra primero en un anillo para usar “en este anillo”")
+            self.ctx.log("warning", "Comando IA con scope de anillo sin anillo enfocado")
+            return None
+        scoped = dict(scope)
+        scoped["command_scope"] = "focused_ring"
+        scoped["active_ring_id"] = focused_ring_id
+        scoped["focused_ring_id"] = focused_ring_id
+        return prompt, scoped
+
     def _submit_ai_command(self):
+        _apptrace(f"WS submit_ai_command prompt={self._command_input.text().strip()[:60]}")
         prompt = self._command_input.text().strip()
         if not prompt:
             self._job_status_label.setText("Escribe una orden para Dendro")
             return
         scope = self._current_context_scope()
+        scoped_command = self._apply_command_scope_hints(prompt, scope)
+        if scoped_command is None:
+            return
+        prompt, scope = scoped_command
         job_type = classify_ai_job_intent(prompt, worldbuilding_active=bool(scope.get("worldbuilding_active")))
         result = self.ai_job_service.create_job(job_type, prompt, context_scope=scope)
         if isinstance(result, Error):
@@ -1407,6 +1550,7 @@ class CreationWorkspace(QWidget):
         job = result.value
         self._command_input.clear()
         self._job_status_label.setText(f"Job creado: {job.type.value.replace('_', ' ')}")
+        pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
         self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
         self._start_ai_job_worker(job.id)
@@ -1422,6 +1566,10 @@ class CreationWorkspace(QWidget):
 
     def _on_ai_job_status(self, status: str, message: str, progress: float):
         percent = int(max(0.0, min(1.0, progress)) * 100)
+        self._job_status_label.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; min-width: 190px; "
+            "background: transparent; border: none;"
+        )
         self._job_status_label.setText(f"Dendro: {message} ({percent}%)")
         self._sync_jobs_indicator()
 
@@ -1431,14 +1579,33 @@ class CreationWorkspace(QWidget):
             self._job_status_label.setText(result.error)
             return
         job = result.value
+        self._job_status_label.setStyleSheet(
+            "color: #58744A; font-size: 11px; min-width: 190px; "
+            "background: transparent; border: none;"
+        )
         self._job_status_label.setText(job.message or "Resultado listo")
+        pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
         self._open_ai_job_result(job)
 
     def _on_ai_job_failed(self, job_id: str, error: str):
-        self._job_status_label.setText(f"Job fallido: {error}")
+        self._job_status_label.setText(f"Error: {error}")
+        self._job_status_label.setStyleSheet("color: #C0392B; font-size: 11px; min-width: 190px; font-weight: 700;")
+        pulse_feedback(self._job_status_label)
         self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
         self._sync_jobs_indicator()
+        # Clear error styling after 8 seconds so it doesn't persist forever
+        QTimer.singleShot(8000, self._reset_job_status_style)
+
+    def _reset_job_status_style(self):
+        self._job_status_label.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; min-width: 190px; "
+            "background: transparent; border: none;"
+        )
+        # Only reset text if it's still showing an error
+        current = self._job_status_label.text()
+        if current.startswith("Error:"):
+            self._job_status_label.setText("Sin tareas IA activas")
 
     def _on_ai_worker_stopped(self):
         self._ai_workers = {jid: worker for jid, worker in self._ai_workers.items() if worker.isRunning()}
@@ -1467,7 +1634,7 @@ class CreationWorkspace(QWidget):
         active = [j for j in jobs if getattr(getattr(j, "status", ""), "value", getattr(j, "status", "")) in {"queued", "building_context", "planning", "waiting_for_model", "running", "postprocessing"}]
         ready = [j for j in jobs if getattr(getattr(j, "status", ""), "value", getattr(j, "status", "")) == "ready_for_review"]
         total = len(active) + len(ready)
-        btn.setText(f"Jobs {total}" if total else "Jobs")
+        btn.setText(f"Tareas {total}" if total else "Tareas")
 
     def _open_ai_job_result(self, job):
         drawer = self.ctx.drawer
@@ -1513,6 +1680,7 @@ class CreationWorkspace(QWidget):
             self._layer_flyout.update_toggle_state(False)
 
     def _apply_layer_filter(self, layer_id: str):
+        _apptrace(f"WS apply_layer_filter layer={layer_id[:40]}")
         """Filter the graph to show only nodes/edges in the selected causal layer."""
         from hosts.DesktopHostPySide.widgets.graph_canvas import VisualFilterState
         self.graph.canvas.apply_visual_filter(
@@ -1520,11 +1688,13 @@ class CreationWorkspace(QWidget):
         )
 
     def _clear_layer_filter(self):
+        _apptrace("WS clear_layer_filter")
         """Remove layer filter and show all nodes."""
         if hasattr(self.graph, "canvas") and hasattr(self.graph.canvas, "clear_visual_filters"):
             self.graph.canvas.clear_visual_filters()
 
     def _open_search_panel(self):
+        _apptrace("WS open_search_panel")
         drawer = self.ctx.drawer
         if drawer is None:
             return
@@ -1533,6 +1703,7 @@ class CreationWorkspace(QWidget):
         drawer.open()
 
     def _open_filter_panel(self):
+        _apptrace("WS open_filter_panel")
         drawer = self.ctx.drawer
         if drawer is None:
             return
@@ -1610,10 +1781,89 @@ class CreationWorkspace(QWidget):
         entity = self._entity_by_id(entity_id)
         return str(getattr(entity, "name", entity_id)) if entity is not None else "Elemento"
 
+    def _on_ring_selected(self, ring_id: str, display_name: str):
+        _apptrace(f"WS ring_selected ring={ring_id[:40]} name={display_name[:40]}")
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_ring_selected "
+            f"ring_id={ring_id!r} display={display_name!r} "
+            f"active_ring={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
+            f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
+        )
+        self._set_focus_breadcrumb(f"Anillo seleccionado: {display_name}", active=True)
+        ring = self.graph.ring_visual_by_id(ring_id) if hasattr(self.graph, "ring_visual_by_id") else None
+        drawer = self.ctx.drawer
+        if drawer is not None and ring is not None:
+            panel = RingInfoPanel(
+                display_name=ring.display_name,
+                count_label=ring.count_label,
+                causal_rank=ring.causal_rank,
+                state=ring.state,
+                on_enter=lambda _checked=False, rid=ring_id: self.focus_ring_scope(rid),
+                on_global=lambda _checked=False: self.clear_focus_scope(),
+            )
+            drawer.set_content(panel, title=f"Anillo: {ring.display_name}")
+            drawer.open()
+        self.ctx.log("info", f"Anillo seleccionado: {display_name}")
+
+    def _on_ring_focused(self, ring_id: str, display_name: str):
+        _apptrace(f"WS ring_focused ring={ring_id[:40]} name={display_name[:40]}")
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_ring_focused_signal "
+            f"ring_id={ring_id!r} display={display_name!r} "
+            f"active_ring={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
+            f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
+        )
+        self._set_focus_breadcrumb(f"Global > Anillo: {display_name}", active=True)
+        self._sync_filter_indicator()
+        self.ctx.log("info", f"Vista enfocada de anillo activa: {display_name}")
+
+    def focus_ring_scope(self, ring_id: str) -> bool:
+        self.ctx.log("info", f"B44TRACE workspace_focus_ring_call ring_id={ring_id!r}")
+        ok = self.graph.focus_ring_scope(ring_id)
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_focus_ring_result "
+            f"ok={ok} active_ring={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
+            f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r} "
+            f"filters={self.graph.active_filter_count() if hasattr(self.graph, 'active_filter_count') else 'na'}",
+        )
+        if ok:
+            name = str(getattr(getattr(self.graph, "canvas", None), "_ring_display_name", lambda rid: "Anillo")(ring_id))
+            self._set_focus_breadcrumb(f"Global > Anillo: {name}", active=True)
+            self._sync_filter_indicator()
+        return ok
+
+    def _active_creation_ring_id(self) -> str:
+        ring_id = self.graph.active_ring_id() if hasattr(self.graph, "active_ring_id") else ""
+        if ring_id == "__unclassified__":
+            return ""
+        return str(ring_id or "")
+
+    def _with_active_ring_payload(self, data: dict) -> dict:
+        _apptrace(f"WS with_active_ring_payload ring={self._active_creation_ring_id()[:40]}")
+        ring_id = self._active_creation_ring_id()
+        self.ctx.log(
+            "info",
+            "B44TRACE workspace_active_ring_payload "
+            f"ring_id={ring_id!r} input_layer_ids={data.get('layer_ids', [])!r} "
+            f"graph_active={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
+            f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
+        )
+        if ring_id:
+            merged = dict(data)
+            existing = [str(value) for value in (merged.get("layer_ids") or []) if value]
+            if ring_id not in existing:
+                existing.insert(0, ring_id)
+            merged["layer_ids"] = existing
+            return merged
+        return data
+
     def focus_tree_scope(self, tree_id: str) -> bool:
         ok = self.graph.focus_tree_scope(tree_id)
         if ok:
-            self._set_focus_breadcrumb(f"Global > {self._entity_name(tree_id)}", active=True)
+            self._set_focus_breadcrumb(f"Mostrando árbol: {self._entity_name(tree_id)}", active=True)
             self.ctx.log("info", "Vista enfocada de árbol activa")
         return ok
 
@@ -1621,21 +1871,25 @@ class CreationWorkspace(QWidget):
         ok = self.graph.focus_neighborhood(item_id)
         if ok:
             label = self._entity_name(item_id) if kind != "relation" else "Relación seleccionada"
-            self._set_focus_breadcrumb(f"Global > Vecindad > {label}", active=True)
+            self._set_focus_breadcrumb(f"Mostrando vecindad: {label}", active=True)
             self.ctx.log("info", "Vista enfocada de vecindad activa")
         return ok
 
     def clear_focus_scope(self):
         self.graph.clear_focus_scope()
-        self._set_focus_breadcrumb("Global", active=False)
+        self._set_focus_breadcrumb("Mostrando todo", active=False)
         self._sync_filter_indicator()
         self.ctx.log("info", "Vista global restaurada")
 
     def fit_all(self):
+        _apptrace("WS fit_all")
         self.graph.fit_all()
+        self.ctx.log("info", "Grafo encajado en pantalla")
 
     def reset_view(self):
+        _apptrace("WS reset_view")
         self.graph.reset_view()
+        self.ctx.log("info", "Vista centrada")
 
     def center_selection(self):
         if not self.graph.center_selection():
@@ -1866,13 +2120,13 @@ class CreationWorkspace(QWidget):
         if self.entity_controller is None:
             self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
             return
-        result = self.entity_controller.create({
+        result = self.entity_controller.create(self._with_active_ring_payload({
             "name": "Nueva hoja",
             "entity_type": "nota",
             "brief_description": "",
             "canon_state": "borrador",
             "custom_metadata": {"_visual_draft": True},
-        })
+        }))
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando hoja: {result.error}")
             return
@@ -1890,13 +2144,13 @@ class CreationWorkspace(QWidget):
         if self.entity_controller is None:
             self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
             return
-        result = self.entity_controller.create({
+        result = self.entity_controller.create(self._with_active_ring_payload({
             "name": "Nueva rama",
             "entity_type": "contenedor",
             "brief_description": "",
             "canon_state": "borrador",
             "custom_metadata": {"_visual_draft": True},
-        })
+        }))
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando rama: {result.error}")
             return
@@ -1937,6 +2191,11 @@ class CreationWorkspace(QWidget):
             return
         self.ctx.log("info", "Hoja asignada a la rama")
         self.refresh()
+
+    def _on_node_converted_to_branch(self, entity_id: str):
+        """Callback after a leaf entity is converted to branch (container/rama).
+        Opens the tree detail panel so the user can configure the new branch."""
+        self._open_tree_panel(entity_id)
 
     def _open_tree_panel(self, entity_id: str, *, is_new: bool = False):
         if self.entity_controller is None or self.ctx.drawer is None:
@@ -2040,6 +2299,8 @@ class CreationWorkspace(QWidget):
             )
         if not active and hasattr(self, "_layer_flyout"):
             self._layer_flyout.hide_flyout()
+        # Only propagate deactivation to graph canvas (avoids forcing layer view
+        # on project load). Layer view activation goes through _toggle_layers_view.
         if not active and hasattr(self, "graph") and hasattr(self.graph, "set_worldbuilding_active"):
             self.graph.set_worldbuilding_active(False)
 
@@ -2059,7 +2320,14 @@ class CreationWorkspace(QWidget):
         if self.entity_controller is None or drawer is None:
             self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
             return
-        panel = EntityQuickCreatePanel(self.entity_controller, on_created=self.refresh)
+        ring_id = self._active_creation_ring_id()
+        ring = self.graph.ring_visual_by_id(ring_id) if ring_id and hasattr(self.graph, "ring_visual_by_id") else None
+        panel = EntityQuickCreatePanel(
+            self.entity_controller,
+            on_created=self.refresh,
+            layer_id=ring_id,
+            layer_name=str(getattr(ring, "display_name", "") or ""),
+        )
         drawer.set_content(panel, title="Nueva hoja")
         drawer.open()
 
@@ -2111,6 +2379,7 @@ class CreationWorkspace(QWidget):
             relation_controller=self.relation_controller,
             is_new=is_new,
             on_focus_neighborhood=lambda eid=entity_id: self.focus_neighborhood(eid, kind="entity"),
+            on_convert_to_branch=self._on_node_converted_to_branch,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()

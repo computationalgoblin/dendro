@@ -7,7 +7,7 @@ outside the canvas through application services.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
@@ -29,6 +29,12 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import EmptyState, enum_human
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
+from packages.domain.world_layer import default_world_layers
+
+
+def _b44trace(message: str):
+    """Temporary B44 diagnostic trace; remove after Windows repro is diagnosed."""
+    print(f"B44TRACE {message}", flush=True)
 
 
 _NODE_COLORS = {
@@ -126,6 +132,25 @@ class _EdgeView:
     direction: str = "unidireccional"
     color: str = ""
     proposed: bool = False
+    inter_ring: bool = False
+    causal: bool = False
+
+
+@dataclass(frozen=True)
+class _RingVisual:
+    """Calculated B44 concentric ring state. Ephemeral UI data, never canon."""
+
+    ring_id: str
+    display_name: str
+    causal_rank: int | None
+    color: str
+    inner_radius: float
+    outer_radius: float
+    item_ids: tuple[str, ...] = ()
+    relation_ids: tuple[str, ...] = ()
+    count_label: str = ""
+    state: str = "normal"  # normal | focused | hidden
+
 
 @dataclass(frozen=True)
 class VisualFilterState:
@@ -216,6 +241,7 @@ def _relation_view(relation: Any) -> _EdgeView:
         label=label,
         direction=direction,
         color=color,
+        causal=relation_family(kind) == "causal",
     )
 
 
@@ -561,6 +587,8 @@ class GraphTreeItem(QGraphicsRectItem):
         self._reposition_type_badge()
         self._reposition_status_dots()
         self._collapse_indicator.setPos(10, _CONTAINER_HEADER_HEIGHT + 4)
+        # Hide member count badge (collapse indicator shows the count instead)
+        self._count_item.setVisible(False)
         self._collapsed = True
 
     def _collapse_silent(self):
@@ -586,6 +614,8 @@ class GraphTreeItem(QGraphicsRectItem):
         """Restore ALL descendants transitively + recalculate layout bottom-up."""
         self._collapsed = False
         self._collapse_indicator.setVisible(False)
+        # Restore member count badge
+        self._count_item.setVisible(True)
         # 1. Expand descendant trees first (bottom-up)
         for child in self._child_nodes:
             if isinstance(child, GraphTreeItem) and child._collapsed:
@@ -776,58 +806,26 @@ class GraphTreeItem(QGraphicsRectItem):
             super().mouseDoubleClickEvent(event)
 
     def shape(self) -> QPainterPath:
-        """Hit testing: only the header bar and border are interactive.
-
-        The content area passes through to children.  This prevents the
-        container from eating clicks meant for its children.
-        """
+        """Hit testing: full rect always. Children have higher z-order so they
+        get priority in _item_node_at when expanded and a child is under cursor."""
         path = QPainterPath()
-        r = self.rect()
-        h = _CONTAINER_HEADER_HEIGHT
-        border = 10.0  # border width for edge click area
-
-        # Header bar
-        path.addRect(QRectF(r.left(), r.top(), r.width(), h))
-
-        # Left border strip
-        path.addRect(QRectF(r.left(), r.top(), border, r.height()))
-        # Right border strip
-        path.addRect(QRectF(r.right() - border, r.top(), border, r.height()))
-        # Bottom border strip
-        path.addRect(QRectF(r.left(), r.bottom() - border, r.width(), border))
-
+        path.addRect(self.rect())
         return path
 
     def mousePressEvent(self, event):
-        """Only accept press if it's on header/border; pass through to children otherwise."""
-        local_pos = event.pos()
-        header_bottom = self.rect().top() + _CONTAINER_HEADER_HEIGHT
-
-        # Check if click is in header area
-        if local_pos.y() <= header_bottom:
-            super().mousePressEvent(event)
-            return
-
-        # Check if click is in border area (within 10px of edge)
-        r = self.rect()
-        in_left = local_pos.x() <= r.left() + 10
-        in_right = local_pos.x() >= r.right() - 10
-        in_bottom = local_pos.y() >= r.bottom() - 10
-
-        if in_left or in_right or in_bottom:
-            super().mousePressEvent(event)
-            return
-
-        # Click is in content area — check if a child item is under cursor
-        scene_pos = self.mapToScene(local_pos)
-        child_at = self.scene().itemAt(scene_pos, self.scene().views()[0].transform() if self.scene().views() else QTransform())
-        if child_at and child_at != self and child_at is not None:
-            # Don't accept — let the child handle it
-            event.ignore()
-            return
-
-        # No child under cursor — select the container itself
+        """Handle clicks: select the container and propagate to canvas view."""
+        # Always propagate to the view so it can handle selection + entitySelected
+        # regardless of where in the container the click lands.
         super().mousePressEvent(event)
+
+    def _notify_canvas_selected(self):
+        """Propagate selection to the GraphCanvasView so entitySelected fires."""
+        views = self.scene().views() if self.scene() else []
+        for view in views:
+            if isinstance(view, GraphCanvasView):
+                view.entitySelected.emit(self.node.entity_id)
+                view._set_single_node_selection(self)
+                break
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -868,7 +866,10 @@ class GraphEdgeItem(QGraphicsPathItem):
         color = QColor("#DCA35F" if edge.proposed else base_color)
 
         self._normal_pen = QPen(color, 2.6 if edge.proposed else 2.2)
-        if edge.proposed:
+        if edge.inter_ring:
+            self._normal_pen.setStyle(Qt.PenStyle.DashDotLine if edge.causal else Qt.PenStyle.DotLine)
+            self._normal_pen.setWidthF(3.0 if edge.causal else 2.4)
+        elif edge.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._normal_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         self._selected_pen = QPen(color.lighter(135), 4.0)
@@ -997,6 +998,44 @@ class GraphEdgeItem(QGraphicsPathItem):
         super().mousePressEvent(event)
 
 
+class GraphRingItem(QGraphicsPathItem):
+    """B44 selectable ring background. Empty-area clicks select the ring.
+
+    Nodes, tree containers and relation handles have higher z-order, so this
+    item only wins hit testing in empty corona areas.
+    """
+
+    def __init__(self, ring: _RingVisual, path: QPainterPath):
+        super().__init__(path)
+        self.ring = ring
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"Anillo: {ring.display_name}\n{ring.count_label}\nDoble click: entrar en anillo")
+        self.setZValue(-100)
+
+    def _canvas_view(self):
+        scene = self.scene()
+        if scene is None:
+            return None
+        for view in scene.views():
+            if isinstance(view, GraphCanvasView):
+                return view
+        return None
+
+    def mousePressEvent(self, event):
+        view = self._canvas_view()
+        if view is not None:
+            view.select_ring(self.ring.ring_id)
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        view = self._canvas_view()
+        if view is not None:
+            view.select_ring(self.ring.ring_id)
+            view.focus_ring_scope(self.ring.ring_id)
+        event.accept()
+
 
 _STRUCTURAL_RELATIONS = {"contiene", "pertenece_a"}
 _CAUSAL_RELATIONS = {"deriva_de", "condiciona", "explica", "contradice", "produce_consecuencia_en"}
@@ -1022,6 +1061,8 @@ class GraphCanvasView(QGraphicsView):
     graphSelectionChanged = Signal(list, list)
     nodeAssignToTreeRequested = Signal(str, str)  # entity_id, tree_entity_id
     relationCreateRejected = Signal(str)
+    ringSelected = Signal(str, str)  # ring_id, display_name
+    ringFocused = Signal(str, str)  # ring_id, display_name
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1040,7 +1081,13 @@ class GraphCanvasView(QGraphicsView):
         self._all_nodes: list[_NodeView] = []
         self._all_edges: list[_EdgeView] = []
         self._all_layers: list[Any] = []
-        self._layer_mode_active = False
+        self._layout_mode_active = "free"
+        self._layer_mode_active = False  # compatibility flag for existing B36 toolbar code
+        self._ring_visuals: list[_RingVisual] = []
+        self._ring_items: dict[str, GraphRingItem] = {}
+        self._node_ring_ids: dict[str, str] = {}
+        self._selected_ring_id = ""
+        self._focused_ring_id = ""
         self._visual_filter = VisualFilterState()
         self._membership: dict[str, str] = {}  # entity_id -> tree_entity_id
         self._pending_source: GraphNodeItem | None = None
@@ -1096,8 +1143,24 @@ class GraphCanvasView(QGraphicsView):
             self._emit_selection_changed()
 
     def wheelEvent(self, event):
-        factor = 1.12 if event.angleDelta().y() > 0 else 1 / 1.12
+        """Smooth bounded zoom under mouse.
+
+        Keeps camera movement predictable: small steps, no accidental infinite zoom,
+        and immediate feedback on every wheel gesture.
+        """
+        current = self.transform().m11()
+        if event.angleDelta().y() > 0:
+            factor = 1.08
+            if current >= 3.0:
+                event.accept()
+                return
+        else:
+            factor = 1 / 1.08
+            if current <= 0.22:
+                event.accept()
+                return
         self.scale(factor, factor)
+        event.accept()
 
     def _item_node_at(self, view_pos) -> GraphNodeItem | GraphTreeItem | None:
         """Find a GraphNodeItem or GraphTreeItem under *view_pos*, ignoring drag overlays."""
@@ -1117,6 +1180,25 @@ class GraphCanvasView(QGraphicsView):
                 if isinstance(check, GraphEdgeItem):
                     return check
                 check = check.parentItem()
+        return None
+
+    def _item_ring_at(self, view_pos) -> GraphRingItem | None:
+        """Find the precise concentric ring under *view_pos* by radius.
+
+        Qt's item lookup can return several QGraphicsPathItem rings for the same
+        point because large annular paths overlap in their item shapes/z-order.
+        B44 ring activation must use the actual concentric radius, not the first
+        item returned by QGraphicsView.items().
+        """
+        scene_pos = self.mapToScene(view_pos.toPoint())
+        radius = math.hypot(scene_pos.x(), scene_pos.y())
+        matches: list[GraphRingItem] = []
+        for ring_id, item in self._ring_items.items():
+            ring = item.ring
+            if ring.inner_radius <= radius <= ring.outer_radius:
+                matches.append(item)
+        if matches:
+            return min(matches, key=lambda item: item.ring.outer_radius)
         return None
 
     def _set_single_node_selection(self, node: GraphNodeItem):
@@ -1166,6 +1248,13 @@ class GraphCanvasView(QGraphicsView):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            items = self.items(event.position().toPoint())
+            _b44trace(
+                "mouse_press "
+                f"layout={self._layout_mode_active} pos=({event.position().x():.1f},{event.position().y():.1f}) "
+                f"scene=({self.mapToScene(event.position().toPoint()).x():.1f},{self.mapToScene(event.position().toPoint()).y():.1f}) "
+                f"items={[type(item).__name__ for item in items[:8]]!r}"
+            )
             alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
             ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
             node = self._item_node_at(event.position())
@@ -1198,8 +1287,42 @@ class GraphCanvasView(QGraphicsView):
                 self.relationSelected.emit(edge.edge.relation_id)
                 event.accept()
                 return
+            ring = self._item_ring_at(event.position())
+            _b44trace(
+                "mouse_press_hit "
+                f"node={getattr(getattr(node, 'node', None), 'entity_id', '') if node is not None else ''!r} "
+                f"edge={getattr(getattr(edge, 'edge', None), 'relation_id', '') if edge is not None else ''!r} "
+                f"ring={getattr(getattr(ring, 'ring', None), 'ring_id', '') if ring is not None else ''!r}"
+            )
+            if ring is not None:
+                self.select_ring(ring.ring.ring_id)
+                event.accept()
+                return
             self.clear_selection()
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            items = self.items(event.position().toPoint())
+            _b44trace(
+                "mouse_double "
+                f"layout={self._layout_mode_active} pos=({event.position().x():.1f},{event.position().y():.1f}) "
+                f"items={[type(item).__name__ for item in items[:8]]!r}"
+            )
+            node = self._item_node_at(event.position())
+            edge = self._item_edge_at(event.position())
+            if node is None and edge is None:
+                ring = self._item_ring_at(event.position())
+                _b44trace(
+                    "mouse_double_hit "
+                    f"node='' edge='' ring={getattr(getattr(ring, 'ring', None), 'ring_id', '') if ring is not None else ''!r}"
+                )
+                if ring is not None:
+                    self.select_ring(ring.ring.ring_id)
+                    self.focus_ring_scope(ring.ring.ring_id)
+                    event.accept()
+                    return
+        super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
         # Alt-drag: moving node into tree container
@@ -1232,9 +1355,14 @@ class GraphCanvasView(QGraphicsView):
             target_tree = self._item_tree_at(event.position())
             self._finish_alt_drag()
             if target_tree is not None and source_item is not None:
-                self.nodeAssignToTreeRequested.emit(
-                    source_item.node.entity_id, target_tree.node.entity_id
-                )
+                src_id = source_item.node.entity_id
+                tgt_id = target_tree.node.entity_id
+                if self.would_create_cycle(src_id, tgt_id):
+                    self.relationCreateRejected.emit(
+                        "No se puede asignar: crearía un ciclo de contención"
+                    )
+                else:
+                    self.nodeAssignToTreeRequested.emit(src_id, tgt_id)
             event.accept()
             return
 
@@ -1460,6 +1588,10 @@ class GraphCanvasView(QGraphicsView):
         self._nodes.clear()
         self._trees.clear()
         self._edges.clear()
+        self._ring_visuals.clear()
+        self._ring_items.clear()
+        self._node_ring_ids.clear()
+        self._selected_ring_id = ""
         self._emit_selection_changed()
 
     def _layer_for_node(self, node: _NodeView, layers_by_id: dict[str, Any]):
@@ -1548,13 +1680,283 @@ class GraphCanvasView(QGraphicsView):
             self._edges.append(item)
         self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def set_graph(self, nodes: list[_NodeView], edges: list[_EdgeView], *, layer_mode: bool = False, layers: list[Any] | None = None):
+    def _ring_color(self, index: int) -> str:
+        palette = [
+            "#E9D8FD",
+            "#DBEAFE",
+            "#D1FAE5",
+            "#FEF3C7",
+            "#FCE7F3",
+            "#E0F2FE",
+            "#EDE9FE",
+            "#FDE68A",
+        ]
+        return palette[index % len(palette)]
+
+    def _ring_item_size_estimate(self, node: _NodeView) -> float:
+        if node.kind.lower() != "contenedor":
+            return 124.0
+        entity = getattr(node, "entity", None)
+        child_ids = list(getattr(entity, "child_entity_ids", []) or getattr(entity, "children_ids", []) or getattr(entity, "entity_ids", []) or [])
+        if not child_ids:
+            return _CONTAINER_MIN_WIDTH
+        cols = max(1, min(4, math.ceil(math.sqrt(len(child_ids)))))
+        rows = math.ceil(len(child_ids) / cols)
+        estimated_width = max(_CONTAINER_MIN_WIDTH, cols * 118.0 + (cols - 1) * _CONTAINER_CHILD_SPACING + _CONTAINER_PADDING * 2)
+        estimated_height = max(_CONTAINER_MIN_HEIGHT, _CONTAINER_HEADER_HEIGHT + rows * 92.0 + (rows - 1) * 32.0 + _CONTAINER_PADDING)
+        return max(estimated_width, estimated_height)
+
+    def _build_concentric_ring_visuals(
+        self,
+        nodes: list[_NodeView],
+        edges: list[_EdgeView],
+        layers: list[Any],
+    ) -> tuple[list[_RingVisual], dict[str, str]]:
+        """Build ephemeral B44 ring visuals and node→ring assignment.
+
+        Uses WorldLayer/Anillo instances already present in the project. No
+        persistence or canon mutation is performed here.
+        """
+        visible_layers = [layer for layer in sort_layers_by_causal_rank(layers or []) if getattr(layer, "is_visible", True)]
+        ranked_layers = [layer for layer in visible_layers if get_causal_rank(layer) is not None]
+        ranked_by_id = {str(getattr(layer, "id", "")): layer for layer in ranked_layers}
+        ordered_ring_ids = [str(getattr(layer, "id", "")) for layer in ranked_layers]
+
+        node_ring_ids: dict[str, str] = {}
+        node_ids_by_ring: dict[str, list[str]] = {ring_id: [] for ring_id in ordered_ring_ids}
+        unclassified: list[str] = []
+        for node in nodes:
+            layer_id = node.layer_id or ""
+            if layer_id and layer_id in ranked_by_id:
+                ring_id = layer_id
+                node_ids_by_ring.setdefault(ring_id, []).append(node.entity_id)
+            else:
+                ring_id = "__unclassified__"
+                unclassified.append(node.entity_id)
+            node_ring_ids[node.entity_id] = ring_id
+
+        if unclassified:
+            node_ids_by_ring["__unclassified__"] = unclassified
+            ordered_ring_ids.append("__unclassified__")
+
+        relation_ids_by_ring: dict[str, list[str]] = {ring_id: [] for ring_id in ordered_ring_ids}
+        for edge in edges:
+            if edge.kind.lower() == "contiene":
+                continue
+            source_ring = node_ring_ids.get(edge.source_id)
+            target_ring = node_ring_ids.get(edge.target_id)
+            if not source_ring or not target_ring:
+                continue
+            # B44-T01/T02: basic association only. Advanced inter-ring styling is T06.
+            ring_id = source_ring if source_ring == target_ring else source_ring
+            if ring_id in relation_ids_by_ring:
+                relation_ids_by_ring[ring_id].append(edge.relation_id)
+
+        nodes_by_id = {node.entity_id: node for node in nodes}
+        visuals: list[_RingVisual] = []
+        previous_outer = 0.0
+        gap = 34.0
+        for index, ring_id in enumerate(ordered_ring_ids):
+            item_ids = tuple(node_ids_by_ring.get(ring_id, []))
+            ring_nodes = [nodes_by_id[item_id] for item_id in item_ids if item_id in nodes_by_id]
+            branch_count = sum(1 for node in ring_nodes if node.kind.lower() == "contenedor")
+            leaf_count = max(0, len(ring_nodes) - branch_count)
+            relation_ids = tuple(relation_ids_by_ring.get(ring_id, []))
+            slot_total = sum(self._ring_item_size_estimate(node) for node in ring_nodes)
+            slot_total += max(0, len(ring_nodes)) * 36.0 + 140.0  # label arc reserve
+            required_mid_radius = slot_total / (2 * math.pi) if ring_nodes else 0.0
+            content_thickness = 176.0 + max(0, len(ring_nodes) - 1) * 16.0 + branch_count * 42.0
+            inner = 42.0 if index == 0 else previous_outer + gap
+            outer = max(inner + content_thickness, required_mid_radius + content_thickness / 2.0)
+            if outer <= inner:
+                outer = inner + content_thickness
+
+            if ring_id == "__unclassified__":
+                display_name = "Sin clasificar"
+                rank = None
+                color = "#ECE7DA"
+            else:
+                layer = ranked_by_id[ring_id]
+                display_name = str(getattr(layer, "name", "Anillo"))
+                rank = get_causal_rank(layer)
+                color = self._ring_color(index)
+
+            relation_count = len(relation_ids)
+            count_label = f"{leaf_count} hojas · {branch_count} ramas · {relation_count} relaciones"
+            state = "focused" if self._focused_ring_id and ring_id == self._focused_ring_id else "normal"
+            visuals.append(_RingVisual(
+                ring_id=ring_id,
+                display_name=display_name,
+                causal_rank=rank,
+                color=color,
+                inner_radius=inner,
+                outer_radius=outer,
+                item_ids=item_ids,
+                relation_ids=relation_ids,
+                count_label=count_label,
+                state=state,
+            ))
+            previous_outer = outer
+        return visuals, node_ring_ids
+
+    def _draw_ring_background(self, ring: _RingVisual):
+        outer_rect = QRectF(-ring.outer_radius, -ring.outer_radius, ring.outer_radius * 2, ring.outer_radius * 2)
+        inner_rect = QRectF(-ring.inner_radius, -ring.inner_radius, ring.inner_radius * 2, ring.inner_radius * 2)
+        outer_path = QPainterPath()
+        outer_path.addEllipse(outer_rect)
+        inner_path = QPainterPath()
+        inner_path.addEllipse(inner_rect)
+        path = outer_path.subtracted(inner_path)
+        item = GraphRingItem(ring, path)
+        color = QColor(ring.color)
+        color.setAlpha(116 if ring.state == "focused" else 82)
+        item.setBrush(QBrush(color))
+        pen = QPen(QColor("#6F6A42") if ring.state == "focused" else QColor(ring.color).darker(118), 2.4 if ring.state == "focused" else 1.2, Qt.PenStyle.SolidLine if ring.state == "focused" else Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        item.setPen(pen)
+        item.setZValue(-100)
+        self.scene_obj.addItem(item)
+        self._ring_items[ring.ring_id] = item
+
+        label_text = f"{ring.display_name} · {ring.count_label} · doble click: entrar"
+        label = QGraphicsSimpleTextItem(_fit_text(label_text, 72), item)
+        label.setBrush(QBrush(QColor("#5F5A3D")))
+        label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        font = QFont(); font.setBold(True); font.setPointSize(10)
+        label.setFont(font)
+        rect = label.boundingRect()
+        label.setPos(-rect.width() / 2, -ring.outer_radius + 14)
+        label.setZValue(10)
+
+    def _position_for_ring_slot(self, ring: _RingVisual, index: int, count: int) -> QPointF:
+        mid_radius = (ring.inner_radius + ring.outer_radius) / 2.0
+        if count <= 1:
+            angle = math.pi / 2.0
+        else:
+            reserved = 0.72  # keep top label arc clear
+            span = 2 * math.pi - reserved * 2
+            angle = -math.pi / 2 + reserved + (span * index / max(1, count - 1))
+        return QPointF(math.cos(angle) * mid_radius, math.sin(angle) * mid_radius)
+
+    def _set_graph_by_concentric_rings(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]):
+        _b44trace(
+            "concentric_enter "
+            f"nodes={len(nodes or [])} edges={len(edges or [])} layers={len(layers or [])} "
+            f"filter_layers={tuple(getattr(self._visual_filter, 'layer_ids', ()))!r} "
+            f"filter_focus={tuple(getattr(self._visual_filter, 'focus_entity_ids', ()))!r}"
+        )
+        self.clear_graph()
+        if self._focused_ring_id:
+            all_visuals, all_node_ring_ids = self._build_concentric_ring_visuals(nodes, edges, layers or [])
+            focused = next((ring for ring in all_visuals if ring.ring_id == self._focused_ring_id), None)
+            if focused is None:
+                self._focused_ring_id = ""
+            else:
+                focused_node_ids = {entity_id for entity_id, ring_id in all_node_ring_ids.items() if ring_id == focused.ring_id}
+                nodes = [node for node in nodes if node.entity_id in focused_node_ids]
+                edges = [edge for edge in edges if edge.source_id in focused_node_ids and edge.target_id in focused_node_ids]
+                if focused.ring_id != "__unclassified__":
+                    layers = [layer for layer in (layers or []) if str(getattr(layer, "id", "")) == focused.ring_id]
+                else:
+                    layers = []
+        self._ring_visuals, self._node_ring_ids = self._build_concentric_ring_visuals(nodes, edges, layers or [])
+        _b44trace(
+            "concentric_built "
+            f"ring_visuals={len(self._ring_visuals)} ring_ids={[ring.ring_id for ring in self._ring_visuals]!r} "
+            f"node_ring_ids={self._node_ring_ids!r}"
+        )
+        if not self._ring_visuals:
+            _b44trace(f"concentric_no_rings fallback_to_free={bool(nodes)}")
+            if nodes:
+                self.set_graph(nodes, edges, layout_mode="free", layers=layers)
+            return
+
+        for ring in self._ring_visuals:
+            self._draw_ring_background(ring)
+
+        nodes_by_id = {node.entity_id: node for node in nodes}
+        for ring in self._ring_visuals:
+            ring_nodes = [nodes_by_id[item_id] for item_id in ring.item_ids if item_id in nodes_by_id]
+            for idx, node in enumerate(ring_nodes):
+                pos = self._position_for_ring_slot(ring, idx, len(ring_nodes))
+                if node.kind.lower() == "contenedor":
+                    item = GraphTreeItem(
+                        node,
+                        x=pos.x() - _CONTAINER_MIN_WIDTH / 2,
+                        y=pos.y() - _CONTAINER_MIN_HEIGHT / 2,
+                        width=_CONTAINER_MIN_WIDTH,
+                        height=_CONTAINER_MIN_HEIGHT,
+                    )
+                    self._trees[node.entity_id] = item
+                else:
+                    item = GraphNodeItem(node, x=pos.x(), y=pos.y())
+                self.scene_obj.addItem(item)
+                self._nodes[node.entity_id] = item  # type: ignore[assignment]
+
+        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        seen_edge_ids: set[str] = set()
+        for edge in edges:
+            edge_id = getattr(edge, "relation_id", "")
+            if edge_id and edge_id in seen_edge_ids:
+                continue
+            if edge_id:
+                seen_edge_ids.add(edge_id)
+            if edge.kind.lower() == "contiene":
+                continue
+            source = self._nodes.get(edge.source_id)
+            target = self._nodes.get(edge.target_id)
+            if not source or not target:
+                continue
+            item = GraphEdgeItem(edge, source, target)
+            self.scene_obj.addItem(item)
+            self._edges.append(item)
+
+        rect = self.scene_obj.itemsBoundingRect()
+        if rect.isValid() and not rect.isEmpty():
+            self.fitInView(rect.adjusted(-160, -160, 160, 160), Qt.AspectRatioMode.KeepAspectRatio)
+        _b44trace(
+            "concentric_done "
+            f"scene_items={len(self.scene_obj.items())} ring_items={len(self._ring_items)} "
+            f"nodes_drawn={len(self._nodes)} trees_drawn={len(self._trees)} edges_drawn={len(self._edges)} "
+            f"scene_rect_valid={rect.isValid()} scene_rect_empty={rect.isEmpty()}"
+        )
+
+    def set_graph(
+        self,
+        nodes: list[_NodeView],
+        edges: list[_EdgeView],
+        *,
+        layer_mode: bool = False,
+        layout_mode: str | None = None,
+        layers: list[Any] | None = None,
+    ):
         self._all_nodes = list(nodes or [])
         self._all_edges = list(edges or [])
         self._all_layers = list(layers or [])
-        self._layer_mode_active = bool(layer_mode)
-        nodes, edges = self._filtered_graph(self._all_nodes, self._all_edges)
-        if layer_mode:
+        if layout_mode is None:
+            layout_mode = "layered" if layer_mode else "free"
+        if layout_mode not in {"free", "layered", "concentric_rings"}:
+            layout_mode = "free"
+        self._layout_mode_active = layout_mode
+        self._layer_mode_active = layout_mode == "layered"
+        if layout_mode == "concentric_rings" and self._focused_ring_id:
+            # Ring focus is a concentric-view scope, not a generic visual filter.
+            # Build from the full canonical graph so moving an item between rings
+            # cannot be hidden by a stale layer filter.
+            nodes, edges = list(self._all_nodes), list(self._all_edges)
+        else:
+            nodes, edges = self._filtered_graph(self._all_nodes, self._all_edges)
+        _b44trace(
+            "set_graph "
+            f"requested_layout={layout_mode} all_nodes={len(self._all_nodes)} all_edges={len(self._all_edges)} "
+            f"filtered_nodes={len(nodes)} filtered_edges={len(edges)} layers={len(self._all_layers)} "
+            f"filter_layers={tuple(getattr(self._visual_filter, 'layer_ids', ()))!r} "
+            f"filter_focus={tuple(getattr(self._visual_filter, 'focus_entity_ids', ()))!r}"
+        )
+        if layout_mode == "concentric_rings":
+            self._set_graph_by_concentric_rings(nodes, edges, layers or [])
+            return
+        if layout_mode == "layered":
             self._set_graph_by_layers(nodes, edges, layers or [])
             return
         self.clear_graph()
@@ -1719,7 +2121,10 @@ class GraphCanvasView(QGraphicsView):
             target = self._nodes.get(edge.target_id)
             if not source or not target:
                 continue
-            item = GraphEdgeItem(edge, source, target)
+            source_ring = self._node_ring_ids.get(edge.source_id, "")
+            target_ring = self._node_ring_ids.get(edge.target_id, "")
+            styled_edge = replace(edge, inter_ring=bool(source_ring and target_ring and source_ring != target_ring))
+            item = GraphEdgeItem(styled_edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
 
@@ -1738,7 +2143,7 @@ class GraphCanvasView(QGraphicsView):
 
     def apply_visual_filter(self, filter_state: VisualFilterState):
         self._visual_filter = filter_state
-        self.set_graph(self._all_nodes, self._all_edges, layer_mode=self._layer_mode_active, layers=self._all_layers)
+        self.set_graph(self._all_nodes, self._all_edges, layout_mode=self._layout_mode_active, layers=self._all_layers)
 
     def clear_visual_filters(self):
         self.apply_visual_filter(VisualFilterState())
@@ -1831,6 +2236,84 @@ class GraphCanvasView(QGraphicsView):
                 ))
         return results[:40]
 
+    def _ring_display_name(self, ring_id: str) -> str:
+        ring = next((ring for ring in self._ring_visuals if ring.ring_id == ring_id), None)
+        if ring is not None:
+            return ring.display_name
+        if ring_id == "__unclassified__":
+            return "Sin clasificar"
+        layer = next((layer for layer in self._all_layers if str(getattr(layer, "id", "")) == ring_id), None)
+        return str(getattr(layer, "name", "Anillo")) if layer is not None else "Anillo"
+
+    def active_ring_id(self) -> str:
+        """Current ring for contextual creation: focused ring wins, then selected ring."""
+        return str(self._focused_ring_id or self._selected_ring_id or "")
+
+    def select_ring(self, ring_id: str) -> bool:
+        _b44trace(f"select_ring_request ring_id={ring_id!r} available={[ring.ring_id for ring in self._ring_visuals]!r}")
+        if not ring_id:
+            _b44trace("select_ring_result ok=False reason=empty_ring_id")
+            return False
+        ring = next((ring for ring in self._ring_visuals if ring.ring_id == ring_id), None)
+        if ring is None:
+            _b44trace("select_ring_result ok=False reason=ring_not_found")
+            return False
+        self.clear_selection(emit=False)
+        self._selected_ring_id = ring_id
+        item = self._ring_items.get(ring_id)
+        if item is not None:
+            item.setSelected(True)
+            self.center_on_item(item)
+        self._emit_selection_changed()
+        self.ringSelected.emit(ring_id, ring.display_name)
+        _b44trace(
+            "select_ring_result "
+            f"ok=True selected={self._selected_ring_id!r} focused={self._focused_ring_id!r} display={ring.display_name!r}"
+        )
+        return True
+
+    def focus_ring_scope(self, ring_id: str) -> bool:
+        """B44: enter ring focus without mutating canon or assignments."""
+        _b44trace(
+            "focus_ring_request "
+            f"ring_id={ring_id!r} all_nodes={len(self._all_nodes)} all_edges={len(self._all_edges)} all_layers={len(self._all_layers)} "
+            f"layout={self._layout_mode_active}"
+        )
+        if not ring_id:
+            _b44trace("focus_ring_result ok=False reason=empty_ring_id")
+            return False
+        visuals, node_ring_ids = self._build_concentric_ring_visuals(self._all_nodes, self._all_edges, self._all_layers)
+        _b44trace(
+            "focus_ring_visuals "
+            f"available={[ring.ring_id for ring in visuals]!r} node_ring_ids={node_ring_ids!r}"
+        )
+        ring = next((ring for ring in visuals if ring.ring_id == ring_id), None)
+        if ring is None:
+            _b44trace("focus_ring_result ok=False reason=ring_not_found")
+            return False
+        self._focused_ring_id = ring_id
+        # Ring focus is not a generic visual layer filter. Keep independent
+        # filter dimensions, but clear stale scope filters that hide nodes after
+        # ring reassignment.
+        self._visual_filter = replace(self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id="")
+        self.set_graph(self._all_nodes, self._all_edges, layout_mode="concentric_rings", layers=self._all_layers)
+        self.ringFocused.emit(ring_id, ring.display_name)
+        _b44trace(
+            "focus_ring_result "
+            f"ok=True focused={self._focused_ring_id!r} selected={self._selected_ring_id!r} "
+            f"filter_layers={tuple(getattr(self._visual_filter, 'layer_ids', ()))!r} "
+            f"filter_focus={tuple(getattr(self._visual_filter, 'focus_entity_ids', ()))!r} "
+            f"ring_items={len(self._ring_items)} nodes_drawn={len(self._nodes)}"
+        )
+        return True
+
+    def clear_ring_focus(self):
+        self._focused_ring_id = ""
+        self._selected_ring_id = ""
+        self._visual_filter = replace(self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id="")
+        if self._layout_mode_active == "concentric_rings":
+            self.set_graph(self._all_nodes, self._all_edges, layout_mode="concentric_rings", layers=self._all_layers)
+
     def focus_tree_scope(self, tree_id: str) -> bool:
         ids = {tree_id} | self._descendant_ids_for_tree(tree_id)
         self.apply_visual_filter(VisualFilterState(focus_entity_ids=tuple(sorted(ids))))
@@ -1848,12 +2331,19 @@ class GraphCanvasView(QGraphicsView):
             for edge in self._all_edges:
                 if edge.source_id == item_id or edge.target_id == item_id:
                     ids.update([edge.source_id, edge.target_id])
+        # Include ancestor containers so nodes inside trees remain visible
+        for eid in list(ids):
+            current = self._membership.get(eid)
+            while current is not None:
+                ids.add(current)
+                current = self._membership.get(current)
         self.apply_visual_filter(VisualFilterState(focus_entity_ids=tuple(sorted(ids))))
         if center_relation:
             return self.focus_relation(center_relation)
         return self.focus_node(item_id)
 
     def clear_focus_scope(self):
+        self.clear_ring_focus()
         self.clear_visual_filters()
 
     def fit_all(self):
@@ -1891,13 +2381,17 @@ class GraphCanvasWidget(QWidget):
     graphSelectionChanged = Signal(list, list)
     nodeAssignToTreeRequested = Signal(str, str)
     relationCreateRejected = Signal(str)
+    ringSelected = Signal(str, str)
+    ringFocused = Signal(str, str)
 
     def __init__(self, ctx: AppContext):
         super().__init__()
         self.ctx = ctx
         self._advanced_mode = bool(ctx.advanced_mode)
         self.ai_controller = None
-        self._layer_mode = False
+        stored_mode = str(getattr(ctx, "creation_layout_mode", "free") or "free")
+        self._layout_mode = stored_mode if stored_mode in {"free", "layered", "concentric_rings"} else "free"
+        self._layer_mode = self._layout_mode == "layered"
         self._build()
 
     def _build(self):
@@ -1918,6 +2412,8 @@ class GraphCanvasWidget(QWidget):
         self.canvas.relationCreateRejected.connect(self.relationCreateRejected.emit)
         self.canvas.graphSelectionChanged.connect(self.graphSelectionChanged.emit)
         self.canvas.nodeAssignToTreeRequested.connect(self.nodeAssignToTreeRequested.emit)
+        self.canvas.ringSelected.connect(self.ringSelected.emit)
+        self.canvas.ringFocused.connect(self.ringFocused.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
 
@@ -1989,6 +2485,30 @@ class GraphCanvasWidget(QWidget):
             self._entity_selected(tree_id)
         return ok
 
+    def focus_ring_scope(self, ring_id: str) -> bool:
+        _b44trace(f"widget_focus_ring_request ring_id={ring_id!r} layout={self._layout_mode!r}")
+        ok = self.canvas.focus_ring_scope(ring_id)
+        _b44trace(
+            "widget_focus_ring_result "
+            f"ok={ok} layout={self._layout_mode!r} canvas_layout={self.canvas._layout_mode_active!r} "
+            f"ring_items={len(self.canvas._ring_items)} nodes={len(self.canvas._nodes)}"
+        )
+        if ok:
+            self._layout_mode = "concentric_rings"
+            self._layer_mode = False
+            self.ctx.creation_layout_mode = "concentric_rings"
+            self.ctx.save_preferences()
+        return ok
+
+    def focused_ring_id(self) -> str:
+        return str(getattr(self.canvas, "_focused_ring_id", ""))
+
+    def active_ring_id(self) -> str:
+        return self.canvas.active_ring_id() if hasattr(self.canvas, "active_ring_id") else ""
+
+    def ring_visual_by_id(self, ring_id: str):
+        return next((ring for ring in getattr(self.canvas, "_ring_visuals", []) if ring.ring_id == ring_id), None)
+
     def focus_neighborhood(self, item_id: str) -> bool:
         ok = self.canvas.focus_neighborhood(item_id)
         if ok:
@@ -2000,6 +2520,8 @@ class GraphCanvasWidget(QWidget):
 
     def clear_focus_scope(self):
         self.canvas.clear_focus_scope()
+        self.ctx.creation_focused_ring_id = ""
+        self.ctx.save_preferences()
 
     def fit_all(self):
         self.canvas.fit_all()
@@ -2040,9 +2562,42 @@ class GraphCanvasWidget(QWidget):
         if rect.isValid() and not rect.isEmpty():
             self.canvas.fitInView(rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
 
+    def _effective_world_layers(self, project) -> list[Any]:
+        """Return visual-only layers for anillo layouts without mutating canon.
+
+        New projects can have no `project.world_layers` yet while the UI flyout
+        still shows `default_world_layers()`. Old projects can also hold default
+        layers without B36 `causal_rank` metadata. B44 must render concentric
+        rings in both cases.
+        """
+        project_layers = list(getattr(project, "world_layers", []) or [])
+        defaults = default_world_layers()
+        if not project_layers:
+            return defaults
+
+        default_by_id = {str(getattr(layer, "id", "")): layer for layer in defaults}
+        effective: list[Any] = []
+        for layer in project_layers:
+            layer_id = str(getattr(layer, "id", ""))
+            default = default_by_id.get(layer_id)
+            if default is not None and get_causal_rank(layer) is None and get_causal_rank(default) is not None:
+                metadata = dict(getattr(default, "metadata", {}) or {})
+                metadata.update(dict(getattr(layer, "metadata", {}) or {}))
+                effective.append(replace(layer, metadata=metadata))
+            else:
+                effective.append(layer)
+
+        known_ids = {str(getattr(layer, "id", "")) for layer in effective}
+        for default in defaults:
+            default_id = str(getattr(default, "id", ""))
+            if default_id and default_id not in known_ids:
+                effective.append(default)
+        return effective
+
     def refresh(self):
         project = self._project()
         if project is None:
+            _b44trace(f"widget_refresh project=None layout={self._layout_mode!r}")
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
             self.empty.setVisible(True)
@@ -2069,19 +2624,56 @@ class GraphCanvasWidget(QWidget):
         # empty entities. Candidate review/acceptance belongs in the candidate
         # tray or explicit AI suggestion UI; only accepted/canonical entities and
         # relations are rendered here.
-        if not entities:
+        _b44trace(
+            "widget_refresh_data "
+            f"layout={self._layout_mode!r} entities={len(entities)} relations={len(relations)} "
+            f"project_layers={len(getattr(project, 'world_layers', []) or [])} "
+            f"canvas_visible_before={self.canvas.isVisible()} empty_visible_before={self.empty.isVisible()}"
+        )
+        if not entities and self._layout_mode != "concentric_rings":
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
             self.empty.setVisible(True)
             return
         self.empty.setVisible(False)
         self.canvas.setVisible(True)
-        self._layer_mode = bool(getattr(project, "worldbuilding_active", False))
-        self.canvas.set_graph(entities, relations, layer_mode=self._layer_mode, layers=list(getattr(project, "world_layers", []) or []))
+        # _layer_mode is controlled only by explicit user action (Anillos button).
+        # Do NOT derive it from project.worldbuilding_active here — that flag
+        # means "worldbuilding feature is available", not "show layer bands".
+        layers = self._effective_world_layers(project) if self._layout_mode in {"layered", "concentric_rings"} else []
+        _b44trace(
+            "widget_refresh_before_set_graph "
+            f"layout={self._layout_mode!r} effective_layers={len(layers)} layer_ids={[str(getattr(layer, 'id', '')) for layer in layers]!r}"
+        )
+        self.canvas.set_graph(entities, relations, layout_mode=self._layout_mode, layers=layers)
+        _b44trace(
+            "widget_refresh_after_set_graph "
+            f"canvas_layout={self.canvas._layout_mode_active!r} canvas_visible={self.canvas.isVisible()} empty_visible={self.empty.isVisible()} "
+            f"ring_items={len(self.canvas._ring_items)} ring_visuals={len(self.canvas._ring_visuals)} nodes_drawn={len(self.canvas._nodes)}"
+        )
+
+    def set_layout_mode(self, layout_mode: str):
+        requested = layout_mode
+        if layout_mode not in {"free", "layered", "concentric_rings"}:
+            layout_mode = "free"
+        _b44trace(
+            "widget_set_layout_mode "
+            f"requested={requested!r} normalized={layout_mode!r} previous={self._layout_mode!r} "
+            f"ctx_previous={getattr(self.ctx, 'creation_layout_mode', '')!r}"
+        )
+        self._layout_mode = layout_mode
+        self._layer_mode = layout_mode == "layered"
+        self.ctx.creation_layout_mode = layout_mode
+        if layout_mode != "concentric_rings":
+            self.ctx.creation_focused_ring_id = ""
+            self.canvas.clear_ring_focus()
+        self.ctx.save_preferences()
+        self.refresh()
 
     def set_worldbuilding_active(self, active: bool):
-        self._layer_mode = bool(active)
-        self.refresh()
+        # Compatibility with existing B36 toolbar: this toggles the layered bands
+        # view, not the project worldbuilding feature flag.
+        self.set_layout_mode("layered" if active else "free")
 
     def set_advanced_mode(self, enabled: bool):
         self._advanced_mode = bool(enabled)

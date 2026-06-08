@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from packages.domain.entity import CanonState, VisibilityState
@@ -721,6 +722,7 @@ class RelationDetailPanel(QWidget):
         self.suggestion_frame.setVisible(True)
 
     def _accept_suggestion(self):
+        _apptrace(f"UI relation accept_suggestion relation_id={self.relation_id!r}")
         text = self.suggestion_text.toPlainText().strip()
         if text:
             current_body = self.body_edit.toPlainText().strip()
@@ -732,6 +734,7 @@ class RelationDetailPanel(QWidget):
         self._discard_suggestion()
 
     def _discard_suggestion(self):
+        _apptrace(f"UI relation discard_suggestion relation_id={self.relation_id!r}")
         self.suggestion_frame.setVisible(False)
         self.suggestion_text.clear()
 
@@ -741,6 +744,7 @@ class RelationDetailPanel(QWidget):
 
     def _open_coherence(self):
         """Open coherence analysis panel for this relation + its endpoints."""
+        _apptrace(f"UI relation run_coherence_check relation_id={self.relation_id!r}")
         if self.ai_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "IA contextual no disponible para coherencia")
             return
@@ -766,9 +770,10 @@ class RelationDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _cancel(self):
+        _apptrace(f"UI relation cancel_edit relation_id={self.relation_id!r} is_new={self.is_new}")
         self._discard_suggestion()
         if self.is_new:
-            # Cancel on new relation: remove the unsaved visual draft, then close drawer.
+             # Cancel on new relation: remove the unsaved visual draft, then close drawer.
             if self.relation_controller is not None:
                 result = self.relation_controller.delete(self.relation_id)
                 if isinstance(result, Error):
@@ -824,6 +829,7 @@ class RelationDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def refresh(self):
+        _apptrace(f"UI relation set_relation relation_id={self.relation_id!r}")
         self._refreshing = True
         try:
             result = self.relation_controller.get(self.relation_id)
@@ -908,6 +914,7 @@ class RelationDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def save(self):
+        _apptrace(f"UI relation save relation_id={self.relation_id!r}")
         self._autosave_timer.stop()
         self._do_save(refresh_after=True)
 

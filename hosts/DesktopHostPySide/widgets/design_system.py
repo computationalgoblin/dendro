@@ -8,9 +8,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -37,14 +38,26 @@ QPushButton {
     color: #5C5A3E;
 }
 QPushButton:hover { background: #FFFFFF; border-color: #AAA579; }
-QPushButton:pressed { background: #E7E4D4; }
+QPushButton:focus { border: 2px solid #8F8A54; padding: 7px 11px; }
+QPushButton:pressed { background: #E7E4D4; padding-top: 9px; padding-bottom: 7px; }
+QPushButton:disabled { background: #EEEBDD; color: #AAA694; border-color: #E0DDD0; }
 QPushButton#primaryButton {
     background: #7A733D;
     border: 1px solid #6C6536;
     color: #FFFDF5;
     font-weight: 600;
 }
-QLabel#mutedLabel { color: #7C806E; }
+QPushButton#primaryButton:hover { background: #696335; border-color: #565229; }
+QPushButton#primaryButton:disabled { background: #B8B299; color: #F7F5EA; }
+QToolButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: #5C5A3E;
+}
+QToolButton:hover { background: #F8F6ED; border-color: #D8D6C8; }
+QLabel#mutedLabel { color: #747866; }
 QLabel#sectionTitle {
     font-size: 18px;
     font-weight: 700;
@@ -60,6 +73,16 @@ QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget {
     min-height: 28px;
     selection-background-color: #B5BBA5;
     font-family: "Segoe UI", "Inter", "Arial";
+}
+QTextEdit:focus, QPlainTextEdit:focus, QLineEdit:focus, QComboBox:focus {
+    border: 2px solid #AFA77A;
+    background: #FFFFFF;
+    padding: 7px 9px;
+}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {
+    background: #EEEBDD;
+    color: #A19D8C;
+    border-color: #E0DDD0;
 }
 QComboBox {
     min-height: 32px;
@@ -254,6 +277,48 @@ class AdvancedSection(QWidget):
     def _on_toggled(self, checked: bool):
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
         self.body.setVisible(checked)
+        fade_in(self.body, duration_ms=140 if checked else 90, start_opacity=0.70 if checked else 1.0)
+
+
+def fade_in(widget: QWidget, *, duration_ms: int = 180, start_opacity: float = 0.0):
+    """Subtle opacity transition for content that appears inside the shell.
+
+    Presentation-only helper: no domain/persistence side effects. It intentionally
+    fails closed so visual polish never breaks workflow logic.
+    """
+    try:
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(start_opacity)
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(duration_ms)
+        animation.setStartValue(start_opacity)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    except Exception:
+        pass
+
+
+def pulse_feedback(widget: QWidget, *, duration_ms: int = 220):
+    """Quick tactile feedback for successful/acknowledged actions."""
+    try:
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(duration_ms)
+        animation.setStartValue(0.62)
+        animation.setKeyValueAt(0.45, 1.0)
+        animation.setEndValue(0.92)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: effect.setOpacity(1.0))
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    except Exception:
+        pass
 
 
 def make_scroll_area(content: QWidget) -> QScrollArea:

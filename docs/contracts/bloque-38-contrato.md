@@ -2,7 +2,7 @@
 
 ## Estado
 
-Planificado. Pendiente de aprobación de tickets por el usuario antes de implementar.
+Aprobado, implementado y cerrado documentalmente. Ver `docs/cierres/bloque-38-cierre.md`.
 
 ## Contexto
 

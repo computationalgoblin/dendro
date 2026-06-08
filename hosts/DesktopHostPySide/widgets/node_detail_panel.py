@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
@@ -253,6 +254,7 @@ class NodeDetailPanel(QWidget):
         relation_controller=None,
         is_new: bool = False,
         on_focus_neighborhood=None,
+        on_convert_to_branch=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -262,6 +264,7 @@ class NodeDetailPanel(QWidget):
         self.ai_controller = ai_controller
         self.relation_controller = relation_controller
         self.on_focus_neighborhood = on_focus_neighborhood
+        self.on_convert_to_branch = on_convert_to_branch
         self.is_new = bool(is_new)
         self._entity = None
         self._current_color: str = ""
@@ -714,6 +717,7 @@ class NodeDetailPanel(QWidget):
         self._ai_worker.start()
 
     def _start_ai_suggestion(self):
+        _apptrace(f"UI node generate_ai_suggestion entity_id={self.entity_id!r}")
         if self.ai_controller is None:
             self._show_ai_error("IA contextual no disponible en esta sesión.")
             return
@@ -827,6 +831,7 @@ class NodeDetailPanel(QWidget):
         self.suggestion_frame.setVisible(True)
 
     def _accept_suggestion(self):
+        _apptrace(f"UI node accept_suggestion entity_id={self.entity_id!r}")
         text = self.suggestion_text.toPlainText().strip()
         if text:
             # If the extended body is empty, put it there; otherwise append
@@ -838,6 +843,7 @@ class NodeDetailPanel(QWidget):
         self._discard_suggestion()
 
     def _discard_suggestion(self):
+        _apptrace(f"UI node discard_suggestion entity_id={self.entity_id!r}")
         self.suggestion_frame.setVisible(False)
         self.suggestion_text.clear()
 
@@ -847,6 +853,7 @@ class NodeDetailPanel(QWidget):
 
     def _open_coherence(self):
         """Open coherence analysis panel for this entity."""
+        _apptrace(f"UI node run_coherence_check entity_id={self.entity_id!r}")
         if self.ai_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "IA contextual no disponible para coherencia")
             return
@@ -868,14 +875,13 @@ class NodeDetailPanel(QWidget):
 
     def _convert_to_branch(self):
         """Convert this leaf entity into a branch (container/rama)."""
+        _apptrace(f"UI node convert_to_branch entity_id={self.entity_id!r}")
         if self.ctx is None:
             return
-        # Use EntityService directly for the transformation
-        project_controller = getattr(self.ctx, "project_controller", None)
-        if project_controller is None:
-            return
-        entity_service = getattr(project_controller, "es", None)
+        # Use EntityController.es (EntityService) directly
+        entity_service = getattr(self.entity_controller, "es", None) if self.entity_controller else None
         if entity_service is None:
+            self.ctx.log("error", "No se pudo convertir en rama: servicio no disponible")
             return
         from packages.domain.result import Error
         result = entity_service.convert_to_branch(self.entity_id)
@@ -883,16 +889,14 @@ class NodeDetailPanel(QWidget):
             self.ctx.log("error", f"Error convirtiendo en rama: {result.error}")
             return
         self.ctx.log("info", "Hoja convertida en rama")
-        # Refresh graph and re-open as tree panel
+        # Refresh graph
         if self.on_saved is not None:
             self.on_saved()
-        # Close node panel and open tree panel instead
+        # Close current drawer and open tree panel via workspace callback
         if self.ctx.drawer is not None:
             self.ctx.drawer.close()
-        # Signal workspace to open tree panel
-        workspace = getattr(self.ctx, "workspace", None)
-        if workspace is not None:
-            workspace._open_tree_panel(self.entity_id)
+        if self.on_convert_to_branch is not None:
+            self.on_convert_to_branch(self.entity_id)
 
     # ------------------------------------------------------------------
     # Cancel
@@ -900,6 +904,7 @@ class NodeDetailPanel(QWidget):
 
     def _cancel(self):
         """Cancel edits. New visual drafts are removed; saved entities are reloaded."""
+        _apptrace(f"UI node cancel_edit entity_id={self.entity_id!r} is_new={self.is_new}")
         self._autosave_timer.stop()
         self._discard_suggestion()
         if self.is_new:
@@ -1010,6 +1015,7 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def refresh(self):
+        _apptrace(f"UI node set_entity entity_id={self.entity_id!r}")
         self._refreshing = True
         try:
             result = self.entity_controller.get(self.entity_id)
@@ -1130,11 +1136,13 @@ class NodeDetailPanel(QWidget):
 
     def save(self):
         """Manual save (button) — saves + refreshes UI."""
+        _apptrace(f"UI node save entity_id={self.entity_id!r}")
         self._autosave_timer.stop()
         self._do_save(refresh_after=True)
 
     def _do_save(self, *, refresh_after: bool = True):
         """Core save logic. refresh_after=True for manual save, False for auto-save."""
+        _apptrace(f"UI node _do_save entity_id={self.entity_id!r} refresh_after={refresh_after}")
         if self._entity is None:
             return
 
@@ -1175,6 +1183,13 @@ class NodeDetailPanel(QWidget):
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
         }
+        self.ctx.log(
+            "info",
+            "B44TRACE node_save_layers "
+            f"entity_id={self.entity_id!r} old_layers={list(getattr(self._entity, 'layer_ids', []) or [])!r} "
+            f"combo_data={self.layer_combo.currentData()!r} payload_layers={payload.get('layer_ids', [])!r} "
+            f"worldbuilding_active={self._worldbuilding_active()}",
+        )
         result = self.entity_controller.update(self.entity_id, payload)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)

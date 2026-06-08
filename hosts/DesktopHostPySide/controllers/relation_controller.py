@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from packages.application.relation_service import RelationService
+from hosts.DesktopHostPySide.app_trace import _apptrace
 
 
 class RelationController:
@@ -12,22 +13,29 @@ class RelationController:
         self.rs = RelationService(self.ps)
 
     def list_all(self):
+        _apptrace(f"CTRL RelationController.list_all"[:120])
         return list(self.ps.active_project.relations) if self.ps.active_project else []
 
     def get(self, relation_id):
+        _apptrace(f"CTRL RelationController.get relation_id={relation_id!r}"[:120])
         return self.rs.get_by_id(relation_id)
 
     def create(self, source_id, target_id, relation_type, data=None):
+        _apptrace(f"CTRL RelationController.create source={source_id!r} target={target_id!r} type={relation_type!r}"[:120])
         return self.rs.create_relation(source_id, target_id, relation_type, data or {})
 
     def update(self, relation_id, data):
+        _apptrace(f"CTRL RelationController.update relation_id={relation_id!r}"[:120])
         return self.rs.update_relation(relation_id, data)
 
     def archive(self, relation_id):
+        _apptrace(f"CTRL RelationController.archive relation_id={relation_id!r}"[:120])
         return self.rs.archive_relation(relation_id)
 
     def restore(self, relation_id):
+        _apptrace(f"CTRL RelationController.restore relation_id={relation_id!r}"[:120])
         return self.rs.restore_relation(relation_id)
 
     def delete(self, relation_id):
+        _apptrace(f"CTRL RelationController.delete relation_id={relation_id!r}"[:120])
         return self.rs.delete_relation(relation_id)

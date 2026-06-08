@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import enum_human
 from packages.application.tree_meta import NARRATIVE_ROLES, TREE_TYPES, TreeMeta
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
@@ -487,6 +488,38 @@ class TreeDetailPanel(QWidget):
             ai_btn_row.addWidget(btn)
         ai_layout.addLayout(ai_btn_row)
 
+        # Causal layer actions (B36/B39) — created here because refresh()
+        # populates/toggles them when worldbuilding is active.
+        target_row = QHBoxLayout()
+        target_row.setSpacing(6)
+        self.target_layer_label = QLabel("Destino causal")
+        self.target_layer_label.setStyleSheet(f"color: {_LABEL_COLOR}; background: transparent;")
+        self.target_layer_combo = _styled_combo([], "— Anillo inferior —")
+        target_row.addWidget(self.target_layer_label)
+        target_row.addWidget(self.target_layer_combo, 1)
+        ai_layout.addLayout(target_row)
+
+        causal_btn_row = QHBoxLayout()
+        causal_btn_row.setSpacing(4)
+        self.ai_expand_down_btn = QPushButton("Expandir hacia anillo inferior")
+        self.ai_expand_down_btn.setFixedHeight(28)
+        self.ai_expand_down_btn.setToolTip("Proponer consecuencias descendentes para esta rama")
+        self.ai_expand_down_btn.clicked.connect(self._start_expand_down)
+        self.ai_explain_causes_btn = QPushButton("Explicar desde causas superiores")
+        self.ai_explain_causes_btn.setFixedHeight(28)
+        self.ai_explain_causes_btn.setToolTip("Proponer causas superiores que expliquen esta rama")
+        self.ai_explain_causes_btn.clicked.connect(self._start_explain_from_causes)
+        for btn in (self.ai_expand_down_btn, self.ai_explain_causes_btn):
+            btn.setEnabled(self.ai_controller is not None)
+            btn.setStyleSheet(
+                "QPushButton { border: 1px solid #C8C6B8; border-radius: 6px; "
+                "padding: 2px 8px; background: white; font-size: 11px; }"
+                "QPushButton:hover { background: #F0EFE6; }"
+                "QPushButton:disabled { color: #AAA; }"
+            )
+            causal_btn_row.addWidget(btn)
+        ai_layout.addLayout(causal_btn_row)
+
         # Custom prompt
         prompt_row = QHBoxLayout()
         self.ai_prompt_edit = _styled_edit("Instruccion adicional para la IA...")
@@ -616,6 +649,7 @@ class TreeDetailPanel(QWidget):
         self.ai_explain_causes_btn.setEnabled(has_ai)
 
     def refresh(self):
+        _apptrace(f"UI tree set_entity entity_id={self.entity_id!r}")
         entity = self._entity_by_id(self.entity_id)
         if entity is None:
             self.header_label.setText("Rama no encontrada")
@@ -679,7 +713,7 @@ class TreeDetailPanel(QWidget):
 
         # B39: Show "Crear anillo desde rama" if worldbuilding is active
         project = self._project()
-        wb_on = getattr(project, "worldbuilding_enabled", False) if project else False
+        wb_on = getattr(project, "worldbuilding_active", False) if project else False
         self.create_ring_btn.setVisible(bool(wb_on))
 
     # ------------------------------------------------------------------
@@ -814,6 +848,7 @@ class TreeDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _save(self):
+        _apptrace(f"UI tree save entity_id={self.entity_id!r}")
         entity = self._entity_by_id(self.entity_id)
         if entity is None:
             return

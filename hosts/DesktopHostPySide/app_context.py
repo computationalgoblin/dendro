@@ -51,6 +51,8 @@ class AppContext:
     ai_temperature: float = 0.7
     last_project_path: str = ""
     recent_projects: list[str] = field(default_factory=list)
+    creation_layout_mode: str = "free"
+    creation_focused_ring_id: str = ""
 
     def __post_init__(self):
         self.load_preferences()
@@ -109,6 +111,10 @@ class AppContext:
                 self.ai_temperature = 0.7
             self.last_project_path = str(data.get("last_project_path", self.last_project_path)) or ""
             self.recent_projects = [str(p) for p in (data.get("recent_projects", []) or []) if p]
+            self.creation_layout_mode = str(data.get("creation_layout_mode", self.creation_layout_mode)) or "free"
+            if self.creation_layout_mode not in {"free", "layered", "concentric_rings"}:
+                self.creation_layout_mode = "free"
+            self.creation_focused_ring_id = str(data.get("creation_focused_ring_id", self.creation_focused_ring_id)) or ""
             self._apply_ai_environment()
         except Exception:
             # UI preferences are non-critical; keep defaults if unreadable.
@@ -135,6 +141,8 @@ class AppContext:
                 "ai_temperature": self.ai_temperature,
                 "last_project_path": self.last_project_path,
                 "recent_projects": list(self.recent_projects or [])[:8],
+                "creation_layout_mode": self.creation_layout_mode,
+                "creation_focused_ring_id": self.creation_focused_ring_id,
             }
             self._apply_ai_environment()
             PREFERENCES_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

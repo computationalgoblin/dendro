@@ -2,7 +2,7 @@
 
 ## Estado
 
-Planificado. Pendiente de aprobación explícita del usuario antes de implementación.
+Aprobado, implementado y cerrado documentalmente. Ver `docs/cierres/bloque-39-cierre.md`.
 
 ## Objetivo
 

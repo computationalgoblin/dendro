@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
 from hosts.DesktopHostPySide.controllers.campaign_controller import CampaignController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
@@ -235,6 +236,16 @@ class MainWindow(QMainWindow):
         self.log.setVisible(False)
         root.addWidget(self.log)
 
+        status = QStatusBar()
+        status.setObjectName("ambientStatusBar")
+        status.setStyleSheet(
+            "QStatusBar#ambientStatusBar { background: #F2F0E4; color: #6F6A42; "
+            "border-top: 1px solid #D8D6C8; padding-left: 8px; }"
+        )
+        status.setSizeGripEnabled(False)
+        self.setStatusBar(status)
+        status.showMessage("Listo")
+
         # Start at home
         self.stack.setCurrentIndex(_IDX_HOME)
 
@@ -332,6 +343,7 @@ class MainWindow(QMainWindow):
     # ── Navigation ───────────────────────────────────────────────────────────
 
     def _go_space(self, idx: int):
+        _apptrace(f"UI go_space idx={idx}")
         # Reset outgoing widget's opacity to prevent ghost rendering
         current = self.stack.currentWidget()
         if current and current.graphicsEffect():
@@ -395,6 +407,7 @@ class MainWindow(QMainWindow):
 
     def _apply_live_preferences(self):
         """Apply appearance preferences immediately."""
+        _apptrace("UI apply_preferences")
         ctx = self.ctx
         # Font size
         size_map = {"small": "12px", "medium": "13px", "large": "16px"}
@@ -440,6 +453,7 @@ class MainWindow(QMainWindow):
             self.home_view.set_last_project_option(None)
 
     def _open_last_project(self):
+        _apptrace(f"UI open_last_project path={self.ctx.last_project_path!r}")
         path = self.ctx.last_project_path
         if not path:
             self._refresh_recent_project_option()
@@ -459,6 +473,7 @@ class MainWindow(QMainWindow):
             self.log_msg(f"Error abriendo último proyecto: {exc}")
 
     def _open_project_panel(self):
+        _apptrace("UI open_project_panel")
         if self.ctx.drawer is None:
             return
         # TOGGLE: if already open, close it
@@ -490,6 +505,7 @@ class MainWindow(QMainWindow):
             self.creation_workspace.set_worldbuilding_active(worldbuilding_active)
 
     def _open_config_panel(self):
+        _apptrace("UI open_config_panel")
         if self.ctx.left_drawer is None:
             return
         # TOGGLE: if already open, close it
@@ -516,6 +532,7 @@ class MainWindow(QMainWindow):
         self.ctx.left_drawer.open()
 
     def _open_ai_settings(self):
+        _apptrace("UI open_ai_settings")
         if self.ctx.left_drawer is None:
             return
         panel = AISettingsPanel(self.ai, on_status=self._handle_ai_status)
@@ -530,6 +547,7 @@ class MainWindow(QMainWindow):
 
     def _new_project(self):
         """Nuevo proyecto — abre el wizard de creación."""
+        _apptrace("UI new_project")
         from hosts.DesktopHostPySide.widgets.project_wizard import ProjectWizard
 
         wizard = ProjectWizard(self)
@@ -569,6 +587,7 @@ class MainWindow(QMainWindow):
             self.log_msg(f"Error creando proyecto: {exc}")
 
     def _open_project(self):
+        _apptrace("UI open_project")
         path, _ = QFileDialog.getOpenFileName(self, "Abrir proyecto", "", "JSON (*.json)")
         if not path:
             return
@@ -584,6 +603,7 @@ class MainWindow(QMainWindow):
             self.log_msg(f"Error abriendo proyecto: {exc}")
 
     def _close_project(self):
+        _apptrace("UI close_project")
         try:
             self.controller.close()
             self.log_msg("Proyecto cerrado")
@@ -594,6 +614,7 @@ class MainWindow(QMainWindow):
             self.log_msg(f"Error cerrando proyecto: {exc}")
 
     def _save(self):
+        _apptrace("UI save")
         try:
             self.controller.save()
             if self.controller.current_path:
@@ -618,6 +639,7 @@ class MainWindow(QMainWindow):
         self.log_msg(f"AI: {resp.provider} — {resp.raw_text[:100]}")
 
     def _toggle_advanced(self):
+        _apptrace(f"UI toggle_advanced new_state={not self.ctx.advanced_mode}")
         new_state = not self.ctx.advanced_mode
         self.ctx.set_advanced_mode(new_state)
         self._apply_advanced_mode(new_state)
@@ -667,6 +689,7 @@ class MainWindow(QMainWindow):
     # ── Refresh ──────────────────────────────────────────────────────────────
 
     def _refresh(self):
+        _apptrace("UI refresh cascade")
         try:
             c = self.controller.counts()
             if c:
@@ -699,6 +722,10 @@ class MainWindow(QMainWindow):
     def log_msg(self, msg: str):
         if hasattr(self, "log"):
             self.log.append(msg)
+        if hasattr(self, "statusBar") and self.statusBar() is not None:
+            clean = str(msg).strip()
+            timeout = 7000 if clean.lower().startswith(("error", "fallo", "no se", "warning")) else 3500
+            self.statusBar().showMessage(clean, timeout)
 
     def on_project_loaded(self):
         self._refresh_all_views()
