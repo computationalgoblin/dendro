@@ -49,17 +49,13 @@ from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineCont
 from hosts.DesktopHostPySide.controllers.writing_controller import WritingController
 from packages.application.export_service import ExportService
 from packages.domain.result import Ok
-from hosts.DesktopHostPySide.views.campaign_view import CampaignView, FactionFrontView, SecretsCluesView
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
 from hosts.DesktopHostPySide.views.framework_view import FrameworkView
 from hosts.DesktopHostPySide.views.home_view import HomeView
 from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
-from hosts.DesktopHostPySide.views.issues_history_view import IssuesHistoryView
 from hosts.DesktopHostPySide.views.layer_view import LayerView
-from hosts.DesktopHostPySide.views.live_post_view import LivePostView
 from hosts.DesktopHostPySide.views.relation_view import RelationView
-from hosts.DesktopHostPySide.views.session_view import SessionView
 from hosts.DesktopHostPySide.views.source_view import SourceView
 from hosts.DesktopHostPySide.views.timeline_view import TimelineView
 from hosts.DesktopHostPySide.views.writing_view import WritingView
@@ -132,16 +128,12 @@ class MainWindow(QMainWindow):
     # ── Views ────────────────────────────────────────────────────────────────
 
     def _build_views(self):
-        # All existing connected views are preserved.
+        # BETA1-A02: only views consumed by Home/Creation are instantiated.
+        # Session-space views (issues, campaign, secrets, faction, session,
+        # live_post) are no longer built; their code remains for future phases.
         self.corpus_view = CorpusView(self.ctx, self.ec)
         self.relation_view = RelationView(self.ctx, self.rc)
         self.candidate_view = CandidateView(self.ctx, self.cc)
-        self.issues_view = IssuesHistoryView(self.ctx, self.issuec, self.sc)
-        self.campaign_view = CampaignView(self.ctx, self.ccamp)
-        self.secrets_view = SecretsCluesView(self.ctx, self.secretsc)
-        self.faction_view = FactionFrontView(self.ctx, self.factionc)
-        self.session_view = SessionView(self.ctx, self.sc)
-        self.live_post_view = LivePostView(self.ctx, self.sc, lmc=self.lmc, psc=self.psc)
         self.import_export_view = ImportExportView(self.ctx, self.controller, self.export_service)
         self.writing_view = WritingView(self.ctx, self.wc)
         self.timeline_view = TimelineView(self.ctx, self.tlc)
@@ -641,12 +633,10 @@ class MainWindow(QMainWindow):
 
     def _apply_advanced_mode(self, enabled: bool):
         """Propagate advanced/debug visibility to every workspace/view."""
-        # BETA1-A01: gallery_workspace / session_workspace removed from runtime
+        # BETA1-A02: only runtime widgets (Home/Creation) receive the toggle
         for widget in [
             self.creation_workspace, self.import_export_view,
             self.corpus_view, self.relation_view, self.candidate_view,
-            self.campaign_view, self.secrets_view, self.faction_view,
-            self.session_view, self.live_post_view, self.issues_view,
             self.writing_view, self.timeline_view, self.framework_view,
             self.source_view, self.layer_view, self.home_view,
         ]:
