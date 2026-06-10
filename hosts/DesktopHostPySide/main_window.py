@@ -30,19 +30,12 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
-from hosts.DesktopHostPySide.controllers.campaign_controller import CampaignController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
-from hosts.DesktopHostPySide.controllers.faction_controller import FactionController
 from hosts.DesktopHostPySide.controllers.framework_controller import FrameworkController
-from hosts.DesktopHostPySide.controllers.import_controller import ImportController
-from hosts.DesktopHostPySide.controllers.issue_controller import IssueController
 from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
-from hosts.DesktopHostPySide.controllers.live_mode_controller import LiveModeController
-from hosts.DesktopHostPySide.controllers.post_session_controller import PostSessionController
 from hosts.DesktopHostPySide.controllers.project_controller import ProjectController
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
-from hosts.DesktopHostPySide.controllers.secrets_controller import SecretsController
 from hosts.DesktopHostPySide.controllers.session_controller import SessionController
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
 from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineController
@@ -101,24 +94,18 @@ class MainWindow(QMainWindow):
         self.ec = EntityController(project_service=ps)
         self.rc = RelationController(project_service=ps)
         self.cc = CandidateController(project_service=ps)
-        self.issuec = IssueController(project_service=ps)
+        # BETA1-A03: SessionController kept as shared dependency of
+        # ExportService (used by ImportExportView inside Creation).
         self.sc = SessionController(project_service=ps)
-        self.lmc = LiveModeController(
-            project_service=ps,
-            session_service=self.sc.ss,
-            secrets_service=self.sc.sec,
-            entity_service=self.sc.es,
-        )
-        self.psc = PostSessionController(project_service=ps, session_service=self.sc.ss)
-        self.ic = ImportController(project_service=ps)
-        self.ccamp = CampaignController(project_service=ps)
+        # BETA1-A03: orphan controllers disconnected (issuec, lmc, psc, ic,
+        # ccamp, secretsc, factionc). Their only consumers were the Session
+        # space views removed in A01/A02. ImportExportView builds its own
+        # ImportController. See docs/architecture/A03_legacy_classification.md.
         self.export_service = ExportService(
             project_service=ps,
             entity_service=self.ec.es,
             session_service=self.sc.ss,
         )
-        self.secretsc = SecretsController(project_service=ps)
-        self.factionc = FactionController(project_service=ps)
         self.wc = WritingController(project_service=ps)
         self.tlc = TimelineController(project_service=ps)
         self.fwc = FrameworkController(project_service=ps)
