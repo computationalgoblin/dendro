@@ -9,10 +9,26 @@ HOME = ROOT / "hosts" / "DesktopHostPySide" / "views" / "home_view.py"
 
 
 def test_b27_5_shell_keeps_three_product_spaces_without_dashboard():
+    # BETA1: legacy test name, new contract is Home + Creation only (A04).
+    # Pre-BETA1 this test asserted a three-space shell (Creación/Galería/
+    # Sesión). BETA 1 reduces the runtime shell to Home + Creación; Gallery
+    # and Session code remains in workspaces.py but must not be instantiated
+    # nor reachable from the shell.
     main = MAIN_WINDOW.read_text(encoding="utf-8")
     home = HOME.read_text(encoding="utf-8")
-    for label in ["Creación", "Galería", "Sesión"]:
-        assert label in main or label in home
+    # Creation remains reachable from the shell
+    assert "Creación" in main or "Creación" in home
+    assert "creation_card" in home
+    # Gallery/Session are out of the BETA1 runtime: no instantiation, no
+    # cards, no navigation wiring (instantiation patterns with "(" so that
+    # explanatory comments do not produce false positives)
+    assert "GalleryWorkspace(" not in main
+    assert "SessionWorkspace(" not in main
+    assert "SessionPreparationWorkspace(" not in main
+    assert "gallery_card" not in home
+    assert "session_card" not in home
+    assert 'register_callback("navigate_gallery"' not in main
+    assert 'register_callback("navigate_session"' not in main
     assert '"Dashboard"' not in main
     assert "DashboardView" not in main
 

@@ -1,8 +1,13 @@
-"""HomeView — Dendro immersive portal for B31 UX fix.
+"""HomeView — Dendro home portal (BETA 1: single Creación card).
 
 Normal mode is intentionally non-technical: no schema, no provider status, no
 counts, no raw IDs. Project/config actions are grouped behind quiet icon buttons
 placed at the bottom corners of the home surface.
+
+BETA1-A04 note: originally a three-space portal (B31). Gallery/Session cards
+were disconnected in A01; some internal helpers (_BranchLine, gallery/session
+tones) remain classified as LEGACY INTERNO — see
+docs/architecture/A03_legacy_classification.md.
 """
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ from hosts.DesktopHostPySide.widgets.design_system import Badge, make_scroll_are
 
 
 class HomeNode(QFrame):
-    """Soft clickable node for one of Dendro's three product spaces."""
+    """Soft clickable node for a Dendro product space (BETA 1: Creación)."""
 
     def __init__(self, title: str, subtitle: str, glyph: str, tone: str, ctx=None, parent: QWidget | None = None):
         super().__init__(parent)
@@ -184,7 +189,7 @@ class _BranchLine(QFrame):
 
 
 class HomeView(QWidget):
-    """Dendro home: three connected narrative spaces + grouped configuration."""
+    """Dendro home: Creación space + grouped configuration (BETA 1)."""
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
