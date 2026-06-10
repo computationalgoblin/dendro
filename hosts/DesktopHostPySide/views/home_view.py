@@ -242,15 +242,10 @@ class HomeView(QWidget):
 
         layout.addStretch(1)
 
-        # ---- Middle: three connected node cards ----
-        # Visual structure:
-        #       [Creation]
-        #          ┃
-        #       [Gallery]
-        #          ┃
-        #       [Session]
-        #
-        # Using a vertical layout with branch lines between cards.
+        # ---- Middle: node cards ----
+        # BETA1-A01: only the Creation card is part of the runtime.
+        # Gallery/Session cards removed from Home (their workspaces are
+        # disconnected from the stack in MainWindow).
 
         cards_container = QVBoxLayout()
         cards_container.setSpacing(0)
@@ -272,34 +267,10 @@ class HomeView(QWidget):
             ctx=self.ctx,
         )
 
-        self.gallery_card = HomeNode(
-            "Galería",
-            "Material narrativo como tarjetas, referencias y hallazgos.",
-            ICON_GLYPHS["gallery"],
-            "gallery",
-            ctx=self.ctx,
-        )
-
-        self.session_card = HomeNode(
-            "Sesión",
-            "Preparación, mesa viva y cierre de partida.",
-            ICON_GLYPHS["session"],
-            "session",
-            ctx=self.ctx,
-        )
-
         self.creation_card.mousePressEvent = lambda event: self._navigate("creation")
-        self.gallery_card.mousePressEvent = lambda event: self._navigate("gallery")
-        self.session_card.mousePressEvent = lambda event: self._navigate("session")
         self.creation_card.setToolTip("Entrar en Creación: grafo, hojas, ramas, relaciones y sugerencias IA")
-        self.gallery_card.setToolTip("Entrar en Galería: material narrativo, fuentes y referencias")
-        self.session_card.setToolTip("Entrar en Sesión: preparación, mesa viva y cierre")
 
         cards_col.addWidget(self.creation_card, 3)
-        cards_col.addWidget(self._branch_line())
-        cards_col.addWidget(self.gallery_card, 3)
-        cards_col.addWidget(self._branch_line())
-        cards_col.addWidget(self.session_card, 3)
 
         cards_row.addLayout(cards_col)
         cards_row.addStretch(1)
@@ -351,36 +322,21 @@ class HomeView(QWidget):
     # ------------------------------------------------------------------
 
     def update_project_visibility(self, project_type: str | None, worldbuilding_active: bool):
-        """Update card visibility and indicators based on project metadata.
+        """Update card indicators based on project metadata.
 
-        Rules:
-          - project_type == "campana" → session + gallery visible
-          - project_type == "novela"  → session hidden, gallery + creation visible
-          - project_type == "otro" / None → all visible (conservative default)
+        BETA1-A01: only the Creation card exists on Home, so project_type no
+        longer toggles card visibility. Rules kept:
           - worldbuilding_active → show "🌐 Capas" on creation card
-          - No project loaded → all visible but dimmed
+          - No project loaded → card visible but dimmed
         """
         self._current_project_type = project_type or "otro"
         self._current_worldbuilding = worldbuilding_active
 
-        # Card visibility
-        if self._current_project_type == "novela":
-            self.session_card.setVisible(False)
-        else:
-            # campana, otro, or None: show all
-            self.session_card.setVisible(True)
-
         # Worldbuilding indicator on creation card
         self.creation_card.set_worldbuilding_indicator(worldbuilding_active)
 
-        # If no project is loaded, dim all cards
-        if not self._project_loaded:
-            for card in (self.creation_card, self.gallery_card, self.session_card):
-                card.set_dimmed(True)
-        else:
-            for card in (self.creation_card, self.gallery_card, self.session_card):
-                if card.isVisible():
-                    card.set_dimmed(False)
+        # If no project is loaded, dim the card
+        self.creation_card.set_dimmed(not self._project_loaded)
 
     # ------------------------------------------------------------------
     # Callbacks
@@ -422,7 +378,7 @@ class HomeView(QWidget):
         # Force all visible cards to full opacity immediately.
         # Cards may be at 0.6 from a previous animate_zoom_in that never
         # finished its restore cycle.
-        for card in (self.creation_card, self.gallery_card, self.session_card):
+        for card in (self.creation_card,):
             if card.isVisible() and hasattr(card, '_opacity_effect'):
                 card._opacity_effect.setOpacity(1.0)
 
@@ -440,10 +396,9 @@ class HomeView(QWidget):
     # ------------------------------------------------------------------
 
     def _navigate(self, space: str):
+        # BETA1-A01: only Creation is navigable from Home
         card = {
             "creation": self.creation_card,
-            "gallery": self.gallery_card,
-            "session": self.session_card,
         }.get(space)
         if card and card.isVisible():
             self._animate_card_zoom(card, space)

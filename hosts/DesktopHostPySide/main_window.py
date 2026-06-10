@@ -1,9 +1,9 @@
 """MainWindow — B31 immersive home + fullscreen navigation.
 
-Architecture:
-  HomeView (portal with 3 cards) → fullscreen Creation/Gallery/Session
+Architecture (BETA1-A01):
+  HomeView (portal, Creación only) → fullscreen Creation
+  Gallery/Session workspaces disconnected from runtime (not instantiated).
   No permanent sidebar. Return button inside each space.
-  All existing views/controllers preserved and re-homed.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ from hosts.DesktopHostPySide.views.session_view import SessionView
 from hosts.DesktopHostPySide.views.source_view import SourceView
 from hosts.DesktopHostPySide.views.timeline_view import TimelineView
 from hosts.DesktopHostPySide.views.writing_view import WritingView
-from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace, GalleryWorkspace, SessionWorkspace
+from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
@@ -71,11 +71,9 @@ from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
 from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
 
 
-# Index constants for the stack widget
+# Index constants for the stack widget (BETA1-A01: only Home + Creation in runtime)
 _IDX_HOME = 0
 _IDX_CREATION = 1
-_IDX_GALLERY = 2
-_IDX_SESSION = 3
 
 
 class MainWindow(QMainWindow):
@@ -154,8 +152,7 @@ class MainWindow(QMainWindow):
         # Home portal
         self.home_view = HomeView(self.ctx)
         self.home_view.register_callback("navigate_creation", lambda: self._go_space(_IDX_CREATION))
-        self.home_view.register_callback("navigate_gallery", lambda: self._go_space(_IDX_GALLERY))
-        self.home_view.register_callback("navigate_session", lambda: self._go_space(_IDX_SESSION))
+        # BETA1-A01: navigate_gallery / navigate_session removed from wiring
         self.home_view.register_callback("project_menu", self._open_project_panel)
         self.home_view.register_callback("config_menu", self._open_config_panel)
         self.home_view.register_callback("new_project", self._new_project)
@@ -179,16 +176,9 @@ class MainWindow(QMainWindow):
             source_view=self.source_view,
             layer_view=self.layer_view,
         )
-        self.gallery_workspace = GalleryWorkspace(self.ctx)
-        self.session_workspace = SessionWorkspace(
-            self.ctx,
-            campaign_view=self.campaign_view,
-            faction_view=self.faction_view,
-            session_view=self.session_view,
-            live_post_view=self.live_post_view,
-            secrets_view=self.secrets_view,
-            issues_view=self.issues_view,
-        )
+        # BETA1-A01: GalleryWorkspace / SessionWorkspace (and its
+        # SessionPreparationWorkspace) are no longer instantiated.
+        # Their code remains in views/workspaces.py for future phases.
 
     # ── Shell ────────────────────────────────────────────────────────────────
 
@@ -218,8 +208,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.home_view)        # 0 - home
         self.stack.addWidget(self._wrap_space(self.creation_workspace, "Creación", _IDX_HOME))  # 1
-        self.stack.addWidget(self._wrap_space(self.gallery_workspace, "Galería", _IDX_HOME))    # 2
-        self.stack.addWidget(self._wrap_space(self.session_workspace, "Sesión", _IDX_HOME))     # 3
+        # BETA1-A01: stack only holds Home + Creation
         body.addWidget(self.stack, stretch=1)
 
         # Right drawer (global, shared via AppContext) — for Project panel
@@ -344,6 +333,10 @@ class MainWindow(QMainWindow):
 
     def _go_space(self, idx: int):
         _apptrace(f"UI go_space idx={idx}")
+        # BETA1-A01: only Home and Creation are navigable in this runtime
+        if idx not in (_IDX_HOME, _IDX_CREATION):
+            _apptrace(f"UI go_space blocked idx={idx} (fuera de alcance BETA1)")
+            return
         # Reset outgoing widget's opacity to prevent ghost rendering
         current = self.stack.currentWidget()
         if current and current.graphicsEffect():
@@ -369,7 +362,7 @@ class MainWindow(QMainWindow):
                             child.refresh()
                         except Exception as exc:
                             self.log_msg(f"Error refreshing: {exc}")
-        self.log_msg(f"Navegación: {'Dendro' if idx == _IDX_HOME else ['','Creación','Galería','Sesión'][idx]}")
+        self.log_msg(f"Navegación: {'Dendro' if idx == _IDX_HOME else 'Creación'}")
 
     def _clear_contextual_surface(self):
         if getattr(self.ctx, "left_drawer", None) is not None:
@@ -648,9 +641,9 @@ class MainWindow(QMainWindow):
 
     def _apply_advanced_mode(self, enabled: bool):
         """Propagate advanced/debug visibility to every workspace/view."""
+        # BETA1-A01: gallery_workspace / session_workspace removed from runtime
         for widget in [
-            self.creation_workspace, self.gallery_workspace,
-            self.session_workspace, self.import_export_view,
+            self.creation_workspace, self.import_export_view,
             self.corpus_view, self.relation_view, self.candidate_view,
             self.campaign_view, self.secrets_view, self.faction_view,
             self.session_view, self.live_post_view, self.issues_view,
