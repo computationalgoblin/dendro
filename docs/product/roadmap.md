@@ -1,51 +1,23 @@
-# Roadmap — Dendro / Narrative Architect
+# Roadmap — Dendro / Narrative Architect (BETA baseline)
 
-Última actualización: B34 completado.
+Última actualización: 2026-06-10 — Cierre de exploración, baseline B44.
 
-## Bloques completados
+## Fase completada: Exploración (B1-B44)
 
-- B01-B24: Fundación, dominio, persistencia, importación, CLI.
-- B25-B26: Análisis, importación avanzada.
-- B27-B29: Desktop UI, navegación, Grafo.
-- B30-B31: UX visual, Home, Creación, Configuración, Proyecto.
-- B32-B34: Árboles jerárquicos, pertenencia, contexto IA, z-order/hit-testing.
-- **B35: Coherencia de subgrafo.** Análisis, reparación, aceptar/descartar, 17 tests.
-- B27: IA provider, escritura asistida.
-- B28: CLI robustez, candidates.
-- B29-B30: Timeline, robustez general.
-- B31: Desktop UI — primera pasada visual (Home, Creación).
-- B32: Árboles semánticos — modelo de datos y servicios.
-- B33: Grafo interactivo — nodos, edges, drag, selección.
-- B34: Árboles jerárquicos — contenedores, collapse, layout, z-order, contexto IA.
+Fundación → dominio → persistencia → CLI → Desktop UI → IA → worldbuilding → coherencia → árboles → anillos → física de grafo.
 
-## Bloque actual
+44 bloques implementados, 30+ suites de tests, schema v23.
 
-- **B36**: Worldbuilding por capas causales — planificación abierta sobre infraestructura real existente.
-  - No reimplementa capas desde cero: reutiliza `Project.world_layers` y las 16 capas contractuales existentes.
-  - T00 documenta la reconciliación entre capas existentes y enfoque causal en `docs/product/B36_worldbuilding_layer_mapping.md`.
-  - Tickets Kanban creados en estado bloqueado para revisión/aprobación antes de implementar.
+## Fase actual: BETA
 
-## Bloques pendientes
+Pendiente de contrato. Sin bloques activos.
 
-- **B31-UX-FIX-02**: Home + Creación + Configuración/Proyecto como núcleo inmersivo (pausa actual, retomar tras B36).
-  - Tipografía máquina de escribir, fondo blanco roto, animaciones zoom.
-  - Configuración (abajo izquierda) con Apariencia, IA (chatbot prueba), Avanzado.
-  - Proyecto (abajo derecha) con tipo, worldbuilding, género, tono, sistema rol.
-  - Visibilidad por tipo de proyecto: campaña → Sesión, novela → sin Sesión.
-  - Worldbuilding → capas en Creación, contexto IA.
+## Deuda activa (hereda BETA)
 
-## Deuda que puede afectar roadmap
+Ver `KNOWN_ISSUES.md` y `docs/product/product_debt_map.md`.
 
-| ID | Impacto |
-|----|---------|
-| DC-034-04 | Pasada graph layout/scene graph futura. No bloquea B35. |
-| DC-B28-UI-WIN | Validación Windows Desktop pendiente. |
-| DC-045 | AnalysisService sin tests. |
+10 bugs con fix WSL sin validación Windows. Deuda DC-026..DC-045 diversa.
 
-## Orden recomendado
+## Orden TBD
 
-1. B35 — Coherencia de subgrafo (modelo/servicios).
-2. B36 — Worldbuilding por capas.
-3. B31-UX-FIX-02 — Pulido inmersivo Home/Creación/Config/Proyecto.
-4. Pasada graph layout — Resolver DC-034-04.
-5. Galería + Sesión — Cuando Home y Creación estén sólidos.
+El contrato BETA definirá alcance y orden.
