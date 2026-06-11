@@ -22,3 +22,8 @@ tmp/
 graphify-out/cache/
 graphify-out/manifest.json
 graphify-out/cost.json
+
+tmp/
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
