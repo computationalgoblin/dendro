@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -1063,6 +1064,14 @@ class GraphCanvasView(QGraphicsView):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)  # ring_id, display_name
     ringFocused = Signal(str, str)  # ring_id, display_name
+    # BETA1-B01: context-menu intents. The canvas only emits intent; the
+    # CreationWorkspace wires them to its existing creation/deletion routes
+    # so no persistence logic lives here.
+    contextCreateEntityRequested = Signal()
+    contextCreateTreeRequested = Signal()
+    contextCreateEntityInTreeRequested = Signal(str)  # parent tree entity_id
+    contextCreateSubtreeRequested = Signal(str)  # parent tree entity_id
+    contextDeleteRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1246,8 +1255,169 @@ class GraphCanvasView(QGraphicsView):
             edge.set_coherence_selected(True)
         self._emit_selection_changed()
 
+    # ── BETA1-B01: context menus ─────────────────────────────────────────
+
+    def contextMenuEvent(self, event):
+        # Never open a menu mid-drag: cancel transient drag state first so the
+        # menu cannot corrupt relation/assignment flows.
+        if self._drag_source is not None:
+            self._finish_relation_drag(None)
+        if self._alt_line is not None:
+            self._finish_alt_drag()
+        self._pending_source = None
+        self._alt_source = None
+        menu = self._build_context_menu(QPointF(event.pos()))
+        if menu is None or menu.isEmpty():
+            super().contextMenuEvent(event)
+            return
+        event.accept()
+        menu.exec(event.globalPos())
+
+    def _build_context_menu(self, view_pos) -> QMenu | None:
+        """Hit-test *view_pos* and build the QMenu for the element found.
+
+        Priority mirrors left-click handling: node/tree, then edge, then ring,
+        then background. The element under the cursor is selected first so
+        edit/delete act on what the user sees highlighted.
+        """
+        node = self._item_node_at(view_pos)
+        if node is not None:
+            self._set_single_node_selection(node)
+            if isinstance(node, GraphTreeItem):
+                return self._tree_context_menu(node)
+            return self._node_context_menu(node)
+        edge = self._item_edge_at(view_pos)
+        if edge is not None:
+            self._set_single_edge_selection(edge)
+            return self._edge_context_menu(edge)
+        ring = self._item_ring_at(view_pos)
+        if ring is not None:
+            return self._ring_context_menu(ring)
+        return self._background_context_menu()
+
+    def _background_context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction("Crear hoja aquí", self.contextCreateEntityRequested.emit)
+        menu.addAction("Crear rama aquí", self.contextCreateTreeRequested.emit)
+        return menu
+
+    def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
+        entity_id = item.node.entity_id
+        menu = QMenu(self)
+        menu.addAction("Editar", lambda: self.entitySelected.emit(entity_id))
+        menu.addAction(
+            "Crear relación desde aquí",
+            lambda: self._begin_context_relation(item),
+        )
+        # Parent the submenu explicitly: with addMenu("…") PySide leaves the
+        # wrapper Python-owned and shiboken deletes the C++ menu when the
+        # local reference dies (before exec()). QMenu(title, parent) hands
+        # ownership to the parent menu.
+        move_menu = QMenu("Mover a rama", menu)
+        menu.addMenu(move_menu)
+        targets = self._context_target_trees(exclude_id=entity_id)
+        if targets:
+            for tree_id, tree_name in targets:
+                move_menu.addAction(
+                    tree_name,
+                    lambda _=False, tid=tree_id: self.nodeAssignToTreeRequested.emit(entity_id, tid),
+                )
+        else:
+            empty = move_menu.addAction("Sin ramas disponibles")
+            empty.setEnabled(False)
+        ring_action = menu.addAction("Mover a anillo")
+        # B01 only wires existing routes; ring reassignment (layer change)
+        # has no canvas/workspace route yet — enabled in B03.
+        ring_action.setEnabled(False)
+        ring_action.setToolTip("Disponible en B03 (requiere ruta de reasignación de capa)")
+        menu.addSeparator()
+        menu.addAction("Eliminar", self.contextDeleteRequested.emit)
+        return menu
+
+    def _tree_context_menu(self, item: GraphTreeItem) -> QMenu:
+        tree_id = item.node.entity_id
+        menu = QMenu(self)
+        menu.addAction("Editar", lambda: self.entitySelected.emit(tree_id))
+        menu.addAction(
+            "Crear hoja dentro",
+            lambda: self.contextCreateEntityInTreeRequested.emit(tree_id),
+        )
+        menu.addAction(
+            "Crear subrama",
+            lambda: self.contextCreateSubtreeRequested.emit(tree_id),
+        )
+        menu.addSeparator()
+        menu.addAction("Eliminar", self.contextDeleteRequested.emit)
+        return menu
+
+    def _edge_context_menu(self, item: GraphEdgeItem) -> QMenu:
+        relation_id = item.edge.relation_id
+        menu = QMenu(self)
+        menu.addAction("Editar relación", lambda: self.relationSelected.emit(relation_id))
+        menu.addSeparator()
+        menu.addAction("Eliminar relación", self.contextDeleteRequested.emit)
+        return menu
+
+    def _ring_context_menu(self, item: GraphRingItem) -> QMenu:
+        ring_id = item.ring.ring_id
+        menu = QMenu(self)
+        menu.addAction(
+            "Crear hoja en este anillo",
+            lambda: self._create_in_ring(ring_id, self.contextCreateEntityRequested),
+        )
+        menu.addAction(
+            "Crear rama en este anillo",
+            lambda: self._create_in_ring(ring_id, self.contextCreateTreeRequested),
+        )
+        return menu
+
+    def _create_in_ring(self, ring_id: str, signal):
+        # select_ring marks the ring active, so the existing creation route
+        # (_with_active_ring_payload in CreationWorkspace) lands the new
+        # element in this ring without new persistence logic.
+        self.select_ring(ring_id)
+        signal.emit()
+
+    def _context_target_trees(self, *, exclude_id: str) -> list[tuple[str, str]]:
+        """Candidate trees for 'Mover a rama': all trees except self and any
+        assignment that would create a containment cycle."""
+        targets: list[tuple[str, str]] = []
+        for item_id, item in self._nodes.items():
+            if not isinstance(item, GraphTreeItem) or item_id == exclude_id:
+                continue
+            if self.would_create_cycle(exclude_id, item_id):
+                continue
+            targets.append((item_id, item.node.name or item_id))
+        targets.sort(key=lambda pair: pair[1].lower())
+        return targets[:20]
+
+    def _begin_context_relation(self, source: GraphNodeItem | GraphTreeItem):
+        """Start the existing relation-drag flow from a context-menu action.
+
+        The arrow follows the cursor (mouseMoveEvent already handles
+        _drag_source) and the next left-click completes or cancels the
+        relation — see the early branch in mousePressEvent.
+        """
+        self._start_relation_drag(source)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            # BETA1-B01: a relation started from the context menu has
+            # _drag_source set without a held button; the next click picks
+            # the target (or cancels on background). Normal drags never enter
+            # here because the button is already held down.
+            if self._drag_source is not None and self._pending_source is None:
+                source = self._drag_source
+                target = self._item_node_at(event.position())
+                self._finish_relation_drag(target)
+                if target is None:
+                    self.relationCreateRejected.emit("Relación cancelada")
+                elif target is source:
+                    self.relationCreateRejected.emit("No se puede crear una relación sobre el mismo elemento")
+                else:
+                    self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
+                event.accept()
+                return
             items = self.items(event.position().toPoint())
             _b44trace(
                 "mouse_press "
@@ -2383,6 +2553,12 @@ class GraphCanvasWidget(QWidget):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)
     ringFocused = Signal(str, str)
+    # BETA1-B01: context-menu intents re-exposed from GraphCanvasView
+    contextCreateEntityRequested = Signal()
+    contextCreateTreeRequested = Signal()
+    contextCreateEntityInTreeRequested = Signal(str)
+    contextCreateSubtreeRequested = Signal(str)
+    contextDeleteRequested = Signal()
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -2414,6 +2590,12 @@ class GraphCanvasWidget(QWidget):
         self.canvas.nodeAssignToTreeRequested.connect(self.nodeAssignToTreeRequested.emit)
         self.canvas.ringSelected.connect(self.ringSelected.emit)
         self.canvas.ringFocused.connect(self.ringFocused.emit)
+        # BETA1-B01: context-menu intents
+        self.canvas.contextCreateEntityRequested.connect(self.contextCreateEntityRequested.emit)
+        self.canvas.contextCreateTreeRequested.connect(self.contextCreateTreeRequested.emit)
+        self.canvas.contextCreateEntityInTreeRequested.connect(self.contextCreateEntityInTreeRequested.emit)
+        self.canvas.contextCreateSubtreeRequested.connect(self.contextCreateSubtreeRequested.emit)
+        self.canvas.contextDeleteRequested.connect(self.contextDeleteRequested.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
 

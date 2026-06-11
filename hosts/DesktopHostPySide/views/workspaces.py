@@ -1207,6 +1207,12 @@ class CreationWorkspace(QWidget):
         self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
         self.graph.ringSelected.connect(self._on_ring_selected)
         self.graph.ringFocused.connect(self._on_ring_focused)
+        # BETA1-B01: context-menu intents → existing creation/deletion routes
+        self.graph.contextCreateEntityRequested.connect(self._create_entity_on_graph)
+        self.graph.contextCreateTreeRequested.connect(self._create_tree_on_graph)
+        self.graph.contextCreateEntityInTreeRequested.connect(self._create_entity_in_tree)
+        self.graph.contextCreateSubtreeRequested.connect(self._create_subtree_in_tree)
+        self.graph.contextDeleteRequested.connect(self._delete_selected)
         layout.addWidget(self.graph, 1)
 
         # Command bar area replaces the old bottom button toolbar.
@@ -2115,11 +2121,15 @@ class CreationWorkspace(QWidget):
         self.refresh()
         self.open_candidates_clean()
 
-    def _create_entity_on_graph(self):
-        """Create a new entity, add node to graph center, open detail panel."""
+    def _create_entity_on_graph(self) -> str:
+        """Create a new entity, add node to graph center, open detail panel.
+
+        Returns the new entity id ("" on failure) so callers like the
+        BETA1-B01 context-menu composition can chain existing routes.
+        """
         if self.entity_controller is None:
             self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
-            return
+            return ""
         result = self.entity_controller.create(self._with_active_ring_payload({
             "name": "Nueva hoja",
             "entity_type": "nota",
@@ -2129,7 +2139,7 @@ class CreationWorkspace(QWidget):
         }))
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando hoja: {result.error}")
-            return
+            return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Hoja creada en modo borrador")
@@ -2138,12 +2148,16 @@ class CreationWorkspace(QWidget):
         self.graph.canvas.focus_entity(entity_id)
         # Open detail panel for editing
         self._open_node_panel(entity_id, is_new=True)
+        return entity_id
 
-    def _create_tree_on_graph(self):
-        """Create a new contenedor entity and open tree detail panel."""
+    def _create_tree_on_graph(self) -> str:
+        """Create a new contenedor entity and open tree detail panel.
+
+        Returns the new entity id ("" on failure); see _create_entity_on_graph.
+        """
         if self.entity_controller is None:
             self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
-            return
+            return ""
         result = self.entity_controller.create(self._with_active_ring_payload({
             "name": "Nueva rama",
             "entity_type": "contenedor",
@@ -2153,13 +2167,27 @@ class CreationWorkspace(QWidget):
         }))
         if isinstance(result, Error):
             self.ctx.log("error", f"Error creando rama: {result.error}")
-            return
+            return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Rama creada en modo borrador")
         self.refresh()
         self.graph.canvas.focus_entity(entity_id)
         self._open_tree_panel(entity_id, is_new=True)
+        return entity_id
+
+    def _create_entity_in_tree(self, tree_id: str):
+        """BETA1-B01 'Crear hoja dentro': composition of two existing routes
+        (create entity + assign to tree). No new persistence logic."""
+        entity_id = self._create_entity_on_graph()
+        if entity_id and tree_id:
+            self._assign_node_to_tree(entity_id, tree_id)
+
+    def _create_subtree_in_tree(self, tree_id: str):
+        """BETA1-B01 'Crear subrama': create tree + assign to parent tree."""
+        entity_id = self._create_tree_on_graph()
+        if entity_id and tree_id:
+            self._assign_node_to_tree(entity_id, tree_id)
 
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
