@@ -13,7 +13,10 @@ from typing import Any
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
+    QStyle,
+    QStyleOptionGraphicsItem,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -22,7 +25,11 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QLineEdit,
     QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -1009,11 +1016,32 @@ class GraphRingItem(QGraphicsPathItem):
     def __init__(self, ring: _RingVisual, path: QPainterPath):
         super().__init__(path)
         self.ring = ring
+        self._base_pen: QPen | None = None
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(f"Anillo: {ring.display_name}\n{ring.count_label}\nDoble click: entrar en anillo")
         self.setZValue(-100)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        # BETA1-B02: suppress Qt's default selection marquee (a dashed
+        # bounding RECTANGLE around the whole ring). Selection feedback is the
+        # highlighted ring outline applied in itemChange instead.
+        clean = QStyleOptionGraphicsItem(option)
+        clean.state &= ~QStyle.StateFlag.State_Selected
+        super().paint(painter, clean, widget)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            if self._base_pen is None:
+                self._base_pen = QPen(self.pen())
+            if value:
+                selected = QPen(QColor("#5B8DEF"), 3.4, Qt.PenStyle.SolidLine)
+                selected.setCosmetic(True)
+                self.setPen(selected)
+            else:
+                self.setPen(self._base_pen)
+        return super().itemChange(change, value)
 
     def _canvas_view(self):
         scene = self.scene()
@@ -1025,12 +1053,21 @@ class GraphRingItem(QGraphicsPathItem):
         return None
 
     def mousePressEvent(self, event):
+        # BETA1-B02: only the left button selects. Without this filter the
+        # right button also triggered select_ring before the context menu
+        # opened, causing a view jump on every right click.
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         view = self._canvas_view()
         if view is not None:
             view.select_ring(self.ring.ring_id)
         event.accept()
 
     def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         view = self._canvas_view()
         if view is not None:
             view.select_ring(self.ring.ring_id)
@@ -1072,6 +1109,12 @@ class GraphCanvasView(QGraphicsView):
     contextCreateEntityInTreeRequested = Signal(str)  # parent tree entity_id
     contextCreateSubtreeRequested = Signal(str)  # parent tree entity_id
     contextDeleteRequested = Signal()
+    # BETA1-B02: emitted after Escape has cancelled modes and cleared the
+    # selection, so the workspace can close contextual surfaces (drawer).
+    escapePressed = Signal()
+    # BETA1-B03: 'Mover a anillo' — entity_id, ring_id (= world layer id).
+    # The workspace resolves it through EntityController.update (CRUD-U).
+    nodeAssignToRingRequested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1111,6 +1154,16 @@ class GraphCanvasView(QGraphicsView):
         self._alt_tree_target: GraphTreeItem | None = None
         self._alt_line: QGraphicsLineItem | None = None
         self._alt_origin_view_pos = QPointF()
+        # BETA1-B02: keyboard core. Click focus so shortcuts only apply when
+        # the user is actually working on the canvas; text inputs in panels
+        # keep receiving their own key events untouched.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._space_pan_active = False
+        # BETA1-B02 fix: explicit ring chosen via context menu must win over
+        # any focused ring while the creation route runs (one-shot override).
+        self._context_ring_override = ""
+        # BETA1-B02: camera state captured by set_graph for same-layout rebuilds
+        self._view_state_to_restore: tuple[QTransform, QPointF] | None = None
 
     def selected_entity_ids(self) -> list[str]:
         return list(self._selected_entity_ids)
@@ -1146,6 +1199,11 @@ class GraphCanvasView(QGraphicsView):
     def _clear_selection_impl(self, *, emit: bool = True):
         for item in self._edges:
             item.set_coherence_selected(False)
+        # BETA1-B02: also drop ring selection feedback (outline) so clicking
+        # the background leaves no ring visually "selected".
+        for ring_item in self._ring_items.values():
+            if ring_item.isSelected():
+                ring_item.setSelected(False)
         self._selected_entity_ids.clear()
         self._selected_relation_ids.clear()
         if emit:
@@ -1255,6 +1313,97 @@ class GraphCanvasView(QGraphicsView):
             edge.set_coherence_selected(True)
         self._emit_selection_changed()
 
+    # ── BETA1-B02: keyboard core (Delete, Escape, Space+drag) ────────────
+
+    def _is_text_input_focused(self) -> bool:
+        """True when a text editor has keyboard focus anywhere in the app.
+
+        Canvas shortcuts must never fire while the user types in a detail
+        panel: Space writes spaces, Delete deletes characters, not entities.
+        """
+        widget = QApplication.focusWidget()
+        return isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit))
+
+    def keyPressEvent(self, event):
+        if self._is_text_input_focused():
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key == Qt.Key.Key_Space and not event.isAutoRepeat():
+            if not self._space_pan_active:
+                self._space_pan_active = True
+                # Disable item interaction so the native ScrollHandDrag pans
+                # even when the drag starts on top of a node/ring.
+                self.setInteractive(False)
+                self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._request_delete_selection()
+            event.accept()
+            return
+        if key == Qt.Key.Key_Escape:
+            self._handle_escape()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            # Always clear pan mode on release, even if focus moved meanwhile,
+            # so the canvas can never get stuck in non-interactive state.
+            if self._space_pan_active:
+                self._space_pan_active = False
+                self.setInteractive(True)
+                self.viewport().unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def _request_delete_selection(self):
+        """Delete current selection through the existing route, after explicit
+        confirmation. No selection → no-op (and no dialog)."""
+        entity_ids = list(self._selected_entity_ids)
+        relation_ids = list(self._selected_relation_ids)
+        if not entity_ids and not relation_ids:
+            return
+        if not self._confirm_delete(entity_ids, relation_ids):
+            return
+        # Same intent signal as the B01 context menu → workspace._delete_selected
+        self.contextDeleteRequested.emit()
+
+    def _confirm_delete(self, entity_ids: list[str], relation_ids: list[str]) -> bool:
+        """Modal confirmation. Separated so tests can monkeypatch it."""
+        parts = []
+        if entity_ids:
+            parts.append(f"{len(entity_ids)} elemento(s)")
+        if relation_ids:
+            parts.append(f"{len(relation_ids)} relación(es)")
+        message = (
+            f"¿Eliminar {' y '.join(parts)}?\n"
+            "Esta acción no se puede deshacer."
+        )
+        result = QMessageBox.question(
+            self,
+            "Confirmar eliminación",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return result == QMessageBox.StandardButton.Yes
+
+    def _handle_escape(self):
+        """Escape: cancel transient modes, clear selection, notify workspace."""
+        if self._drag_source is not None:
+            self._finish_relation_drag(None)
+            self.relationCreateRejected.emit("Relación cancelada")
+        if self._alt_line is not None:
+            self._finish_alt_drag()
+        self._pending_source = None
+        self._alt_source = None
+        self.clear_selection()
+        self.escapePressed.emit()
+
     # ── BETA1-B01: context menus ─────────────────────────────────────────
 
     def contextMenuEvent(self, event):
@@ -1325,11 +1474,20 @@ class GraphCanvasView(QGraphicsView):
         else:
             empty = move_menu.addAction("Sin ramas disponibles")
             empty.setEnabled(False)
-        ring_action = menu.addAction("Mover a anillo")
-        # B01 only wires existing routes; ring reassignment (layer change)
-        # has no canvas/workspace route yet — enabled in B03.
-        ring_action.setEnabled(False)
-        ring_action.setToolTip("Disponible en B03 (requiere ruta de reasignación de capa)")
+        # BETA1-B03: ring reassignment through EntityController.update
+        ring_targets = self._context_target_rings(exclude_entity=entity_id)
+        if ring_targets:
+            ring_menu = QMenu("Mover a anillo", menu)
+            menu.addMenu(ring_menu)
+            for ring_id, ring_name in ring_targets:
+                ring_menu.addAction(
+                    ring_name,
+                    lambda _=False, rid=ring_id: self.nodeAssignToRingRequested.emit(entity_id, rid),
+                )
+        else:
+            ring_action = menu.addAction("Mover a anillo")
+            ring_action.setEnabled(False)
+            ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -1375,8 +1533,14 @@ class GraphCanvasView(QGraphicsView):
         # select_ring marks the ring active, so the existing creation route
         # (_with_active_ring_payload in CreationWorkspace) lands the new
         # element in this ring without new persistence logic.
+        # The one-shot override guarantees the right-clicked ring wins even
+        # when another ring holds focus (active_ring_id prefers focus).
         self.select_ring(ring_id)
-        signal.emit()
+        self._context_ring_override = ring_id
+        try:
+            signal.emit()  # synchronous: creation runs inside this emit
+        finally:
+            self._context_ring_override = ""
 
     def _context_target_trees(self, *, exclude_id: str) -> list[tuple[str, str]]:
         """Candidate trees for 'Mover a rama': all trees except self and any
@@ -1391,6 +1555,17 @@ class GraphCanvasView(QGraphicsView):
         targets.sort(key=lambda pair: pair[1].lower())
         return targets[:20]
 
+    def _context_target_rings(self, *, exclude_entity: str) -> list[tuple[str, str]]:
+        """Candidate rings for 'Mover a anillo': every visible ring except the
+        synthetic unclassified ring and the entity's current one."""
+        current = self._node_ring_ids.get(exclude_entity, "")
+        targets: list[tuple[str, str]] = []
+        for ring in self._ring_visuals:
+            if ring.ring_id in ("__unclassified__", current):
+                continue
+            targets.append((ring.ring_id, ring.display_name))
+        return targets
+
     def _begin_context_relation(self, source: GraphNodeItem | GraphTreeItem):
         """Start the existing relation-drag flow from a context-menu action.
 
@@ -1401,6 +1576,13 @@ class GraphCanvasView(QGraphicsView):
         self._start_relation_drag(source)
 
     def mousePressEvent(self, event):
+        # BETA1-B02: in space-pan mode the view is non-interactive and the
+        # native ScrollHandDrag must receive the press untouched (no
+        # selection, no relation logic).
+        if self._space_pan_active:
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            super().mousePressEvent(event)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             # BETA1-B01: a relation started from the context menu has
             # _drag_source set without a held button; the next click picks
@@ -1495,6 +1677,10 @@ class GraphCanvasView(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event):
+        # BETA1-B02: space-pan passes straight to the native hand-drag
+        if self._space_pan_active:
+            super().mouseMoveEvent(event)
+            return
         # Alt-drag: moving node into tree container
         if self._alt_source is not None and self._alt_line is None:
             delta = event.position() - self._alt_origin_view_pos
@@ -1519,6 +1705,11 @@ class GraphCanvasView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # BETA1-B02: space-pan release returns to the open-hand cursor
+        if self._space_pan_active:
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            super().mouseReleaseEvent(event)
+            return
         # Alt-drag release: assign node to tree
         if self._alt_line is not None:
             source_item = self._alt_source
@@ -1848,7 +2039,7 @@ class GraphCanvasView(QGraphicsView):
             item = GraphEdgeItem(edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
-        self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+        self._finalize_view(140.0)  # BETA1-B02
 
     def _ring_color(self, index: int) -> str:
         palette = [
@@ -1984,6 +2175,7 @@ class GraphCanvasView(QGraphicsView):
         pen = QPen(QColor("#6F6A42") if ring.state == "focused" else QColor(ring.color).darker(118), 2.4 if ring.state == "focused" else 1.2, Qt.PenStyle.SolidLine if ring.state == "focused" else Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         item.setPen(pen)
+        item._base_pen = QPen(pen)  # restored when the ring is deselected
         item.setZValue(-100)
         self.scene_obj.addItem(item)
         self._ring_items[ring.ring_id] = item
@@ -2081,9 +2273,10 @@ class GraphCanvasView(QGraphicsView):
             self.scene_obj.addItem(item)
             self._edges.append(item)
 
+        # BETA1-B02: set_graph returns early for this layout, so the common
+        # view finalization (scene rect + camera restore/fit) happens here.
+        self._finalize_view(160.0)
         rect = self.scene_obj.itemsBoundingRect()
-        if rect.isValid() and not rect.isEmpty():
-            self.fitInView(rect.adjusted(-160, -160, 160, 160), Qt.AspectRatioMode.KeepAspectRatio)
         _b44trace(
             "concentric_done "
             f"scene_items={len(self.scene_obj.items())} ring_items={len(self._ring_items)} "
@@ -2107,6 +2300,17 @@ class GraphCanvasView(QGraphicsView):
             layout_mode = "layered" if layer_mode else "free"
         if layout_mode not in {"free", "layered", "concentric_rings"}:
             layout_mode = "free"
+        # BETA1-B02: rebuilding the same layout (refresh after create/edit/
+        # delete) must not reset the user's zoom and pan — constant re-fitting
+        # made navigation impossible. Capture the camera now; _finalize_view
+        # restores it instead of fitting when the layout didn't change.
+        previous_layout = self._layout_mode_active
+        self._view_state_to_restore = None
+        if layout_mode == previous_layout and self._nodes:
+            self._view_state_to_restore = (
+                QTransform(self.transform()),
+                self.mapToScene(self.viewport().rect().center()),
+            )
         self._layout_mode_active = layout_mode
         self._layer_mode_active = layout_mode == "layered"
         if layout_mode == "concentric_rings" and self._focused_ring_id:
@@ -2306,7 +2510,50 @@ class GraphCanvasView(QGraphicsView):
         for tree in self._trees.values():
             tree.set_canvas_edges(self._edges)
 
-        self.fitInView(self.scene_obj.itemsBoundingRect().adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+        self._finalize_view(140.0)
+
+    def _finalize_view(self, margin: float = 140.0):
+        """BETA1-B02: common tail for every layout builder.
+
+        Expands the scene rect to the content and then either restores the
+        camera captured by set_graph (same-layout rebuild → keep the user's
+        zoom/pan) or fits the whole graph (first build / layout change)."""
+        self._expand_scene_rect_to_content()
+        state = self._view_state_to_restore
+        if state is not None:
+            self._view_state_to_restore = None
+            transform, center = state
+            self.setTransform(transform)
+            self.centerOn(center)
+            return
+        rect = self.scene_obj.itemsBoundingRect()
+        if rect.isValid() and not rect.isEmpty():
+            self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def reveal_entity(self, entity_id: str):
+        """BETA1-B02: make an entity visible by scrolling only — no zoom
+        change. Used after contextual creation so the new element shows up
+        without yanking the camera (focus_entity does a fitInView zoom)."""
+        item = self._nodes.get(entity_id) or self._trees.get(entity_id)
+        if item is not None:
+            self.ensureVisible(item, 120, 120)
+
+    def _expand_scene_rect_to_content(self):
+        """BETA1-B02: make the scene rect cover the real content (plus margin)
+        so panning — Space+drag, hand-drag, scrollbars — can reach every part
+        of the graph. The fixed default rect (3200x2200) was smaller than
+        large concentric layouts, which froze navigation near the center.
+        Must be called by EVERY layout builder (free/layered/concentric):
+        set_graph returns early for layered and concentric modes."""
+        content_rect = self.scene_obj.itemsBoundingRect()
+        if content_rect.isNull():
+            return
+        margin = 400.0
+        expanded = content_rect.adjusted(-margin, -margin, margin, margin)
+        # Never shrink below the historical default so small/free graphs
+        # keep their roomy feel.
+        expanded = expanded.united(QRectF(-1600, -1100, 3200, 2200))
+        self.scene_obj.setSceneRect(expanded)
 
     def recompute_edge_visibility(self):
         self.refresh_all_visibility()
@@ -2416,7 +2663,10 @@ class GraphCanvasView(QGraphicsView):
         return str(getattr(layer, "name", "Anillo")) if layer is not None else "Anillo"
 
     def active_ring_id(self) -> str:
-        """Current ring for contextual creation: focused ring wins, then selected ring."""
+        """Current ring for contextual creation: context-menu override wins
+        (explicit user intent), then focused ring, then selected ring."""
+        if self._context_ring_override:
+            return self._context_ring_override
         return str(self._focused_ring_id or self._selected_ring_id or "")
 
     def select_ring(self, ring_id: str) -> bool:
@@ -2430,10 +2680,17 @@ class GraphCanvasView(QGraphicsView):
             return False
         self.clear_selection(emit=False)
         self._selected_ring_id = ring_id
+        # BETA1-B02: only one ring can show selection feedback at a time
+        for other in self._ring_items.values():
+            if other.isSelected():
+                other.setSelected(False)
         item = self._ring_items.get(ring_id)
         if item is not None:
             item.setSelected(True)
-            self.center_on_item(item)
+            # BETA1-B02: selection must not navigate. center_on_item here did
+            # a fitInView (zoom jump) on every ring click, which made manual
+            # navigation nearly impossible. Use focus (double click) to dive
+            # into a ring; single click only selects.
         self._emit_selection_changed()
         self.ringSelected.emit(ring_id, ring.display_name)
         _b44trace(
@@ -2559,6 +2816,10 @@ class GraphCanvasWidget(QWidget):
     contextCreateEntityInTreeRequested = Signal(str)
     contextCreateSubtreeRequested = Signal(str)
     contextDeleteRequested = Signal()
+    # BETA1-B02
+    escapePressed = Signal()
+    # BETA1-B03
+    nodeAssignToRingRequested = Signal(str, str)
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -2596,6 +2857,10 @@ class GraphCanvasWidget(QWidget):
         self.canvas.contextCreateEntityInTreeRequested.connect(self.contextCreateEntityInTreeRequested.emit)
         self.canvas.contextCreateSubtreeRequested.connect(self.contextCreateSubtreeRequested.emit)
         self.canvas.contextDeleteRequested.connect(self.contextDeleteRequested.emit)
+        # BETA1-B02
+        self.canvas.escapePressed.connect(self.escapePressed.emit)
+        # BETA1-B03
+        self.canvas.nodeAssignToRingRequested.connect(self.nodeAssignToRingRequested.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
 

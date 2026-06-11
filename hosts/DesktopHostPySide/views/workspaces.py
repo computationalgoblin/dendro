@@ -1213,6 +1213,11 @@ class CreationWorkspace(QWidget):
         self.graph.contextCreateEntityInTreeRequested.connect(self._create_entity_in_tree)
         self.graph.contextCreateSubtreeRequested.connect(self._create_subtree_in_tree)
         self.graph.contextDeleteRequested.connect(self._delete_selected)
+        # BETA1-B02: Escape closes the contextual drawer after the canvas has
+        # cancelled modes and cleared the selection
+        self.graph.escapePressed.connect(self._on_canvas_escape)
+        # BETA1-B03: 'Mover a anillo' → EntityController.update (layer_ids)
+        self.graph.nodeAssignToRingRequested.connect(self._assign_node_to_ring)
         layout.addWidget(self.graph, 1)
 
         # Command bar area replaces the old bottom button toolbar.
@@ -1975,6 +1980,16 @@ class CreationWorkspace(QWidget):
                 self.ctx.drawer.close()
             self.refresh()
 
+    def _on_canvas_escape(self):
+        """BETA1-B02: Escape on the canvas closes the contextual drawer.
+
+        The canvas has already cancelled transient modes and cleared its
+        selection; here we only hide the detail surface using the existing
+        drawer API (same call _delete_selected already uses)."""
+        drawer = getattr(self.ctx, "drawer", None)
+        if drawer is not None and drawer.isVisible():
+            drawer.close()
+
     def _open_coherence_panel(self):
         entity_ids = self.graph.selected_entity_ids()
         relation_ids = self.graph.selected_relation_ids()
@@ -2144,8 +2159,9 @@ class CreationWorkspace(QWidget):
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Hoja creada en modo borrador")
         self.refresh()
-        # Focus the new node
-        self.graph.canvas.focus_entity(entity_id)
+        # BETA1-B02: reveal without zooming — focus_entity did a fitInView
+        # that yanked the camera on every contextual creation.
+        self.graph.canvas.reveal_entity(entity_id)
         # Open detail panel for editing
         self._open_node_panel(entity_id, is_new=True)
         return entity_id
@@ -2172,7 +2188,8 @@ class CreationWorkspace(QWidget):
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Rama creada en modo borrador")
         self.refresh()
-        self.graph.canvas.focus_entity(entity_id)
+        # BETA1-B02: reveal without zooming (see _create_entity_on_graph)
+        self.graph.canvas.reveal_entity(entity_id)
         self._open_tree_panel(entity_id, is_new=True)
         return entity_id
 
@@ -2218,6 +2235,30 @@ class CreationWorkspace(QWidget):
             self.ctx.log("error", f"Error asignando a la rama: {result.error}")
             return
         self.ctx.log("info", "Hoja asignada a la rama")
+        self.refresh()
+
+    def _assign_node_to_ring(self, entity_id: str, ring_id: str):
+        """BETA1-B03 'Mover a anillo': replace the entity's world-layer
+        membership via the existing EntityController.update route (CRUD-U).
+        Non-ring layer ids (if any) are preserved; only world-layer ids are
+        swapped for the chosen ring."""
+        if self.entity_controller is None:
+            self.ctx.log("error", "No se pudo mover al anillo: servicio no disponible")
+            return
+        entity = self._entity_by_id(entity_id)
+        if entity is None:
+            self.ctx.log("error", "No se pudo mover al anillo: elemento no encontrado")
+            return
+        pc = self.ctx.project_controller
+        project = pc.ps.active_project if pc else None
+        world_ids = {str(getattr(layer, "id", "")) for layer in (getattr(project, "world_layers", []) or [])}
+        existing = [str(value) for value in (getattr(entity, "layer_ids", []) or []) if value]
+        new_layer_ids = [ring_id] + [lid for lid in existing if lid not in world_ids and lid != ring_id]
+        result = self.entity_controller.update(entity_id, {"layer_ids": new_layer_ids})
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error moviendo al anillo: {result.error}")
+            return
+        self.ctx.log("info", "Elemento movido al anillo")
         self.refresh()
 
     def _on_node_converted_to_branch(self, entity_id: str):

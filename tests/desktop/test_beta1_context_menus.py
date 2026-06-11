@@ -238,6 +238,40 @@ def test_context_relation_cancels_on_background_click(qapp, monkeypatch):
     assert view._drag_source is None
 
 
+def test_ring_creation_wins_over_focused_ring(qapp):
+    """Regression (B02): right-clicked ring must win even if another ring
+    holds focus — active_ring_id prefers focus, so the context creation uses
+    a one-shot override while the route runs."""
+    view = GraphCanvasView()
+    layers = [layer("metafisica", "Metafísica", 1), layer("politica", "Política", 5)]
+    nodes = [node("m1", "M1", layer_id="metafisica"), node("p1", "P1", layer_id="politica")]
+    view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
+    view.focus_ring_scope("metafisica")  # stale focus on another ring
+
+    seen: list[str] = []
+    # The workspace creation route runs synchronously inside this emit, so
+    # whatever active_ring_id() returns here is what creation would use.
+    view.contextCreateEntityRequested.connect(lambda: seen.append(view.active_ring_id()))
+    menu = view._ring_context_menu(view._ring_items["politica"])
+    next(a for a in menu.actions() if a.text() == "Crear hoja en este anillo").trigger()
+
+    assert seen == ["politica"]
+    assert view._context_ring_override == ""  # one-shot, cleared afterwards
+
+
+def test_scene_rect_covers_full_concentric_layout(qapp):
+    """Regression (B02): the scene rect must contain the whole layout so
+    panning can reach the outer rings."""
+    view = GraphCanvasView()
+    layers = [layer(f"l{i}", f"Capa {i}", i) for i in range(1, 9)]
+    nodes = [node(f"n{i}", f"N{i}", layer_id=f"l{i}") for i in range(1, 9)]
+    view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
+
+    scene_rect = view.scene_obj.sceneRect()
+    content = view.scene_obj.itemsBoundingRect()
+    assert scene_rect.contains(content)
+
+
 def test_move_targets_exclude_self_and_cycles(qapp):
     view = build_basic_view(qapp)
     # rama-2 must not offer itself as target
