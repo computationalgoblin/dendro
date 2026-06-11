@@ -51,7 +51,7 @@ class AppContext:
     ai_temperature: float = 0.7
     last_project_path: str = ""
     recent_projects: list[str] = field(default_factory=list)
-    creation_layout_mode: str = "free"
+    creation_layout_mode: str = "concentric_rings"
     creation_focused_ring_id: str = ""
 
     def __post_init__(self):
@@ -111,9 +111,10 @@ class AppContext:
                 self.ai_temperature = 0.7
             self.last_project_path = str(data.get("last_project_path", self.last_project_path)) or ""
             self.recent_projects = [str(p) for p in (data.get("recent_projects", []) or []) if p]
-            self.creation_layout_mode = str(data.get("creation_layout_mode", self.creation_layout_mode)) or "free"
-            if self.creation_layout_mode not in {"free", "layered", "concentric_rings"}:
-                self.creation_layout_mode = "free"
+            # BETA1-B05: Creation always starts from the concentric layout.
+            # Older persisted preferences may contain "free" or "layered";
+            # those are session choices, not the app default.
+            self.creation_layout_mode = "concentric_rings"
             self.creation_focused_ring_id = str(data.get("creation_focused_ring_id", self.creation_focused_ring_id)) or ""
             self._apply_ai_environment()
         except Exception:

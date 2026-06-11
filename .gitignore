@@ -17,3 +17,8 @@ ai_outputs/*
 manual_test_b01_b12/
 # Test artifacts leaked by subprocess cwd on Windows
 Users*
+
+tmp/
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json

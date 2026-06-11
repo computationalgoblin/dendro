@@ -340,12 +340,9 @@ class TestProjectExtensions:
         for d in p.domains:
             assert isinstance(d, str)
 
-    def test_default_world_layers_are_sixteen(self) -> None:
+    def test_new_projects_start_without_world_layers(self) -> None:
         p = Project()
-        assert len(p.world_layers) == 16
-        for wl in p.world_layers:
-            assert isinstance(wl, WorldLayer)
-            assert wl.is_default is True
+        assert p.world_layers == []
 
     def test_advanced_config_is_present(self) -> None:
         p = Project()
@@ -359,7 +356,7 @@ class TestProjectExtensions:
         assert "world_layers" in d
         assert "advanced_config" in d
         assert len(d["domains"]) == 5
-        assert len(d["world_layers"]) == 16
+        assert d["world_layers"] == []
 
     def test_project_roundtrip_preserves_domains(self) -> None:
         p = Project()
@@ -386,7 +383,7 @@ class TestProjectExtensions:
         p2 = Project.from_dict(d)
         assert p2.advanced_config.primary_genre == "fantasía oscura"
 
-    def test_from_dict_without_new_fields_uses_defaults(self) -> None:
+    def test_from_dict_without_new_fields_keeps_world_layers_empty(self) -> None:
         """Old projects without domains/world_layers/advanced_config
         should load with defaults."""
         p = Project()
@@ -396,5 +393,5 @@ class TestProjectExtensions:
         del d["advanced_config"]
         p2 = Project.from_dict(d)
         assert p2.domains == ["mundo", "historia", "campaña", "compartido", "sin_asignar"]
-        assert len(p2.world_layers) == 16
+        assert p2.world_layers == []
         assert isinstance(p2.advanced_config, AdvancedProjectConfig)

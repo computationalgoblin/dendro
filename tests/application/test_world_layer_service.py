@@ -3,11 +3,13 @@
 from packages.application.project_service import ProjectService
 from packages.application.world_layer_service import WorldLayerService
 from packages.domain.result import Error, Ok
+from packages.domain.world_layer import default_world_layers
 
 
 def _setup():
     ps = ProjectService()
     ps.create("Test World")
+    ps.active_project.world_layers = default_world_layers()
     svc = WorldLayerService(ps)
     return ps, svc
 

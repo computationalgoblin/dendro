@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QMessageBox,
     QStackedWidget,
     QStatusBar,
     QTextEdit,
@@ -316,6 +317,11 @@ class MainWindow(QMainWindow):
         if idx not in (_IDX_HOME, _IDX_CREATION):
             _apptrace(f"UI go_space blocked idx={idx} (fuera de alcance BETA1)")
             return
+        if idx == _IDX_CREATION and self._get_active_project() is None:
+            _apptrace("UI go_space blocked creation without active project")
+            self.log_msg("Abre o crea un proyecto antes de entrar en Creación")
+            self.home_view.refresh()
+            return
         # Reset outgoing widget's opacity to prevent ghost rendering
         current = self.stack.currentWidget()
         if current and current.graphicsEffect():
@@ -587,8 +593,26 @@ class MainWindow(QMainWindow):
 
     def _save(self):
         _apptrace("UI save")
+        self._save_active_project()
+
+    def _save_active_project(self) -> bool:
         try:
-            self.controller.save()
+            if self.controller.ps.active_project is None:
+                self.log_msg("No hay proyecto activo que guardar")
+                return True
+            if not self.controller.current_path:
+                project = self.controller.ps.active_project
+                default_name = f"{getattr(project, 'name', 'proyecto') or 'proyecto'}.json"
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Guardar proyecto", default_name, "JSON (*.json)"
+                )
+                if not path:
+                    return False
+                self.controller.current_path = str(path)
+            result = self.controller.save()
+            if not isinstance(result, Ok):
+                self.log_msg(f"Error guardando proyecto: {getattr(result, 'error', result)}")
+                return False
             if self.controller.current_path:
                 self.ctx.remember_project(self.controller.current_path)
                 self._refresh_recent_project_option()
@@ -596,8 +620,31 @@ class MainWindow(QMainWindow):
             self._refresh_all_views()
             if self.ctx.drawer:
                 self.ctx.drawer.close()
+            return True
         except Exception as exc:
             self.log_msg(f"Error guardando proyecto: {exc}")
+            return False
+
+    def closeEvent(self, event):
+        if self._get_active_project() is None:
+            event.accept()
+            return
+        answer = QMessageBox.question(
+            self,
+            "Guardar progreso",
+            "Hay un proyecto activo. ¿Quieres guardar el progreso antes de salir?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            event.ignore()
+            return
+        if answer == QMessageBox.StandardButton.Save and not self._save_active_project():
+            event.ignore()
+            return
+        event.accept()
 
     def _test_ai(self):
         result = self.ai.test_provider()

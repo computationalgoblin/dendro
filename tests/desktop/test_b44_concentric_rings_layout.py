@@ -78,7 +78,7 @@ def test_b44_concentric_layout_orders_layers_by_causal_rank_center_to_outer(qapp
     assert ring_by_id(view, "metafisica").outer_radius < ring_by_id(view, "politica").inner_radius
 
 
-def test_b44_concentric_layout_sends_unranked_and_unassigned_to_external_bucket(qapp):
+def test_b44_concentric_layout_keeps_user_unranked_rings_and_unassigned_bucket(qapp):
     view = GraphCanvasView()
     layers = [
         layer("metafisica", "Metafísica", 1),
@@ -92,11 +92,12 @@ def test_b44_concentric_layout_sends_unranked_and_unassigned_to_external_bucket(
 
     view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
 
-    assert [r.ring_id for r in view._ring_visuals] == ["metafisica", "__unclassified__"]
+    assert [r.ring_id for r in view._ring_visuals] == ["metafisica", "meta", "__unclassified__"]
+    assert view._node_ring_ids["n-unranked"] == "meta"
     unclassified = ring_by_id(view, "__unclassified__")
     assert unclassified.display_name == "Sin clasificar"
-    assert set(unclassified.item_ids) == {"n-unranked", "n-free"}
-    assert unclassified.inner_radius > ring_by_id(view, "metafisica").outer_radius
+    assert set(unclassified.item_ids) == {"n-free"}
+    assert unclassified.inner_radius > ring_by_id(view, "meta").outer_radius
 
 
 def test_b44_concentric_layout_radius_grows_with_content_and_pushes_outer_rings(qapp):
@@ -246,7 +247,7 @@ def test_b44_intra_ring_edges_remain_plain(qapp):
     assert view._edges[0].edge.causal is True
 
 
-def test_b44_concentric_widget_uses_default_rings_when_project_has_no_persisted_layers(qapp):
+def test_b44_concentric_widget_does_not_auto_apply_default_rings(qapp):
     ctx = SimpleNamespace(
         advanced_mode=False,
         creation_layout_mode="free",
@@ -263,9 +264,10 @@ def test_b44_concentric_widget_uses_default_rings_when_project_has_no_persisted_
     nodes = [node("n-meta", "Dioses", layer_id="layer_metafisica")]
     view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
 
-    assert any(ring.ring_id == "layer_metafisica" for ring in view._ring_visuals)
-    assert ring_by_id(view, "layer_metafisica").item_ids == ("n-meta",)
-    assert len(view._ring_items) >= 10
+    assert layers == []
+    assert not any(ring.ring_id == "layer_metafisica" for ring in view._ring_visuals)
+    assert ring_by_id(view, "__unclassified__").item_ids == ("n-meta",)
+    assert len(view._ring_items) == 1
 
 
 def test_b44_selecting_ring_sets_active_ring_for_contextual_creation(qapp):
@@ -306,14 +308,12 @@ def test_b44_concentric_widget_opens_with_empty_project(qapp):
 
     widget.set_layout_mode("concentric_rings")
 
-    assert widget.canvas.isVisible() is True
-    assert widget.empty.isVisible() is False
+    assert widget.canvas.isHidden() is False
+    assert widget.empty.isHidden() is True
     assert widget.canvas._layout_mode_active == "concentric_rings"
-    assert len(widget.canvas._ring_items) >= 10
-    assert widget.canvas.select_ring("layer_metafisica") is True
-    assert widget.canvas.active_ring_id() == "layer_metafisica"
-    assert widget.canvas.focus_ring_scope("layer_metafisica") is True
-    assert widget.canvas.focused_ring_id() == "layer_metafisica"
+    assert len(widget.canvas._ring_items) == 0
+    assert widget.canvas.select_ring("layer_metafisica") is False
+    assert widget.canvas.active_ring_id() == ""
 
 
 def test_b44_concentric_refresh_does_not_auto_reapply_saved_ring_focus(qapp):
@@ -332,4 +332,4 @@ def test_b44_concentric_refresh_does_not_auto_reapply_saved_ring_focus(qapp):
 
     assert widget.canvas._layout_mode_active == "concentric_rings"
     assert widget.canvas.focused_ring_id() == ""
-    assert len(widget.canvas._ring_items) >= 10
+    assert len(widget.canvas._ring_items) == 0

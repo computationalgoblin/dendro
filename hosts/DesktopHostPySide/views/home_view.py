@@ -402,6 +402,9 @@ class HomeView(QWidget):
 
     def _navigate(self, space: str):
         # BETA1-A01: only Creation is navigable from Home
+        if space == "creation" and not self._project_loaded:
+            self._status_label.setText("Abre o crea un proyecto para entrar en Creación.")
+            return
         card = {
             "creation": self.creation_card,
         }.get(space)

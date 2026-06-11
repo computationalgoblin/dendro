@@ -26,6 +26,9 @@ class ProjectController:
         result = self.ps.create(name=name)
         if hasattr(result, "error"):
             return result
+        project = self.ps.active_project
+        if project is not None:
+            project.world_layers = []
         if path:
             self.current_path = str(path)
         return result

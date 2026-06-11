@@ -41,6 +41,7 @@ def test_project_controller_create_with_path_saves_loadable_json(tmp_path: Path)
     assert len(loaded.entities) == 0
     assert len(loaded.relations) == 0
     assert len(loaded.candidates) == 0
+    assert loaded.world_layers == []
 
 
 def test_main_window_new_project_uses_selected_save_path_contract():

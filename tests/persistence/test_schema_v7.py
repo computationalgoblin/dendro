@@ -15,6 +15,7 @@ from pathlib import Path
 from packages.domain.advanced_config import AdvancedProjectConfig
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok
+from packages.domain.world_layer import default_world_layers
 from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
     MAX_SUPPORTED_VERSION,
@@ -328,6 +329,7 @@ class TestProjectStoreRoundtripV7:
         path = tmp_path / "project.json"
 
         project = Project(id="proj-r2", name="Roundtrip 2")
+        project.world_layers = default_world_layers()
         # Modify a layer
         project.world_layers[0].name = "Custom Premisa"
         project.world_layers[0].description = "Custom description"

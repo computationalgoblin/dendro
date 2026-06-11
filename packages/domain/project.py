@@ -30,7 +30,7 @@ from packages.domain.custom_types import (
 )
 from packages.domain.entity import NarrativeEntity
 from packages.domain.narrative_domain import NarrativeDomain
-from packages.domain.world_layer import WorldLayer, default_world_layers
+from packages.domain.world_layer import WorldLayer
 from packages.domain.advanced_config import AdvancedProjectConfig
 from packages.domain.project_config import (
     AIConfig,
@@ -236,7 +236,7 @@ class Project:
         NarrativeDomain.COMPARTIDO.value,
         NarrativeDomain.SIN_ASIGNAR.value,
     ])
-    world_layers: list[WorldLayer] = field(default_factory=default_world_layers)
+    world_layers: list[WorldLayer] = field(default_factory=list)
     advanced_config: AdvancedProjectConfig = field(default_factory=AdvancedProjectConfig)
 
     # ── Import baskets (Bloque 17) ──
@@ -608,4 +608,3 @@ def _parse_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(v) for v in value]
     return []
-
