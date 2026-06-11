@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -224,6 +226,61 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
         layer = result.value
         self.status.setText(f"Anillo creado: {getattr(layer, 'name', 'sin nombre')}")
         self.on_created()
+
+
+class RingEditPanel(_SimpleFormPanel):
+    """BETA1-B03: edit a ring (world layer) — name and order.
+
+    Order also writes metadata.causal_rank because the concentric view sorts
+    rings by causal rank, not by the plain order field."""
+
+    def __init__(self, controller, ring_id: str, on_saved):
+        super().__init__("Editar anillo", "Nombre y orden del estrato.")
+        self.controller = controller
+        self.ring_id = ring_id
+        self.on_saved = on_saved
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.order = QSpinBox()
+        self.order.setRange(1, 999)
+        current = controller.get(ring_id) if hasattr(controller, "get") else None
+        layer = getattr(current, "value", None)
+        if layer is not None:
+            self.name.setText(str(getattr(layer, "name", "")))
+            rank = str(getattr(layer, "metadata", {}).get("causal_rank", "") or getattr(layer, "order", 1))
+            try:
+                self.order.setValue(int(rank))
+            except (TypeError, ValueError):
+                self.order.setValue(int(getattr(layer, "order", 1) or 1))
+        form.addRow("Nombre", self.name)
+        form.addRow("Orden (rango causal)", self.order)
+        self.layout.addLayout(form)
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        save = QPushButton("Guardar anillo")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        name = self.name.text().strip()
+        if not name:
+            self.status.setText("El nombre no puede estar vacío")
+            return
+        order = int(self.order.value())
+        result = self.controller.update(self.ring_id, {
+            "name": name,
+            "order": order,
+            "metadata": {"causal_rank": str(order)},
+        })
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        self.status.setText("Anillo actualizado")
+        self.on_saved()
 
 
 class CandidateReviewPanel(_SimpleFormPanel):
@@ -965,7 +1022,11 @@ class _LayerEdgeFlyout(QFrame):
         return counts
 
     def populate_layers(self):
-        """Fill chip list from project layers or defaults."""
+        """Fill chip list from project layers only.
+
+        Default causal layers are a selectable template, never a visual fallback
+        for an empty project.
+        """
         # Clear existing
         while self._chips_layout.count() > 1:
             item = self._chips_layout.takeAt(0)
@@ -973,12 +1034,8 @@ class _LayerEdgeFlyout(QFrame):
                 item.widget().deleteLater()
         self._layer_chips.clear()
 
-        # Get layers from project or defaults
         project = self._workspace._get_active_project()
-        if project and getattr(project, "world_layers", None):
-            layers = list(project.world_layers)
-        else:
-            layers = default_world_layers()
+        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
 
         # Sort by order
         layers = sorted(layers, key=lambda l: getattr(l, "order", 99))
@@ -1218,6 +1275,12 @@ class CreationWorkspace(QWidget):
         self.graph.escapePressed.connect(self._on_canvas_escape)
         # BETA1-B03: 'Mover a anillo' → EntityController.update (layer_ids)
         self.graph.nodeAssignToRingRequested.connect(self._assign_node_to_ring)
+        # BETA1-B03: ring CRUD → LayerController
+        self.graph.ringCreateRequested.connect(self._open_ring_create_panel)
+        self.graph.ringEditRequested.connect(self._open_ring_edit_panel)
+        self.graph.ringDeleteRequested.connect(self._delete_ring)
+        # BETA1-B03: drag-out extraction → remove 'contiene' membership
+        self.graph.nodeExtractFromTreeRequested.connect(self._extract_node_from_tree)
         layout.addWidget(self.graph, 1)
 
         # Command bar area replaces the old bottom button toolbar.
@@ -1855,13 +1918,15 @@ class CreationWorkspace(QWidget):
     def _with_active_ring_payload(self, data: dict) -> dict:
         _apptrace(f"WS with_active_ring_payload ring={self._active_creation_ring_id()[:40]}")
         ring_id = self._active_creation_ring_id()
-        self.ctx.log(
-            "info",
-            "B44TRACE workspace_active_ring_payload "
-            f"ring_id={ring_id!r} input_layer_ids={data.get('layer_ids', [])!r} "
-            f"graph_active={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
-            f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
-        )
+        ctx = getattr(self, "ctx", None)
+        if ctx is not None and hasattr(ctx, "log"):
+            ctx.log(
+                "info",
+                "B44TRACE workspace_active_ring_payload "
+                f"ring_id={ring_id!r} input_layer_ids={data.get('layer_ids', [])!r} "
+                f"graph_active={self.graph.active_ring_id() if hasattr(self.graph, 'active_ring_id') else ''!r} "
+                f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
+            )
         if ring_id:
             merged = dict(data)
             existing = [str(value) for value in (merged.get("layer_ids") or []) if value]
@@ -2166,6 +2231,23 @@ class CreationWorkspace(QWidget):
         self._open_node_panel(entity_id, is_new=True)
         return entity_id
 
+    def _create_entity_with_payload(self, data: dict, *, open_panel: bool = True) -> str:
+        if self.entity_controller is None:
+            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
+            return ""
+        result = self.entity_controller.create(data)
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error creando hoja: {result.error}")
+            return ""
+        entity = result.value
+        entity_id = getattr(entity, "id", "")
+        self.ctx.log("info", "Hoja creada en modo borrador")
+        self.refresh()
+        self.graph.canvas.reveal_entity(entity_id)
+        if open_panel:
+            self._open_node_panel(entity_id, is_new=True)
+        return entity_id
+
     def _create_tree_on_graph(self) -> str:
         """Create a new contenedor entity and open tree detail panel.
 
@@ -2196,15 +2278,41 @@ class CreationWorkspace(QWidget):
     def _create_entity_in_tree(self, tree_id: str):
         """BETA1-B01 'Crear hoja dentro': composition of two existing routes
         (create entity + assign to tree). No new persistence logic."""
-        entity_id = self._create_entity_on_graph()
+        payload = self._payload_in_tree_ring(tree_id, {
+            "name": "Nueva hoja",
+            "entity_type": "nota",
+            "brief_description": "",
+            "canon_state": "borrador",
+            "custom_metadata": {"_visual_draft": True},
+        })
+        entity_id = self._create_entity_with_payload(payload, open_panel=False)
         if entity_id and tree_id:
             self._assign_node_to_tree(entity_id, tree_id)
+            self._open_node_panel(entity_id, is_new=True)
 
     def _create_subtree_in_tree(self, tree_id: str):
         """BETA1-B01 'Crear subrama': create tree + assign to parent tree."""
-        entity_id = self._create_tree_on_graph()
+        payload = self._payload_in_tree_ring(tree_id, {
+            "name": "Nueva rama",
+            "entity_type": "contenedor",
+            "brief_description": "",
+            "canon_state": "borrador",
+            "custom_metadata": {"_visual_draft": True},
+        })
+        if self.entity_controller is None:
+            self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
+            return
+        result = self.entity_controller.create(payload)
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error creando rama: {result.error}")
+            return
+        entity_id = getattr(result.value, "id", "")
+        self.ctx.log("info", "Rama creada en modo borrador")
+        self.refresh()
+        self.graph.canvas.reveal_entity(entity_id)
         if entity_id and tree_id:
             self._assign_node_to_tree(entity_id, tree_id)
+            self._open_tree_panel(entity_id, is_new=True)
 
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
@@ -2234,7 +2342,52 @@ class CreationWorkspace(QWidget):
         if isinstance(result, Error):
             self.ctx.log("error", f"Error asignando a la rama: {result.error}")
             return
+        self._sync_entity_to_tree_ring(entity_id, tree_id)
         self.ctx.log("info", "Hoja asignada a la rama")
+        self.refresh()
+
+    def _open_ring_create_panel(self):
+        """BETA1-B03: 'Crear anillo…' — reuses the existing layer panel."""
+        if self.layer_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
+            return
+        panel = LayerQuickCreatePanel(self.layer_controller, on_created=self.refresh)
+        self.ctx.drawer.set_content(panel, title="Nuevo anillo")
+        self.ctx.drawer.open()
+
+    def _open_ring_edit_panel(self, ring_id: str):
+        """BETA1-B03: 'Editar anillo…' — name and order via LayerController."""
+        if self.layer_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo editar anillo: servicio no disponible")
+            return
+        panel = RingEditPanel(self.layer_controller, ring_id, on_saved=self.refresh)
+        self.ctx.drawer.set_content(panel, title="Editar anillo")
+        self.ctx.drawer.open()
+
+    def _delete_ring(self, ring_id: str):
+        """BETA1-B03: 'Eliminar anillo' — soft delete (hide_layer) after
+        confirmation. Entities keep their layer ids: they show as 'Sin
+        clasificar' and the ring can be restored from the layers view."""
+        if self.layer_controller is None:
+            self.ctx.log("error", "No se pudo eliminar anillo: servicio no disponible")
+            return
+        ring = self.layer_controller.get(ring_id) if hasattr(self.layer_controller, "get") else None
+        name = str(getattr(getattr(ring, "value", None), "name", ring_id))
+        answer = QMessageBox.question(
+            self,
+            "Eliminar anillo",
+            f"¿Eliminar el anillo «{name}»?\n"
+            "Sus elementos pasarán a 'Sin clasificar' (el anillo puede restaurarse).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = self.layer_controller.hide(ring_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", f"Error eliminando anillo: {result.error}")
+            return
+        self.ctx.log("info", f"Anillo eliminado: {name}")
         self.refresh()
 
     def _assign_node_to_ring(self, entity_id: str, ring_id: str):
@@ -2258,7 +2411,28 @@ class CreationWorkspace(QWidget):
         if isinstance(result, Error):
             self.ctx.log("error", f"Error moviendo al anillo: {result.error}")
             return
+        for child_id in self._contained_descendant_ids(entity_id):
+            child = self._entity_by_id(child_id)
+            if child is None:
+                continue
+            child_existing = [str(value) for value in (getattr(child, "layer_ids", []) or []) if value]
+            child_layer_ids = [ring_id] + [lid for lid in child_existing if lid not in world_ids and lid != ring_id]
+            child_result = self.entity_controller.update(child_id, {"layer_ids": child_layer_ids})
+            if isinstance(child_result, Error):
+                self.ctx.log("error", f"Error moviendo contenido de rama al anillo: {child_result.error}")
+                return
         self.ctx.log("info", "Elemento movido al anillo")
+        self.refresh()
+
+    def _extract_node_from_tree(self, entity_id: str):
+        """BETA1-B03: dragging an item out of its container removes its
+        'contiene' membership via the existing route. The item stays in the
+        project (and in its ring), it just stops belonging to the branch."""
+        if self.relation_controller is None:
+            self.ctx.log("error", "No se pudo extraer de la rama: servicio no disponible")
+            return
+        self._remove_tree_membership(entity_id)
+        self.ctx.log("info", "Elemento extraído de la rama")
         self.refresh()
 
     def _on_node_converted_to_branch(self, entity_id: str):
@@ -2368,10 +2542,9 @@ class CreationWorkspace(QWidget):
             )
         if not active and hasattr(self, "_layer_flyout"):
             self._layer_flyout.hide_flyout()
-        # Only propagate deactivation to graph canvas (avoids forcing layer view
-        # on project load). Layer view activation goes through _toggle_layers_view.
-        if not active and hasattr(self, "graph") and hasattr(self.graph, "set_worldbuilding_active"):
-            self.graph.set_worldbuilding_active(False)
+        # Worldbuilding availability does not own the Creation layout. The
+        # default layout remains concentric even for projects without template
+        # layers; explicit view toggles are handled by their own toolbar routes.
 
     def refresh(self):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,
@@ -2487,10 +2660,79 @@ class CreationWorkspace(QWidget):
         kind = getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "entidad"))
         return human_ref(getattr(entity, "name", "Sin nombre"), enum_human(str(kind)))
 
-    def _relation_exists(self, source_id: str, target_id: str) -> bool:
+    def _world_layer_ids(self) -> set[str]:
+        pc = self.ctx.project_controller
+        project = pc.ps.active_project if pc else None
+        return {str(getattr(layer, "id", "")) for layer in (getattr(project, "world_layers", []) or []) if getattr(layer, "id", "")}
+
+    def _entity_ring_id(self, entity_id: str) -> str:
+        entity = self._entity_by_id(entity_id)
+        if entity is None:
+            return ""
+        world_ids = self._world_layer_ids()
+        for value in getattr(entity, "layer_ids", []) or []:
+            layer_id = str(value)
+            if layer_id and (not world_ids or layer_id in world_ids):
+                return layer_id
+        return ""
+
+    def _payload_in_tree_ring(self, tree_id: str, data: dict) -> dict:
+        ring_id = self._entity_ring_id(tree_id)
+        if not ring_id:
+            return self._with_active_ring_payload(data)
+        merged = dict(data)
+        existing = [str(value) for value in (merged.get("layer_ids") or []) if value]
+        if ring_id not in existing:
+            existing.insert(0, ring_id)
+        merged["layer_ids"] = existing
+        return merged
+
+    def _sync_entity_to_tree_ring(self, entity_id: str, tree_id: str) -> None:
+        if self.entity_controller is None:
+            return
+        ring_id = self._entity_ring_id(tree_id)
+        if not ring_id:
+            return
+        entity = self._entity_by_id(entity_id)
+        if entity is None:
+            return
+        world_ids = self._world_layer_ids()
+        existing = [str(value) for value in (getattr(entity, "layer_ids", []) or []) if value]
+        new_layer_ids = [ring_id] + [lid for lid in existing if lid not in world_ids and lid != ring_id]
+        self.entity_controller.update(entity_id, {"layer_ids": new_layer_ids})
+
+    def _contained_descendant_ids(self, tree_id: str) -> list[str]:
+        if self.relation_controller is None:
+            return []
+        children_by_parent: dict[str, list[str]] = {}
+        for rel in self.relation_controller.list_all():
+            if self._rtype_value(rel) == "contiene":
+                children_by_parent.setdefault(str(getattr(rel, "source_id", "")), []).append(str(getattr(rel, "target_id", "")))
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def visit(parent_id: str):
+            for child_id in children_by_parent.get(parent_id, []):
+                if not child_id or child_id in seen:
+                    continue
+                seen.add(child_id)
+                ordered.append(child_id)
+                visit(child_id)
+
+        visit(tree_id)
+        return ordered
+
+    def _relation_exists(self, source_id: str, target_id: str, *, ignore_structural: bool = False) -> bool:
+        """True if a relation exists between the pair (either direction).
+
+        BETA1-B03: with ignore_structural=True the structural 'contiene'
+        relation doesn't count — a branch must be able to hold narrative
+        relations with its own content and nested branches."""
         if self.relation_controller is None:
             return False
         for relation in self.relation_controller.list_all():
+            if ignore_structural and self._rtype_value(relation) == "contiene":
+                continue
             src = getattr(relation, "source_id", "")
             tgt = getattr(relation, "target_id", "")
             if (src, tgt) == (source_id, target_id) or (src, tgt) == (target_id, source_id):
@@ -2546,7 +2788,9 @@ class CreationWorkspace(QWidget):
         if source_id == target_id:
             self.ctx.log("warning", "No se puede crear una relación sobre la misma entidad")
             return
-        if self._relation_exists(source_id, target_id):
+        # BETA1-B03: 'contiene' is structural, not narrative — it must not
+        # block creating a real relation between a branch and its content.
+        if self._relation_exists(source_id, target_id, ignore_structural=True):
             self.ctx.log("warning", "Ya existe una relación entre esas entidades")
             return
         result = controller.create(

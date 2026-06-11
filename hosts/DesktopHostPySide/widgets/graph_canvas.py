@@ -316,6 +316,12 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setPos(x, y)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        # BETA1-B03: edges must follow items. Scene-position notifications
+        # also fire when an ANCESTOR moves, so nested children keep their
+        # relations attached while their tree is dragged.
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsScenePositionChanges, True)
+        self._connected_edges: list = []
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
 
@@ -375,6 +381,14 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setPen(self._selected_pen if enabled else self._normal_pen)
 
     def itemChange(self, change, value):
+        # BETA1-B03: keep relations attached while the node moves (own move
+        # or an ancestor tree dragging it along).
+        if change in (
+            QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemScenePositionHasChanged,
+        ):
+            for edge in getattr(self, "_connected_edges", ()):  # noqa: B007
+                edge.update_path()
         return super().itemChange(change, value)
 
 
@@ -407,6 +421,11 @@ class GraphTreeItem(QGraphicsRectItem):
         self.setPos(x - width / 2, y - height / 2)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        # BETA1-B03: see GraphNodeItem — edges follow trees too, including
+        # nested trees dragged along by an ancestor.
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsScenePositionChanges, True)
+        self._connected_edges: list = []
         self.setAcceptHoverEvents(True)
         self.setZValue(0)
 
@@ -563,6 +582,22 @@ class GraphTreeItem(QGraphicsRectItem):
             self._expand()
         else:
             self._collapse()
+        # BETA1-B03: a nested collapse/expand changes this tree's size, so
+        # every ancestor container must refit around it (bottom-up).
+        ancestor = self.parentItem()
+        while isinstance(ancestor, GraphTreeItem):
+            if ancestor._child_nodes:
+                ancestor.resize_to_fit_children()
+            ancestor = ancestor.parentItem()
+        # BETA1-B03: rings react to content size changes. Children keep
+        # their own positions (hidden on collapse, restored on expand);
+        # only ring radii and top-level slots are recomputed.
+        scene = self.scene()
+        if scene is not None:
+            for view in scene.views():
+                if isinstance(view, GraphCanvasView):
+                    view._relayout_concentric()
+                    break
 
     def _collapse(self):
         """Hide ALL descendants transitively + all their edges, shrink."""
@@ -598,6 +633,7 @@ class GraphTreeItem(QGraphicsRectItem):
         # Hide member count badge (collapse indicator shows the count instead)
         self._count_item.setVisible(False)
         self._collapsed = True
+        self._update_attached_edges()  # BETA1-B03: no floating edges
 
     def _collapse_silent(self):
         """Mark as collapsed and shrink, but don't recurse (parent handles that)."""
@@ -645,6 +681,7 @@ class GraphTreeItem(QGraphicsRectItem):
             self._reposition_title()
             self._reposition_type_badge()
             self._reposition_status_dots()
+        self._update_attached_edges()  # BETA1-B03: no floating edges
 
     def _refresh_edge_visibility(self):
         """Show/hide all canvas edges based on source+target visibility."""
@@ -778,6 +815,17 @@ class GraphTreeItem(QGraphicsRectItem):
             min_x + 10 + self._title_item.boundingRect().width() + 6,
             min_y + (_CONTAINER_HEADER_HEIGHT - self._count_item.boundingRect().height()) / 2,
         )
+        # BETA1-B03: the rect changed → connection points moved. Recalculate
+        # attached relations so none is left floating.
+        self._update_attached_edges()
+
+    def _update_attached_edges(self):
+        """BETA1-B03: refresh geometry of every relation touching this tree
+        or its content (rect/size changes don't fire itemChange)."""
+        for edge in getattr(self, "_connected_edges", ()):  # noqa: B007
+            edge.update_path()
+        for edge in getattr(self, "_internal_edges", ()):  # noqa: B007
+            edge.update_path()
 
     @property
     def radius(self) -> float:
@@ -846,6 +894,13 @@ class GraphTreeItem(QGraphicsRectItem):
         # No manual delta propagation needed.
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
             self._previous_pos = self.pos()
+        # BETA1-B03: keep this tree's relations attached while it moves
+        if change in (
+            QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemScenePositionHasChanged,
+        ):
+            for edge in getattr(self, "_connected_edges", ()):  # noqa: B007
+                edge.update_path()
         return super().itemChange(change, value)
 
 
@@ -863,6 +918,12 @@ class GraphEdgeItem(QGraphicsPathItem):
         self.edge = edge
         self.source = source
         self.target = target
+        # BETA1-B03: register on both endpoints so their itemChange keeps
+        # this edge's geometry in sync while they move.
+        for endpoint in (source, target):
+            registry = getattr(endpoint, "_connected_edges", None)
+            if registry is not None and self not in registry:
+                registry.append(self)
         self._is_bidirectional = edge.direction == "bidireccional"
         self._coherence_selected = False
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -1115,6 +1176,13 @@ class GraphCanvasView(QGraphicsView):
     # BETA1-B03: 'Mover a anillo' — entity_id, ring_id (= world layer id).
     # The workspace resolves it through EntityController.update (CRUD-U).
     nodeAssignToRingRequested = Signal(str, str)
+    # BETA1-B03: ring CRUD intents (LayerController routes in the workspace)
+    ringCreateRequested = Signal()
+    ringEditRequested = Signal(str)  # ring_id
+    ringDeleteRequested = Signal(str)  # ring_id
+    # BETA1-B03: dragging content OUT of its container extracts it (the
+    # workspace removes the 'contiene' membership).
+    nodeExtractFromTreeRequested = Signal(str)  # entity_id
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1164,6 +1232,11 @@ class GraphCanvasView(QGraphicsView):
         self._context_ring_override = ""
         # BETA1-B02: camera state captured by set_graph for same-layout rebuilds
         self._view_state_to_restore: tuple[QTransform, QPointF] | None = None
+        # BETA1-B03: plain left-drag MOVES items (Qt native move). The item
+        # being moved is tracked so the release can offer drop-on-tree
+        # assignment. Relation creation lives in the context menu only.
+        self._moving_item: GraphNodeItem | GraphTreeItem | None = None
+        self._move_origin_scene = QPointF()
 
     def selected_entity_ids(self) -> list[str]:
         return list(self._selected_entity_ids)
@@ -1448,6 +1521,9 @@ class GraphCanvasView(QGraphicsView):
         menu = QMenu(self)
         menu.addAction("Crear hoja aquí", self.contextCreateEntityRequested.emit)
         menu.addAction("Crear rama aquí", self.contextCreateTreeRequested.emit)
+        if self._layout_mode_active == "concentric_rings":
+            menu.addSeparator()
+            menu.addAction("Crear anillo…", self.ringCreateRequested.emit)
         return menu
 
     def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
@@ -1497,6 +1573,10 @@ class GraphCanvasView(QGraphicsView):
         menu = QMenu(self)
         menu.addAction("Editar", lambda: self.entitySelected.emit(tree_id))
         menu.addAction(
+            "Crear relación desde aquí",
+            lambda: self._begin_context_relation(item),
+        )
+        menu.addAction(
             "Crear hoja dentro",
             lambda: self.contextCreateEntityInTreeRequested.emit(tree_id),
         )
@@ -1504,6 +1584,19 @@ class GraphCanvasView(QGraphicsView):
             "Crear subrama",
             lambda: self.contextCreateSubtreeRequested.emit(tree_id),
         )
+        ring_targets = self._context_target_rings(exclude_entity=tree_id)
+        if ring_targets:
+            ring_menu = QMenu("Mover a anillo", menu)
+            menu.addMenu(ring_menu)
+            for ring_id, ring_name in ring_targets:
+                ring_menu.addAction(
+                    ring_name,
+                    lambda _=False, rid=ring_id: self.nodeAssignToRingRequested.emit(tree_id, rid),
+                )
+        else:
+            ring_action = menu.addAction("Mover a anillo")
+            ring_action.setEnabled(False)
+            ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -1527,6 +1620,13 @@ class GraphCanvasView(QGraphicsView):
             "Crear rama en este anillo",
             lambda: self._create_in_ring(ring_id, self.contextCreateTreeRequested),
         )
+        # BETA1-B03: ring CRUD. The synthetic unclassified ring is not a real
+        # world layer, so it cannot be edited/deleted.
+        if ring_id != "__unclassified__":
+            menu.addSeparator()
+            menu.addAction("Editar anillo…", lambda: self.ringEditRequested.emit(ring_id))
+            menu.addAction("Crear anillo…", self.ringCreateRequested.emit)
+            menu.addAction("Eliminar anillo", lambda: self.ringDeleteRequested.emit(ring_id))
         return menu
 
     def _create_in_ring(self, ring_id: str, signal):
@@ -1624,10 +1724,15 @@ class GraphCanvasView(QGraphicsView):
                     event.accept()
                     return
                 self._set_single_node_selection(node)
-                self._pending_source = node
-                self._drag_origin_view_pos = event.position()
                 self.entitySelected.emit(node.node.entity_id)
-                event.accept()
+                # BETA1-B03: plain drag moves the item (ItemIsMovable does the
+                # work once the item receives the press). Relation creation
+                # moved to the context menu in B01, so the old drag-to-relate
+                # interception is gone. Track the item to support
+                # drop-on-tree assignment at release.
+                self._moving_item = node
+                self._move_origin_scene = QPointF(node.scenePos())
+                super().mousePressEvent(event)
                 return
             edge = self._item_edge_at(event.position())
             if edge is not None:
@@ -1693,10 +1798,9 @@ class GraphCanvasView(QGraphicsView):
             event.accept()
             return
 
-        if self._pending_source is not None and self._drag_source is None:
-            delta = event.position() - self._drag_origin_view_pos
-            if abs(delta.x()) + abs(delta.y()) > 10:
-                self._start_relation_drag(self._pending_source)
+        # BETA1-B03: plain drag no longer starts a relation (it moves the
+        # item natively). Relations start from the context menu, which sets
+        # _drag_source directly via _begin_context_relation.
         if self._drag_source is not None:
             scene_pos = self.mapToScene(event.position().toPoint())
             self._update_relation_drag(scene_pos, self._item_node_at(event.position()))
@@ -1740,9 +1844,70 @@ class GraphCanvasView(QGraphicsView):
                 self.relationCreateRejected.emit("Relación cancelada")
             event.accept()
             return
+        # BETA1-B03: finish a native move-drag. If the item was dropped on a
+        # tree container, offer assignment through the existing route (same
+        # signal as Alt+drag and the context menu).
+        moving = self._moving_item
+        self._moving_item = None
+        if moving is not None and event.button() == Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)  # let Qt close the move grab
+            if moving.scenePos() != self._move_origin_scene:
+                self._handle_move_drop(moving, event.position())
+            return
         self._pending_source = None
         self._alt_source = None
         super().mouseReleaseEvent(event)
+
+    def _handle_move_drop(self, moved: GraphNodeItem | GraphTreeItem, view_pos):
+        """BETA1-B03: dropping a moved item onto a tree assigns it to that
+        tree — no Alt needed. Drops elsewhere just leave the item moved."""
+        target = self._drop_tree_target(moved, view_pos)
+        if target is None:
+            parent = moved.parentItem()
+            if isinstance(parent, GraphTreeItem):
+                # BETA1-B03: dropping OUTSIDE the container's own rectangle
+                # (pre-refit, children excluded) extracts the item from the
+                # branch instead of stretching the branch to swallow it.
+                drop_scene = self.mapToScene(view_pos.toPoint())
+                parent_rect = parent.mapRectToScene(parent.rect())
+                if not parent_rect.contains(drop_scene):
+                    self.nodeExtractFromTreeRequested.emit(moved.node.entity_id)
+                    return
+                # Internal rearrange: refit the whole ancestor chain
+                ancestor = parent
+                while isinstance(ancestor, GraphTreeItem):
+                    if ancestor._child_nodes:
+                        ancestor.resize_to_fit_children()
+                    ancestor = ancestor.parentItem()
+            # BETA1-B03: rings wrap the content wherever the user left it —
+            # spans recalc after EVERY move, without repositioning items.
+            self._refresh_ring_spans()
+            return
+        src_id = moved.node.entity_id
+        tgt_id = target.node.entity_id
+        if self._membership.get(src_id) == tgt_id:
+            return
+        if self.would_create_cycle(src_id, tgt_id):
+            self.relationCreateRejected.emit("No se puede asignar: crearía un ciclo de contención")
+            return
+        self.nodeAssignToTreeRequested.emit(src_id, tgt_id)
+
+    def _drop_tree_target(self, moved, view_pos) -> GraphTreeItem | None:
+        """Tree under *view_pos*, excluding the moved item itself and its
+        current ancestor chain (so dragging a child within its own tree is a
+        rearrange, not a reassignment)."""
+        ancestors: set = set()
+        parent = moved.parentItem()
+        while parent is not None:
+            ancestors.add(parent)
+            parent = parent.parentItem()
+        for item in self.items(view_pos.toPoint()):
+            check = item
+            while check is not None:
+                if isinstance(check, GraphTreeItem) and check is not moved and check not in ancestors:
+                    return check
+                check = check.parentItem()
+        return None
 
     def _start_relation_drag(self, source: GraphNodeItem | GraphTreeItem):
         self._drag_source = source
@@ -2036,7 +2201,14 @@ class GraphCanvasView(QGraphicsView):
             target = self._nodes.get(edge.target_id)
             if not source or not target:
                 continue
-            item = GraphEdgeItem(edge, source, target)
+            source_ring = self._node_ring_ids.get(edge.source_id, "")
+            target_ring = self._node_ring_ids.get(edge.target_id, "")
+            styled_edge = replace(
+                edge,
+                inter_ring=bool(source_ring and target_ring and source_ring != target_ring),
+                causal=bool(edge.causal or relation_family(edge.kind) == "causal"),
+            )
+            item = GraphEdgeItem(styled_edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
         self._finalize_view(140.0)  # BETA1-B02
@@ -2054,17 +2226,22 @@ class GraphCanvasView(QGraphicsView):
         ]
         return palette[index % len(palette)]
 
-    def _ring_item_size_estimate(self, node: _NodeView) -> float:
+    def _ring_item_size_estimate(self, node: _NodeView, child_count: int = 0) -> float:
         if node.kind.lower() != "contenedor":
             return 124.0
-        entity = getattr(node, "entity", None)
-        child_ids = list(getattr(entity, "child_entity_ids", []) or getattr(entity, "children_ids", []) or getattr(entity, "entity_ids", []) or [])
-        if not child_ids:
+        if child_count <= 0:
+            # Fallback for callers without containment info
+            entity = getattr(node, "entity", None)
+            child_ids = list(getattr(entity, "child_entity_ids", []) or getattr(entity, "children_ids", []) or getattr(entity, "entity_ids", []) or [])
+            child_count = len(child_ids)
+        if child_count <= 0:
             return _CONTAINER_MIN_WIDTH
-        cols = max(1, min(4, math.ceil(math.sqrt(len(child_ids)))))
-        rows = math.ceil(len(child_ids) / cols)
-        estimated_width = max(_CONTAINER_MIN_WIDTH, cols * 118.0 + (cols - 1) * _CONTAINER_CHILD_SPACING + _CONTAINER_PADDING * 2)
-        estimated_height = max(_CONTAINER_MIN_HEIGHT, _CONTAINER_HEADER_HEIGHT + rows * 92.0 + (rows - 1) * 32.0 + _CONTAINER_PADDING)
+        # BETA1-B03: nested children render inside the tree, so the tree (and
+        # therefore its ring) must reserve room for them with slack.
+        cols = max(1, min(4, math.ceil(math.sqrt(child_count))))
+        rows = math.ceil(child_count / cols)
+        estimated_width = max(_CONTAINER_MIN_WIDTH, cols * 152.0 + (cols - 1) * _CONTAINER_CHILD_SPACING + _CONTAINER_PADDING * 2)
+        estimated_height = max(_CONTAINER_MIN_HEIGHT, _CONTAINER_HEADER_HEIGHT + rows * 132.0 + (rows - 1) * 32.0 + _CONTAINER_PADDING)
         return max(estimated_width, estimated_height)
 
     def _build_concentric_ring_visuals(
@@ -2072,6 +2249,7 @@ class GraphCanvasView(QGraphicsView):
         nodes: list[_NodeView],
         edges: list[_EdgeView],
         layers: list[Any],
+        measured: dict[str, float] | None = None,
     ) -> tuple[list[_RingVisual], dict[str, str]]:
         """Build ephemeral B44 ring visuals and node→ring assignment.
 
@@ -2079,16 +2257,15 @@ class GraphCanvasView(QGraphicsView):
         persistence or canon mutation is performed here.
         """
         visible_layers = [layer for layer in sort_layers_by_causal_rank(layers or []) if getattr(layer, "is_visible", True)]
-        ranked_layers = [layer for layer in visible_layers if get_causal_rank(layer) is not None]
-        ranked_by_id = {str(getattr(layer, "id", "")): layer for layer in ranked_layers}
-        ordered_ring_ids = [str(getattr(layer, "id", "")) for layer in ranked_layers]
+        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in visible_layers if str(getattr(layer, "id", ""))}
+        ordered_ring_ids = [str(getattr(layer, "id", "")) for layer in visible_layers if str(getattr(layer, "id", ""))]
 
         node_ring_ids: dict[str, str] = {}
         node_ids_by_ring: dict[str, list[str]] = {ring_id: [] for ring_id in ordered_ring_ids}
         unclassified: list[str] = []
         for node in nodes:
             layer_id = node.layer_id or ""
-            if layer_id and layer_id in ranked_by_id:
+            if layer_id and layer_id in layer_by_id:
                 ring_id = layer_id
                 node_ids_by_ring.setdefault(ring_id, []).append(node.entity_id)
             else:
@@ -2114,6 +2291,15 @@ class GraphCanvasView(QGraphicsView):
                 relation_ids_by_ring[ring_id].append(edge.relation_id)
 
         nodes_by_id = {node.entity_id: node for node in nodes}
+        # BETA1-B03: containment info — contained items render INSIDE their
+        # tree, so they don't occupy a ring slot of their own, while trees
+        # grow with their child count (with slack).
+        contains_count: dict[str, int] = {}
+        contained_set: set[str] = set()
+        for edge in edges:
+            if edge.kind.lower() == "contiene":
+                contains_count[edge.source_id] = contains_count.get(edge.source_id, 0) + 1
+                contained_set.add(edge.target_id)
         visuals: list[_RingVisual] = []
         previous_outer = 0.0
         gap = 34.0
@@ -2123,10 +2309,27 @@ class GraphCanvasView(QGraphicsView):
             branch_count = sum(1 for node in ring_nodes if node.kind.lower() == "contenedor")
             leaf_count = max(0, len(ring_nodes) - branch_count)
             relation_ids = tuple(relation_ids_by_ring.get(ring_id, []))
-            slot_total = sum(self._ring_item_size_estimate(node) for node in ring_nodes)
-            slot_total += max(0, len(ring_nodes)) * 36.0 + 140.0  # label arc reserve
-            required_mid_radius = slot_total / (2 * math.pi) if ring_nodes else 0.0
-            content_thickness = 176.0 + max(0, len(ring_nodes) - 1) * 16.0 + branch_count * 42.0
+            slotted_nodes = [node for node in ring_nodes if node.entity_id not in contained_set]
+
+            def _extent(node: _NodeView) -> float:
+                # BETA1-B03 reactive: a real measured size (tree already
+                # nested/resized/collapsed) beats any estimate.
+                if measured and node.entity_id in measured:
+                    return measured[node.entity_id]
+                return self._ring_item_size_estimate(node, contains_count.get(node.entity_id, 0))
+
+            extents = [_extent(node) for node in slotted_nodes]
+            slot_total = sum(extents)
+            slot_total += max(0, len(slotted_nodes)) * 36.0 + 140.0  # label arc reserve
+            required_mid_radius = slot_total / (2 * math.pi) if slotted_nodes else 0.0
+            max_extent = max(extents) if extents else 0.0
+            # The ring must be at least thick enough to hold its largest item
+            # with slack (90px), and grows mildly with crowding.
+            content_thickness = (
+                max(176.0, max_extent + 90.0)
+                + max(0, len(slotted_nodes) - 1) * 16.0
+                + branch_count * 24.0
+            )
             inner = 42.0 if index == 0 else previous_outer + gap
             outer = max(inner + content_thickness, required_mid_radius + content_thickness / 2.0)
             if outer <= inner:
@@ -2137,7 +2340,7 @@ class GraphCanvasView(QGraphicsView):
                 rank = None
                 color = "#ECE7DA"
             else:
-                layer = ranked_by_id[ring_id]
+                layer = layer_by_id[ring_id]
                 display_name = str(getattr(layer, "name", "Anillo"))
                 rank = get_causal_rank(layer)
                 color = self._ring_color(index)
@@ -2190,6 +2393,174 @@ class GraphCanvasView(QGraphicsView):
         label.setPos(-rect.width() / 2, -ring.outer_radius + 14)
         label.setZValue(10)
 
+    def _layout_concentric_rings(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]) -> bool:
+        """BETA1-B03: (re)compute ring visuals from the REAL current item
+        sizes, draw the ring backgrounds and place top-level items in their
+        slots. Reused by the initial build and by reactive re-layouts
+        (collapse/expand), so ring sizes always match the content.
+
+        Returns False when there are no rings to draw (caller falls back)."""
+        # Drop previous ring graphics (labels are their Qt children)
+        for ring_item in self._ring_items.values():
+            self.scene_obj.removeItem(ring_item)
+        self._ring_items = {}
+
+        # Measure top-level trees as they really are (nested, resized,
+        # possibly collapsed). Leaves keep the standard estimate.
+        measured: dict[str, float] = {}
+        for entity_id, tree in self._trees.items():
+            if tree.parentItem() is None:
+                rect = tree.boundingRect()
+                measured[entity_id] = max(rect.width(), rect.height())
+
+        self._ring_visuals, self._node_ring_ids = self._build_concentric_ring_visuals(
+            nodes, edges, layers, measured=measured
+        )
+        if not self._ring_visuals:
+            return False
+
+        for ring in self._ring_visuals:
+            self._draw_ring_background(ring)
+
+        contained_set = {edge.target_id for edge in edges if edge.kind.lower() == "contiene"}
+        nodes_by_id = {node.entity_id: node for node in nodes}
+        for ring in self._ring_visuals:
+            ring_nodes = [nodes_by_id[item_id] for item_id in ring.item_ids if item_id in nodes_by_id]
+            slotted = [node for node in ring_nodes if node.entity_id not in contained_set]
+            for idx, node in enumerate(slotted):
+                item = self._nodes.get(node.entity_id)
+                if item is None or item.parentItem() is not None:
+                    continue
+                pos = self._position_for_ring_slot(ring, idx, len(slotted))
+                if isinstance(item, GraphTreeItem):
+                    # Center the tree's actual rect on the slot
+                    rect = item.boundingRect()
+                    item.setPos(pos.x() - rect.center().x(), pos.y() - rect.center().y())
+                else:
+                    item.setPos(pos)
+        # Edges may already exist (reactive re-layout): follow the new slots
+        for edge_item in self._edges:
+            edge_item.update_path()
+        return True
+
+    def _relayout_concentric(self):
+        """BETA1-B03: reactive ring sizing — called after collapse/expand so
+        rings grow/shrink around the content without rebuilding the graph."""
+        if self._layout_mode_active != "concentric_rings":
+            return
+        inputs = getattr(self, "_concentric_inputs", None)
+        if not inputs:
+            return
+        nodes, edges, layers = inputs
+        if self._layout_concentric_rings(nodes, edges, layers):
+            self._expand_scene_rect_to_content()
+
+    def _refresh_ring_spans(self):
+        """BETA1-B03: resize ring bands around the CURRENT positions and
+        sizes of their top-level items, WITHOUT repositioning anything.
+
+        Used after manual moves: _relayout_concentric would snap items back
+        to their slots, undoing the user's placement; this only makes each
+        ring wide enough to wrap its content wherever it sits."""
+        if self._layout_mode_active != "concentric_rings" or not self._ring_visuals:
+            return
+        contained: set[str] = set()
+        inputs = getattr(self, "_concentric_inputs", None)
+        if inputs:
+            _, edges, _ = inputs
+            contained = {edge.target_id for edge in edges if edge.kind.lower() == "contiene"}
+        new_visuals: list[_RingVisual] = []
+        previous_outer = 0.0
+        gap = 34.0
+        for index, ring in enumerate(self._ring_visuals):
+            inner = 42.0 if index == 0 else previous_outer + gap
+            required = inner + 176.0
+            for item_id in ring.item_ids:
+                if item_id in contained:
+                    continue
+                item = self._nodes.get(item_id)
+                if item is None or item.parentItem() is not None:
+                    continue
+                rect = item.sceneBoundingRect()
+                center_dist = math.hypot(rect.center().x(), rect.center().y())
+                extent = max(rect.width(), rect.height()) / 2.0
+                required = max(required, center_dist + extent + 60.0)
+            outer = required
+            new_visuals.append(replace(ring, inner_radius=inner, outer_radius=outer))
+            previous_outer = outer
+        self._ring_visuals = new_visuals
+        selected_ring = self._selected_ring_id
+        for ring_item in self._ring_items.values():
+            self.scene_obj.removeItem(ring_item)
+        self._ring_items = {}
+        for ring in self._ring_visuals:
+            self._draw_ring_background(ring)
+        if selected_ring and selected_ring in self._ring_items:
+            self._ring_items[selected_ring].setSelected(True)
+        self._expand_scene_rect_to_content()
+
+    def _nest_contained_items(self, nodes: list[_NodeView], edges: list[_EdgeView]):
+        """BETA1-B03: re-parent contained items into their tree containers.
+
+        Mirrors the free-layout nesting contract for the concentric view:
+        children become Qt children of the tree (they render inside it and
+        move with it) and trees are resized bottom-up to fit with slack.
+        """
+        contains_map: dict[str, set[str]] = {}
+        for edge in edges:
+            if edge.kind.lower() == "contiene":
+                contains_map.setdefault(edge.source_id, set()).add(edge.target_id)
+        if not contains_map:
+            return
+        # Leaves-first order so nested containers are sized before parents
+        ordered: list[str] = []
+        visited: set[str] = set()
+
+        def _visit(container_id: str):
+            if container_id in visited:
+                return
+            visited.add(container_id)
+            for child_id in contains_map.get(container_id, ()):  # noqa: B023
+                if child_id in self._trees:
+                    _visit(child_id)
+            ordered.append(container_id)
+
+        for container_id in contains_map:
+            if container_id in self._trees:
+                _visit(container_id)
+
+        for container_id in ordered:
+            tree = self._trees.get(container_id)
+            if tree is None:
+                continue
+            child_ids = contains_map.get(container_id, set())
+            leaf_ids = [eid for eid in child_ids if eid in self._nodes and eid not in self._trees]
+            nested_tree_ids = [eid for eid in child_ids if eid in self._trees and eid != container_id]
+            tree_cx = tree._width / 2
+            tree_cy = tree._height / 2
+            child_radius = max(70, min(160, 50 * len(leaf_ids))) if leaf_ids else 70.0
+            for index, entity_id in enumerate(leaf_ids):
+                item = self._nodes[entity_id]
+                count = max(1, len(leaf_ids))
+                if count == 1:
+                    cx, cy = tree_cx, tree_cy + _CONTAINER_HEADER_HEIGHT + 60
+                else:
+                    angle = (2 * math.pi * index) / count
+                    cx = tree_cx + math.cos(angle) * child_radius
+                    cy = tree_cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(angle) * child_radius * 0.5
+                item.setPos(cx, cy)
+                tree.add_child_node(item)  # type: ignore[arg-type]
+            if nested_tree_ids:
+                nested_y = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if leaf_ids else 0)
+                for index, entity_id in enumerate(nested_tree_ids):
+                    nested = self._trees[entity_id]
+                    spread = max(1, len(nested_tree_ids))
+                    width = nested._width
+                    nested.setPos(tree_cx + (index - (spread - 1) / 2) * (width + 30), tree_cy + nested_y)
+                    tree.add_child_node(nested)  # type: ignore[arg-type]
+            if tree._child_nodes:
+                tree.resize_to_fit_children()
+
     def _position_for_ring_slot(self, ring: _RingVisual, index: int, count: int) -> QPointF:
         mid_radius = (ring.inner_radius + ring.outer_radius) / 2.0
         if count <= 1:
@@ -2221,39 +2592,43 @@ class GraphCanvasView(QGraphicsView):
                     layers = [layer for layer in (layers or []) if str(getattr(layer, "id", "")) == focused.ring_id]
                 else:
                     layers = []
-        self._ring_visuals, self._node_ring_ids = self._build_concentric_ring_visuals(nodes, edges, layers or [])
+        # BETA1-B03 (reactive rings): create ALL items first at a provisional
+        # origin, nest contained items into their trees and resize them —
+        # only then compute ring radii from the REAL measured sizes. This is
+        # what lets rings reserve space with slack and react to growth.
+        for node in nodes:
+            if node.kind.lower() == "contenedor":
+                item = GraphTreeItem(
+                    node,
+                    x=0.0,
+                    y=0.0,
+                    width=_CONTAINER_MIN_WIDTH,
+                    height=_CONTAINER_MIN_HEIGHT,
+                )
+                self._trees[node.entity_id] = item
+            else:
+                item = GraphNodeItem(node, x=0.0, y=0.0)
+            self.scene_obj.addItem(item)
+            self._nodes[node.entity_id] = item  # type: ignore[assignment]
+
+        # Nest contained items (same visual contract as the free layout:
+        # children inside the rectangle, the tree moves with all its content)
+        self._nest_contained_items(nodes, edges)
+
+        # Remember inputs so collapse/expand can re-layout reactively
+        self._concentric_inputs = (list(nodes), list(edges), list(layers or []))
+
+        laid_out = self._layout_concentric_rings(nodes, edges, layers or [])
         _b44trace(
             "concentric_built "
             f"ring_visuals={len(self._ring_visuals)} ring_ids={[ring.ring_id for ring in self._ring_visuals]!r} "
             f"node_ring_ids={self._node_ring_ids!r}"
         )
-        if not self._ring_visuals:
+        if not laid_out:
             _b44trace(f"concentric_no_rings fallback_to_free={bool(nodes)}")
             if nodes:
                 self.set_graph(nodes, edges, layout_mode="free", layers=layers)
             return
-
-        for ring in self._ring_visuals:
-            self._draw_ring_background(ring)
-
-        nodes_by_id = {node.entity_id: node for node in nodes}
-        for ring in self._ring_visuals:
-            ring_nodes = [nodes_by_id[item_id] for item_id in ring.item_ids if item_id in nodes_by_id]
-            for idx, node in enumerate(ring_nodes):
-                pos = self._position_for_ring_slot(ring, idx, len(ring_nodes))
-                if node.kind.lower() == "contenedor":
-                    item = GraphTreeItem(
-                        node,
-                        x=pos.x() - _CONTAINER_MIN_WIDTH / 2,
-                        y=pos.y() - _CONTAINER_MIN_HEIGHT / 2,
-                        width=_CONTAINER_MIN_WIDTH,
-                        height=_CONTAINER_MIN_HEIGHT,
-                    )
-                    self._trees[node.entity_id] = item
-                else:
-                    item = GraphNodeItem(node, x=pos.x(), y=pos.y())
-                self.scene_obj.addItem(item)
-                self._nodes[node.entity_id] = item  # type: ignore[assignment]
 
         self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
         seen_edge_ids: set[str] = set()
@@ -2269,9 +2644,22 @@ class GraphCanvasView(QGraphicsView):
             target = self._nodes.get(edge.target_id)
             if not source or not target:
                 continue
-            item = GraphEdgeItem(edge, source, target)
+            source_ring = self._node_ring_ids.get(edge.source_id, "")
+            target_ring = self._node_ring_ids.get(edge.target_id, "")
+            styled_edge = replace(
+                edge,
+                inter_ring=bool(source_ring and target_ring and source_ring != target_ring),
+                causal=bool(edge.causal or relation_family(edge.kind) == "causal"),
+            )
+            item = GraphEdgeItem(styled_edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
+
+        # BETA1-B03: register internal edges (tree↔content and content↔content)
+        # so collapse/visibility behaves like the free layout.
+        for tree in self._trees.values():
+            tree.find_internal_edges(self._edges)
+            tree.set_canvas_edges(self._edges)
 
         # BETA1-B02: set_graph returns early for this layout, so the common
         # view finalization (scene rect + camera restore/fit) happens here.
@@ -2497,7 +2885,11 @@ class GraphCanvasView(QGraphicsView):
                 continue
             source_ring = self._node_ring_ids.get(edge.source_id, "")
             target_ring = self._node_ring_ids.get(edge.target_id, "")
-            styled_edge = replace(edge, inter_ring=bool(source_ring and target_ring and source_ring != target_ring))
+            styled_edge = replace(
+                edge,
+                inter_ring=bool(source_ring and target_ring and source_ring != target_ring),
+                causal=bool(edge.causal or relation_family(edge.kind) == "causal"),
+            )
             item = GraphEdgeItem(styled_edge, source, target)
             self.scene_obj.addItem(item)
             self._edges.append(item)
@@ -2669,6 +3061,9 @@ class GraphCanvasView(QGraphicsView):
             return self._context_ring_override
         return str(self._focused_ring_id or self._selected_ring_id or "")
 
+    def focused_ring_id(self) -> str:
+        return str(self._focused_ring_id or "")
+
     def select_ring(self, ring_id: str) -> bool:
         _b44trace(f"select_ring_request ring_id={ring_id!r} available={[ring.ring_id for ring in self._ring_visuals]!r}")
         if not ring_id:
@@ -2820,6 +3215,10 @@ class GraphCanvasWidget(QWidget):
     escapePressed = Signal()
     # BETA1-B03
     nodeAssignToRingRequested = Signal(str, str)
+    ringCreateRequested = Signal()
+    ringEditRequested = Signal(str)
+    ringDeleteRequested = Signal(str)
+    nodeExtractFromTreeRequested = Signal(str)
 
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -2861,6 +3260,10 @@ class GraphCanvasWidget(QWidget):
         self.canvas.escapePressed.connect(self.escapePressed.emit)
         # BETA1-B03
         self.canvas.nodeAssignToRingRequested.connect(self.nodeAssignToRingRequested.emit)
+        self.canvas.ringCreateRequested.connect(self.ringCreateRequested.emit)
+        self.canvas.ringEditRequested.connect(self.ringEditRequested.emit)
+        self.canvas.ringDeleteRequested.connect(self.ringDeleteRequested.emit)
+        self.canvas.nodeExtractFromTreeRequested.connect(self.nodeExtractFromTreeRequested.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
 
@@ -3012,15 +3415,14 @@ class GraphCanvasWidget(QWidget):
     def _effective_world_layers(self, project) -> list[Any]:
         """Return visual-only layers for anillo layouts without mutating canon.
 
-        New projects can have no `project.world_layers` yet while the UI flyout
-        still shows `default_world_layers()`. Old projects can also hold default
-        layers without B36 `causal_rank` metadata. B44 must render concentric
-        rings in both cases.
+        New BETA1 projects can have no `project.world_layers` yet. In that
+        state the concentric canvas stays empty until the user explicitly
+        creates a ring or applies the suggested template.
         """
         project_layers = list(getattr(project, "world_layers", []) or [])
         defaults = default_world_layers()
         if not project_layers:
-            return defaults
+            return []
 
         default_by_id = {str(getattr(layer, "id", "")): layer for layer in defaults}
         effective: list[Any] = []
@@ -3033,12 +3435,6 @@ class GraphCanvasWidget(QWidget):
                 effective.append(replace(layer, metadata=metadata))
             else:
                 effective.append(layer)
-
-        known_ids = {str(getattr(layer, "id", "")) for layer in effective}
-        for default in defaults:
-            default_id = str(getattr(default, "id", ""))
-            if default_id and default_id not in known_ids:
-                effective.append(default)
         return effective
 
     def refresh(self):
