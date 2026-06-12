@@ -108,15 +108,21 @@ def test_node_menu_has_full_action_set(qapp):
 
 
 def test_tree_menu_has_tree_actions(qapp):
+    # Contrato actualizado en B03: relación desde rama + mover rama a anillo
     view = build_basic_view(qapp)
     item = view._nodes["rama-1"]
     menu = view._tree_context_menu(item)
     assert action_texts(menu) == [
         "Editar",
+        "Crear relación desde aquí",
         "Crear hoja dentro",
         "Crear subrama",
+        "Mover a anillo",
         "Eliminar",
     ]
+    # En layout libre no hay anillos → la acción existe pero deshabilitada
+    ring_action = next(a for a in menu.actions() if a.text() == "Mover a anillo")
+    assert ring_action.isEnabled() is False
 
 
 def test_edge_menu_has_relation_actions(qapp):
@@ -133,9 +139,13 @@ def test_ring_menu_offers_ring_creation(qapp):
     view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
     ring_item = view._ring_items["metafisica"]
     menu = view._ring_context_menu(ring_item)
+    # Contrato actualizado en B03: el menú de anillo incluye su CRUD
     assert action_texts(menu) == [
         "Crear hoja en este anillo",
         "Crear rama en este anillo",
+        "Editar anillo…",
+        "Crear anillo…",
+        "Eliminar anillo",
     ]
 
 
@@ -246,7 +256,10 @@ def test_ring_creation_wins_over_focused_ring(qapp):
     layers = [layer("metafisica", "Metafísica", 1), layer("politica", "Política", 5)]
     nodes = [node("m1", "M1", layer_id="metafisica"), node("p1", "P1", layer_id="politica")]
     view.set_graph(nodes, [], layout_mode="concentric_rings", layers=layers)
-    view.focus_ring_scope("metafisica")  # stale focus on another ring
+    # Simulate a STALE persisted focus (e.g. restored from preferences)
+    # without rebuilding: focus_ring_scope() would collapse the view to the
+    # focused ring only, removing the other ring items.
+    view._focused_ring_id = "metafisica"
 
     seen: list[str] = []
     # The workspace creation route runs synchronously inside this emit, so

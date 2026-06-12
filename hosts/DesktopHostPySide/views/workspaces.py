@@ -1270,6 +1270,7 @@ class CreationWorkspace(QWidget):
         self.graph.contextCreateEntityInTreeRequested.connect(self._create_entity_in_tree)
         self.graph.contextCreateSubtreeRequested.connect(self._create_subtree_in_tree)
         self.graph.contextDeleteRequested.connect(self._delete_selected)
+        self.graph.contextAIActionRequested.connect(self._run_context_ai_action)
         # BETA1-B02: Escape closes the contextual drawer after the canvas has
         # cancelled modes and cleared the selection
         self.graph.escapePressed.connect(self._on_canvas_escape)
@@ -1347,6 +1348,24 @@ class CreationWorkspace(QWidget):
         self._jobs_btn = icon_btn("Tareas", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
         self._jobs_btn.setStyleSheet(text_btn_style)
         self._jobs_btn.setFixedWidth(74)
+        self._suggest_branch_btn = icon_btn("Rama IA", "Sugerir rama con IA", self._suggest_branch)
+        self._suggest_branch_btn.setStyleSheet(text_btn_style)
+        self._suggest_branch_btn.setFixedWidth(74)
+        self._suggest_relation_btn = icon_btn("Rel IA", "Selecciona nodos para sugerir relaciones con IA", self._suggest_relation, enabled=False)
+        self._suggest_relation_btn.setStyleSheet(disabled_style)
+        self._suggest_relation_btn.setFixedWidth(66)
+        self._summary_btn = icon_btn("Resumen", "Selecciona elementos para resumir con IA", self._summarize_selection, enabled=False)
+        self._summary_btn.setStyleSheet(disabled_style)
+        self._summary_btn.setFixedWidth(78)
+        for ai_button in (
+            self._suggest_entity_btn,
+            self._coherence_btn,
+            self._jobs_btn,
+            self._suggest_branch_btn,
+            self._suggest_relation_btn,
+            self._summary_btn,
+        ):
+            ai_button.setVisible(False)
         self._suggestion_count = 0
         self._layers_toggle_btn = icon_btn("Anillos", "Abrir/cerrar panel de anillos causales", self._toggle_layer_drawer)
         self._layers_toggle_btn.setStyleSheet(text_btn_style)
@@ -1397,6 +1416,10 @@ class CreationWorkspace(QWidget):
         self._concentric_view_btn.setStyleSheet(text_btn_style)
         self._concentric_view_btn.clicked.connect(self._toggle_concentric_view_from_toolbar)
         layout.addWidget(self._concentric_view_btn)
+
+        # BETA1-C05 (decisión de producto): la física está SIEMPRE activa —
+        # no hay toggle de usuario. _physics_enabled queda como mecanismo
+        # interno (tests/fallback de rendimiento), nunca un layout mode.
 
         fit_btn = QPushButton("Encajar")
         fit_btn.setToolTip("Encajar todo el grafo en pantalla")
@@ -1628,6 +1651,29 @@ class CreationWorkspace(QWidget):
         self._sync_jobs_indicator()
         self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
         self._start_ai_job_worker(job.id)
+
+    def _launch_toolbar_ai_job(self, prompt: str, status_text: str) -> bool:
+        project = self._get_active_project()
+        if project is None:
+            self.ctx.log("error", "No hay proyecto activo")
+            return False
+        scope = self._current_context_scope()
+        job_type = classify_ai_job_intent(
+            prompt,
+            worldbuilding_active=bool(scope.get("worldbuilding_active")),
+        )
+        result = self.ai_job_service.create_job(job_type, prompt, context_scope=scope)
+        if isinstance(result, Error):
+            self._job_status_label.setText(result.error)
+            self.ctx.log("error", result.error)
+            return False
+        job = result.value
+        self._job_status_label.setText(status_text)
+        pulse_feedback(self._job_status_label)
+        self._sync_jobs_indicator()
+        self.ctx.log("info", "Job IA creado desde accion visible: resultado revisable")
+        self._start_ai_job_worker(job.id)
+        return True
 
     def _start_ai_job_worker(self, job_id: str):
         worker = _AIJobWorker(self.ai_job_service, job_id)
@@ -1997,6 +2043,34 @@ class CreationWorkspace(QWidget):
                 else:
                     btn.setToolTip(f"{base} con IA (contexto: todo el proyecto)")
 
+        # D04 explicit enablement for actions born disabled.
+        branch_btn = getattr(self, "_suggest_branch_btn", None)
+        if branch_btn is not None:
+            branch_btn.setToolTip(
+                f"Sugerir rama con IA (contexto: {n_e} nodo(s), {n_r} relacion(es))"
+                if has_selection else
+                "Sugerir rama con IA (contexto: foco/anillo actual)"
+            )
+        relation_btn = getattr(self, "_suggest_relation_btn", None)
+        if relation_btn is not None:
+            can_suggest_relation = n_e >= 2 or n_r > 0
+            relation_btn.setEnabled(can_suggest_relation)
+            relation_btn.setStyleSheet(self._toolbar_btn_style if can_suggest_relation else self._toolbar_disabled_style)
+            relation_btn.setToolTip(
+                f"Sugerir relaciones con IA (contexto: {n_e} nodo(s), {n_r} relacion(es))"
+                if can_suggest_relation else
+                "Selecciona al menos dos hojas o una relacion para sugerir relaciones"
+            )
+        summary_btn = getattr(self, "_summary_btn", None)
+        if summary_btn is not None:
+            summary_btn.setEnabled(has_selection)
+            summary_btn.setStyleSheet(self._toolbar_btn_style if has_selection else self._toolbar_disabled_style)
+            summary_btn.setToolTip(
+                f"Resumir seleccion con IA ({n_e} nodo(s), {n_r} relacion(es))"
+                if has_selection else
+                "Selecciona elementos para resumir con IA"
+            )
+
         # Delete button: enabled when something is selected
         del_btn = getattr(self, "_delete_btn", None)
         if del_btn is not None:
@@ -2011,6 +2085,37 @@ class CreationWorkspace(QWidget):
                 del_btn.setToolTip(f"Eliminar: {', '.join(parts)}")
             else:
                 del_btn.setToolTip("Selecciona algo para eliminar")
+
+    def _run_context_ai_action(self, action: str):
+        entity_ids = self.graph.selected_entity_ids()
+        relation_ids = self.graph.selected_relation_ids()
+        if not (entity_ids or relation_ids):
+            self.ctx.log("info", "Selecciona hojas, ramas o relaciones para usar IA contextual")
+            return
+        selection_hint = f"{len(entity_ids)} elemento(s), {len(relation_ids)} relacion(es)"
+        prompts = {
+            "suggest_nodes": (
+                "A partir de la seleccion actual del grafo, sugiere hojas/nodos candidatos que completen "
+                "el contexto narrativo. Devuelve solo candidatos revisables; no modifiques canon."
+            ),
+            "suggest_branches": (
+                "A partir de la seleccion actual del grafo, sugiere ramas candidatas para agrupar, explicar "
+                "o expandir estos elementos. Devuelve solo candidatos revisables; no modifiques canon."
+            ),
+            "suggest_relations": (
+                "A partir de la seleccion actual del grafo, sugiere relaciones candidatas entre hojas, ramas "
+                "y relaciones relevantes. Usa endpoints reales del contexto cuando existan. No modifiques canon."
+            ),
+            "analyze_coherence": (
+                "Analiza la coherencia narrativa de la seleccion actual del grafo. Detecta tensiones, huecos, "
+                "contradicciones y oportunidades. Devuelve un informe revisable; no modifiques canon."
+            ),
+        }
+        prompt = prompts.get(action)
+        if not prompt:
+            self.ctx.log("warning", f"Accion IA contextual desconocida: {action}")
+            return
+        self._launch_toolbar_ai_job(prompt, f"IA contextual sobre seleccion ({selection_hint})...")
 
     def _delete_selected(self):
         """Delete selected entities and/or relations."""
@@ -2091,6 +2196,29 @@ class CreationWorkspace(QWidget):
 
     # ── Suggest node / relation via AI ─────────────────────────────────
 
+    def _suggest_branch(self):
+        """Suggest 1-2 branch candidates from the current creation context."""
+        prompt = (
+            "Sugiere 1-2 ramas candidatas para el contexto actual de Creacion. "
+            "Una rama debe ser un grupo, sistema, faccion, cultura, institucion, trama u organizacion. "
+            "Devuelve solo candidatos revisables; no modifiques canon."
+        )
+        self._launch_toolbar_ai_job(prompt, "Sugiriendo ramas IA...")
+
+    def _summarize_selection(self):
+        """Summarize the current graph selection as a reviewable AI report."""
+        entity_ids = self.graph.selected_entity_ids()
+        relation_ids = self.graph.selected_relation_ids()
+        if not (entity_ids or relation_ids):
+            self.ctx.log("info", "Selecciona elementos para resumir con IA")
+            return
+        prompt = (
+            "Resume la seleccion actual del grafo de forma narrativa. "
+            "Incluye entidades, relaciones, huecos y preguntas abiertas. "
+            "Devuelve un informe revisable, no cambios de canon."
+        )
+        self._launch_toolbar_ai_job(prompt, "Resumiendo seleccion IA...")
+
     def _suggest_node(self):
         """Ask AI to suggest missing entities. Uses graph selection as context if available."""
         if self.ai_context_controller is None:
@@ -2130,6 +2258,19 @@ class CreationWorkspace(QWidget):
 
     def _suggest_relation(self):
         """Ask AI to suggest missing relations. Uses graph selection as context if available."""
+        sel_e = self.graph.selected_entity_ids()
+        sel_r = self.graph.selected_relation_ids()
+        if len(sel_e) < 2 and not sel_r:
+            self.ctx.log("info", "Selecciona al menos dos hojas o una relacion para sugerir relaciones con IA")
+            return
+        prompt = (
+            "Sugiere relaciones candidatas entre los elementos seleccionados. "
+            "Usa endpoints reales del contexto si existen; si no, usa nombres. "
+            "Devuelve solo candidatos de relacion revisables, sin modificar canon."
+        )
+        self._launch_toolbar_ai_job(prompt, "Sugiriendo relaciones IA...")
+        return
+
         if self.ai_context_controller is None:
             self.ctx.log("error", "IA no configurada. Verifica proveedor en Ajustes.")
             return

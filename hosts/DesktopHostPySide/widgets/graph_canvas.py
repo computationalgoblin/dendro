@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,6 +38,13 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import EmptyState, enum_human
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.world_layer import default_world_layers
+from packages.ui.graph_physics import (
+    UNCLASSIFIED_RING_ID,
+    Body,
+    PhysicsEngine,
+    Spring,
+    resolve_effective_ring_id,
+)
 
 
 def _b44trace(message: str):
@@ -1170,6 +1177,7 @@ class GraphCanvasView(QGraphicsView):
     contextCreateEntityInTreeRequested = Signal(str)  # parent tree entity_id
     contextCreateSubtreeRequested = Signal(str)  # parent tree entity_id
     contextDeleteRequested = Signal()
+    contextAIActionRequested = Signal(str)
     # BETA1-B02: emitted after Escape has cancelled modes and cleared the
     # selection, so the workspace can close contextual surfaces (drawer).
     escapePressed = Signal()
@@ -1237,6 +1245,21 @@ class GraphCanvasView(QGraphicsView):
         # assignment. Relation creation lives in the context menu only.
         self._moving_item: GraphNodeItem | GraphTreeItem | None = None
         self._move_origin_scene = QPointF()
+        # BETA1-C02: physics is an OVERLAY flag, never a layout mode
+        # (contract: docs/architecture/C01_physics_contract.md). The engine is
+        # pure (packages/ui/graph_physics); this bridge packs top-level items,
+        # steps on a timer and applies positions. Auto-stop by energy.
+        # BETA1-C05 (decisión de producto): SIEMPRE ON por defecto — no hay
+        # toggle de usuario; el flag queda como mecanismo interno de
+        # seguridad/tests. Cada acción (CRUD, layout, colapso, drop) hace
+        # reheat, así la física reacciona a cualquier cambio.
+        self._physics_enabled = True
+        self._physics_engine = PhysicsEngine()
+        # Motores locales intrarrama: tree_id → engine en coords del padre
+        self._physics_local: dict[str, PhysicsEngine] = {}
+        self._physics_timer = QTimer(self)
+        self._physics_timer.setInterval(33)  # ~30 Hz
+        self._physics_timer.timeout.connect(self._physics_tick)
 
     def selected_entity_ids(self) -> list[str]:
         return list(self._selected_entity_ids)
@@ -1386,6 +1409,261 @@ class GraphCanvasView(QGraphicsView):
             edge.set_coherence_selected(True)
         self._emit_selection_changed()
 
+    # ── BETA1-C02: physics bridge ────────────────────────────────────────
+
+    def physics_enabled(self) -> bool:
+        return self._physics_enabled
+
+    def set_physics_enabled(self, enabled: bool):
+        """Toggle physics. Writes EXCLUSIVELY _physics_enabled — never
+        _layout_mode (contract C01 §4.1)."""
+        enabled = bool(enabled)
+        if enabled == self._physics_enabled:
+            return
+        self._physics_enabled = enabled
+        if enabled:
+            self._rebuild_physics_world()
+            self._physics_engine.reheat()
+            self._physics_timer.start()
+        else:
+            self._physics_timer.stop()
+
+    def _physics_top_level_of(self, entity_id: str):
+        """Top-level body owning *entity_id* (itself, or its outermost tree).
+        Nested content is never simulated — it travels with its tree."""
+        item = self._nodes.get(entity_id) or self._trees.get(entity_id)
+        if item is None:
+            return None
+        while item.parentItem() is not None and isinstance(item.parentItem(), (GraphNodeItem, GraphTreeItem)):
+            item = item.parentItem()
+        return item
+
+    def _physics_effective_ring(self, entity_id: str) -> str:
+        """BETA1-C03: anillo efectivo centralizado (rings.resolve_…).
+
+        Capas explícitas reales desde _node_ring_ids (excluyendo la
+        asignación sintética a 'Sin clasificar') y herencia por _membership."""
+        explicit = {
+            eid: rid for eid, rid in self._node_ring_ids.items()
+            if rid and rid != UNCLASSIFIED_RING_ID
+        }
+        return resolve_effective_ring_id(
+            entity_id,
+            explicit_ring_ids=explicit,
+            membership=self._membership,
+            is_tree=frozenset(self._trees.keys()),
+        )
+
+    def _rebuild_physics_world(self):
+        """Pack current top-level items + relations into the pure engine."""
+        bodies: list[Body] = []
+        ring_bands: dict[str, tuple[float, float]] = {}
+        concentric = self._layout_mode_active == "concentric_rings"
+        if concentric:
+            for ring in self._ring_visuals:
+                ring_bands[ring.ring_id] = (ring.inner_radius, ring.outer_radius)
+        seen: set[int] = set()
+        effective_rings: dict[str, str] = {}
+        for entity_id, item in {**self._nodes, **self._trees}.items():
+            if item.parentItem() is not None:
+                continue  # nested: travels with its tree
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            rect = item.sceneBoundingRect()
+            center = rect.center()
+            extent = max(rect.width(), rect.height()) / 2.0
+            target = None
+            band_inner = band_outer = None
+            if concentric:
+                ring_id = self._physics_effective_ring(entity_id)
+                effective_rings[entity_id] = ring_id
+                band = ring_bands.get(ring_id)
+                if band is None and ring_bands:
+                    # Sin anillo y sin banda 'Sin clasificar' dibujada:
+                    # zona EXTERIOR al último anillo (C03: nunca al centro)
+                    outermost = max(outer for _, outer in ring_bands.values())
+                    band = (outermost + 34.0, outermost + 34.0 + 240.0)
+                if band is not None:
+                    inner, outer = band
+                    target = (inner + outer) / 2.0
+                    # margen = extensión del item para que su BORDE respete
+                    # la corona, no solo su centro
+                    band_inner = inner + min(extent, (outer - inner) / 2.0 - 1.0)
+                    band_outer = max(band_inner, outer - min(extent, (outer - inner) / 2.0 - 1.0))
+            child_count = len(getattr(item, "_child_nodes", []) or [])
+            bodies.append(Body(
+                body_id=entity_id,
+                x=center.x(),
+                y=center.y(),
+                mass=1.0 + 0.2 * child_count,
+                radius=extent + 18.0,
+                target_radius=target,
+                band_inner=band_inner,
+                band_outer=band_outer,
+            ))
+        springs: list[Spring] = []
+        ring_targets = {rid: (b[0] + b[1]) / 2.0 for rid, b in ring_bands.items()}
+        for edge_item in self._edges:
+            src = self._physics_top_level_of(edge_item.edge.source_id)
+            tgt = self._physics_top_level_of(edge_item.edge.target_id)
+            if src is None or tgt is None or src is tgt:
+                continue
+            a = src.node.entity_id
+            b = tgt.node.entity_id
+            factor = 1.0
+            ideal = 230.0
+            if concentric:
+                ring_a = effective_rings.get(a, "")
+                ring_b = effective_rings.get(b, "")
+                if ring_a != ring_b:
+                    # inter-ring: weak spring, ideal ≈ radial gap (C01 §4.6)
+                    factor = 0.3
+                    if ring_a in ring_targets and ring_b in ring_targets:
+                        ideal = max(230.0, abs(ring_targets[ring_a] - ring_targets[ring_b]))
+            springs.append(Spring(a=a, b=b, ideal_length=ideal, strength_factor=factor))
+        # Compactación central solo en layout libre (contract C01 §4.4)
+        self._physics_engine.center_strength = 0.0006 if self._layout_mode_active == "free" else 0.0
+        self._physics_engine.set_world(bodies, springs)
+        self._rebuild_local_physics()
+
+    def _rebuild_local_physics(self):
+        """BETA1-C05: física intrarrama. Un motor local por rama expandida
+        con ≥2 hijos directos, en coordenadas LOCALES del contenedor: los
+        hijos se repelen, los muelles internos tiran y un clamp rectangular
+        los mantiene bajo la cabecera y dentro del rectángulo."""
+        self._physics_local = {}
+        for tree_id, tree in self._trees.items():
+            children = [c for c in getattr(tree, "_child_nodes", []) if c.isVisible()]
+            if len(children) < 2 or getattr(tree, "_collapsed", False):
+                continue
+            rect = tree.rect()
+            bodies: list[Body] = []
+            child_ids: dict[str, object] = {}
+            for child in children:
+                extent = (
+                    max(child.boundingRect().width(), child.boundingRect().height()) / 2.0
+                    if isinstance(child, GraphTreeItem)
+                    else getattr(child, "radius", 58.0)
+                )
+                cid = child.node.entity_id
+                child_ids[cid] = child
+                center_x = child.pos().x() + (child.boundingRect().center().x() if isinstance(child, GraphTreeItem) else 0.0)
+                center_y = child.pos().y() + (child.boundingRect().center().y() if isinstance(child, GraphTreeItem) else 0.0)
+                bodies.append(Body(
+                    body_id=cid,
+                    x=center_x,
+                    y=center_y,
+                    radius=extent + 12.0,
+                    bounds=(
+                        rect.left() + extent + 10.0,
+                        rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0,
+                        max(rect.left() + extent + 10.0, rect.right() - extent - 10.0),
+                        max(rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0, rect.bottom() - extent - 10.0),
+                    ),
+                ))
+            springs: list[Spring] = []
+            for edge_item in self._edges:
+                a = edge_item.edge.source_id
+                b = edge_item.edge.target_id
+                if a in child_ids and b in child_ids and a != b:
+                    springs.append(Spring(a=a, b=b, ideal_length=150.0))
+            engine = PhysicsEngine(repulsion=60_000.0, max_speed=14.0)
+            engine.set_world(bodies, springs)
+            self._physics_local[tree_id] = engine
+
+    def _apply_local_physics(self, tree_id: str, engine: PhysicsEngine) -> float:
+        tree = self._trees.get(tree_id)
+        if tree is None or getattr(tree, "_collapsed", False):
+            return 0.0
+        energy = engine.step()
+        for body_id, body in engine.bodies.items():
+            if body.pinned:
+                continue  # el hijo arrastrado lo lleva el usuario
+            child = next(
+                (c for c in tree._child_nodes if c.node.entity_id == body_id), None
+            )
+            if child is None or not child.isVisible():
+                continue
+            if isinstance(child, GraphTreeItem):
+                rect = child.boundingRect()
+                child.setPos(body.x - rect.center().x(), body.y - rect.center().y())
+            else:
+                child.setPos(body.x, body.y)
+        return energy
+
+    def _physics_tick(self):
+        # Pan and menu-relation modes pause everything (contract §4.5)
+        if self._space_pan_active or self._drag_source is not None:
+            return
+        # BETA1-C05 (decisión de producto): la física actúa TAMBIÉN durante
+        # el arrastre. El item arrastrado va PINNED y su cuerpo se sincroniza
+        # en vivo con el cursor: el resto del grafo reacciona a él (muelles y
+        # repulsión siguen al elemento mientras lo llevas).
+        moving = self._moving_item
+        if moving is not None:
+            top = moving
+            while isinstance(top.parentItem(), (GraphNodeItem, GraphTreeItem)):
+                top = top.parentItem()
+            top_body = self._physics_engine.bodies.get(top.node.entity_id)
+            if top_body is not None:
+                center = top.sceneBoundingRect().center()
+                top_body.x, top_body.y = center.x(), center.y()
+                top_body.vx = top_body.vy = 0.0
+                top_body.pinned = True
+            parent = moving.parentItem()
+            if isinstance(parent, GraphTreeItem):
+                local = self._physics_local.get(parent.node.entity_id)
+                if local is not None:
+                    local_body = local.bodies.get(moving.node.entity_id)
+                    if local_body is not None:
+                        if isinstance(moving, GraphTreeItem):
+                            rect = moving.boundingRect()
+                            local_body.x = moving.pos().x() + rect.center().x()
+                            local_body.y = moving.pos().y() + rect.center().y()
+                        else:
+                            local_body.x = moving.pos().x()
+                            local_body.y = moving.pos().y()
+                        local_body.vx = local_body.vy = 0.0
+                        local_body.pinned = True
+        energy = self._physics_engine.step()
+        for body_id, body in self._physics_engine.bodies.items():
+            if body.pinned:
+                continue
+            item = self._nodes.get(body_id) or self._trees.get(body_id)
+            if item is None or item.parentItem() is not None:
+                continue
+            current = item.sceneBoundingRect().center()
+            dx = body.x - current.x()
+            dy = body.y - current.y()
+            if abs(dx) > 0.01 or abs(dy) > 0.01:
+                item.moveBy(dx, dy)
+        # BETA1-C05: física intrarrama (coords locales; viaja con la rama)
+        for tree_id, local_engine in self._physics_local.items():
+            energy += self._apply_local_physics(tree_id, local_engine)
+        if energy < self._physics_engine.min_energy and moving is None:
+            # Auto-stop: converged (nunca durante un drag — el elemento en
+            # mano debe seguir provocando reacción). Reheat hooks restart.
+            self._physics_timer.stop()
+            # BETA1-C03: con el grafo en reposo, los anillos se re-ajustan
+            # alrededor del contenido (throttled: solo al estabilizarse,
+            # nunca por frame — riesgo 3 del contrato C01)
+            if self._layout_mode_active == "concentric_rings":
+                self._refresh_ring_spans()
+
+    def _physics_reheat(self):
+        """Wake physics after ANY structural change (CRUD, layout, colapso,
+        drop). Decisión de producto C05: cualquier acción re-activa la
+        acomodación — la física reacciona siempre."""
+        if not self._physics_enabled:
+            return
+        self._rebuild_physics_world()
+        self._physics_engine.reheat()
+        for local_engine in self._physics_local.values():
+            local_engine.reheat()
+        if not self._physics_timer.isActive():
+            self._physics_timer.start()
+
     # ── BETA1-B02: keyboard core (Delete, Escape, Space+drag) ────────────
 
     def _is_text_input_focused(self) -> bool:
@@ -1504,13 +1782,15 @@ class GraphCanvasView(QGraphicsView):
         """
         node = self._item_node_at(view_pos)
         if node is not None:
-            self._set_single_node_selection(node)
+            if node.node.entity_id not in self._selected_entity_ids:
+                self._set_single_node_selection(node)
             if isinstance(node, GraphTreeItem):
                 return self._tree_context_menu(node)
             return self._node_context_menu(node)
         edge = self._item_edge_at(view_pos)
         if edge is not None:
-            self._set_single_edge_selection(edge)
+            if edge.edge.relation_id not in self._selected_relation_ids:
+                self._set_single_edge_selection(edge)
             return self._edge_context_menu(edge)
         ring = self._item_ring_at(view_pos)
         if ring is not None:
@@ -1521,10 +1801,21 @@ class GraphCanvasView(QGraphicsView):
         menu = QMenu(self)
         menu.addAction("Crear hoja aquí", self.contextCreateEntityRequested.emit)
         menu.addAction("Crear rama aquí", self.contextCreateTreeRequested.emit)
+        if self._selected_entity_ids or self._selected_relation_ids:
+            self._add_ai_context_menu(menu)
         if self._layout_mode_active == "concentric_rings":
             menu.addSeparator()
             menu.addAction("Crear anillo…", self.ringCreateRequested.emit)
         return menu
+
+    def _add_ai_context_menu(self, menu: QMenu) -> None:
+        menu.addSeparator()
+        ai_menu = QMenu("IA sobre seleccion", menu)
+        menu.addMenu(ai_menu)
+        ai_menu.addAction("Sugerir hojas", lambda: self.contextAIActionRequested.emit("suggest_nodes"))
+        ai_menu.addAction("Sugerir ramas", lambda: self.contextAIActionRequested.emit("suggest_branches"))
+        ai_menu.addAction("Sugerir relaciones", lambda: self.contextAIActionRequested.emit("suggest_relations"))
+        ai_menu.addAction("Analizar coherencia", lambda: self.contextAIActionRequested.emit("analyze_coherence"))
 
     def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
         entity_id = item.node.entity_id
@@ -1564,6 +1855,7 @@ class GraphCanvasView(QGraphicsView):
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
             ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
+        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -1597,6 +1889,7 @@ class GraphCanvasView(QGraphicsView):
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
             ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
+        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -1605,6 +1898,7 @@ class GraphCanvasView(QGraphicsView):
         relation_id = item.edge.relation_id
         menu = QMenu(self)
         menu.addAction("Editar relación", lambda: self.relationSelected.emit(relation_id))
+        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar relación", self.contextDeleteRequested.emit)
         return menu
@@ -1732,6 +2026,11 @@ class GraphCanvasView(QGraphicsView):
                 # drop-on-tree assignment at release.
                 self._moving_item = node
                 self._move_origin_scene = QPointF(node.scenePos())
+                # BETA1-C05: la física sigue viva durante el arrastre — si el
+                # timer estaba dormido por convergencia, despertarlo para que
+                # el grafo reaccione al elemento en mano.
+                if self._physics_enabled and not self._physics_timer.isActive():
+                    self._physics_timer.start()
                 super().mousePressEvent(event)
                 return
             edge = self._item_edge_at(event.position())
@@ -1853,6 +2152,13 @@ class GraphCanvasView(QGraphicsView):
             super().mouseReleaseEvent(event)  # let Qt close the move grab
             if moving.scenePos() != self._move_origin_scene:
                 self._handle_move_drop(moving, event.position())
+                # BETA1-C02: adopt the user's placement and wake physics
+                if self._physics_enabled:
+                    center = moving.sceneBoundingRect().center()
+                    self._physics_engine.sync_position(
+                        moving.node.entity_id, center.x(), center.y()
+                    )
+                    self._physics_reheat()
             return
         self._pending_source = None
         self._alt_source = None
@@ -2454,6 +2760,9 @@ class GraphCanvasView(QGraphicsView):
         nodes, edges, layers = inputs
         if self._layout_concentric_rings(nodes, edges, layers):
             self._expand_scene_rect_to_content()
+            # BETA1-C05: el colapso/expansión cambia la geometría → la
+            # física reacciona (reheat completo, incluidos motores locales)
+            self._physics_reheat()
 
     def _refresh_ring_spans(self):
         """BETA1-B03: resize ring bands around the CURRENT positions and
@@ -2498,6 +2807,12 @@ class GraphCanvasView(QGraphicsView):
         if selected_ring and selected_ring in self._ring_items:
             self._ring_items[selected_ring].setSelected(True)
         self._expand_scene_rect_to_content()
+        # BETA1-C05: las bandas cambiaron → re-empaquetar el mundo SIN
+        # despertar la simulación. Importante: _refresh_ring_spans se llama
+        # desde el auto-stop del tick; un reheat aquí crearía un bucle
+        # stop→spans→reheat→stop infinito.
+        if self._physics_enabled:
+            self._rebuild_physics_world()
 
     def _nest_contained_items(self, nodes: list[_NodeView], edges: list[_EdgeView]):
         """BETA1-B03: re-parent contained items into their tree containers.
@@ -2921,6 +3236,9 @@ class GraphCanvasView(QGraphicsView):
         rect = self.scene_obj.itemsBoundingRect()
         if rect.isValid() and not rect.isEmpty():
             self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
+        # BETA1-C02: any (re)build changes bodies/rings → re-pack the engine.
+        # This NEVER touches _physics_enabled (layout and physics orthogonal).
+        self._physics_reheat()
 
     def reveal_entity(self, entity_id: str):
         """BETA1-B02: make an entity visible by scrolling only — no zoom
@@ -3211,6 +3529,7 @@ class GraphCanvasWidget(QWidget):
     contextCreateEntityInTreeRequested = Signal(str)
     contextCreateSubtreeRequested = Signal(str)
     contextDeleteRequested = Signal()
+    contextAIActionRequested = Signal(str)
     # BETA1-B02
     escapePressed = Signal()
     # BETA1-B03
@@ -3256,6 +3575,7 @@ class GraphCanvasWidget(QWidget):
         self.canvas.contextCreateEntityInTreeRequested.connect(self.contextCreateEntityInTreeRequested.emit)
         self.canvas.contextCreateSubtreeRequested.connect(self.contextCreateSubtreeRequested.emit)
         self.canvas.contextDeleteRequested.connect(self.contextDeleteRequested.emit)
+        self.canvas.contextAIActionRequested.connect(self.contextAIActionRequested.emit)
         # BETA1-B02
         self.canvas.escapePressed.connect(self.escapePressed.emit)
         # BETA1-B03
@@ -3276,6 +3596,13 @@ class GraphCanvasWidget(QWidget):
 
     def selected_entity_ids(self) -> list[str]:
         return self.canvas.selected_entity_ids()
+
+    # BETA1-C02: physics overlay (orthogonal to layout mode)
+    def physics_enabled(self) -> bool:
+        return self.canvas.physics_enabled()
+
+    def set_physics_enabled(self, enabled: bool):
+        self.canvas.set_physics_enabled(enabled)
 
     def selected_relation_ids(self) -> list[str]:
         return self.canvas.selected_relation_ids()
