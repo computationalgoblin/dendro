@@ -374,16 +374,27 @@ class AIContextActionService:
         candidate_service: Any,
         provider: AIProvider | None = None,
         provider_name: str = "simulated",
+        allow_simulated: bool = False,
     ):
         self.project_service = project_service
         self.candidate_service = candidate_service
         self.context_builder = NarrativeContextBuilder(project_service)
         self.provider = provider or create_provider(provider_name)
+        self.allow_simulated = allow_simulated
+
+    def _provider_unconfigured_error(self) -> Error | None:
+        provider_name = str(getattr(self.provider, "provider_name", "ai"))
+        if provider_name == "simulated" and not self.allow_simulated:
+            return Error("IA no configurada: configura un proveedor real para usar acciones IA.")
+        return None
 
     def run_node_action(self, entity_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm") -> Result[AIContextActionResult, str]:
         mode = _NODE_ACTIONS.get(action_type)
         if mode is None:
             return Error(f"Unknown node AI action: {action_type}")
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         context = self.context_builder.build_for_entity(entity_id, audience=audience)
         return self._run("node", entity_id, action_type, mode, context, prompt_hint)
 
@@ -402,6 +413,9 @@ class AIContextActionService:
         the suggestion remains local UI text until the user accepts it and then
         saves the entity through EntityService.
         """
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         context = self.context_builder.build_for_entity(entity_id, audience=audience)
         if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
             return Error("Target not visible for requested audience")
@@ -439,6 +453,9 @@ class AIContextActionService:
         language: str = "es",
     ) -> Result[AIContextActionResult, str]:
         """Return a text-only inline suggestion for a relation."""
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         context = self.context_builder.build_for_relation(relation_id, audience=audience)
         if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
             return Error("Target not visible for requested audience")
@@ -479,6 +496,9 @@ class AIContextActionService:
         """Analyze joint coherence for a selected subgraph without mutating canon."""
         if not (entity_ids or relation_ids):
             return Error("Selecciona al menos un nodo o una relación para analizar coherencia.")
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
         selection = context.get("selection") or {}
         if not (selection.get("entities") or selection.get("relations")):
@@ -528,6 +548,9 @@ class AIContextActionService:
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
         context_hash = _context_hash(context)
         lang = "en" if str(language).lower().startswith("en") else "es"
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         system_prompt = _COHERENCE_REPAIR_SYSTEM_PROMPT_EN if lang == "en" else _COHERENCE_REPAIR_SYSTEM_PROMPT_ES
         user_prompt = _selection_repair_user_prompt(context, proposal, prompt_hint, lang)
         try:
@@ -559,6 +582,9 @@ class AIContextActionService:
         mode = _RELATION_ACTIONS.get(action_type)
         if mode is None:
             return Error(f"Unknown relation AI action: {action_type}")
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         context = self.context_builder.build_for_relation(relation_id, audience=audience)
         return self._run("relation", relation_id, action_type, mode, context, prompt_hint)
 
@@ -576,6 +602,9 @@ class AIContextActionService:
         if mode is None:
             return Error(f"Unknown graph AI action: {action_type}")
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         return self._run("graph", None, action_type, mode, context, prompt_hint, language=language)
 
     def _run(
@@ -588,6 +617,9 @@ class AIContextActionService:
         prompt_hint: str,
         language: str = "es",
     ) -> Result[AIContextActionResult, str]:
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
         if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
             return Error("Target not visible for requested audience")
         context_hash = _context_hash(context)

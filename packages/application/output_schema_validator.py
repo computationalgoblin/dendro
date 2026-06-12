@@ -58,6 +58,29 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
 _FREEFORM_INTENTS = {"freeform", "chat", "explain", "suggest", "improvise", "wizard_suggestion"}
 
 
+# Keys that mean the model is trying to apply, canonize or persist changes
+# instead of returning reviewable data. IDs are allowed because coherence repair
+# patches may target already selected objects by id.
+FORBIDDEN_MUTATION_KEYS: frozenset[str] = frozenset({
+    "canon_state",
+    "visibility_state",
+    "final_action",
+    "reviewed_at",
+    "apply_directly",
+    "auto_apply",
+    "auto_accept",
+    "mutate_canon",
+    "direct_mutation",
+    "canonize",
+    "canonize_automatically",
+    "canonizes_automatically",
+    "write_to_project",
+    "persist",
+    "save_to_project",
+    "project_store",
+})
+
+
 @dataclass
 class ValidationResult:
     """Result of validating AI output against expected schema."""
@@ -65,6 +88,24 @@ class ValidationResult:
     parsed: dict[str, Any] | list | None = None
     error: str | None = None
     retry_hint: str | None = None
+
+
+def _find_forbidden_mutation(value: Any, path: str = "$") -> str | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key)
+            next_path = f"{path}.{key_text}"
+            if key_text.lower() in FORBIDDEN_MUTATION_KEYS:
+                return next_path
+            found = _find_forbidden_mutation(item, next_path)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found = _find_forbidden_mutation(item, f"{path}[{index}]")
+            if found:
+                return found
+    return None
 
 
 def validate_ai_output(text: str | None, intent: str) -> ValidationResult:
@@ -97,6 +138,14 @@ def validate_ai_output(text: str | None, intent: str) -> ValidationResult:
             is_valid=False,
             error=f"JSON inválido: {str(e)[:100]}",
             retry_hint="Reintentar — el modelo no produjo JSON válido",
+        )
+
+    forbidden_path = _find_forbidden_mutation(parsed)
+    if forbidden_path:
+        return ValidationResult(
+            is_valid=False,
+            error=f"Output intenta mutacion directa no permitida: {forbidden_path}",
+            retry_hint="Reintentar: la IA debe devolver preview/candidate/suggestion, no mutacion canon directa",
         )
 
     # Validate against schema

@@ -21,9 +21,12 @@ from enum import Enum
 from typing import Any
 import json
 import re
+import time
 import uuid
 
 from packages.domain.result import Error, Ok, Result
+from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
+from packages.application.ai_request_gateway import ModelParams
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 
 
@@ -35,6 +38,7 @@ from packages.application.prompt_registry import get_prompt
 
 # Legacy constant — now sourced from Prompt Registry (B43-T01)
 COMMAND_BAR_SYSTEM_PROMPT_ES = get_prompt("command_bar", lang="es") or ""
+DEFAULT_AI_TIMEOUT_SECONDS = 300
 
 
 class AIJobStatus(str, Enum):
@@ -599,10 +603,19 @@ def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow
 class AIJobService:
     """In-memory AI job registry and command-bar runner."""
 
-    def __init__(self, provider: AIProvider | None = None, *, allow_simulated: bool = False):
+    def __init__(
+        self,
+        provider: AIProvider | None = None,
+        *,
+        allow_simulated: bool = False,
+        observability_log: AIObservabilityLog | None = None,
+        timeout_seconds: int = DEFAULT_AI_TIMEOUT_SECONDS,
+    ):
         self._jobs: dict[str, AIJob] = {}
         self._provider = provider if provider is not None else create_provider()
         self.allow_simulated = allow_simulated
+        self.observability_log = observability_log or AIObservabilityLog()
+        self.timeout_seconds = max(1, int(timeout_seconds or DEFAULT_AI_TIMEOUT_SECONDS))
 
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None) -> Result:
         prompt = (prompt or "").strip()
@@ -667,7 +680,35 @@ class AIJobService:
         job.updated_at = _now_iso()
         return Ok(job)
 
-    def execute_job(self, job_id: str, progress_callback=None) -> Result:
+    def _record_observability(
+        self,
+        job: AIJob,
+        *,
+        status: str,
+        error_type: str | None = None,
+        duration_ms: float = 0.0,
+        output_size: int = 0,
+        model: str | None = None,
+    ) -> None:
+        params = ModelParams.from_intent(job.type.value if isinstance(job.type, AIJobType) else str(job.type))
+        context_size = len(json.dumps(job.context_scope or {}, ensure_ascii=False, default=str))
+        provider_name = str(getattr(self._provider, "provider_name", "ai"))
+        self.observability_log.record(AIJobRecord(
+            job_id=job.id,
+            intent_type=job.type.value if isinstance(job.type, AIJobType) else str(job.type),
+            model=model or str(getattr(self._provider, "model", provider_name)),
+            temperature=params.temperature,
+            max_tokens=params.max_tokens,
+            context_depth=len(job.context_scope or {}),
+            input_size=len(job.prompt or "") + context_size,
+            output_size=max(0, int(output_size or 0)),
+            duration_ms=max(0.0, float(duration_ms or 0.0)),
+            status=status,
+            error_type=error_type,
+            raw_prompt=job.prompt,
+        ))
+
+    def _execute_job_pre_d03(self, job_id: str, progress_callback=None) -> Result:
         job = self._jobs.get(job_id)
         if job is None:
             return Error("Job IA no encontrado")
@@ -721,6 +762,134 @@ class AIJobService:
         if progress_callback and not isinstance(updated, Error):
             progress_callback(updated.value)
         return updated
+
+    def execute_job(self, job_id: str, progress_callback=None) -> Result:
+        """Execute a command-bar job with cooperative cancel and timeout.
+
+        D03 keeps provider work outside the UI thread via `_AIJobWorker`; this
+        service owns the job state machine and is safe to call from that worker.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return Error("Job IA no encontrado")
+        if job.status == AIJobStatus.CANCELLED:
+            return Error("Job IA cancelado")
+        provider_name = str(getattr(self._provider, "provider_name", "ai"))
+        if provider_name == "simulated" and not self.allow_simulated:
+            msg = "Configura un proveedor IA real para la command bar; no se generara contenido simulado."
+            self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
+            self._record_observability(job, status="error", error_type="provider_unconfigured")
+            return Error(msg)
+
+        def emit_current() -> None:
+            if progress_callback:
+                current = self._jobs.get(job_id)
+                if current is not None:
+                    progress_callback(current)
+
+        def cancelled_error() -> Error | None:
+            cancelled = self._ensure_not_cancelled(job_id)
+            return cancelled if isinstance(cancelled, Error) else None
+
+        self.update_status(job_id, AIJobStatus.BUILDING_CONTEXT, message="Construyendo contexto...", progress=0.20)
+        emit_current()
+        cancelled = cancelled_error()
+        if cancelled:
+            return cancelled
+
+        intent = classify_intent(job.prompt, job.context_scope)
+        job.intent = intent.to_dict()
+        self.update_status(job_id, AIJobStatus.PLANNING, message="Interpretando peticion...", progress=0.35)
+        emit_current()
+        cancelled = cancelled_error()
+        if cancelled:
+            return cancelled
+
+        plan = build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)
+        job.type = intent.intent_type
+        job.plan = plan.to_dict()
+        self.update_status(job_id, AIJobStatus.WAITING_FOR_MODEL, message="Pensando...", progress=0.60)
+        emit_current()
+        cancelled = cancelled_error()
+        if cancelled:
+            return cancelled
+
+        started = time.monotonic()
+        try:
+            text, error = self._provider.chat(
+                COMMAND_BAR_SYSTEM_PROMPT_ES,
+                build_model_user_message(plan),
+                timeout=self.timeout_seconds,
+            )
+        except Exception as exc:
+            text, error = None, str(exc)
+        elapsed = time.monotonic() - started
+
+        cancelled = cancelled_error()
+        if cancelled:
+            return cancelled
+        if elapsed > self.timeout_seconds:
+            msg = f"Timeout IA: el job supero {self.timeout_seconds}s."
+            self.update_status(job_id, AIJobStatus.FAILED, message="Timeout IA", error=msg, progress=1.0)
+            self._record_observability(job, status="error", error_type="timeout", duration_ms=elapsed * 1000)
+            return Error(msg)
+        if error:
+            safe = _sanitize_error(error)
+            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=safe, progress=1.0)
+            self._record_observability(job, status="error", error_type="provider_error", duration_ms=elapsed * 1000)
+            return Error(safe)
+        if not text:
+            msg = "El proveedor IA no devolvio contenido."
+            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=msg, progress=1.0)
+            self._record_observability(job, status="error", error_type="empty_response", duration_ms=elapsed * 1000)
+            return Error(msg)
+
+        self.update_status(job_id, AIJobStatus.POSTPROCESSING, message="Preparando candidatos...", progress=0.80)
+        emit_current()
+        cancelled = cancelled_error()
+        if cancelled:
+            return cancelled
+
+        payload = _extract_json(text)
+        result = stage_results(payload, job)
+        result["provider"] = provider_name
+        result["timeout_seconds"] = self.timeout_seconds
+        model_name = str(getattr(self._provider, "model", provider_name))
+        for candidate in result.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            metadata = dict(candidate.get("metadata") or {})
+            metadata.setdefault("provider", provider_name)
+            metadata.setdefault("model", model_name)
+            metadata.setdefault("trace_status", "ready_for_review")
+            candidate["metadata"] = metadata
+        updated = self.update_status(
+            job_id,
+            AIJobStatus.READY_FOR_REVIEW,
+            message=result.get("summary", "Listo para revisar"),
+            progress=1.0,
+            result=result,
+        )
+        self._record_observability(
+            job,
+            status="ok",
+            duration_ms=elapsed * 1000,
+            output_size=len(text or ""),
+            model=model_name,
+        )
+        if progress_callback and not isinstance(updated, Error):
+            progress_callback(updated.value)
+        return updated
+
+    def _ensure_not_cancelled(self, job_id: str) -> Result | None:
+        job = self._jobs.get(job_id)
+        if job is None:
+            return Error("Job IA no encontrado")
+        if job.status == AIJobStatus.CANCELLED:
+            job.message = "Job cancelado"
+            job.updated_at = _now_iso()
+            return Error("Job IA cancelado")
+        return None
 
     def cancel_job(self, job_id: str) -> Result:
         job = self._jobs.get(job_id)

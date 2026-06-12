@@ -16,7 +16,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from packages.application.context_sanitizer import sanitize_nested
+from packages.application.output_schema_validator import validate_ai_output
 from packages.infrastructure.ai_provider import AIProvider, create_provider
+
+
+DEFAULT_AI_TIMEOUT_SECONDS = 300
 
 
 # ---------------------------------------------------------------------------
@@ -179,27 +184,41 @@ class AIRequestGateway:
         text, error = self.provider.chat(
             system_prompt=system,
             user_message=request.user_prompt,
-            timeout=request.timeout or params.max_tokens // 10 + 30,
+            timeout=request.timeout or DEFAULT_AI_TIMEOUT_SECONDS,
         )
+
+        validation = validate_ai_output(text, request.intent)
 
         # 5. Build response
         duration_ms = (time.time() - t0) * 1000
+        metadata = {
+            "provider": getattr(self.provider, "provider_name", "unknown"),
+            "intent": request.intent,
+            "temperature": params.temperature,
+            "max_tokens": params.max_tokens,
+            "context_depth": len(safe_ctx),
+            "input_size": len(request.user_prompt) + len(system),
+            "output_size": len(text) if text else 0,
+            "duration_ms": round(duration_ms, 1),
+            "status": "ok" if not error and validation.is_valid else "error",
+            "error_type": type(error).__name__ if error else ("validation" if not validation.is_valid else None),
+            "validation_error": validation.error,
+            "retry_hint": validation.retry_hint,
+        }
+        if error or not validation.is_valid:
+            return GatewayResponse(
+                text=text,
+                error=error or validation.error,
+                intent=request.intent,
+                metadata=metadata,
+                _parsed_json=validation.parsed if validation.is_valid else None,
+            )
         return GatewayResponse(
             text=text,
             error=error,
             intent=request.intent,
-            metadata={
-                "provider": getattr(self.provider, "provider_name", "unknown"),
-                "intent": request.intent,
-                "temperature": params.temperature,
-                "max_tokens": params.max_tokens,
-                "context_depth": len(safe_ctx),
-                "input_size": len(request.user_prompt) + len(system),
-                "output_size": len(text) if text else 0,
-                "duration_ms": round(duration_ms, 1),
-                "status": "ok" if not error else "error",
-                "error_type": type(error).__name__ if error else None,
-            },
+            metadata=metadata,
+            _parsed_json=validation.parsed if isinstance(validation.parsed, (dict, list)) else None,
         )
 
     @staticmethod
@@ -207,7 +226,7 @@ class AIRequestGateway:
         """Remove sensitive fields from context before sending to AI."""
         if not context:
             return {}
-        sanitized = {}
+        sanitized = dict(sanitize_nested(context) or {})
         for key, value in context.items():
             k_lower = key.lower()
             # Block exact matches
@@ -217,5 +236,5 @@ class AIRequestGateway:
             if any(p in k_lower for p in ("api_key", "secret", "password", "token", "credential")):
                 continue
             # Allow known safe prefixes and anything not blocked
-            sanitized[key] = value
+            sanitized[key] = sanitize_nested({key: value}).get(key)
         return sanitized

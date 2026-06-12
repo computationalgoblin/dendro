@@ -171,6 +171,7 @@ class TestGatewayExecution:
         assert result.is_valid
         assert result.text == "AI response text"
         mock_provider.chat.assert_called_once()
+        assert mock_provider.chat.call_args.kwargs["timeout"] == 300
 
     def test_gateway_handles_provider_error(self):
         mock_provider = MagicMock()

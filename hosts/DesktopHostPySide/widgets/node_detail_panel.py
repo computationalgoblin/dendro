@@ -464,6 +464,7 @@ class NodeDetailPanel(QWidget):
         prompt_row.addWidget(self.ai_prompt_edit, 1)
         self.ai_generate_btn = QPushButton("Generar sugerencia")
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
+        self.ai_generate_btn.setText("Consultar")
         self.ai_generate_btn.clicked.connect(self._start_ai_suggestion)
         prompt_row.addWidget(self.ai_generate_btn)
         ai_layout.addLayout(prompt_row)
@@ -492,6 +493,15 @@ class NodeDetailPanel(QWidget):
         self.explain_causes_btn.setEnabled(self.ai_controller is not None)
         self.explain_causes_btn.clicked.connect(self._start_explain_from_causes)
         ai_layout.addWidget(self.explain_causes_btn)
+
+        for extra_ai_widget in (
+            self.ai_coherence_btn,
+            self.target_layer_label,
+            self.target_layer_combo,
+            self.expand_down_btn,
+            self.explain_causes_btn,
+        ):
+            extra_ai_widget.setVisible(False)
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")

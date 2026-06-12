@@ -524,7 +524,25 @@ class TreeDetailPanel(QWidget):
         prompt_row = QHBoxLayout()
         self.ai_prompt_edit = _styled_edit("Instruccion adicional para la IA...")
         prompt_row.addWidget(self.ai_prompt_edit, 1)
+        self.ai_run_btn = QPushButton("Consultar")
+        self.ai_run_btn.setFixedHeight(28)
+        self.ai_run_btn.setEnabled(self.ai_controller is not None)
+        self.ai_run_btn.clicked.connect(lambda: self._start_ai("description"))
+        prompt_row.addWidget(self.ai_run_btn)
         ai_layout.addLayout(prompt_row)
+
+        for extra_ai_widget in (
+            self.ai_desc_btn,
+            self.ai_members_btn,
+            self.ai_subtrees_btn,
+            self.ai_coherence_btn,
+            self.ai_questions_btn,
+            self.target_layer_label,
+            self.target_layer_combo,
+            self.ai_expand_down_btn,
+            self.ai_explain_causes_btn,
+        ):
+            extra_ai_widget.setVisible(False)
 
         if self.ai_controller is None:
             no_ai = _muted("IA contextual no disponible en esta sesión.")
@@ -1006,7 +1024,8 @@ class TreeDetailPanel(QWidget):
             return
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
                     self.ai_coherence_btn, self.ai_questions_btn,
-                    self.ai_expand_down_btn, self.ai_explain_causes_btn):
+                    self.ai_expand_down_btn, self.ai_explain_causes_btn,
+                    self.ai_run_btn):
             btn.setEnabled(False)
         self.suggestion_text.setPlainText(status_text)
         self.suggestion_frame.setVisible(True)
@@ -1074,7 +1093,8 @@ class TreeDetailPanel(QWidget):
         # Disable buttons while running
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
                      self.ai_coherence_btn, self.ai_questions_btn,
-                     self.ai_expand_down_btn, self.ai_explain_causes_btn):
+                     self.ai_expand_down_btn, self.ai_explain_causes_btn,
+                     self.ai_run_btn):
             btn.setEnabled(False)
 
         self._ai_worker = _TreeAIWorker(
@@ -1091,7 +1111,8 @@ class TreeDetailPanel(QWidget):
         has_ai = self.ai_controller is not None
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
                      self.ai_coherence_btn, self.ai_questions_btn,
-                     self.ai_expand_down_btn, self.ai_explain_causes_btn):
+                     self.ai_expand_down_btn, self.ai_explain_causes_btn,
+                     self.ai_run_btn):
             btn.setEnabled(has_ai)
 
         if error:

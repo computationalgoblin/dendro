@@ -26,7 +26,7 @@ class AIJobRecord:
     input_size: int
     output_size: int
     duration_ms: float
-    status: str  # "ok" | "error" | "fallback"
+    status: str  # "ok" | "error"
     error_type: str | None = None
     raw_prompt: str | None = None  # Only stored in debug mode
 

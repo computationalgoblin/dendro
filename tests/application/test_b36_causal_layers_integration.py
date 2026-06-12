@@ -114,7 +114,7 @@ def test_b36_ai_actions_are_registered_and_prompt_uses_causal_context() -> None:
     effect = _entity("effect", "Consecuencia física", "layer_fisica")
     project.entities.extend([cause, effect])
     ps = ProjectServiceStub(project)
-    service = AIContextActionService(ps, CandidateService(project_service=ps), provider_name="simulated")
+    service = AIContextActionService(ps, CandidateService(project_service=ps), provider_name="simulated", allow_simulated=True)
 
     expand = service.run_node_action(effect.id, "expand_causal_down", prompt_hint="hacia Materia/Naturaleza")
     explain = service.run_node_action(effect.id, "explain_from_causes")

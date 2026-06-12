@@ -420,6 +420,7 @@ class RelationDetailPanel(QWidget):
         prompt_row.addWidget(self.ai_prompt_edit, 1)
         self.ai_generate_btn = QPushButton("Mejorar / desarrollar relación")
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
+        self.ai_generate_btn.setText("Consultar")
         self.ai_generate_btn.clicked.connect(self._start_ai_suggestion)
         prompt_row.addWidget(self.ai_generate_btn)
         ai_layout.addLayout(prompt_row)
@@ -431,6 +432,7 @@ class RelationDetailPanel(QWidget):
         self.ai_coherence_btn.setEnabled(self.ai_controller is not None)
         self.ai_coherence_btn.clicked.connect(self._open_coherence)
         ai_layout.addWidget(self.ai_coherence_btn)
+        self.ai_coherence_btn.setVisible(False)
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -483,7 +485,7 @@ class RelationDetailPanel(QWidget):
         self.discard_btn = QPushButton("Descartar")
         self.discard_btn.setFixedHeight(28)
         self.discard_btn.clicked.connect(self._discard_suggestion)
-        self.refine_btn.setVisible(False)
+        self.refine_btn.setVisible(True)
         self.refine_btn.setEnabled(False)
         sug_actions.addStretch()
         sug_actions.addWidget(self.refine_btn)
@@ -650,7 +652,7 @@ class RelationDetailPanel(QWidget):
     def _show_ai_error(self, message: str):
         safe_message = _safe_ai_error(message)
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
-        self.ai_generate_btn.setText("Mejorar / desarrollar relación")
+        self.ai_generate_btn.setText("Consultar")
         self.refine_btn.setEnabled(False)
         self.suggestion_text.setPlainText(f"Error IA: {safe_message}")
         self.suggestion_frame.setVisible(True)
@@ -660,12 +662,12 @@ class RelationDetailPanel(QWidget):
 
     def _on_ai_finished(self, text: str, error: str):
         self.ai_generate_btn.setEnabled(True)
-        self.ai_generate_btn.setText("Mejorar / desarrollar relación")
+        self.ai_generate_btn.setText("Consultar")
         if error:
             self._show_ai_error(error)
             return
         self.accept_btn.setEnabled(True)
-        self.refine_btn.setEnabled(False)
+        self.refine_btn.setEnabled(True)
         if not text:
             self._show_ai_error("La IA no devolvió texto.")
             return
