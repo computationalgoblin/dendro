@@ -1,6 +1,6 @@
 # Product Debt Map — Dendro / Narrative Architect (BETA baseline)
 
-Última actualización: 2026-06-10 — Cierre de exploración.
+Última actualización: 2026-06-13 — I08 PDF desktop dependency.
 
 ## Deuda activa
 
@@ -9,7 +9,6 @@
 | DC-001..DC-024 | Sin evidencia documental individual | baja | abierta | B01-B16 |
 | DC-026 | import review edit no implementado | baja | abierta | B17 |
 | DC-027 | import review merge no implementado | baja | abierta | B17 |
-| DC-028 | PDFExtractor requiere pymupdf | baja | abierta | B17 |
 | DC-033 | get_ordered_events sin partial_order real | baja | abierta | B27 |
 | DC-034 | TimelineEvent sync con NarrativeEntity(EVENTO) | baja | abierta | B27 |
 | DC-035 | IA writing provider simulado | baja | abierta | B27 |
@@ -32,6 +31,7 @@
 | DC-016 | Absorbida | B12 |
 | DC-022 | CandidateService sin tests | B15.8 |
 | DC-024 | OrchestratorService sin tests | B15.8 |
+| DC-028 | PDFExtractor requiere pymupdf | BETA1-I08 |
 
 ## Reglas
 

@@ -109,15 +109,16 @@ def test_related_milestones_panel_suggest_button_emits_context(qapp):
 
 def test_project_wizard_collects_and_applies_chronology(qapp):
     wizard = ProjectWizard()
-    chronology_page = wizard.page(3)
 
-    chronology_page.mode_combo.setCurrentIndex(chronology_page.mode_combo.findData("full_calendar"))
-    chronology_page.name_edit.setText("Calendario del Exilio")
-    chronology_page.eras_edit.setPlainText("Antes: 900\nDespues: 42")
-    chronology_page.months_edit.setPlainText("Niebla: 28\nFuego: 31")
-    chronology_page.weekdays_edit.setPlainText("Uno\nDos")
-    chronology_page.days_per_month_spin.setValue(28)
-    chronology_page.current_date_picker.set_date({"era": "Despues", "year": 4, "month": "Fuego", "day": 12})
+    # BETA1-G09: el wizard es ahora un QDialog custom; sus campos de cronología
+    # son atributos planos (no QWizardPage). La intención del test no cambia.
+    wizard.chrono_mode.setCurrentIndex(wizard.chrono_mode.findData("full_calendar"))
+    wizard.chrono_name.setText("Calendario del Exilio")
+    wizard.chrono_eras.setPlainText("Antes: 900\nDespues: 42")
+    wizard.chrono_months.setPlainText("Niebla: 28\nFuego: 31")
+    wizard.chrono_weekdays.setPlainText("Uno\nDos")
+    wizard.chrono_days.setValue(28)
+    wizard.chrono_date.set_date({"era": "Despues", "year": 4, "month": "Fuego", "day": 12})
     cfg = wizard.collect_config()
 
     assert cfg["project_chronology"]["calendar_name"] == "Calendario del Exilio"
