@@ -163,6 +163,33 @@ class CausalMilestoneService:
                 return Ok(hito)
         return Error(f"Hito '{hito_id[:8]}' not found")
 
+    def delete_hito(self, hito_id: str) -> Result[CausalMilestone, str]:
+        proj = self._proj()
+        if isinstance(proj, Error):
+            return proj
+        normalized = str(hito_id or "").strip()
+        if not normalized:
+            return Error("Hito id required")
+        for index, hito in enumerate(list(proj.value.causal_milestones)):
+            if str(getattr(hito, "id", "")) != normalized:
+                continue
+            removed = proj.value.causal_milestones.pop(index)
+            chronology = getattr(proj.value, "project_chronology", None)
+            if chronology is not None and hasattr(chronology, "unlink_milestone"):
+                chronology.unlink_milestone(normalized)
+            for other in proj.value.causal_milestones:
+                other.causal_parent_hito_ids = [
+                    mid for mid in (other.causal_parent_hito_ids or []) if str(mid) != normalized
+                ]
+                other.causal_child_hito_ids = [
+                    mid for mid in (other.causal_child_hito_ids or []) if str(mid) != normalized
+                ]
+            if hasattr(proj.value, "touch"):
+                proj.value.touch()
+            self._record("hito_eliminado", f"Hito '{removed.title}' eliminado", removed)
+            return Ok(removed)
+        return Error(f"Hito '{normalized[:8]}' not found")
+
     def list_hitos_for_leaf(self, leaf_id: str) -> Result[list[CausalMilestone], str]:
         return self._filter(lambda h: leaf_id in h.affected_entity_ids)
 

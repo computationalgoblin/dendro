@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (B41: causal milestones)
-CURRENT_SCHEMA_VERSION: int = 23
+# Current schema version for new projects (H02: project chronology)
+CURRENT_SCHEMA_VERSION: int = 24
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 23
+MAX_SUPPORTED_VERSION: int = 24
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +707,16 @@ def _apply_migration_v22_to_v23(data):
     migrated["schema_version"] = 23
     return migrated
 
+
+def _apply_migration_v23_to_v24(data):
+    """v23 -> v24: adds project_chronology container (H02)."""
+    migrated = dict(data)
+    if not isinstance(migrated.get("project_chronology"), dict):
+        from packages.domain.project_chronology import ProjectChronology
+        migrated["project_chronology"] = ProjectChronology().to_dict()
+    migrated["schema_version"] = 24
+    return migrated
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -733,6 +743,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     config_sections = (
         "general", "tone", "genre", "realism", "ai",
         "visibility", "export", "project_metadata", "advanced_config",
+        "project_chronology",
     )
     for section in config_sections:
         if section in data and not isinstance(data[section], dict):

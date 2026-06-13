@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -45,6 +45,23 @@ from packages.ui.graph_physics import (
     Spring,
     resolve_effective_ring_id,
 )
+
+
+def _paint_inner_halo(painter: QPainter, path: QPainterPath):
+    """BETA1-F05: feedback de selección — halo oscuro INTERNO en el contorno
+    de la forma, como si el elemento se hundiera en el lienzo. Sustituye al
+    marco azul. Tres pasadas concéntricas con alpha decreciente, recortadas
+    al interior de la forma."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setClipPath(path)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for width, alpha in ((16.0, 22), (9.0, 40), (4.0, 66)):
+        pen = QPen(QColor(58, 54, 36, alpha), width)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.drawPath(path)
+    painter.restore()
 
 
 def _b44trace(message: str):
@@ -312,7 +329,7 @@ class GraphNodeItem(QGraphicsEllipseItem):
     """Visual node item; stores full entity ID internally, never shows it.
 
     Compact mode: shows name + type + status dot only.
-    Brief description is available via tooltip, not rendered inside the node.
+    Brief description is available in the detail panel, not rendered inside the node.
     """
 
     def __init__(self, node: _NodeView, *, x: float, y: float, radius: float = 58.0):
@@ -338,7 +355,10 @@ class GraphNodeItem(QGraphicsEllipseItem):
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 4.0)
         self._selected_pen = QPen(QColor("#5B8DEF"), 5.0)
-        self.setBrush(QBrush(color.lighter(112)))
+        # BETA1-F05: hojas BLANCAS — el color del tipo vive como halo sutil
+        # exterior (ver paint()), no como relleno.
+        self._halo_color = QColor(color)
+        self.setBrush(QBrush(QColor(255, 255, 253, 250)))
         self.setPen(self._normal_pen)
 
         # Name — centred, fitted to node width
@@ -370,22 +390,47 @@ class GraphNodeItem(QGraphicsEllipseItem):
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
 
-        # Tooltip with full info (not rendered inside node)
-        tip_parts = [f"<b>{node.name}</b>", f"Tipo: {enum_human(node.kind)}"]
-        if node.subtitle:
-            tip_parts.append(f"Descripción: {node.subtitle}")
-        tip_parts.append(f"Estado: {node.canon}")
-        self.setToolTip("<br>".join(tip_parts))
+        self.setToolTip("")
 
     def set_drag_highlight(self, enabled: bool):
-        if self._coherence_selected and not enabled:
-            self.setPen(self._selected_pen)
-            return
-        self.setPen(self._highlight_pen if enabled else self._normal_pen)
+        # BETA1-F05: feedback por repintado (halo/ámbar), no por pen-swap
+        self._drag_highlighted = bool(enabled)
+        self.update()
 
     def set_coherence_selected(self, enabled: bool):
         self._coherence_selected = bool(enabled)
-        self.setPen(self._selected_pen if enabled else self._normal_pen)
+        self.update()
+
+    def paint(self, painter: QPainter, option, widget=None):
+        # BETA1-F05: pintura propia — SIN marquee negro de Qt (causa de las
+        # "pestañas negras"), SIN contorno marcado, halo interno al
+        # seleccionar y aro ámbar solo como destino de drop.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ellipse = QPainterPath()
+        ellipse.addEllipse(self.rect())
+        # BETA1-F05: halo EXTERIOR sutil con el color del tipo — se pinta
+        # sobre el contorno y el relleno blanco posterior tapa la mitad
+        # interna, dejando solo el resplandor hacia fuera.
+        halo = getattr(self, "_halo_color", None)
+        if halo is not None:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for width, alpha in ((11.0, 22), (6.0, 38)):
+                glow = QColor(halo)
+                glow.setAlpha(alpha)
+                painter.setPen(QPen(glow, width))
+                painter.drawPath(ellipse)
+        painter.setBrush(self.brush())
+        if self.node.proposed:
+            painter.setPen(self._normal_pen)  # propuesto: rastro discontinuo
+        else:
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+        painter.drawPath(ellipse)
+        if getattr(self, "_drag_highlighted", False):
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#EBCB8B"), 3.0))
+            painter.drawPath(ellipse)
+        if self._coherence_selected:
+            _paint_inner_halo(painter, ellipse)
 
     def itemChange(self, change, value):
         # BETA1-B03: keep relations attached while the node moves (own move
@@ -404,7 +449,7 @@ class GraphTreeItem(QGraphicsRectItem):
 
     Renders as a rounded rectangle with a **fixed header bar** at the top.
     The header always shows: name, type badge, member count, collapse toggle.
-    Brief description is in tooltip only — never in the content area.
+    Brief description lives in the detail panel, never in the content area.
 
     Children (GraphNodeItem / GraphTreeItem) are positioned below the header.
     The container auto-resizes to encompass children with padding.
@@ -453,18 +498,19 @@ class GraphTreeItem(QGraphicsRectItem):
         self._highlight_pen = QPen(QColor("#EBCB8B"), 3.5)
         self._selected_pen = QPen(QColor("#5B8DEF"), 4.0)
 
-        # Background fill
-        bg_color = QColor(_CONTAINER_COLOR)
-        bg_color.setAlpha(160)
+        # BETA1-F05 (estética): la rama no tiene color propio — ACLARA el
+        # espacio que ocupa (velo blanco translúcido) con un trazo suave.
+        bg_color = QColor(255, 255, 255, 80)
         self.setBrush(QBrush(bg_color))
+        self._normal_pen = QPen(QColor(111, 106, 66, 70), 1.4)
+        if node.proposed:
+            self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self.setPen(self._normal_pen)
 
-        # ── Header bar (fixed at top of rect) ──
+        # ── Header: sin barra (estética orgánica F05) — solo el título ──
         self._header_item = QGraphicsRectItem(0, 0, width, _CONTAINER_HEADER_HEIGHT, self)
         self._header_item.setZValue(self._HEADER_Z)
-        header_bg = QColor(_CONTAINER_HEADER_COLOR)
-        header_bg.setAlpha(210)
-        self._header_item.setBrush(QBrush(header_bg))
+        self._header_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self._header_item.setPen(QPen(Qt.PenStyle.NoPen))
 
         # Title in header
@@ -482,11 +528,15 @@ class GraphTreeItem(QGraphicsRectItem):
         self._type_badge.setBrush(QBrush(QColor("#6F6A42")))
         self._type_badge.setFont(QFont("", 7))
         self._reposition_type_badge()
+        # BETA1-F05: sin etiqueta de tipo ("contenedor") en el grafo
+        self._type_badge.setVisible(False)
 
         # Member count (updates dynamically)
         self._count_item = QGraphicsSimpleTextItem("", self)
         self._count_item.setBrush(QBrush(QColor("#5C5A3E")))
         self._count_item.setFont(QFont("", 8))
+        # BETA1-F05: el conteo tampoco — solo el nombre, dentro de la rama
+        self._count_item.setVisible(False)
 
         # Collapse indicator
         self._collapse_indicator = QGraphicsSimpleTextItem("", self)
@@ -510,18 +560,19 @@ class GraphTreeItem(QGraphicsRectItem):
         self._child_nodes: list[GraphNodeItem | GraphTreeItem] = []
         self._internal_edges: list[GraphEdgeItem] = []
 
-        # Tooltip with full info
-        tip_parts = [f"<b>{node.name}</b>", f"Tipo: {enum_human(node.kind)}"]
-        if node.subtitle:
-            tip_parts.append(f"Descripción: {node.subtitle}")
-        tip_parts.append(f"Estado: {node.canon}")
-        self.setToolTip("<br>".join(tip_parts))
+        self.setToolTip("")
 
     # ── Helper repositioning ──
 
     def _reposition_title(self):
+        # BETA1-F05: el nombre vive DENTRO de la cápsula, centrado en su
+        # franja superior (no en una barra de cabecera).
         tr = self._title_item.boundingRect()
-        self._title_item.setPos(10, (_CONTAINER_HEADER_HEIGHT - tr.height()) / 2)
+        rect = self.rect()
+        self._title_item.setPos(
+            rect.left() + (rect.width() - tr.width()) / 2,
+            rect.top() + max(8.0, (_CONTAINER_HEADER_HEIGHT - tr.height()) / 2),
+        )
 
     def _reposition_type_badge(self):
         br = self._type_badge.boundingRect()
@@ -850,14 +901,13 @@ class GraphTreeItem(QGraphicsRectItem):
         return header_center
 
     def set_drag_highlight(self, enabled: bool):
-        if self._coherence_selected and not enabled:
-            self.setPen(self._selected_pen)
-            return
-        self.setPen(self._highlight_pen if enabled else self._normal_pen)
+        # BETA1-F05: feedback por repintado (halo/ámbar), no por pen-swap
+        self._drag_highlighted = bool(enabled)
+        self.update()
 
     def set_coherence_selected(self, enabled: bool):
         self._coherence_selected = bool(enabled)
-        self.setPen(self._selected_pen if enabled else self._normal_pen)
+        self.update()
 
     def mouseDoubleClickEvent(self, event):
         local_pos = event.pos()
@@ -891,10 +941,27 @@ class GraphTreeItem(QGraphicsRectItem):
                 break
 
     def paint(self, painter: QPainter, option, widget=None):
+        # BETA1-F05: forma CIRCULAR/orgánica — cápsula con radio máximo
+        # (círculo cuando el contenido es compacto, píldora al crecer).
+        # Sin contorno marcado; halo interno al seleccionar; aro ámbar solo
+        # como destino de drop.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        radius = min(rect.width(), rect.height()) / 2.0
+        capsule = QPainterPath()
+        capsule.addRoundedRect(rect, radius, radius)
         painter.setBrush(self.brush())
-        painter.setPen(self.pen())
-        painter.drawRoundedRect(self.rect(), 12.0, 12.0)
+        if self.node.proposed:
+            painter.setPen(self._normal_pen)
+        else:
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+        painter.drawPath(capsule)
+        if getattr(self, "_drag_highlighted", False):
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor("#EBCB8B"), 3.0))
+            painter.drawPath(capsule)
+        if self._coherence_selected:
+            _paint_inner_halo(painter, capsule)
 
     def itemChange(self, change, value):
         # Children are Qt children (parentItem=self) so they move automatically.
@@ -934,6 +1001,9 @@ class GraphEdgeItem(QGraphicsPathItem):
         self._is_bidirectional = edge.direction == "bidireccional"
         self._coherence_selected = False
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        # BETA1-F05: zona de click generosa — el shape por defecto era el
+        # grosor del trazo (~2px), por eso las relaciones "no se podían
+        # seleccionar". Ver shape() más abajo.
         self.setAcceptHoverEvents(True)
         self.setZValue(100)  # Always above containers and nodes
 
@@ -962,7 +1032,7 @@ class GraphEdgeItem(QGraphicsPathItem):
         self.handle_item = QGraphicsEllipseItem(-5, -5, 10, 10, self)
         self.handle_item.setBrush(QBrush(QColor("#D08770")))
         self.handle_item.setPen(QPen(QColor("#F7F1E8"), 1.2))
-        self.handle_item.setToolTip("Abrir relación")
+        self.handle_item.setToolTip("")
         self.handle_item.setAcceptHoverEvents(True)
         self.handle_item.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -980,6 +1050,13 @@ class GraphEdgeItem(QGraphicsPathItem):
             self._arrow_bwd = None
 
         self.update_path()
+
+    @staticmethod
+    def shape(self) -> QPainterPath:  # noqa: D102
+        # BETA1-F05: 14px de zona clickable alrededor de la línea
+        stroker = QPainterPathStroker()
+        stroker.setWidth(14.0)
+        return stroker.createStroke(self.path())
 
     @staticmethod
     def _make_arrowhead(tip: QPointF, angle: float, size: float) -> QPainterPath:
@@ -1088,7 +1165,7 @@ class GraphRingItem(QGraphicsPathItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(f"Anillo: {ring.display_name}\n{ring.count_label}\nDoble click: entrar en anillo")
+        self.setToolTip("")
         self.setZValue(-100)
 
     def paint(self, painter: QPainter, option, widget=None):
@@ -1101,14 +1178,16 @@ class GraphRingItem(QGraphicsPathItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
-            if self._base_pen is None:
-                self._base_pen = QPen(self.pen())
+            # BETA1-F05: la selección de anillo profundiza la hendidura
+            # (sombra más intensa), sin contornos azules.
+            if getattr(self, "_base_brush", None) is None:
+                self._base_brush = QBrush(self.brush())
             if value:
-                selected = QPen(QColor("#5B8DEF"), 3.4, Qt.PenStyle.SolidLine)
-                selected.setCosmetic(True)
-                self.setPen(selected)
+                deep = QColor(self._base_brush.color())
+                deep.setAlpha(min(255, deep.alpha() + 30))
+                self.setBrush(QBrush(deep))
             else:
-                self.setPen(self._base_pen)
+                self.setBrush(self._base_brush)
         return super().itemChange(change, value)
 
     def _canvas_view(self):
@@ -1199,7 +1278,9 @@ class GraphCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setBackgroundBrush(QBrush(QColor("#F7F1E8")))
+        # BETA1-F05: lienzo un punto más oscuro — las hojas blancas y los
+        # velos claros de las ramas destacan sin esfuerzo.
+        self.setBackgroundBrush(QBrush(QColor("#ECE5D4")))
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
         self.setScene(self.scene_obj)
@@ -1245,6 +1326,11 @@ class GraphCanvasView(QGraphicsView):
         # assignment. Relation creation lives in the context menu only.
         self._moving_item: GraphNodeItem | GraphTreeItem | None = None
         self._move_origin_scene = QPointF()
+        # BETA1-F05: al ROZAR una rama con el item arrastrado, la física se
+        # CONGELA por completo — sin esto, la repulsión pelea contra el gesto
+        # de anidar (meter una hoja en una subrama era una lucha).
+        self._physics_drag_freeze = False
+        self._drop_highlight_tree: GraphTreeItem | None = None
         # BETA1-C02: physics is an OVERLAY flag, never a layout mode
         # (contract: docs/architecture/C01_physics_contract.md). The engine is
         # pure (packages/ui/graph_physics); this bridge packs top-level items,
@@ -1344,6 +1430,23 @@ class GraphCanvasView(QGraphicsView):
                     return check
                 check = check.parentItem()
         return None
+
+    def _topmost_node_or_edge_at(self, view_pos):
+        """BETA1-F05: resuelve el item REAL bajo el cursor respetando el
+        orden visual (z). Una relación dibujada sobre una rama debe ganar al
+        click — antes _item_node_at devolvía la rama aunque la arista
+        estuviera encima (z=100), abriendo el panel equivocado.
+
+        Devuelve ("edge", item), ("node", item) o (None, None)."""
+        for item in self.items(view_pos.toPoint()):
+            check = item
+            while check is not None:
+                if isinstance(check, GraphEdgeItem):
+                    return "edge", check
+                if isinstance(check, (GraphNodeItem, GraphTreeItem)):
+                    return "node", check
+                check = check.parentItem()
+        return None, None
 
     def _item_ring_at(self, view_pos) -> GraphRingItem | None:
         """Find the precise concentric ring under *view_pos* by radius.
@@ -1596,6 +1699,10 @@ class GraphCanvasView(QGraphicsView):
         # Pan and menu-relation modes pause everything (contract §4.5)
         if self._space_pan_active or self._drag_source is not None:
             return
+        # BETA1-F05: congelación total mientras el drag roza una rama —
+        # el gesto de anidar gana a cualquier fuerza.
+        if self._physics_drag_freeze and self._moving_item is not None:
+            return
         # BETA1-C05 (decisión de producto): la física actúa TAMBIÉN durante
         # el arrastre. El item arrastrado va PINNED y su cuerpo se sincroniza
         # en vivo con el cursor: el resto del grafo reacciona a él (muelles y
@@ -1780,18 +1887,19 @@ class GraphCanvasView(QGraphicsView):
         then background. The element under the cursor is selected first so
         edit/delete act on what the user sees highlighted.
         """
-        node = self._item_node_at(view_pos)
-        if node is not None:
-            if node.node.entity_id not in self._selected_entity_ids:
-                self._set_single_node_selection(node)
-            if isinstance(node, GraphTreeItem):
-                return self._tree_context_menu(node)
-            return self._node_context_menu(node)
-        edge = self._item_edge_at(view_pos)
-        if edge is not None:
-            if edge.edge.relation_id not in self._selected_relation_ids:
-                self._set_single_edge_selection(edge)
-            return self._edge_context_menu(edge)
+        # BETA1-F05: prioridad por orden VISUAL — una relación dibujada sobre
+        # una rama gana el click derecho (igual que el izquierdo).
+        kind, hit = self._topmost_node_or_edge_at(view_pos)
+        if kind == "edge":
+            if hit.edge.relation_id not in self._selected_relation_ids:
+                self._set_single_edge_selection(hit)
+            return self._edge_context_menu(hit)
+        if kind == "node":
+            if hit.node.entity_id not in self._selected_entity_ids:
+                self._set_single_node_selection(hit)
+            if isinstance(hit, GraphTreeItem):
+                return self._tree_context_menu(hit)
+            return self._node_context_menu(hit)
         ring = self._item_ring_at(view_pos)
         if ring is not None:
             return self._ring_context_menu(ring)
@@ -1854,7 +1962,7 @@ class GraphCanvasView(QGraphicsView):
         else:
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
-            ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
+            ring_action.setToolTip("")
         self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
@@ -1888,7 +1996,7 @@ class GraphCanvasView(QGraphicsView):
         else:
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
-            ring_action.setToolTip("Sin anillos disponibles (vista concéntrica)")
+            ring_action.setToolTip("")
         self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
@@ -2003,12 +2111,28 @@ class GraphCanvasView(QGraphicsView):
             )
             alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
             ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-            node = self._item_node_at(event.position())
+            # BETA1-F05: respetar el orden VISUAL — si la relación está
+            # dibujada encima de una rama, el click selecciona la relación.
+            kind, hit = self._topmost_node_or_edge_at(event.position())
+            node = hit if kind == "node" else None
+            edge = hit if kind == "edge" else None
+            if node is None and edge is None:
+                node = self._item_node_at(event.position())
 
             # Alt+Click on a node or container: start tree-assignment drag
             if alt and node is not None and isinstance(node, (GraphNodeItem, GraphTreeItem)):
                 self._alt_source = node
                 self._alt_origin_view_pos = event.position()
+                event.accept()
+                return
+
+            if edge is not None:
+                if ctrl:
+                    self._toggle_edge_selection(edge)
+                    event.accept()
+                    return
+                self._set_single_edge_selection(edge)
+                self.relationSelected.emit(edge.edge.relation_id)
                 event.accept()
                 return
 
@@ -2032,16 +2156,6 @@ class GraphCanvasView(QGraphicsView):
                 if self._physics_enabled and not self._physics_timer.isActive():
                     self._physics_timer.start()
                 super().mousePressEvent(event)
-                return
-            edge = self._item_edge_at(event.position())
-            if edge is not None:
-                if ctrl:
-                    self._toggle_edge_selection(edge)
-                    event.accept()
-                    return
-                self._set_single_edge_selection(edge)
-                self.relationSelected.emit(edge.edge.relation_id)
-                event.accept()
                 return
             ring = self._item_ring_at(event.position())
             _b44trace(
@@ -2085,6 +2199,17 @@ class GraphCanvasView(QGraphicsView):
         if self._space_pan_active:
             super().mouseMoveEvent(event)
             return
+        # BETA1-F05: durante un drag, si el item roza una rama destino la
+        # física se congela y la rama se ilumina — anidar sin pelear.
+        if self._moving_item is not None:
+            target = self._drop_tree_target(self._moving_item, event.position())
+            if target is not self._drop_highlight_tree:
+                if self._drop_highlight_tree is not None:
+                    self._drop_highlight_tree.set_drag_highlight(False)
+                self._drop_highlight_tree = target
+                if target is not None:
+                    target.set_drag_highlight(True)
+            self._physics_drag_freeze = target is not None
         # Alt-drag: moving node into tree container
         if self._alt_source is not None and self._alt_line is None:
             delta = event.position() - self._alt_origin_view_pos
@@ -2148,6 +2273,11 @@ class GraphCanvasView(QGraphicsView):
         # signal as Alt+drag and the context menu).
         moving = self._moving_item
         self._moving_item = None
+        # BETA1-F05: limpiar congelación e iluminación de drop
+        self._physics_drag_freeze = False
+        if self._drop_highlight_tree is not None:
+            self._drop_highlight_tree.set_drag_highlight(False)
+            self._drop_highlight_tree = None
         if moving is not None and event.button() == Qt.MouseButton.LeftButton:
             super().mouseReleaseEvent(event)  # let Qt close the move grab
             if moving.scenePos() != self._move_origin_scene:
@@ -2223,7 +2353,7 @@ class GraphCanvasView(QGraphicsView):
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         line.setPen(pen)
         line.setZValue(3)
-        line.setToolTip("Flecha provisional de relación")
+        line.setToolTip("")
         self._drag_line = line
         self.scene_obj.addItem(line)
         source.set_drag_highlight(True)
@@ -2678,11 +2808,15 @@ class GraphCanvasView(QGraphicsView):
         inner_path.addEllipse(inner_rect)
         path = outer_path.subtracted(inner_path)
         item = GraphRingItem(ring, path)
-        color = QColor(ring.color)
-        color.setAlpha(116 if ring.state == "focused" else 82)
-        item.setBrush(QBrush(color))
-        pen = QPen(QColor("#6F6A42") if ring.state == "focused" else QColor(ring.color).darker(118), 2.4 if ring.state == "focused" else 1.2, Qt.PenStyle.SolidLine if ring.state == "focused" else Qt.PenStyle.DashLine)
-        pen.setCosmetic(True)
+        # BETA1-F05 (estética): los anillos NO son bandas de color con
+        # contorno — son hendiduras del lienzo: sombras alternas muy
+        # tenues, sin borde. Seleccionables igual (el contorno azul de
+        # selección sigue viniendo de itemChange).
+        ring_index = sum(1 for _ in self._ring_items)
+        shade = QColor(92, 90, 62)  # sombra cálida de la paleta
+        shade.setAlpha(26 if ring.state == "focused" else (16 if ring_index % 2 == 0 else 8))
+        item.setBrush(QBrush(shade))
+        pen = QPen(Qt.PenStyle.NoPen)
         item.setPen(pen)
         item._base_pen = QPen(pen)  # restored when the ring is deselected
         item.setZValue(-100)
@@ -3232,11 +3366,14 @@ class GraphCanvasView(QGraphicsView):
             transform, center = state
             self.setTransform(transform)
             self.centerOn(center)
-            return
-        rect = self.scene_obj.itemsBoundingRect()
-        if rect.isValid() and not rect.isEmpty():
-            self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
-        # BETA1-C02: any (re)build changes bodies/rings → re-pack the engine.
+        else:
+            rect = self.scene_obj.itemsBoundingRect()
+            if rect.isValid() and not rect.isEmpty():
+                self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
+        # BETA1-C02/C05: any (re)build changes bodies/rings → re-pack the
+        # engine and wake it. CRITICAL: this must run in BOTH camera paths —
+        # the early-return of the restore branch silently skipped reheat on
+        # every same-layout rebuild (bug encontrado en la línea base de F).
         # This NEVER touches _physics_enabled (layout and physics orthogonal).
         self._physics_reheat()
 
@@ -3471,12 +3608,14 @@ class GraphCanvasView(QGraphicsView):
             for edge in self._all_edges:
                 if edge.source_id == item_id or edge.target_id == item_id:
                     ids.update([edge.source_id, edge.target_id])
-        # Include ancestor containers so nodes inside trees remain visible
-        for eid in list(ids):
-            current = self._membership.get(eid)
-            while current is not None:
-                ids.add(current)
-                current = self._membership.get(current)
+        # Include ancestor containers for entity neighborhoods so nodes inside
+        # trees remain visible. Relation focus stays limited to endpoints.
+        if relation is None:
+            for eid in list(ids):
+                current = self._membership.get(eid)
+                while current is not None:
+                    ids.add(current)
+                    current = self._membership.get(current)
         self.apply_visual_filter(VisualFilterState(focus_entity_ids=tuple(sorted(ids))))
         if center_relation:
             return self.focus_relation(center_relation)

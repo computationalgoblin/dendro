@@ -166,6 +166,7 @@ class ProjectPanel(QWidget):
 
         # ── Section C: Worldbuilding ──
         self._build_worldbuilding_section()
+        self._build_chronology_section()
 
         # ── Section D-G: Creative Config (B40 tabbed panel) ──
         from hosts.DesktopHostPySide.widgets.creative_config_panel import CreativeConfigPanel
@@ -229,6 +230,13 @@ class ProjectPanel(QWidget):
         close_btn.clicked.connect(self.callbacks["close_project"])
         btn_row.addWidget(close_btn)
         card.layout.addLayout(btn_row)
+        # BETA1-F01: importar documento vive en el área de proyecto del Home,
+        # no como botón permanente del canvas (regla de producto Fase F).
+        if "import_document" in self.callbacks and self.project is not None:
+            import_btn = QPushButton("Importar documento")
+            import_btn.setToolTip("Importar un documento al proyecto (cestas de candidatos)")
+            import_btn.clicked.connect(self.callbacks["import_document"])
+            card.layout.addWidget(import_btn)
         self.root_layout.addWidget(card)
 
     def _build_project_type_section(self):
@@ -257,6 +265,16 @@ class ProjectPanel(QWidget):
         note.setWordWrap(True)
         card.layout.addWidget(note)
         self.root_layout.addWidget(card)
+
+    def _build_chronology_section(self):
+        pc = getattr(self.ctx, "project_controller", None)
+        ps = getattr(pc, "ps", None) if pc is not None else None
+        if ps is None:
+            return
+        from hosts.DesktopHostPySide.controllers.project_chronology_controller import ProjectChronologyController
+        from hosts.DesktopHostPySide.widgets.chronology_config_panel import ChronologyConfigPanel
+
+        self.root_layout.addWidget(ChronologyConfigPanel(ProjectChronologyController(ps), compact=True))
 
     def _build_creative_config_section(self):
         card = self._make_card("Configuración creativa")

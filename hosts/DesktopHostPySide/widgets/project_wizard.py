@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,6 +29,8 @@ from PySide6.QtWidgets import (
 
 from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
 from packages.domain.project import Project
+from packages.domain.project_chronology import ProjectChronology
+from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +55,21 @@ from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     TagInput,
     ListEditor,
 )
+
+
+def _names_from_length_text(text: str) -> list[str]:
+    names: list[str] = []
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        for separator in (":", "=", ","):
+            if separator in clean:
+                clean = clean.split(separator, 1)[0].strip()
+                break
+        if clean:
+            names.append(clean)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +177,132 @@ class WorldPage(QWizardPage):
         info.setObjectName("mutedLabel")
         info.setWordWrap(True)
         layout.addWidget(info)
+
+
+class ChronologyPage(QWizardPage):
+    """Step 4: manual chronology/calendar baseline."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("Cronologia")
+        self.setSubTitle("Elige si el proyecto no usa calendario, usa periodos vagos o necesita calendario completo.")
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self.mode_combo = QComboBox()
+        for raw, label in [
+            ("none", "No anadir calendario"),
+            ("vague_periods", "Calendario vago"),
+            ("full_calendar", "Calendario completo"),
+        ]:
+            self.mode_combo.addItem(label, raw)
+        self.mode_combo.currentIndexChanged.connect(self._sync_mode_visibility)
+        form.addRow("Modo", self.mode_combo)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Nombre del calendario")
+        form.addRow("Nombre", self.name_edit)
+
+        self.description_edit = QTextEdit()
+        self.description_edit.setMaximumHeight(58)
+        self.description_edit.setPlaceholderText("Reglas temporales o contexto del calendario")
+        form.addRow("Descripcion", self.description_edit)
+
+        self.periods_label = QLabel("Periodos vagos")
+        self.periods_edit = QTextEdit()
+        self.periods_edit.setMaximumHeight(74)
+        self.periods_edit.setPlaceholderText("Antiguedad\nHistoria reciente\nActualidad")
+        form.addRow(self.periods_label, self.periods_edit)
+
+        self.eras_label = QLabel("Eras pasadas")
+        self.eras_edit = QTextEdit()
+        self.eras_edit.setMaximumHeight(74)
+        self.eras_edit.setPlaceholderText("Era Antigua: 900\nEra Imperial: 1200\nEra de la Ruptura: 40")
+        self.eras_edit.textChanged.connect(self._sync_current_picker_calendar)
+        form.addRow(self.eras_label, self.eras_edit)
+
+        self.months_label = QLabel("Meses")
+        self.months_edit = QTextEdit()
+        self.months_edit.setMaximumHeight(90)
+        self.months_edit.setPlaceholderText("Enero: 31\nFebrero: 28\nMarzo: 31...")
+        self.months_edit.textChanged.connect(self._sync_current_picker_calendar)
+        form.addRow(self.months_label, self.months_edit)
+
+        self.weekdays_label = QLabel("Dias semana")
+        self.weekdays_edit = QTextEdit()
+        self.weekdays_edit.setMaximumHeight(64)
+        self.weekdays_edit.setPlaceholderText("Lunes\nMartes\nMiercoles...")
+        form.addRow(self.weekdays_label, self.weekdays_edit)
+
+        self.days_label = QLabel("Dias por mes")
+        self.days_per_month_spin = QSpinBox()
+        self.days_per_month_spin.setRange(1, 999)
+        self.days_per_month_spin.setValue(30)
+        form.addRow(self.days_label, self.days_per_month_spin)
+
+        self.year_label = QLabel("Ano actual")
+        self.current_year_spin = QSpinBox()
+        self.current_year_spin.setRange(-999999, 999999)
+        self.current_year_spin.setValue(1)
+        form.addRow(self.year_label, self.current_year_spin)
+
+        self.current_date_label = QLabel("Fecha actual")
+        self.current_date_picker = CalendarDatePicker(compact=True)
+        self.current_date_picker.setObjectName("wizardCurrentCalendarDatePicker")
+        form.addRow(self.current_date_label, self.current_date_picker)
+
+        layout.addLayout(form)
+        note = QLabel("La IA podra sugerir cambios despues, pero no se aplicaran sin revision.")
+        note.setObjectName("mutedLabel")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self._sync_mode_visibility()
+
+    def _sync_mode_visibility(self):
+        mode = str(self.mode_combo.currentData() or "none")
+        vague = mode == "vague_periods"
+        full = mode == "full_calendar"
+        for widget in (self.periods_label, self.periods_edit):
+            widget.setVisible(vague)
+        for widget in (
+            self.eras_label,
+            self.eras_edit,
+            self.months_label,
+            self.months_edit,
+            self.weekdays_label,
+            self.weekdays_edit,
+            self.days_label,
+            self.days_per_month_spin,
+            self.year_label,
+            self.current_year_spin,
+            self.current_date_label,
+            self.current_date_picker,
+        ):
+            widget.setVisible(full)
+        if full:
+            self._sync_current_picker_calendar()
+
+    def _sync_current_picker_calendar(self):
+        if not hasattr(self, "current_date_picker"):
+            return
+        current = self.current_date_picker.date()
+        eras = _names_from_length_text(self.eras_edit.toPlainText())
+        months = _names_from_length_text(self.months_edit.toPlainText())
+        weekdays = _names_from_length_text(self.weekdays_edit.toPlainText())
+        self.current_date_picker.set_calendar({
+            "mode": "full_calendar",
+            "eras": eras,
+            "past_eras": eras,
+            "months": months,
+            "weekdays": weekdays,
+            "era_lengths": self.eras_edit.toPlainText(),
+            "month_lengths": self.months_edit.toPlainText(),
+            "days_per_month": self.days_per_month_spin.value(),
+            "current_year": self.current_year_spin.value(),
+        })
+        self.current_date_picker.set_date(current)
 
 
 class DirectionPage(QWizardPage):
@@ -347,7 +491,7 @@ class AIPage(QWizardPage):
 
 
 class ProjectWizard(QWizard):
-    """8-step project creation wizard (B40-T04)."""
+    """Project creation wizard (B40-T04, H05 chronology)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -361,6 +505,7 @@ class ProjectWizard(QWizard):
         self.addPage(WelcomePage())
         self.addPage(GenrePage())
         self.addPage(WorldPage())
+        self.addPage(ChronologyPage())
         self.addPage(DirectionPage())
         self.addPage(NarrativePage())
         self.addPage(StylePage())
@@ -388,40 +533,70 @@ class ProjectWizard(QWizard):
         lang = p2.language_edit.text().strip() or "es"
         wb = p2.wb_check.isChecked()
 
-        # Page 3: Direction
+        # Page 3: Chronology
         p3 = self.page(3)
-        promise = p3.promise_edit.toPlainText().strip()
-        emotions = p3.emotions.value()
-        aftertaste = p3.aftertaste_edit.toPlainText().strip()
+        mode = p3.mode_combo.currentData() or "none"
+        periods = [line.strip() for line in p3.periods_edit.toPlainText().splitlines() if line.strip()]
+        eras = _names_from_length_text(p3.eras_edit.toPlainText())
+        months = _names_from_length_text(p3.months_edit.toPlainText())
+        weekdays = _names_from_length_text(p3.weekdays_edit.toPlainText())
+        chronology = {
+            "calendar_name": p3.name_edit.text().strip(),
+            "description": p3.description_edit.toPlainText().strip(),
+            "calendar_system": mode,
+            "metadata": {
+                "mode": mode,
+                "periods": periods or (["Antiguedad", "Historia reciente", "Actualidad"] if mode == "vague_periods" else []),
+                "eras": eras,
+                "past_eras": eras,
+                "era_lengths": p3.eras_edit.toPlainText(),
+                "months": months,
+                "month_lengths": p3.months_edit.toPlainText(),
+                "weekdays": weekdays,
+                "days_per_month": p3.days_per_month_spin.value(),
+                "months_per_year": len(months),
+                "current_year": p3.current_year_spin.value(),
+                "current_date": p3.current_date_picker.date(),
+                "units": ["era", "ano", "mes", "dia"] if mode == "full_calendar" else (["periodo narrativo"] if mode == "vague_periods" else []),
+                "supports_exact_dates": mode == "full_calendar",
+                "date_resolution": "dia" if mode == "full_calendar" else ("periodo" if mode == "vague_periods" else ""),
+            },
+        }
 
-        # Page 4: Narrative
+        # Page 4: Direction
         p4 = self.page(4)
-        conflicts = p4.conflict_tags.value()
-        tension = p4.tension_combo.currentText()
-        progression = p4.progression_combo.currentText()
-        agency = p4.agency_slider.value()
+        promise = p4.promise_edit.toPlainText().strip()
+        emotions = p4.emotions.value()
+        aftertaste = p4.aftertaste_edit.toPlainText().strip()
 
-        # Page 5: Style
+        # Page 5: Narrative
         p5 = self.page(5)
-        style = p5.style_edit.toPlainText().strip()
-        tone = p5.tone_edit.toPlainText().strip()
-        distance = p5.distance_combo.currentText()
-        density = p5.density_slider.value()
+        conflicts = p5.conflict_tags.value()
+        tension = p5.tension_combo.currentText()
+        progression = p5.progression_combo.currentText()
+        agency = p5.agency_slider.value()
 
-        # Page 6: Rules
+        # Page 6: Style
         p6 = self.page(6)
-        hard = p6.hard_rules.value()
-        soft = p6.soft_rules.value()
-        strictness = p6.strictness_slider.value()
-        contradiction = p6.contradiction_combo.currentText()
+        style = p6.style_edit.toPlainText().strip()
+        tone = p6.tone_edit.toPlainText().strip()
+        distance = p6.distance_combo.currentText()
+        density = p6.density_slider.value()
 
-        # Page 7: AI
+        # Page 7: Rules
         p7 = self.page(7)
-        ai_role = p7.role_combo.currentData() or "coauthor"
-        ai_aggression = p7.aggression_slider.value()
-        ai_num = p7.num_spin.value()
-        ai_output = p7.output_combo.currentData() or "contrastive_options"
-        ai_strategy = p7.strategy_combo.currentData() or "profundizar"
+        hard = p7.hard_rules.value()
+        soft = p7.soft_rules.value()
+        strictness = p7.strictness_slider.value()
+        contradiction = p7.contradiction_combo.currentText()
+
+        # Page 8: AI
+        p8 = self.page(8)
+        ai_role = p8.role_combo.currentData() or "coauthor"
+        ai_aggression = p8.aggression_slider.value()
+        ai_num = p8.num_spin.value()
+        ai_output = p8.output_combo.currentData() or "contrastive_options"
+        ai_strategy = p8.strategy_combo.currentData() or "profundizar"
 
         return {
             "name": name,
@@ -470,6 +645,7 @@ class ProjectWizard(QWizard):
             },
             "primary_language": lang,
             "worldbuilding_active": wb,
+            "project_chronology": chronology,
         }
 
     def apply_to_project(self, project: Project) -> None:
@@ -479,6 +655,52 @@ class ProjectWizard(QWizard):
         project.name = cfg.get("name", project.name)
         project.primary_language = cfg.get("primary_language", project.primary_language)
         project.worldbuilding_active = cfg.get("worldbuilding_active", project.worldbuilding_active)
+        chronology_data = cfg.get("project_chronology", {})
+        if isinstance(chronology_data, dict):
+            current = getattr(project, "project_chronology", None) or ProjectChronology()
+            current.calendar_name = chronology_data.get("calendar_name", current.calendar_name)
+            current.description = chronology_data.get("description", current.description)
+            current.calendar_system = chronology_data.get("calendar_system", current.calendar_system)
+            metadata = dict(getattr(current, "metadata", {}) or {})
+            incoming_meta = chronology_data.get("metadata")
+            if isinstance(incoming_meta, dict):
+                metadata.update(incoming_meta)
+            mode = str(metadata.get("mode") or chronology_data.get("calendar_system") or "none")
+            if mode == "vague_periods":
+                periods = metadata.get("periods") or ["Antiguedad", "Historia reciente", "Actualidad"]
+                metadata.update({
+                    "periods": list(periods),
+                    "eras": list(periods),
+                    "units": ["periodo narrativo"],
+                    "supports_exact_dates": False,
+                    "date_resolution": "periodo",
+                })
+            elif mode == "full_calendar":
+                months = metadata.get("months") or [
+                    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+                ]
+                weekdays = metadata.get("weekdays") or [
+                    "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo",
+                ]
+                metadata.update({
+                    "months": list(months),
+                    "weekdays": list(weekdays),
+                    "month_lengths": metadata.get("month_lengths") or {str(month): 30 for month in months},
+                    "era_lengths": metadata.get("era_lengths") or {str(era): 100 for era in metadata.get("eras", [])},
+                    "current_date": metadata.get("current_date") or {
+                        "era": str((metadata.get("eras") or ["Actualidad"])[-1]),
+                        "year": metadata.get("current_year", 1),
+                        "month": str(months[0] if months else ""),
+                        "day": 1,
+                    },
+                    "months_per_year": len(months),
+                    "units": ["era", "ano", "mes", "dia"],
+                    "supports_exact_dates": True,
+                    "date_resolution": "dia",
+                })
+            current.metadata = metadata
+            project.project_chronology = current
 
         cc = project.creative_config
         cc_data = cfg.get("creative_config", {})

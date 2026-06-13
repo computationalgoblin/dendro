@@ -7,9 +7,11 @@ except ImportError:
     print("PySide6 not installed. Run: pip install narrative-architect[desktop]")
     sys.exit(1)
 from hosts.DesktopHostPySide.main_window import MainWindow
+from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
 
 def main():
     app = QApplication(sys.argv)
+    install_tooltip_suppression(app)
     w = MainWindow(); w.show()
     sys.exit(app.exec())
 

@@ -7,6 +7,7 @@ from packages.domain.ai_models import AIResponse
 
 class OpenAICompatibleProvider(AIProvider):
     provider_name = "openai_compatible"
+    supports_command_bar_planner = True
 
     def __init__(self, base_url=None, api_key=None, model=None, timeout=None):
         self.base_url = base_url or os.environ.get("NARRATIVE_AI_BASE_URL", "")

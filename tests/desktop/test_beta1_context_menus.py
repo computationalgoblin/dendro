@@ -92,11 +92,13 @@ def test_node_menu_has_full_action_set(qapp):
     item = view._nodes["hoja-1"]
     menu = view._node_context_menu(item)
     texts = action_texts(menu)
+    # "IA sobre seleccion" añadido por D06 (Hermes): contrato unificado
     assert texts == [
         "Editar",
         "Crear relación desde aquí",
         "Mover a rama",
         "Mover a anillo",
+        "IA sobre seleccion",
         "Eliminar",
     ]
     # 'Mover a anillo' has no route until B03 → must be disabled, not crash
@@ -118,6 +120,7 @@ def test_tree_menu_has_tree_actions(qapp):
         "Crear hoja dentro",
         "Crear subrama",
         "Mover a anillo",
+        "IA sobre seleccion",  # D06 (Hermes)
         "Eliminar",
     ]
     # En layout libre no hay anillos → la acción existe pero deshabilitada
@@ -129,7 +132,8 @@ def test_edge_menu_has_relation_actions(qapp):
     view = build_basic_view(qapp)
     item = view._edges[0]
     menu = view._edge_context_menu(item)
-    assert action_texts(menu) == ["Editar relación", "Eliminar relación"]
+    # "IA sobre seleccion" añadido por D06 (Hermes)
+    assert action_texts(menu) == ["Editar relación", "IA sobre seleccion", "Eliminar relación"]
 
 
 def test_ring_menu_offers_ring_creation(qapp):

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -28,8 +29,9 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
+from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge, enum_human, human_ref
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
+from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, VisibilityState
 from packages.domain.relation import IntensityLevel, RelationType
 from packages.domain.result import Error
@@ -219,8 +221,11 @@ class RelationDetailPanel(QWidget):
         on_saved=None,
         ai_controller=None,
         entity_controller=None,
+        milestone_controller=None,
         is_new: bool = False,
         on_focus_neighborhood=None,
+        on_open_milestones=None,
+        on_suggest_milestone=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -229,7 +234,10 @@ class RelationDetailPanel(QWidget):
         self.on_saved = on_saved
         self.ai_controller = ai_controller
         self.entity_controller = entity_controller
+        self.milestone_controller = milestone_controller
         self.on_focus_neighborhood = on_focus_neighborhood
+        self.on_open_milestones = on_open_milestones
+        self.on_suggest_milestone = on_suggest_milestone
         self.is_new = is_new
         self._relation = None
         self._current_color: str = ""
@@ -264,11 +272,7 @@ class RelationDetailPanel(QWidget):
         self.type_badge = Badge("Relación", "info")
         head.addWidget(self.type_badge)
         root.addLayout(head)
-        if self.on_focus_neighborhood is not None:
-            focus_btn = QPushButton("Enfocar vecindad")
-            focus_btn.setToolTip("Ver los extremos de esta relación sin todo el grafo")
-            focus_btn.clicked.connect(self.on_focus_neighborhood)
-            root.addWidget(focus_btn)
+        # BETA1-F04: "Enfocar vecindad" fuera del panel editorial.
 
         # -- Direction summary --
         self.summary = QLabel("")
@@ -308,9 +312,8 @@ class RelationDetailPanel(QWidget):
         form.labelAlignment = 0x0002  # AlignRight
         _label_ss = f"color: {_LABEL_COLOR}; background: transparent; font-weight: 600;"
 
-        # Type + Color
-        type_label = QLabel("Tipo:")
-        type_label.setStyleSheet(_label_ss)
+        # BETA1-F05 layout exacto: TIPO + color en una fila fluida (la
+        # identidad de la relación son sus extremos, ya resumidos arriba).
         type_row = QHBoxLayout()
         type_row.setSpacing(8)
         self.type_combo = QComboBox()
@@ -325,46 +328,82 @@ class RelationDetailPanel(QWidget):
         self.color_btn.setToolTip("Color de la arista")
         self.color_btn.clicked.connect(self._pick_color)
         type_row.addWidget(self.color_btn)
-        form.addRow(type_label, type_row)
+        form.addRow(type_row)
 
-        # Direction
-        dir_label = QLabel("Dirección:")
-        dir_label.setStyleSheet(_label_ss)
+        # Dirección → submenú "Más opciones" (BETA1-F04); el resumen de
+        # extremos ya comunica el sentido en lenguaje natural.
         self.direction_combo = QComboBox()
         self.direction_combo.addItem("Origen → destino", "source_to_target")
         self.direction_combo.addItem("Destino → origen", "target_to_source")
         self.direction_combo.addItem("Bidireccional", "bidireccional")
-        form.addRow(dir_label, self.direction_combo)
 
-        # Description (brief)
-        desc_label = QLabel("Descripción:")
-        desc_label.setStyleSheet(_label_ss)
+        # Descripción breve: tras la imagen (orden F05) — creada aquí,
+        # montada más abajo.
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(80)
-        form.addRow(desc_label, self.description_edit)
+        self.description_edit.setPlaceholderText("Descripción breve…")
 
-        # Cuerpo (extended body for the relation)
-        body_label = QLabel("Cuerpo:")
-        body_label.setStyleSheet(_label_ss)
-        self.body_edit = QTextEdit()
-        self.body_edit.setMaximumHeight(120)
-        form.addRow(body_label, self.body_edit)
-
-        note_label = QLabel("Notas:")
-        note_label.setStyleSheet(_label_ss)
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setMaximumHeight(70)
-        form.addRow(note_label, self.notes_edit)
-
-        # Estado (simplified canon)
-        canon_label = QLabel("Estado:")
-        canon_label.setStyleSheet(_label_ss)
+        # Estado y dirección → submenú (BETA1-F04); se crean aquí, se montan
+        # en "Más opciones". La dirección sale de la vista principal.
         self.canon_combo = QComboBox()
         for val in _SIMPLE_CANON:
             self.canon_combo.addItem(enum_human(val), val)
-        form.addRow(canon_label, self.canon_combo)
 
         root.addWidget(form_card)
+
+        # BETA1-F05: imagen opcional (uniforme con hoja/rama; persistencia
+        # protegida — si el dominio de relaciones no admite metadata, deuda)
+        self.image_preview = QLabel()
+        self.image_preview.setVisible(False)
+        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_preview.setStyleSheet("border: 1px solid #D8D6C8; border-radius: 10px; background: rgba(255,255,255,0.4); padding: 4px;")
+        self.image_preview.setMaximumHeight(160)
+        root.addWidget(self.image_preview)
+        image_row = QHBoxLayout()
+        self.image_btn = QPushButton("Añadir imagen…")
+        self.image_btn.setFixedHeight(26)
+        self.image_btn.clicked.connect(self._pick_image)
+        image_row.addWidget(self.image_btn)
+        image_row.addStretch(1)
+        root.addLayout(image_row)
+
+        # BETA1-F05: viñetas protagonistas — misma estética que la hoja
+        _card_ss = (
+            "QTextEdit { background: #FFFDF7; border: 1px solid #E7E3D4; "
+            "border-radius: 12px; padding: 10px; font-size: 13px; color: #3F3D2E; } "
+            "QTextEdit:focus { border: 1px solid #C9C0A0; background: #FFFFFF; }"
+        )
+        self.description_edit.setStyleSheet(_card_ss)
+        root.addWidget(self.description_edit)
+
+        # BETA1-F04: el CUERPO de la relación domina el panel
+        body_header = QLabel("Cuerpo")
+        body_header.setStyleSheet(_label_ss)
+        root.addWidget(body_header)
+        self.body_edit = QTextEdit()
+        self.body_edit.setMinimumHeight(240)
+        self.body_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.body_edit.setStyleSheet(_card_ss)
+        root.addWidget(self.body_edit, 1)
+
+        # Notas → submenú "Más opciones"
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setMaximumHeight(70)
+
+        self.related_milestones_panel = None
+        if self.milestone_controller is not None:
+            self.related_milestones_panel = RelatedMilestonesPanel(
+                milestone_controller=self.milestone_controller,
+                target_kind="relation",
+                target_id=self.relation_id,
+                project_getter=self._project,
+                entity_controller=self.entity_controller,
+                relation_controller=self.relation_controller,
+                on_open_chronology=self.on_open_milestones,
+                on_suggest_milestone=self.on_suggest_milestone,
+                on_created=self.on_saved,
+            )
+            # BETA1-F04: hitos relacionados → submenú "Más opciones"
 
         # -- Advanced fields (hidden in normal mode) --
         self._advanced_widgets: list[QWidget] = []
@@ -496,6 +535,25 @@ class RelationDetailPanel(QWidget):
         ai_layout.addWidget(self.suggestion_frame)
         root.addWidget(ai_card)
 
+        # BETA1-F04: submenú "Más opciones" — dirección, estado, notas,
+        # hitos y datos técnicos (estos, además, solo en modo avanzado).
+        self.more_section = AdvancedSection("Más opciones")
+        more_form = QFormLayout()
+        more_form.setSpacing(6)
+        more_dir_label = QLabel("Dirección:")
+        more_dir_label.setStyleSheet(_label_ss)
+        more_form.addRow(more_dir_label, self.direction_combo)
+        more_canon_label = QLabel("Estado:")
+        more_canon_label.setStyleSheet(_label_ss)
+        more_form.addRow(more_canon_label, self.canon_combo)
+        more_notes_label = QLabel("Notas:")
+        more_notes_label.setStyleSheet(_label_ss)
+        more_form.addRow(more_notes_label, self.notes_edit)
+        self.more_section.body_layout.addLayout(more_form)
+        if self.related_milestones_panel is not None:
+            self.more_section.body_layout.addWidget(self.related_milestones_panel)
+        root.addWidget(self.more_section)
+
         # -- Technical box (advanced only) --
         self.technical_box = QGroupBox("Datos técnicos")
         self.technical_box.setStyleSheet(
@@ -509,7 +567,8 @@ class RelationDetailPanel(QWidget):
         self.technical_text.setReadOnly(True)
         self.technical_text.setMaximumHeight(120)
         technical_layout.addWidget(self.technical_text)
-        root.addWidget(self.technical_box)
+        # BETA1-F05: datos técnicos FUERA del producto (widget sin montar;
+        # _refresh los sigue escribiendo sin coste visual).
 
         # -- Actions --
         actions = QHBoxLayout()
@@ -546,6 +605,41 @@ class RelationDetailPanel(QWidget):
             f"QPushButton:hover {{ border-color: #AAA579; }}"
         )
         self.color_btn.setToolTip(f"Color: {hex_color}")
+
+    # ── BETA1-F05: imagen opcional (uniforme con hoja/rama) ─────────────
+
+    def _pick_image(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Importar imagen", "", "Imágenes (*.png *.jpg *.jpeg *.webp)"
+        )
+        if not path:
+            return
+        result = self.relation_controller.get(self.relation_id)
+        relation = getattr(result, "value", None)
+        metadata = dict(getattr(relation, "custom_metadata", {}) or {}) if relation is not None else {}
+        metadata["_image_path"] = path
+        update = self.relation_controller.update(self.relation_id, {"custom_metadata": metadata})
+        if isinstance(update, Error):
+            # El dominio de relaciones puede no admitir metadata → deuda F
+            self.ctx.log("warning", f"Imagen no persistida en la relación: {update.error}")
+        self._show_image(path)
+
+    def _show_image(self, path: str):
+        from pathlib import Path as _Path
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtCore import Qt as _Qt
+        if not path or not _Path(path).exists():
+            self.image_preview.setVisible(False)
+            self.image_btn.setText("Añadir imagen…")
+            return
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            self.image_preview.setVisible(False)
+            return
+        self.image_preview.setPixmap(pixmap.scaledToHeight(150, _Qt.TransformationMode.SmoothTransformation))
+        self.image_preview.setVisible(True)
+        self.image_btn.setText("Cambiar imagen…")
 
     def _pick_color(self):
         """Cycle through relation palette colors without opening external dialogs."""
@@ -883,6 +977,8 @@ class RelationDetailPanel(QWidget):
                 self._update_color_swatch(_default_color_for_type(kind))
 
             self._refresh_technical(relation)
+            if self.related_milestones_panel is not None:
+                self.related_milestones_panel.refresh()
             self.set_advanced_mode(self.ctx.advanced_mode)
         finally:
             self._refreshing = False

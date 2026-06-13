@@ -33,6 +33,8 @@ class AppContext:
     advanced_mode: bool = False
     drawer: Any = None  # RightDrawer reference (set by MainWindow)
     left_drawer: Any = None  # LeftDrawer reference (set by MainWindow)
+    rag_service: Any = None
+    ai_prompt_trace_store: Any = None
 
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large

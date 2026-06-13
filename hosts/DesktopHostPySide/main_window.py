@@ -59,6 +59,7 @@ from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
 from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
+from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
 
 
 # Index constants for the stack widget (BETA1-A01: only Home + Creation in runtime)
@@ -71,10 +72,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        install_tooltip_suppression()
         self.ctx = AppContext()
         self.controller = ProjectController()
         self.ctx.project_controller = self.controller
         self.ctx.log_sink = self.log_msg
+        # BETA1-F02: el canvas guarda por la misma ruta que el Home
+        self.ctx.request_save = self._save
 
         self.setWindowTitle("Dendro")
         self.setMinimumSize(1180, 760)
@@ -468,6 +472,8 @@ class MainWindow(QMainWindow):
                 "open_project": self._open_project,
                 "save_project": self._save,
                 "close_project": self._close_project,
+                # BETA1-F01: importar documento desde el área de proyecto
+                "import_document": self._import_document,
             },
             on_preview=self._preview_project_change,
         )
@@ -481,6 +487,16 @@ class MainWindow(QMainWindow):
         # Update Creation workspace worldbuilding
         if hasattr(self, 'creation_workspace'):
             self.creation_workspace.set_worldbuilding_active(worldbuilding_active)
+
+    def _import_document(self):
+        """BETA1-F01: la importación se lanza desde el área de proyecto del
+        Home; abre Creación y su utilidad de importación existente (la vista
+        no se mueve de sitio — solo cambia la puerta de entrada)."""
+        _apptrace("UI import_document")
+        self._go_space(_IDX_CREATION)
+        workspace = getattr(self, "creation_workspace", None)
+        if workspace is not None and hasattr(workspace, "_open_utility"):
+            workspace._open_utility(workspace.import_export_view)
 
     def _open_config_panel(self):
         _apptrace("UI open_config_panel")

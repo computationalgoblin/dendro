@@ -16,8 +16,8 @@ from packages.persistence.store import ProjectStore, load_project_data
 
 @pytest.mark.persistence
 def test_schema_version_bumped_to_23_for_causal_milestones():
-    assert CURRENT_SCHEMA_VERSION == 23
-    assert MAX_SUPPORTED_VERSION == 23
+    assert CURRENT_SCHEMA_VERSION >= 23
+    assert MAX_SUPPORTED_VERSION >= 23
 
 
 @pytest.mark.persistence
@@ -55,7 +55,7 @@ def test_load_project_data_migrates_v22_and_project_store_roundtrips_milestones(
     loaded_raw = load_project_data(legacy_path)
 
     assert isinstance(loaded_raw, Ok)
-    assert loaded_raw.value["schema_version"] == 23
+    assert loaded_raw.value["schema_version"] == CURRENT_SCHEMA_VERSION
     assert loaded_raw.value["causal_milestones"] == []
 
     project = Project(id="proj-b41", name="B41")

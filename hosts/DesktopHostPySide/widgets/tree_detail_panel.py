@@ -15,10 +15,11 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QColorDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -34,7 +36,8 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import enum_human
+from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, enum_human
+from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.application.tree_meta import NARRATIVE_ROLES, TREE_TYPES, TreeMeta
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.entity import (
@@ -231,6 +234,9 @@ class TreeDetailPanel(QWidget):
         *,
         is_new: bool = False,
         on_focus_tree: Callable[[str], None] | None = None,
+        milestone_controller=None,
+        on_open_milestones: Callable[[str, str, str], None] | None = None,
+        on_suggest_milestone: Callable[[str, str], None] | None = None,
     ):
         super().__init__(parent)
         self.ctx = ctx
@@ -240,6 +246,9 @@ class TreeDetailPanel(QWidget):
         self.on_saved = on_saved
         self.ai_controller = ai_controller
         self.on_focus_tree = on_focus_tree
+        self.milestone_controller = milestone_controller
+        self.on_open_milestones = on_open_milestones
+        self.on_suggest_milestone = on_suggest_milestone
         self._ai_worker: _TreeAIWorker | None = None
         self._tree_meta = TreeMeta()
         self._is_new = is_new
@@ -264,46 +273,80 @@ class TreeDetailPanel(QWidget):
             f"color: {_TITLE_COLOR}; font-weight: 700; font-size: 16px; background: transparent;"
         )
         root.addWidget(self.header_label)
-        if self.on_focus_tree is not None:
-            focus_btn = QPushButton("Enfocar rama")
-            focus_btn.setToolTip("Ver solo esta rama y su contenido directo")
-            focus_btn.clicked.connect(lambda: self.on_focus_tree(self.entity_id))
-            root.addWidget(focus_btn)
+        # BETA1-F04: "Enfocar rama" fuera del panel editorial (doble click
+        # en el grafo / menú contextual cubren la navegación).
 
-        # ═══ 1. IDENTIDAD ═══
-        id_card, id_layout = _section_card("Identidad")
+        # ═══ 1. IDENTIDAD ═══ (BETA1-F05: plana, idéntica al panel de hoja)
+        id_card = QWidget()
+        id_layout = QVBoxLayout(id_card)
+        id_layout.setContentsMargins(0, 0, 0, 0)
+        id_layout.setSpacing(6)
         form = QFormLayout()
         form.setSpacing(6)
 
+        # BETA1-F05 layout exacto: NOMBRE + TIPO + ANILLO en UNA fila fluida.
+        first_row = QHBoxLayout()
+        first_row.setSpacing(8)
         self.name_edit = _styled_edit("Nombre de la rama...")
-        form.addRow("Nombre", self.name_edit)
-
+        first_row.addWidget(self.name_edit, 3)
         self.tree_type_combo = _styled_combo(TREE_TYPES, "— Sin tipo —")
-        form.addRow("Tipo de rama", self.tree_type_combo)
-
-        # Color row
-        color_row = QHBoxLayout()
+        first_row.addWidget(self.tree_type_combo, 2)
+        self.layer_combo = _styled_combo([], "— Sin anillo —")
+        self.layer_label = QLabel("")  # legacy ref
+        first_row.addWidget(self.layer_combo, 2)
         self.color_edit = _styled_edit("#D0D8E0")
-        self.color_edit.setMaximumWidth(100)
-        self.color_btn = QPushButton("Color")
-        self.color_btn.setFixedSize(50, 28)
+        self.color_edit.setVisible(False)  # editable desde el botón
+        self.color_btn = QPushButton("")
+        self.color_btn.setFixedSize(28, 28)
+        self.color_btn.setToolTip("Color de la rama")
         self.color_btn.setStyleSheet(
-            "QPushButton { border: 1px solid #C8C6B8; border-radius: 6px; background: #D0D8E0; }"
+            "QPushButton { border: 1px solid #C8C6B8; border-radius: 14px; background: #D0D8E0; }"
         )
         self.color_btn.clicked.connect(self._pick_color)
-        color_row.addWidget(self.color_edit)
-        color_row.addWidget(self.color_btn)
-        color_row.addStretch()
-        form.addRow("Color", color_row)
+        first_row.addWidget(self.color_btn)
+        form.addRow(first_row)
 
+        # Descripción breve: se monta tras la imagen (orden F05)
         self.brief_edit = _styled_edit("Descripción breve...")
-        form.addRow("Descripción breve", self.brief_edit)
-
-        self.extended_edit = _styled_textedit("Cuerpo / descripción extendida...", 150)
-        form.addRow("Cuerpo", self.extended_edit)
 
         id_layout.addLayout(form)
         root.addWidget(id_card)
+
+        # BETA1-F04: imagen opcional de la rama (persistencia mínima en
+        # custom_metadata; gestión avanzada de assets = deuda F)
+        self.image_preview = QLabel()
+        self.image_preview.setVisible(False)
+        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_preview.setStyleSheet("border: 1px solid #D8D6C8; border-radius: 10px; background: rgba(255,255,255,0.4); padding: 4px;")
+        self.image_preview.setMaximumHeight(160)
+        root.addWidget(self.image_preview)
+        image_row = QHBoxLayout()
+        self.image_btn = QPushButton("Añadir imagen…")
+        self.image_btn.setFixedHeight(26)
+        self.image_btn.clicked.connect(self._pick_image)
+        image_row.addWidget(self.image_btn)
+        image_row.addStretch(1)
+        root.addLayout(image_row)
+
+        # BETA1-F05: viñetas protagonistas — misma estética que la hoja
+        _card_ss = (
+            "QTextEdit, QLineEdit { background: #FFFDF7; border: 1px solid #E7E3D4; "
+            "border-radius: 12px; padding: 10px; font-size: 13px; color: #3F3D2E; } "
+            "QTextEdit:focus, QLineEdit:focus { border: 1px solid #C9C0A0; background: #FFFFFF; }"
+        )
+        self.brief_edit.setStyleSheet(_card_ss)
+        root.addWidget(self.brief_edit)
+
+        # BETA1-F04: el CUERPO domina el panel (contenedor narrativo)
+        body_header = QLabel("Cuerpo")
+        body_header.setStyleSheet(f"color: {_TITLE_COLOR}; font-weight: 600; background: transparent;")
+        root.addWidget(body_header)
+        self.extended_edit = _styled_textedit("Cuerpo / descripción extendida...", 150)
+        self.extended_edit.setMaximumHeight(16777215)  # sin tope
+        self.extended_edit.setMinimumHeight(260)
+        self.extended_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.extended_edit.setStyleSheet(_card_ss)
+        root.addWidget(self.extended_edit, 1)
 
         # ═══ 2. FUNCION NARRATIVA ═══
         fn_card, fn_layout = _section_card("Función narrativa")
@@ -324,7 +367,9 @@ class TreeDetailPanel(QWidget):
         fn_form.addRow("Desarrollo", self.development_combo)
 
         fn_layout.addLayout(fn_form)
-        root.addWidget(fn_card)
+        # BETA1-F04: secundarios → submenú "Más opciones" (montado tras la IA)
+        self.more_section = AdvancedSection("Más opciones")
+        self.more_section.body_layout.addWidget(fn_card)
 
         # ═══ 3. CONTENIDO ═══
         ct_card, ct_layout = _section_card("Contenido")
@@ -355,7 +400,7 @@ class TreeDetailPanel(QWidget):
         ct_form.addRow("Rel. externas", self.external_rels_list)
 
         ct_layout.addLayout(ct_form)
-        root.addWidget(ct_card)
+        self.more_section.body_layout.addWidget(ct_card)
 
         # ═══ 4. WORLDBUILDING + CANON ═══
         wc_card, wc_layout = _section_card("Worldbuilding y canon")
@@ -365,16 +410,14 @@ class TreeDetailPanel(QWidget):
         self.canon_combo = _styled_combo([e.value for e in CanonState], "")
         wc_form.addRow("Estado canon", self.canon_combo)
 
+        # BETA1-F04: la visibilidad sale del modo normal del producto.
+        # El combo existe (la carga/guardado lo siguen usando) pero no se
+        # monta en la UI.
         self.visibility_combo = _styled_combo([e.value for e in VisibilityState], "")
-        wc_form.addRow("Visibilidad", self.visibility_combo)
 
         self.certainty_combo = _styled_combo([e.value for e in CertaintyLevel], "")
         wc_form.addRow("Certeza", self.certainty_combo)
-
-        self.layer_combo = _styled_combo([], "— Sin anillo —")
-        self.layer_label = QLabel("Anillo causal")
-        self.layer_label.setStyleSheet(f"color: {_LABEL_COLOR}; background: transparent;")
-        wc_form.addRow(self.layer_label, self.layer_combo)
+        # (El anillo vive ahora en la sección de identidad — BETA1-F04)
 
         wc_layout.addLayout(wc_form)
 
@@ -416,16 +459,27 @@ class TreeDetailPanel(QWidget):
         wc_layout.addWidget(self.questions_list)
         wc_layout.addLayout(q_row)
 
-        # -- Notas --
-        wc_layout.addWidget(_label("Notas privadas"))
+        # BETA1-F05: notas privadas/exportables DESAPARECEN de la UI.
+        # Widgets sin montar — carga/guardado intactos, sin pérdida de datos.
         self.private_notes_edit = _styled_textedit("Notas privadas...", 60)
-        wc_layout.addWidget(self.private_notes_edit)
-
-        wc_layout.addWidget(_label("Notas exportables"))
         self.exportable_notes_edit = _styled_textedit("Notas exportables...", 60)
-        wc_layout.addWidget(self.exportable_notes_edit)
 
-        root.addWidget(wc_card)
+        self.more_section.body_layout.addWidget(wc_card)
+
+        self.related_milestones_panel = None
+        if self.milestone_controller is not None:
+            self.related_milestones_panel = RelatedMilestonesPanel(
+                milestone_controller=self.milestone_controller,
+                target_kind="branch",
+                target_id=self.entity_id,
+                project_getter=self._project,
+                entity_controller=self.entity_controller,
+                relation_controller=self.relation_controller,
+                on_open_chronology=self.on_open_milestones,
+                on_suggest_milestone=self.on_suggest_milestone,
+                on_created=self.on_saved,
+            )
+            self.more_section.body_layout.addWidget(self.related_milestones_panel)
 
         # -- B39: Create ring from branch button (hidden by default, wired in T02) --
         self.create_ring_btn = QPushButton("Crear anillo desde rama")
@@ -437,11 +491,11 @@ class TreeDetailPanel(QWidget):
         )
         self.create_ring_btn.setVisible(False)
         self.create_ring_btn.clicked.connect(self._create_ring_from_branch)
-        root.addWidget(self.create_ring_btn)
+        self.more_section.body_layout.addWidget(self.create_ring_btn)
 
         # ═══ 5. IA ═══
         ai_card, ai_layout = _section_card("IA")
-        ai_title = QLabel("Acciones IA de la rama")
+        ai_title = QLabel("IA")  # BETA1-F05: título uniforme con hoja/relación
         ai_title.setStyleSheet(
             f"color: {_LABEL_COLOR}; font-weight: 600; font-size: 12px; background: transparent;"
         )
@@ -488,37 +542,15 @@ class TreeDetailPanel(QWidget):
             ai_btn_row.addWidget(btn)
         ai_layout.addLayout(ai_btn_row)
 
-        # Causal layer actions (B36/B39) — created here because refresh()
-        # populates/toggles them when worldbuilding is active.
-        target_row = QHBoxLayout()
-        target_row.setSpacing(6)
+        # BETA1-F05: destino causal / expandir / explicar ELIMINADOS del
+        # panel de rama (deuda F: acciones contextuales futuras del grafo).
+        # Widgets vivos sin montar — refresh() y las rutas los referencian.
         self.target_layer_label = QLabel("Destino causal")
-        self.target_layer_label.setStyleSheet(f"color: {_LABEL_COLOR}; background: transparent;")
         self.target_layer_combo = _styled_combo([], "— Anillo inferior —")
-        target_row.addWidget(self.target_layer_label)
-        target_row.addWidget(self.target_layer_combo, 1)
-        ai_layout.addLayout(target_row)
-
-        causal_btn_row = QHBoxLayout()
-        causal_btn_row.setSpacing(4)
         self.ai_expand_down_btn = QPushButton("Expandir hacia anillo inferior")
-        self.ai_expand_down_btn.setFixedHeight(28)
-        self.ai_expand_down_btn.setToolTip("Proponer consecuencias descendentes para esta rama")
         self.ai_expand_down_btn.clicked.connect(self._start_expand_down)
         self.ai_explain_causes_btn = QPushButton("Explicar desde causas superiores")
-        self.ai_explain_causes_btn.setFixedHeight(28)
-        self.ai_explain_causes_btn.setToolTip("Proponer causas superiores que expliquen esta rama")
         self.ai_explain_causes_btn.clicked.connect(self._start_explain_from_causes)
-        for btn in (self.ai_expand_down_btn, self.ai_explain_causes_btn):
-            btn.setEnabled(self.ai_controller is not None)
-            btn.setStyleSheet(
-                "QPushButton { border: 1px solid #C8C6B8; border-radius: 6px; "
-                "padding: 2px 8px; background: white; font-size: 11px; }"
-                "QPushButton:hover { background: #F0EFE6; }"
-                "QPushButton:disabled { color: #AAA; }"
-            )
-            causal_btn_row.addWidget(btn)
-        ai_layout.addLayout(causal_btn_row)
 
         # Custom prompt
         prompt_row = QHBoxLayout()
@@ -594,6 +626,8 @@ class TreeDetailPanel(QWidget):
 
         ai_layout.addWidget(self.suggestion_frame)
         root.addWidget(ai_card)
+        # BETA1-F04: todo lo secundario, plegado bajo la IA
+        root.addWidget(self.more_section)
 
         # -- Save / Cancel --
         btn_row = QHBoxLayout()
@@ -676,6 +710,10 @@ class TreeDetailPanel(QWidget):
         # Header
         self.header_label.setText(entity.name or "Rama sin nombre")
 
+        # BETA1-F04: imagen asociada (si la hay)
+        metadata = dict(getattr(entity, "custom_metadata", {}) or {})
+        self._show_image(str(metadata.get("_image_path", "")))
+
         # Identidad
         self.name_edit.setText(entity.name)
         self.brief_edit.setText(entity.brief_description)
@@ -733,6 +771,8 @@ class TreeDetailPanel(QWidget):
         project = self._project()
         wb_on = getattr(project, "worldbuilding_active", False) if project else False
         self.create_ring_btn.setVisible(bool(wb_on))
+        if self.related_milestones_panel is not None:
+            self.related_milestones_panel.refresh()
 
     # ------------------------------------------------------------------
     # Members / Relations
@@ -939,6 +979,39 @@ class TreeDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Color picker
     # ------------------------------------------------------------------
+
+    # ── BETA1-F04: imagen opcional ───────────────────────────────────────
+
+    def _pick_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Importar imagen", "", "Imágenes (*.png *.jpg *.jpeg *.webp)"
+        )
+        if not path:
+            return
+        result = self.entity_controller.get(self.entity_id)
+        entity = getattr(result, "value", None)
+        metadata = dict(getattr(entity, "custom_metadata", {}) or {}) if entity is not None else {}
+        metadata["_image_path"] = path
+        update = self.entity_controller.update(self.entity_id, {"custom_metadata": metadata})
+        if isinstance(update, Error):
+            self.ctx.log("error", f"No se pudo asociar la imagen: {update.error}")
+            return
+        self._show_image(path)
+        self.ctx.log("info", "Imagen asociada a la rama")
+
+    def _show_image(self, path: str):
+        from pathlib import Path as _Path
+        if not path or not _Path(path).exists():
+            self.image_preview.setVisible(False)
+            self.image_btn.setText("Añadir imagen…")
+            return
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            self.image_preview.setVisible(False)
+            return
+        self.image_preview.setPixmap(pixmap.scaledToHeight(150, Qt.TransformationMode.SmoothTransformation))
+        self.image_preview.setVisible(True)
+        self.image_btn.setText("Cambiar imagen…")
 
     def _pick_color(self):
         current = QColor(self.color_edit.text().strip() or "#D0D8E0")

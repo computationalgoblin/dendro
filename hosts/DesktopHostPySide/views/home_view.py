@@ -11,9 +11,12 @@ docs/architecture/A03_legacy_classification.md.
 """
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
+from PySide6.QtCore import QEvent, Qt, QPropertyAnimation, QEasingCurve, QPointF, QSize, QTimer
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -27,6 +30,375 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.design_system import Badge, make_scroll_area, ICON_GLYPHS
+
+try:  # BETA1-F01: QtMultimedia viene con PySide6, pero protegemos el import
+    from PySide6.QtCore import QUrl
+    from PySide6.QtMultimedia import QSoundEffect
+    _HAS_AUDIO = True
+except Exception:  # noqa: BLE001 — sin audio, el Home sigue intacto
+    _HAS_AUDIO = False
+
+
+class _AmbientMusic:
+    """BETA1-F01: música GENERATIVA procedural en Re# menor, apagada por
+    defecto.
+
+    No hay loop: un conductor (QTimer) improvisa para siempre.
+    - Tres voces de acorde (tríadas de la tonalidad: i, III, iv, v, VI, VII)
+      en registro grave/medio, desplegadas de forma arpegiada y muy pausada
+      (un acorde cada 8-13 s).
+    - Una cuarta voz aguda improvisa de vez en cuando frases breves sobre la
+      pentatónica de Re# menor (no puede sonar mal).
+    - Cada nota se sintetiza UNA vez y se cachea a WAV (temp): seno cálido
+      con parcial suave y desafinación, ataque lento, decay exponencial
+      largo, paso-bajo de un polo (filtrado) y reverb por combs con
+      retroalimentación. Reproducción con QSoundEffect, volumen bajo."""
+
+    _RATE = 12000  # suficiente para un pad oscuro y filtrado; síntesis barata
+    _NOTE_SECONDS = 5.5
+    _CHORD_VOLUME = 0.17
+    _MELODY_VOLUME = 0.10
+
+    # Re# menor natural: D# E#(F) F# G# A# B C#  → semitonos 0 2 3 5 7 8 10
+    _ROOT_MIDI = 39  # D#2
+    # Tríadas (grados) calmadas, sesgadas a i/VI/III
+    _CHORDS = (
+        (0, 3, 7),    # i   D#m
+        (3, 7, 10),   # III F#
+        (8, 0, 3),    # VI  B   (B, D#, F#)
+        (5, 8, 0),    # iv  G#m (G#, B, D#)
+        (7, 10, 2),   # v   A#m (A#, C#, E#)
+        (10, 2, 5),   # VII C#  (C#, E#, G#)
+    )
+    _CHORD_WEIGHTS = (4, 3, 3, 2, 1, 2)
+    # Pentatónica menor de D# para la voz que improvisa: D# F# G# A# C#
+    _MELODY_DEGREES = (0, 3, 5, 7, 10)
+
+    def __init__(self):
+        self._playing = False
+        self._effects: dict[int, object] = {}  # midi → QSoundEffect
+        self._rng = random.Random()
+        self._chord_timer = None
+        self._melody_timer = None
+        self._current_chord = 0
+
+    def is_playing(self) -> bool:
+        return self._playing
+
+    def toggle(self) -> bool:
+        if not _HAS_AUDIO:
+            return False
+        if self._playing:
+            self.stop()
+            return False
+        self._playing = True
+        if self._chord_timer is None:
+            self._chord_timer = QTimer()
+            self._chord_timer.setSingleShot(True)
+            self._chord_timer.timeout.connect(self._next_chord)
+            self._melody_timer = QTimer()
+            self._melody_timer.setSingleShot(True)
+            self._melody_timer.timeout.connect(self._melody_phrase)
+        self._next_chord()  # primer acorde inmediato
+        self._melody_timer.start(self._rng.randint(6000, 12000))
+        return True
+
+    def stop(self):
+        self._playing = False
+        if self._chord_timer is not None:
+            self._chord_timer.stop()
+            self._melody_timer.stop()
+        for effect in self._effects.values():
+            effect.stop()
+
+    # ── conductor ────────────────────────────────────────────────────────
+
+    def _next_chord(self):
+        if not self._playing:
+            return
+        choices = [i for i in range(len(self._CHORDS)) if i != self._current_chord]
+        weights = [self._CHORD_WEIGHTS[i] for i in choices]
+        self._current_chord = self._rng.choices(choices, weights=weights, k=1)[0]
+        degrees = self._CHORDS[self._current_chord]
+        # Voicing: raíz grave (oct 0), tercera y quinta en el registro medio
+        midis = (
+            self._ROOT_MIDI + degrees[0],
+            self._ROOT_MIDI + 12 + degrees[1],
+            self._ROOT_MIDI + 12 + degrees[2] + (12 if degrees[2] < degrees[1] else 0),
+        )
+        delay = 0
+        for midi in midis:  # despliegue arpegiado, muy pausado
+            delay += self._rng.randint(250, 1100)
+            QTimer.singleShot(delay, lambda m=midi: self._play_note(m, self._CHORD_VOLUME))
+        self._chord_timer.start(self._rng.randint(8000, 13000))
+
+    def _melody_phrase(self):
+        if not self._playing:
+            return
+        if self._rng.random() < 0.75:  # a veces, simplemente silencio
+            count = self._rng.randint(1, 3)
+            delay = 0
+            last = None
+            for _ in range(count):
+                degree = self._rng.choice([d for d in self._MELODY_DEGREES if d != last])
+                last = degree
+                midi = self._ROOT_MIDI + 36 + degree  # D#5 y alrededores
+                delay += self._rng.randint(700, 1600)
+                QTimer.singleShot(delay, lambda m=midi: self._play_note(m, self._MELODY_VOLUME))
+        self._melody_timer.start(self._rng.randint(7000, 15000))
+
+    def _play_note(self, midi: int, volume: float):
+        if not self._playing:
+            return
+        effect = self._effects.get(midi)
+        if effect is None:
+            path = self._render_note(midi)
+            effect = QSoundEffect()
+            effect.setSource(QUrl.fromLocalFile(path))
+            self._effects[midi] = effect
+        effect.setVolume(volume)
+        effect.play()
+
+    # ── síntesis (una vez por nota, cacheada) ────────────────────────────
+
+    def _render_note(self, midi: int) -> str:
+        import struct
+        import tempfile
+        import wave
+        from pathlib import Path
+
+        path = Path(tempfile.gettempdir()) / f"dendro_note_{midi}_v2.wav"
+        if path.exists():
+            return str(path)
+        rate = self._RATE
+        total = int(self._NOTE_SECONDS * rate)
+        freq = 440.0 * (2.0 ** ((midi - 69) / 12.0))
+        two_pi = 2.0 * math.pi
+        attack = int(0.55 * rate)
+        tau = 1.9  # s — decay largo
+        # 1) oscilador cálido + envolvente
+        dry = [0.0] * total
+        w1 = two_pi * freq / rate
+        w2 = two_pi * freq * 2.0 / rate          # parcial suave (octava)
+        w3 = two_pi * freq * 1.004 / rate        # desafinación leve
+        for n in range(total):
+            env = (n / attack) if n < attack else math.exp(-(n - attack) / (tau * rate))
+            dry[n] = env * (
+                0.62 * math.sin(w1 * n)
+                + 0.18 * math.sin(w2 * n)
+                + 0.30 * math.sin(w3 * n)
+            )
+        # 2) paso-bajo de un polo (filtrado, oscurece)
+        cutoff = 900.0
+        alpha = 1.0 / (1.0 + rate / (two_pi * cutoff))
+        prev = 0.0
+        for n in range(total):
+            prev += alpha * (dry[n] - prev)
+            dry[n] = prev
+        # 3) reverb: tres combs con retroalimentación (colas largas)
+        for delay_s, feedback in ((0.149, 0.34), (0.211, 0.28), (0.293, 0.22)):
+            d = int(delay_s * rate)
+            for n in range(d, total):
+                dry[n] += feedback * dry[n - d]
+        # normalizar con techo suave
+        peak = max(0.0001, max(abs(s) for s in dry))
+        scale = 0.82 / peak
+        frames = bytearray()
+        for sample in dry:
+            frames += struct.pack("<h", int(max(-0.95, min(0.95, sample * scale)) * 32767))
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(rate)
+            wav.writeframes(bytes(frames))
+        return str(path)
+
+
+class _AtmosphereOverlay(QWidget):
+    """BETA1-F01: atmósfera del Home — hojas a la deriva y raíces orgánicas
+    de baja opacidad.
+
+    Decorativa y barata: transparente al ratón, repaint ~25 fps SOLO mientras
+    el Home está visible, y si el contexto pide movimiento reducido
+    (animation_duration → 0) no hay timer: solo las raíces estáticas.
+    Se dibuja DEBAJO de las cards (lower())."""
+
+    _LEAF_COUNT = 18
+
+    def __init__(self, parent: QWidget, *, ctx=None):
+        super().__init__(parent)
+        self._ctx = ctx
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self._rng = random.Random(7)
+        self._leaves = [self._spawn_leaf(initial=True) for _ in range(self._LEAF_COUNT)]
+        self._phase = 0.0
+        # BETA1-F01 (viento): el cursor actúa como corriente — las hojas
+        # cercanas reciben un impulso según la velocidad del ratón.
+        self._last_mouse: QPointF | None = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._advance)
+        parent.setMouseTracking(True)
+        parent.installEventFilter(self)
+        self.setGeometry(parent.rect())
+        self.lower()
+
+    # ── ciclo de vida ────────────────────────────────────────────────────
+
+    def _animations_enabled(self) -> bool:
+        ctx = self._ctx
+        if ctx is None or not hasattr(ctx, "animation_duration"):
+            return True
+        try:
+            return int(ctx.animation_duration(100)) > 0
+        except Exception:  # noqa: BLE001 — la atmósfera jamás debe romper el Home
+            return True
+
+    def eventFilter(self, watched, event):
+        if watched is self.parent():
+            if event.type() == QEvent.Type.Resize:
+                self.setGeometry(self.parent().rect())
+            elif event.type() == QEvent.Type.Show:
+                if self._animations_enabled() and not self._timer.isActive():
+                    self._timer.start()
+            elif event.type() == QEvent.Type.Hide:
+                self._timer.stop()
+                self._last_mouse = None
+            elif event.type() == QEvent.Type.MouseMove:
+                if self._animations_enabled():
+                    self._apply_wind(QPointF(event.position()))
+            elif event.type() == QEvent.Type.Leave:
+                self._last_mouse = None
+        return False
+
+    def _apply_wind(self, mouse_pos: QPointF):
+        """El ratón es una corriente: su velocidad empuja a las hojas
+        cercanas con caída cuadrática por distancia. Las hojas grandes
+        (más 'masa') reaccionan menos."""
+        last = self._last_mouse
+        self._last_mouse = QPointF(mouse_pos)
+        if last is None:
+            return
+        delta_x = mouse_pos.x() - last.x()
+        delta_y = mouse_pos.y() - last.y()
+        speed = math.hypot(delta_x, delta_y)
+        if speed < 0.5:
+            return
+        # Limitar ráfagas (saltos de cursor) para que nada salga disparado
+        if speed > 80.0:
+            scale = 80.0 / speed
+            delta_x *= scale
+            delta_y *= scale
+        width = max(1, self.width())
+        height = max(1, self.height())
+        radius = 230.0
+        for index, leaf in enumerate(self._leaves):
+            sway_x = leaf["sway"] * math.sin(self._phase * leaf["sway_speed"] * 2.0 + index)
+            leaf_x = (leaf["x"] + sway_x) * width
+            leaf_y = leaf["y"] * height
+            dist = math.hypot(leaf_x - mouse_pos.x(), leaf_y - mouse_pos.y())
+            if dist >= radius:
+                continue
+            falloff = (1.0 - dist / radius) ** 2
+            mass = leaf["size"] / 9.0  # hojas grandes, más inercia
+            gain = 0.03 * falloff / mass
+            leaf["wx"] += (delta_x / width) * gain * 4.0
+            leaf["wy"] += (delta_y / height) * gain * 4.0
+            # giro extra al pasar la corriente
+            leaf["spin"] += (delta_x - delta_y) * 0.35 * falloff
+
+    # ── partículas ───────────────────────────────────────────────────────
+
+    def _spawn_leaf(self, *, initial: bool = False) -> dict:
+        rng = self._rng
+        return {
+            "x": rng.uniform(0.02, 0.98),
+            "y": rng.uniform(0.0, 1.0) if initial else -0.06,
+            "speed": rng.uniform(0.018, 0.042),  # fracción de alto / s
+            "sway": rng.uniform(0.008, 0.03),
+            "sway_speed": rng.uniform(0.35, 1.0),
+            "size": rng.uniform(7.0, 13.0),
+            "angle": rng.uniform(0.0, 360.0),
+            "spin": rng.uniform(-22.0, 22.0),
+            "alpha": rng.randint(26, 48),
+            # velocidad de viento (impulsos del cursor), decae sola
+            "wx": 0.0,
+            "wy": 0.0,
+        }
+
+    def _advance(self):
+        dt = 0.04
+        self._phase += dt
+        for leaf in self._leaves:
+            leaf["y"] += leaf["speed"] * dt + leaf["wy"]
+            leaf["x"] += leaf["wx"]
+            # la corriente decae: la hoja recupera su deriva tranquila
+            # (0.93 → estela más larga, la ráfaga se siente)
+            leaf["wx"] *= 0.93
+            leaf["wy"] *= 0.93
+            leaf["spin"] = max(-60.0, min(60.0, leaf["spin"] * 0.985))
+            leaf["angle"] = (leaf["angle"] + leaf["spin"] * dt) % 360.0
+            # envoltura horizontal: el viento puede sacarla por un lado
+            if leaf["x"] < -0.06:
+                leaf["x"] = 1.05
+            elif leaf["x"] > 1.06:
+                leaf["x"] = -0.05
+            if leaf["y"] > 1.08:
+                leaf.update(self._spawn_leaf())
+            elif leaf["y"] < -0.12:  # el viento la subió demasiado
+                leaf["y"] = -0.1
+                leaf["wy"] = 0.0
+        self.update()
+
+    # ── pintura ──────────────────────────────────────────────────────────
+
+    def paintEvent(self, event):  # noqa: N802 (Qt API)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width = max(1, self.width())
+        height = max(1, self.height())
+        self._paint_roots(painter, width, height)
+        if self._animations_enabled():
+            self._paint_leaves(painter, width, height)
+        painter.end()
+
+    def _paint_roots(self, painter: QPainter, width: int, height: int):
+        """Líneas orgánicas que suben desde la base, casi imperceptibles."""
+        pen = QPen(QColor(111, 106, 66, 20), 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for index, base in enumerate((0.16, 0.5, 0.86)):
+            path = QPainterPath(QPointF(width * base, float(height)))
+            wobble = (index - 1) * 0.06
+            path.cubicTo(
+                QPointF(width * (base + wobble), height * 0.72),
+                QPointF(width * (base - wobble * 1.4), height * 0.46),
+                QPointF(width * (base + wobble * 0.6), height * 0.18),
+            )
+            painter.drawPath(path)
+            # ramificación secundaria
+            branch = QPainterPath(QPointF(width * base, height * 0.62))
+            branch.quadTo(
+                QPointF(width * (base + 0.05 + wobble), height * 0.5),
+                QPointF(width * (base + 0.09 + wobble), height * 0.34),
+            )
+            painter.drawPath(branch)
+
+    def _paint_leaves(self, painter: QPainter, width: int, height: int):
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, leaf in enumerate(self._leaves):
+            sway_x = leaf["sway"] * math.sin(self._phase * leaf["sway_speed"] * 2.0 + index)
+            x = (leaf["x"] + sway_x) * width
+            y = leaf["y"] * height
+            painter.save()
+            painter.translate(x, y)
+            painter.rotate(leaf["angle"])
+            painter.setBrush(QColor(122, 115, 61, leaf["alpha"]))
+            size = leaf["size"]
+            painter.drawEllipse(QPointF(0.0, 0.0), size, size * 0.42)
+            painter.restore()
 
 
 class HomeNode(QFrame):
@@ -215,6 +587,9 @@ class HomeView(QWidget):
             "QWidget#dendroHome { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, "
             "stop:0 #F7F5EA, stop:0.55 #EEEEDF, stop:1 #E8E8DC); }"
         )
+        # BETA1-F01: atmósfera (hojas + raíces) detrás de las cards; no
+        # intercepta el ratón y se pausa cuando el Home no está visible.
+        self._atmosphere = _AtmosphereOverlay(content, ctx=self.ctx)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(64, 42, 64, 34)
         layout.setSpacing(20)
@@ -290,6 +665,15 @@ class HomeView(QWidget):
         self._btn_config = QuietIconButton(ICON_GLYPHS["settings"], icon_only=True)
         self._btn_config.clicked.connect(lambda: self._action("config_menu"))
         bottom_row.addWidget(self._btn_config)
+
+        # BETA1-F01: música ambiental — opcional, APAGADA por defecto,
+        # control visible y discreto. Si QtMultimedia no está, no aparece.
+        self._music = _AmbientMusic() if _HAS_AUDIO else None
+        if self._music is not None:
+            self._btn_music = QuietIconButton("♪", icon_only=True)
+            self._btn_music.setToolTip("Música ambiental (apagada)")
+            self._btn_music.clicked.connect(self._toggle_music)
+            bottom_row.addWidget(self._btn_music)
 
         bottom_row.addStretch(1)
 
@@ -418,6 +802,22 @@ class HomeView(QWidget):
         cb = self._callbacks.get(action)
         if cb:
             cb()
+
+    def _toggle_music(self):
+        """BETA1-F01: alternar la música ambiental (síntesis local)."""
+        if self._music is None:
+            return
+        try:
+            playing = self._music.toggle()
+        except Exception as exc:  # noqa: BLE001 — el audio jamás rompe el Home
+            self.ctx.log("error", f"Música ambiental no disponible: {exc}")
+            return
+        self._btn_music.setToolTip(
+            "Música ambiental (sonando — click para apagar)" if playing
+            else "Música ambiental (apagada)"
+        )
+        # marca visual simple del estado
+        self._btn_music.setText("♫" if playing else "♪")
 
     # ------------------------------------------------------------------
     # Refresh

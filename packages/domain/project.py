@@ -16,6 +16,7 @@ from typing import TypeVar
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.narrative_framework import NarrativeFramework
+from packages.domain.project_chronology import ProjectChronology
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
 from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
@@ -267,6 +268,9 @@ class Project:
     # ── Causal milestones (Bloque 41) ──
     causal_milestones: list[CausalMilestone] = field(default_factory=list)
 
+    # Project chronology (H01-H02)
+    project_chronology: ProjectChronology = field(default_factory=ProjectChronology)
+
     # ── Project type & creative config (B31-T03) ──
     project_type: str = "otro"  # campana, novela, otro
     worldbuilding_active: bool = False
@@ -377,6 +381,7 @@ class Project:
             "saved_graph_views": [dict(v) for v in self.saved_graph_views],
             # ── Causal milestones (Bloque 41) ──
             "causal_milestones": [h.to_dict() for h in self.causal_milestones],
+            "project_chronology": self.project_chronology.to_dict(),
             # ── Project type & creative config (B31-T03) ──
             "project_type": self.project_type,
             "worldbuilding_active": self.worldbuilding_active,
@@ -594,6 +599,12 @@ class Project:
                     if isinstance(h, dict)
                 ]}
                 if "causal_milestones" in data else {}
+            ),
+            **(
+                {"project_chronology": ProjectChronology.from_dict(
+                    data.get("project_chronology", {})
+                )}
+                if "project_chronology" in data else {}
             ),
             # ── Project type & creative config (B31-T03) ──
             project_type=data.get("project_type", "otro"),

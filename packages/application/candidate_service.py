@@ -10,6 +10,7 @@ from typing import Any
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
 from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.result import Error, Ok, Result
+from packages.application.project_chronology_service import ProjectChronologyService
 
 
 def _now() -> datetime:
@@ -191,6 +192,21 @@ class CandidateService:
             if isinstance(result, Error):
                 return result
             entity_id = ""
+        elif c.proposed_data.get("kind") == "causal_milestone":
+            milestone_data = c.proposed_data.get("milestone")
+            if not isinstance(milestone_data, dict):
+                return Error("Causal milestone candidate has no milestone payload")
+            hito = CausalMilestone.from_dict(milestone_data)
+            proj.value.causal_milestones.append(hito)
+            chronology = getattr(proj.value, "project_chronology", None)
+            if chronology is not None and hasattr(chronology, "link_milestone"):
+                chronology.link_milestone(hito.id)
+            if hasattr(proj.value, "touch"):
+                proj.value.touch()
+        elif c.proposed_data.get("kind") == "project_chronology_suggestion":
+            result = ProjectChronologyService(self.project_service).apply_candidate(c.proposed_data)
+            if isinstance(result, Error):
+                return result
         else:
             # Other types: just mark accepted without creating entity/relation
             pass

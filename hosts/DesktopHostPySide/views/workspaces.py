@@ -6,7 +6,8 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,8 +32,10 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.controllers.causal_milestone_controller import CausalMilestoneController
+from hosts.DesktopHostPySide.controllers.project_chronology_controller import ProjectChronologyController
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState, relation_family
+from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
@@ -50,6 +53,8 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
 from packages.application.ai_jobs import AIJobService, classify_ai_job_intent
+from packages.application.ai_prompt_debug import AIPromptDebugTraceStore
+from packages.application.rag_service import RAGService
 
 
 class _SimpleFormPanel(QWidget):
@@ -102,7 +107,7 @@ class RingInfoPanel(_SimpleFormPanel):
 
 class EntityQuickCreatePanel(_SimpleFormPanel):
     def __init__(self, controller, on_created, *, layer_id: str = "", layer_name: str = ""):
-        super().__init__("Nueva hoja", "Crea una pieza narrativa sin ver campos técnicos.")
+        super().__init__("Nueva hoja", "Crea una pieza narrativa sin ver campos tecnicos.")
         self.controller = controller
         self.on_created = on_created
         self.layer_id = str(layer_id or "")
@@ -113,13 +118,13 @@ class EntityQuickCreatePanel(_SimpleFormPanel):
         self.kind = QComboBox()
         self.kind.addItems(["personaje", "localizacion", "objeto", "evento", "faccion", "secreto", "pista", "trama", "nota"])
         self.description = QTextEdit()
-        self.description.setPlaceholderText("Descripción breve")
+        self.description.setPlaceholderText("Descripcion breve")
         self.description.setMinimumHeight(90)
         form.addRow("Nombre", self.name)
         form.addRow("Tipo", self.kind)
         if self.layer_id:
             form.addRow("Anillo", QLabel(self.layer_name or self.layer_id))
-        form.addRow("Descripción", self.description)
+        form.addRow("Descripcion", self.description)
         self.layout.addLayout(form)
         self.status = self.add_status()
         row = QHBoxLayout()
@@ -200,10 +205,10 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
         self.name = QLineEdit()
         self.name.setPlaceholderText("Nombre de la capa")
         self.description = QTextEdit()
-        self.description.setPlaceholderText("Qué representa esta capa")
+        self.description.setPlaceholderText("Que representa esta capa")
         self.description.setMinimumHeight(90)
         form.addRow("Nombre", self.name)
-        form.addRow("Descripción", self.description)
+        form.addRow("Descripcion", self.description)
         self.layout.addLayout(form)
         self.status = self.add_status()
         row = QHBoxLayout()
@@ -229,7 +234,7 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
 
 
 class RingEditPanel(_SimpleFormPanel):
-    """BETA1-B03: edit a ring (world layer) — name and order.
+    """BETA1-B03: edit a ring (world layer) - name and order.
 
     Order also writes metadata.causal_rank because the concentric view sorts
     rings by causal rank, not by the plain order field."""
@@ -268,7 +273,7 @@ class RingEditPanel(_SimpleFormPanel):
     def _save(self):
         name = self.name.text().strip()
         if not name:
-            self.status.setText("El nombre no puede estar vacío")
+            self.status.setText("El nombre no puede estar vacio")
             return
         order = int(self.order.value())
         result = self.controller.update(self.ring_id, {
@@ -437,6 +442,250 @@ class SuggestionInboxPanel(_SimpleFormPanel):
         self.refresh()
 
 
+class AICenterPanel(_SimpleFormPanel):
+    """BETA1-F03: Centro IA — jobs + sugerencias en una bandeja editorial.
+
+    Flujo: lanzas tareas (command bar o menú contextual) → las ves resolverse
+    aquí (feedback vivo, refresco suave) → las propuestas aparecen debajo y
+    se pueden previsualizar, editar, aceptar o descartar. Nada canoniza sin
+    confirmación. Sin tablas técnicas, sin JSON, sin IDs."""
+
+    _STATE_LABELS = {
+        "queued": "En cola",
+        "running": "Trabajando…",
+        "ready_for_review": "Listo para revisar",
+        "applied": "Aplicado",
+        "failed": "Error",
+        "cancelled": "Cancelado",
+    }
+
+    def __init__(self, workspace: "CreationWorkspace"):
+        super().__init__(
+            "Centro IA",
+            "Tareas en curso y propuestas revisables. Nada cambia el canon sin tu confirmación.",
+        )
+        self.workspace = workspace
+        self._editing_candidate_id = ""
+        body = QWidget()
+        self._body_layout = QVBoxLayout(body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(10)
+        self.layout.addWidget(make_scroll_area(body), 1)
+        # Feedback vivo: refresco suave mientras el panel está visible
+        self._timer = QTimer(self)
+        self._timer.setInterval(900)
+        self._timer.timeout.connect(self._tick)
+        self.refresh()
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        self._timer.start()
+
+    def hideEvent(self, event):  # noqa: N802 (Qt API)
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def _tick(self):
+        # refresco completo solo si hay jobs activos (barato y tranquilo)
+        jobs = self._jobs()
+        if any(self._job_state(job) in ("queued", "running") for job in jobs):
+            self.refresh()
+
+    # ── datos ────────────────────────────────────────────────────────────
+
+    def _jobs(self) -> list:
+        try:
+            return list(self.workspace.ai_job_service.list_jobs())
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _candidates(self) -> list:
+        controller = getattr(self.workspace.candidate_view, "cc", None)
+        if controller is None:
+            return []
+        try:
+            return [
+                c for c in controller.list_all()
+                if str(getattr(getattr(c, "state", ""), "value", getattr(c, "state", ""))).lower()
+                in ("", "pending", "proposed", "candidatestate.pending")
+                or "pend" in str(getattr(c, "state", "")).lower()
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    @staticmethod
+    def _job_state(job) -> str:
+        raw = str(getattr(getattr(job, "status", ""), "value", getattr(job, "status", ""))).lower()
+        return raw.split(".")[-1]
+
+    # ── render ───────────────────────────────────────────────────────────
+
+    def refresh(self):
+        while self._body_layout.count():
+            item = self._body_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        jobs = self._jobs()
+        candidates = self._candidates()
+
+        active = [j for j in jobs if self._job_state(j) in ("queued", "running")]
+        finished = [j for j in jobs if self._job_state(j) not in ("queued", "running")]
+
+        if active:
+            self._section_label("En curso")
+            for job in reversed(active):
+                self._job_card(job, live=True)
+        if finished:
+            self._section_label("Tareas recientes")
+            for job in list(reversed(finished))[:5]:
+                self._job_card(job, live=False)
+        if candidates:
+            self._section_label("Propuestas para revisar")
+            for candidate in candidates:
+                self._candidate_card(candidate)
+        if not jobs and not candidates:
+            self._body_layout.addWidget(EmptyState(
+                "Silencio creativo",
+                "Pide algo en la barra inferior o desde el menú contextual del grafo;\n"
+                "las tareas y propuestas aparecerán aquí.",
+            ))
+        self._body_layout.addStretch(1)
+
+    def _section_label(self, text: str):
+        label = QLabel(text)
+        label.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; font-weight: 700; letter-spacing: 1px; "
+            "text-transform: uppercase; background: transparent; border: none; padding-top: 4px;"
+        )
+        self._body_layout.addWidget(label)
+
+    def _job_card(self, job, *, live: bool):
+        title = str(getattr(job, "title", "") or getattr(job, "prompt", "") or "Tarea IA")
+        if len(title) > 70:
+            title = title[:67] + "…"
+        state = self._job_state(job)
+        state_label = self._STATE_LABELS.get(state, state or "—")
+        card = Card(title, state_label)
+        if live:
+            progress = QProgressBar()
+            progress.setRange(0, 100)
+            progress.setTextVisible(False)
+            progress.setFixedHeight(6)
+            progress.setValue(int(max(0.0, min(1.0, float(getattr(job, "progress", 0.0)))) * 100))
+            card.layout.addWidget(progress)
+        elif state == "failed":
+            reason = QLabel(str(getattr(job, "error", "") or "La tarea no pudo completarse."))
+            reason.setObjectName("mutedLabel")
+            reason.setWordWrap(True)
+            card.layout.addWidget(reason)
+        elif state == "ready_for_review":
+            row = QHBoxLayout()
+            row.addStretch(1)
+            view = QPushButton("Ver resultado")
+            view.clicked.connect(lambda _=False, jid=str(getattr(job, "id", "")): self.workspace._open_ai_job_result_by_id(jid))
+            row.addWidget(view)
+            card.layout.addLayout(row)
+        self._body_layout.addWidget(card)
+
+    def _candidate_card(self, candidate):
+        cid = str(getattr(candidate, "id", ""))
+        proposed = dict(getattr(candidate, "proposed_data", {}) or {})
+        title = (
+            str(proposed.get("name", "")) or str(getattr(candidate, "title", ""))
+            or str(getattr(candidate, "name", "")) or "Propuesta"
+        )
+        kind = str(getattr(getattr(candidate, "candidate_type", ""), "value", getattr(candidate, "candidate_type", ""))).replace("_", " ")
+        summary = (
+            str(proposed.get("brief_description", "")) or str(proposed.get("description", ""))
+            or str(getattr(candidate, "summary", "")) or ""
+        )
+        subtitle = " · ".join(part for part in (kind, summary[:90]) if part) or "Pendiente de revisión"
+        card = Card(title, subtitle)
+
+        if self._editing_candidate_id == cid:
+            # Edición inline antes de aceptar: nombre + descripción
+            name_edit = QLineEdit(title)
+            desc_edit = QTextEdit()
+            desc_edit.setPlainText(summary)
+            desc_edit.setMaximumHeight(110)
+            card.layout.addWidget(name_edit)
+            card.layout.addWidget(desc_edit)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            save = QPushButton("Guardar y aceptar")
+            save.setObjectName("primaryButton")
+            cancel = QPushButton("Cancelar")
+
+            def _save(_=False, c=candidate, n=name_edit, d=desc_edit):
+                data = dict(getattr(c, "proposed_data", {}) or {})
+                if n.text().strip():
+                    data["name"] = n.text().strip()
+                text = d.toPlainText().strip()
+                if "brief_description" in data or "name" in data:
+                    data["brief_description"] = text
+                else:
+                    data["description"] = text
+                try:
+                    c.proposed_data = data
+                except Exception:  # noqa: BLE001 — si el modelo es inmutable, aceptar sin editar
+                    pass
+                self._editing_candidate_id = ""
+                self._accept(cid)
+
+            save.clicked.connect(_save)
+            cancel.clicked.connect(lambda: (setattr(self, "_editing_candidate_id", ""), self.refresh()))
+            row.addWidget(cancel)
+            row.addWidget(save)
+            card.layout.addLayout(row)
+        else:
+            if summary and len(summary) > 90:
+                preview = QLabel(summary[:400] + ("…" if len(summary) > 400 else ""))
+                preview.setObjectName("mutedLabel")
+                preview.setWordWrap(True)
+                card.layout.addWidget(preview)
+            row = QHBoxLayout()
+            row.addStretch(1)
+            edit = QPushButton("Editar")
+            edit.setToolTip("Ajustar la propuesta antes de aceptarla")
+            edit.clicked.connect(lambda _=False, c=cid: (setattr(self, "_editing_candidate_id", c), self.refresh()))
+            accept = QPushButton("Aceptar")
+            accept.setObjectName("primaryButton")
+            accept.clicked.connect(lambda _=False, c=cid: self._accept(c))
+            reject = QPushButton("Descartar")
+            reject.clicked.connect(lambda _=False, c=cid: self._reject(c))
+            row.addWidget(edit)
+            row.addWidget(reject)
+            row.addWidget(accept)
+            card.layout.addLayout(row)
+        self._body_layout.addWidget(card)
+
+    # ── acciones ─────────────────────────────────────────────────────────
+
+    def _accept(self, candidate_id: str):
+        controller = getattr(self.workspace.candidate_view, "cc", None)
+        if controller is None:
+            return
+        result = controller.accept(candidate_id)
+        if isinstance(result, Error):
+            self.workspace.ctx.log("error", f"No se pudo aceptar: {result.error}")
+        else:
+            self.workspace.ctx.log("info", "Propuesta aceptada")
+            self.workspace.refresh()
+        self.refresh()
+
+    def _reject(self, candidate_id: str):
+        controller = getattr(self.workspace.candidate_view, "cc", None)
+        if controller is None:
+            return
+        result = controller.reject(candidate_id)
+        if isinstance(result, Error):
+            self.workspace.ctx.log("error", f"No se pudo descartar: {result.error}")
+        else:
+            self.workspace.ctx.log("info", "Propuesta descartada")
+        self.refresh()
+
+
 class NarrativeWorkbench(QWidget):
     """Normal-mode clean entry points for creation work."""
 
@@ -599,6 +848,11 @@ class AIJobsPanel(_SimpleFormPanel):
             return
         for job in reversed(jobs):
             card = Card(self._job_title(job), self._job_description(job))
+            rag_label = QLabel(self._job_rag_status(job))
+            rag_label.setObjectName("mutedLabel")
+            rag_label.setWordWrap(True)
+            rag_label.setStyleSheet("font-size: 11px; color: #6F6A42; background: transparent; border: none;")
+            card.layout.addWidget(rag_label)
             progress = QProgressBar()
             progress.setRange(0, 100)
             progress.setValue(int(max(0.0, min(1.0, float(getattr(job, "progress", 0.0)))) * 100))
@@ -628,6 +882,24 @@ class AIJobsPanel(_SimpleFormPanel):
         if error:
             message = f"{message}: {error}"
         return f"{str(job_type).replace('_', ' ')} · {status} · {message}"
+
+    def _job_rag_status(self, job) -> str:
+        status = str(getattr(getattr(job, "status", ""), "value", getattr(job, "status", "")))
+        active = status in {"queued", "building_context", "planning", "waiting_for_model", "running", "postprocessing"}
+        plan = getattr(job, "plan", {}) or {}
+        context = plan.get("context", {}) if isinstance(plan, dict) else {}
+        pack = context.get("rag_context_pack", {}) if isinstance(context, dict) else {}
+        if not isinstance(pack, dict) or not pack:
+            return "RAG: preparando contexto" if active else "RAG: sin contexto registrado"
+
+        warnings = [str(item) for item in (pack.get("warnings") or []) if str(item)]
+        items = pack.get("items") if isinstance(pack.get("items"), list) else []
+        tokens = int(pack.get("tokens_estimated", 0) or 0)
+        if warnings and not items:
+            return f"RAG: {warnings[0]}"
+        truncated = " · truncado" if pack.get("truncated") else ""
+        warning_text = f" · aviso: {warnings[0]}" if warnings else ""
+        return f"RAG: contexto listo ({len(items)} items, {tokens} tokens){truncated}{warning_text}"
 
     def _cancel(self, job_id: str):
         result = self.workspace.ai_job_service.cancel_job(job_id)
@@ -799,7 +1071,7 @@ class CreationFilterPanel(_SimpleFormPanel):
         self.show_relations = QCheckBox("Mostrar relaciones")
         self.show_relations.setChecked(True)
         for combo in (self.entity_type, self.relation_type, self.relation_family, self.tree, self.layer, self.canon, self.visibility):
-            combo.addItem("— Cualquiera —", "")
+            combo.addItem("- Cualquiera -", "")
         for label, value in (("Pertenencia estructural", "estructural"), ("Narrativa", "narrativa"), ("Causal", "causal"), ("Coherencia/incidencias", "coherencia")):
             self.relation_family.addItem(label, value)
         self._populate()
@@ -810,7 +1082,8 @@ class CreationFilterPanel(_SimpleFormPanel):
         if self._worldbuilding_active():
             form.addRow("Anillo", self.layer)
         form.addRow("Estado", self.canon)
-        form.addRow("Visibilidad", self.visibility)
+        # BETA1-F02/F04: visibilidad fuera del modo normal del producto
+        self.visibility.setVisible(False)
         form.addRow("Relaciones", self.show_relations)
         self.layout.addLayout(form)
         for widget in (self.entity_type, self.relation_type, self.relation_family, self.tree, self.layer, self.canon, self.visibility):
@@ -822,8 +1095,51 @@ class CreationFilterPanel(_SimpleFormPanel):
         row.addStretch(1)
         row.addWidget(clear)
         self.layout.addLayout(row)
+        # BETA1-F02/F03 (revisión): el menú de anillos vive INTEGRADO aquí —
+        # lista con edición directa + creación. Más ordenado que un panel
+        # técnico aparte.
+        if self._worldbuilding_active():
+            self._build_rings_section()
         self.layout.addStretch(1)
         self._sync_status()
+
+    def _build_rings_section(self):
+        header = QLabel("Anillos")
+        header.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; font-weight: 700; letter-spacing: 1px; "
+            "text-transform: uppercase; background: transparent; border: none; padding-top: 8px;"
+        )
+        self.layout.addWidget(header)
+        controller = getattr(self.workspace, "layer_controller", None)
+        rings = []
+        if controller is not None:
+            try:
+                rings = list(controller.list_all())
+            except Exception:  # noqa: BLE001
+                rings = []
+        for ring in rings:
+            row = QHBoxLayout()
+            name = QLabel(str(getattr(ring, "name", "Anillo")))
+            name.setStyleSheet("color: #504B2E; font-size: 12px; background: transparent; border: none;")
+            row.addWidget(name, 1)
+            edit = QPushButton("Editar")
+            edit.setFixedHeight(24)
+            edit.setToolTip("Nombre y orden del anillo")
+            edit.clicked.connect(
+                lambda _=False, rid=str(getattr(ring, "id", "")): self.workspace._open_ring_edit_panel(rid)
+            )
+            row.addWidget(edit)
+            self.layout.addLayout(row)
+        actions = QHBoxLayout()
+        new_btn = QPushButton("Nuevo anillo")
+        new_btn.clicked.connect(self.workspace._open_ring_create_panel)
+        actions.addWidget(new_btn)
+        flyout_btn = QPushButton("Vista de anillos")
+        flyout_btn.setToolTip("Chips de anillos sobre el grafo (filtrado rápido y visibilidad)")
+        flyout_btn.clicked.connect(self.workspace._toggle_layer_drawer)
+        actions.addWidget(flyout_btn)
+        actions.addStretch(1)
+        self.layout.addLayout(actions)
 
     def _worldbuilding_active(self) -> bool:
         project = self.workspace._get_active_project()
@@ -900,7 +1216,7 @@ class CreationFilterPanel(_SimpleFormPanel):
 
 
 
-# ── Left-edge layer flyout ──────────────────────────────────────────────
+# Left-edge layer flyout
 
 class _LayerEdgeFlyout(QFrame):
     """Persistent left drawer for causal layers when Worldbuilding is ON.
@@ -1116,7 +1432,7 @@ class CausalMilestonePanel(_SimpleFormPanel):
     """Drawer panel for creating and reviewing causal milestones (B41-T03).
 
     Uses cards, not tables. No IDs or JSON shown to the user.
-    All mutations go through CausalMilestoneController → CausalMilestoneService.
+    All mutations go through CausalMilestoneController -> CausalMilestoneService.
     """
 
     def __init__(self, controller, on_created=None, prefill: dict | None = None):
@@ -1222,7 +1538,15 @@ class CreationWorkspace(QWidget):
         self.entity_controller = getattr(corpus_view, "ec", None)
         self.relation_controller = getattr(relation_view, "rc", None)
         self.ai_context_controller = None
-        self.ai_job_service = AIJobService()
+        self.rag_service = getattr(self.ctx, "rag_service", None) or RAGService()
+        self.ctx.rag_service = self.rag_service
+        self.prompt_trace_store = getattr(self.ctx, "ai_prompt_trace_store", None) or AIPromptDebugTraceStore.default()
+        self.ctx.ai_prompt_trace_store = self.prompt_trace_store
+        self.ai_job_service = AIJobService(
+            rag_service=self.rag_service,
+            project_provider=self._get_active_project,
+            prompt_trace_store=self.prompt_trace_store,
+        )
         self._ai_workers = {}
         self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
@@ -1231,8 +1555,10 @@ class CreationWorkspace(QWidget):
         if project_service is not None:
             self.ai_context_controller = AIContextController(project_service)
             self._milestone_ctrl = CausalMilestoneController(project_service)
+            self._chronology_ctrl = ProjectChronologyController(project_service)
         else:
             self._milestone_ctrl = None
+            self._chronology_ctrl = None
 
         self._build_ui()
 
@@ -1247,11 +1573,12 @@ class CreationWorkspace(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Persistent top toolbar: creative graph actions left, utilities right.
+        # BETA1-F02 (revisión): la barra superior DESAPARECE del modo normal.
+        # Se sigue construyendo (oculta, fuera del layout) porque varios
+        # flujos legacy/D06 referencian sus botones; las acciones visibles
+        # viven ahora en clusters flotantes junto a la command bar.
         self._top_toolbar = self._build_top_toolbar()
-        self._top_toolbar.setFixedHeight(48)
-        self._top_toolbar.setVisible(True)
-        layout.addWidget(self._top_toolbar)
+        self._top_toolbar.setVisible(False)
 
         # Graph canvas (takes all space)
         self.graph = GraphCanvasWidget(self.ctx)
@@ -1264,7 +1591,7 @@ class CreationWorkspace(QWidget):
         self.graph.nodeAssignToTreeRequested.connect(self._assign_node_to_tree)
         self.graph.ringSelected.connect(self._on_ring_selected)
         self.graph.ringFocused.connect(self._on_ring_focused)
-        # BETA1-B01: context-menu intents → existing creation/deletion routes
+        # BETA1-B01: context-menu intents -> existing creation/deletion routes
         self.graph.contextCreateEntityRequested.connect(self._create_entity_on_graph)
         self.graph.contextCreateTreeRequested.connect(self._create_tree_on_graph)
         self.graph.contextCreateEntityInTreeRequested.connect(self._create_entity_in_tree)
@@ -1274,19 +1601,58 @@ class CreationWorkspace(QWidget):
         # BETA1-B02: Escape closes the contextual drawer after the canvas has
         # cancelled modes and cleared the selection
         self.graph.escapePressed.connect(self._on_canvas_escape)
-        # BETA1-B03: 'Mover a anillo' → EntityController.update (layer_ids)
+        # BETA1-B03: 'Mover a anillo' -> EntityController.update (layer_ids)
         self.graph.nodeAssignToRingRequested.connect(self._assign_node_to_ring)
-        # BETA1-B03: ring CRUD → LayerController
+        # BETA1-B03: ring CRUD -> LayerController
         self.graph.ringCreateRequested.connect(self._open_ring_create_panel)
         self.graph.ringEditRequested.connect(self._open_ring_edit_panel)
         self.graph.ringDeleteRequested.connect(self._delete_ring)
-        # BETA1-B03: drag-out extraction → remove 'contiene' membership
+        # BETA1-B03: drag-out extraction -> remove 'contiene' membership
         self.graph.nodeExtractFromTreeRequested.connect(self._extract_node_from_tree)
         layout.addWidget(self.graph, 1)
 
         # Command bar area replaces the old bottom button toolbar.
-        command_bar = self._build_command_bar()
+        self._command_bar = self._build_command_bar()
+        command_bar = self._command_bar
         layout.addWidget(command_bar)
+
+        # BETA1-F02 (revisión): clusters flotantes a ambos lados, sobre la
+        # command bar. Símbolos monocromos, minimalistas, con leve vaivén.
+        self._float_left = self._build_float_cluster([
+            ("⌕", "Buscar y enfocar elementos", self._open_search_panel),
+            ("◎", "Filtros y anillos", self._open_filter_panel),
+            ("◷", "Cronología e hitos", self._open_milestone_chronology_view),
+        ])
+        self._float_right = self._build_float_cluster([
+            ("✶", "Centro IA — tareas y propuestas", self._open_ai_center),
+            ("⤓", "Guardar proyecto", self._save_project_from_canvas),
+        ])
+        # Breadcrumb flotante de foco (sustituye al de la barra retirada)
+        self._float_focus = QFrame(self)
+        self._float_focus.setStyleSheet(
+            "QFrame { background: rgba(250,248,240,0.92); border: 1px solid #D8D6C8; border-radius: 12px; }"
+        )
+        focus_layout = QHBoxLayout(self._float_focus)
+        focus_layout.setContentsMargins(12, 4, 8, 4)
+        focus_layout.setSpacing(6)
+        self._float_focus_label = QLabel("")
+        self._float_focus_label.setStyleSheet("color: #6F6A42; font-size: 11px; background: transparent; border: none;")
+        focus_layout.addWidget(self._float_focus_label)
+        focus_exit = QPushButton("✕")
+        focus_exit.setToolTip("Volver a mostrar todo el grafo")
+        focus_exit.setFixedSize(20, 20)
+        focus_exit.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #6F6A42; font-size: 11px; } "
+            "QPushButton:hover { color: #504B2E; }"
+        )
+        focus_exit.clicked.connect(self.clear_focus_scope)
+        focus_layout.addWidget(focus_exit)
+        self._float_focus.setVisible(False)
+        # Vaivén sutil de los clusters (respetando movimiento reducido)
+        self._float_phase = 0.0
+        self._float_timer = QTimer(self)
+        self._float_timer.setInterval(60)
+        self._float_timer.timeout.connect(self._drift_floats)
 
         # Left layer drawer is persistent: explicit button toggles it.
         self._layer_flyout = _LayerEdgeFlyout(self)
@@ -1336,15 +1702,13 @@ class CreationWorkspace(QWidget):
             layout.addWidget(button)
             return button
 
-        # Left: primary creative graph actions.
-        icon_btn(ICON_GLYPHS["add"], "Crear hoja", self._create_entity_on_graph)
-        icon_btn("⊞", "Crear rama", self._create_tree_on_graph)
-        self._connect_mode_btn = icon_btn("↔", "Crear relación / modo conexión", self._start_relation_mode)
-        self._suggest_entity_btn = icon_btn("✨", "Sugerir hoja con IA", self._suggest_node)
-        self._coherence_btn = icon_btn("⚠", "Selecciona nodos o relaciones para analizar coherencia", self._open_coherence_panel, enabled=False)
-        icon_btn("⌕", "Buscar y enfocar elementos", self._open_search_panel)
-        self._filter_btn = icon_btn("◌", "Filtros visuales", self._open_filter_panel)
-        self._suggestion_btn = icon_btn("⊹", "Bandeja de sugerencias", self._open_suggestion_inbox)
+        # BETA1-F02: crear hoja/rama/relación viven SOLO en los menús
+        # contextuales del canvas (B01) — sin duplicados permanentes en barra.
+        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
+        self._coherence_btn = icon_btn("!", "Selecciona nodos o relaciones para analizar coherencia", self._open_coherence_panel, enabled=False)
+        icon_btn("Buscar", "Buscar y enfocar elementos", self._open_search_panel)
+        self._filter_btn = icon_btn("Filtro", "Filtros visuales", self._open_filter_panel)
+        self._suggestion_btn = icon_btn("Sug", "Bandeja de sugerencias", self._open_suggestion_inbox)
         self._jobs_btn = icon_btn("Tareas", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
         self._jobs_btn.setStyleSheet(text_btn_style)
         self._jobs_btn.setFixedWidth(74)
@@ -1367,23 +1731,10 @@ class CreationWorkspace(QWidget):
         ):
             ai_button.setVisible(False)
         self._suggestion_count = 0
-        self._layers_toggle_btn = icon_btn("Anillos", "Abrir/cerrar panel de anillos causales", self._toggle_layer_drawer)
-        self._layers_toggle_btn.setStyleSheet(text_btn_style)
-        self._layers_toggle_btn.setFixedWidth(72)
-
-        self._milestone_btn = QPushButton("Crear hito")
-        self._milestone_btn.setToolTip("Crear un hito causal/histórico")
-        self._milestone_btn.setStyleSheet(text_btn_style)
-        self._milestone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._milestone_btn.clicked.connect(self._open_hito_panel)
-        layout.addWidget(self._milestone_btn)
-
-        self._hito_from_sel_btn = QPushButton("Hito desde selección")
-        self._hito_from_sel_btn.setToolTip("Crear hito explicativo desde la selección actual")
-        self._hito_from_sel_btn.setStyleSheet(text_btn_style)
-        self._hito_from_sel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._hito_from_sel_btn.clicked.connect(self._create_hito_from_selection)
-        layout.addWidget(self._hito_from_sel_btn)
+        # BETA1-F02: la gestión de anillos se integra en el panel de filtros
+        # (_open_filter_panel ofrece "Gestionar anillos"); sin botón fijo.
+        # BETA1-F02: hitos/cronología fuera del modo normal — deuda Fase F
+        # (pendiente de decisión visual). Vista y rutas intactas en código.
 
         self._global_focus_btn = QPushButton("Vista global")
         self._global_focus_btn.setToolTip("Volver a mostrar todo el grafo")
@@ -1399,50 +1750,127 @@ class CreationWorkspace(QWidget):
 
         layout.addStretch(1)
 
-        # Right: secondary management / view tools.
-        import_btn = QPushButton("Importar documento")
-        import_btn.setStyleSheet(text_btn_style)
-        import_btn.clicked.connect(lambda: self._open_utility(self.import_export_view))
-        layout.addWidget(import_btn)
+        # BETA1-F02: barra mínima. Eliminados del modo normal: importar
+        # documento (→ Home/proyecto), vista por bandas (desaparece),
+        # toggle concéntrica (modo asumido; B05 la activa por defecto),
+        # Encajar/Centrar (navegación natural: zoom/pan + Space+drag),
+        # papelera (Suprimir + menú contextual cubren el borrado).
+        # BETA1-C05: la física está SIEMPRE activa — sin toggle de usuario.
 
-        self._layers_view_btn = QPushButton("Vista libre/anillos")
-        self._layers_view_btn.setToolTip("Alternar vista por bandas causales")
-        self._layers_view_btn.setStyleSheet(text_btn_style)
-        self._layers_view_btn.clicked.connect(self._toggle_layers_view_from_toolbar)
-        layout.addWidget(self._layers_view_btn)
-
-        self._concentric_view_btn = QPushButton("Concéntrica")
-        self._concentric_view_btn.setToolTip("Mostrar anillos causales como coronas concéntricas calculadas")
-        self._concentric_view_btn.setStyleSheet(text_btn_style)
-        self._concentric_view_btn.clicked.connect(self._toggle_concentric_view_from_toolbar)
-        layout.addWidget(self._concentric_view_btn)
-
-        # BETA1-C05 (decisión de producto): la física está SIEMPRE activa —
-        # no hay toggle de usuario. _physics_enabled queda como mecanismo
-        # interno (tests/fallback de rendimiento), nunca un layout mode.
-
-        fit_btn = QPushButton("Encajar")
-        fit_btn.setToolTip("Encajar todo el grafo en pantalla")
-        fit_btn.setStyleSheet(text_btn_style)
-        fit_btn.clicked.connect(self.fit_all)
-        layout.addWidget(fit_btn)
-
-        reset_btn = QPushButton("Centrar")
-        reset_btn.setToolTip("Centrar la vista y restaurar zoom")
-        reset_btn.setStyleSheet(text_btn_style)
-        reset_btn.clicked.connect(self.reset_view)
-        layout.addWidget(reset_btn)
-
-        delete_btn = QPushButton("🗑")
-        delete_btn.setToolTip("Selecciona algo para eliminar")
-        delete_btn.setStyleSheet(disabled_style)
-        delete_btn.setEnabled(False)
-        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        delete_btn.clicked.connect(self._delete_selected)
-        self._delete_btn = delete_btn
-        layout.addWidget(delete_btn)
+        self._save_btn = QPushButton("Guardar")
+        self._save_btn.setToolTip("Guardar proyecto")
+        self._save_btn.setStyleSheet(text_btn_style)
+        self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._save_btn.clicked.connect(self._save_project_from_canvas)
+        layout.addWidget(self._save_btn)
 
         return bar
+
+    def _build_float_cluster(self, actions: list[tuple[str, str, object]]) -> QFrame:
+        """BETA1-F02: cluster flotante de iconos monocromos sobre la command
+        bar. Estética común: redondos, sin color, calmados."""
+        cluster = QFrame(self)
+        cluster.setStyleSheet(
+            "QFrame { background: rgba(250,248,240,0.94); border: 1px solid #D8D6C8; border-radius: 23px; }"
+        )
+        row = QHBoxLayout(cluster)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(4)
+        for glyph, tip, callback in actions:
+            button = QPushButton(glyph)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedSize(36, 36)
+            button.setStyleSheet(
+                "QPushButton { background: transparent; border: none; border-radius: 18px; "
+                "color: #6F6A42; font-size: 17px; } "
+                "QPushButton:hover { background: rgba(175,167,122,0.22); color: #504B2E; } "
+                "QPushButton:pressed { background: rgba(175,167,122,0.35); }"
+            )
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        cluster.adjustSize()
+        cluster.raise_()
+        return cluster
+
+    def _position_floats(self):
+        """Coloca los clusters a ambos lados de la command bar y el
+        breadcrumb de foco arriba a la izquierda."""
+        bar = getattr(self, "_command_bar", None)
+        if bar is None:
+            return
+        top = bar.y() - 46
+        bob = getattr(self, "_float_bob", 0.0)
+        left = getattr(self, "_float_left", None)
+        if left is not None:
+            left.adjustSize()
+            left.move(18, int(top + bob))
+            left.raise_()
+        right = getattr(self, "_float_right", None)
+        if right is not None:
+            right.adjustSize()
+            right.move(self.width() - right.width() - 18, int(top - bob))
+            right.raise_()
+        focus = getattr(self, "_float_focus", None)
+        if focus is not None and focus.isVisible():
+            focus.adjustSize()
+            focus.move(18, 14)
+            focus.raise_()
+
+    def _drift_floats(self):
+        """Vaivén casi imperceptible de los clusters (±2px, lento)."""
+        import math as _math
+        self._float_phase += 0.06
+        self._float_bob = 2.0 * _math.sin(self._float_phase)
+        self._position_floats()
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._position_floats()
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        self._position_floats()
+        animations = True
+        if hasattr(self.ctx, "animation_duration"):
+            try:
+                animations = int(self.ctx.animation_duration(100)) > 0
+            except Exception:  # noqa: BLE001
+                animations = True
+        if animations and hasattr(self, "_float_timer") and not self._float_timer.isActive():
+            self._float_timer.start()
+
+    def hideEvent(self, event):  # noqa: N802 (Qt API)
+        if hasattr(self, "_float_timer"):
+            self._float_timer.stop()
+        super().hideEvent(event)
+
+    def _open_ai_center(self):
+        """BETA1-F03: acceso único a jobs + sugerencias (Centro IA)."""
+        drawer = self.ctx.drawer
+        if drawer is None:
+            return
+        panel = AICenterPanel(self)
+        drawer.set_content(panel, title="Centro IA")
+        drawer.open()
+
+    def _save_project_from_canvas(self):
+        """BETA1-F02: guardado discreto desde el canvas, por la misma ruta
+        que el Home (ctx.request_save → MainWindow._save: gestiona recientes
+        y estado). Fallback directo por controlador si no hay hook."""
+        request_save = getattr(self.ctx, "request_save", None)
+        if callable(request_save):
+            request_save()
+            return
+        pc = getattr(self.ctx, "project_controller", None)
+        if pc is None:
+            self.ctx.log("error", "No hay proyecto que guardar")
+            return
+        result = pc.save()
+        if hasattr(result, "error"):
+            self.ctx.log("error", f"Error guardando: {result.error}")
+        else:
+            self.ctx.log("info", "Proyecto guardado")
 
     def _build_command_bar(self) -> QWidget:
         """Bottom B38 contextual AI command bar. Creates jobs, never mutates canon."""
@@ -1467,7 +1895,7 @@ class CreationWorkspace(QWidget):
 
         self._command_input = QLineEdit()
         self._command_input.setObjectName("aiCommandInput")
-        self._command_input.setPlaceholderText("Pide una acción revisable: sugerir personaje, detectar contradicción, expandir causa…")
+        self._command_input.setPlaceholderText("Pide una accion revisable: sugerir personaje, detectar contradiccion, expandir causa...")
         self._command_input.setStyleSheet(
             "QLineEdit#aiCommandInput { background: rgba(255,255,255,0.90); "
             "border: 1px solid #D0CCB8; border-radius: 20px; padding: 9px 16px; "
@@ -1497,7 +1925,7 @@ class CreationWorkspace(QWidget):
         layout.addWidget(self._job_status_label)
         return bar
 
-    # ── B38 persistent layer drawer and command bar ───────────────────────
+    # B38 persistent layer drawer and command bar
 
     def _start_relation_mode(self):
         """Guide the existing drag-to-connect relation flow; no parallel mode."""
@@ -1618,7 +2046,7 @@ class CreationWorkspace(QWidget):
             return prompt, scope
         focused_ring_id = str(scope.get("focused_ring_id") or scope.get("active_ring_id") or "")
         if not focused_ring_id:
-            self._job_status_label.setText("Entra primero en un anillo para usar “en este anillo”")
+            self._job_status_label.setText("Entra primero en un anillo para usar en este anillo")
             self.ctx.log("warning", "Comando IA con scope de anillo sin anillo enfocado")
             return None
         scoped = dict(scope)
@@ -1650,14 +2078,15 @@ class CreationWorkspace(QWidget):
         pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
         self.ctx.log("info", "Job IA creado: resultado revisable, sin cambios automáticos en canon")
+        self._open_prompt_trace_page()
         self._start_ai_job_worker(job.id)
 
-    def _launch_toolbar_ai_job(self, prompt: str, status_text: str) -> bool:
+    def _launch_toolbar_ai_job(self, prompt: str, status_text: str, scope_override: dict | None = None) -> bool:
         project = self._get_active_project()
         if project is None:
             self.ctx.log("error", "No hay proyecto activo")
             return False
-        scope = self._current_context_scope()
+        scope = dict(scope_override) if scope_override is not None else self._current_context_scope()
         job_type = classify_ai_job_intent(
             prompt,
             worldbuilding_active=bool(scope.get("worldbuilding_active")),
@@ -1672,6 +2101,7 @@ class CreationWorkspace(QWidget):
         pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
         self.ctx.log("info", "Job IA creado desde accion visible: resultado revisable")
+        self._open_prompt_trace_page()
         self._start_ai_job_worker(job.id)
         return True
 
@@ -1684,6 +2114,21 @@ class CreationWorkspace(QWidget):
         self._ai_workers[job_id] = worker
         worker.start()
 
+    def _open_prompt_trace_page(self):
+        store = getattr(self, "prompt_trace_store", None)
+        if store is None:
+            return
+        try:
+            path = store.write_page().resolve()
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except Exception as exc:
+            self.ctx.log("warning", f"No se pudo abrir visor de prompts RAG: {exc}")
+            return
+        if opened:
+            self.ctx.log("info", f"Visor temporal de prompts RAG abierto: {path}")
+        else:
+            self.ctx.log("warning", f"Visor de prompts RAG escrito, pero no se pudo abrir: {path}")
+
     def _on_ai_job_status(self, status: str, message: str, progress: float):
         percent = int(max(0.0, min(1.0, progress)) * 100)
         self._job_status_label.setStyleSheet(
@@ -1692,6 +2137,7 @@ class CreationWorkspace(QWidget):
         )
         self._job_status_label.setText(f"Dendro: {message} ({percent}%)")
         self._sync_jobs_indicator()
+        self._refresh_ai_jobs_panel_if_open()
 
     def _on_ai_job_finished(self, job_id: str):
         result = self.ai_job_service.get_job(job_id)
@@ -1706,6 +2152,7 @@ class CreationWorkspace(QWidget):
         self._job_status_label.setText(job.message or "Resultado listo")
         pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
+        self._refresh_ai_jobs_panel_if_open()
         self._open_ai_job_result(job)
 
     def _on_ai_job_failed(self, job_id: str, error: str):
@@ -1714,6 +2161,7 @@ class CreationWorkspace(QWidget):
         pulse_feedback(self._job_status_label)
         self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
         self._sync_jobs_indicator()
+        self._refresh_ai_jobs_panel_if_open()
         # Clear error styling after 8 seconds so it doesn't persist forever
         QTimer.singleShot(8000, self._reset_job_status_style)
 
@@ -1736,8 +2184,17 @@ class CreationWorkspace(QWidget):
         if drawer is None:
             return
         panel = AIJobsPanel(self)
+        self._ai_jobs_panel = panel
         drawer.set_content(panel, title="Tareas IA")
         drawer.open()
+
+    def _refresh_ai_jobs_panel_if_open(self):
+        panel = getattr(self, "_ai_jobs_panel", None)
+        if panel is not None and hasattr(panel, "refresh"):
+            try:
+                panel.refresh()
+            except RuntimeError:
+                self._ai_jobs_panel = None
 
     def _open_ai_job_result_by_id(self, job_id: str):
         result = self.ai_job_service.get_job(job_id)
@@ -1860,9 +2317,9 @@ class CreationWorkspace(QWidget):
         count = len(controller.list_all())
         self._suggestion_count = count
         if count > 0:
-            btn.setText(f"💡 {count}")
+            btn.setText(f"Sugerencias {count}")
         else:
-            btn.setText("💡")
+            btn.setText("Sugerencias")
 
     def _sync_filter_indicator(self):
         btn = getattr(self, "_filter_btn", None)
@@ -1870,10 +2327,10 @@ class CreationWorkspace(QWidget):
             return
         count = self.graph.active_filter_count()
         if count:
-            btn.setText(f"◫{count}")
+            btn.setText(f"Filtros {count}")
             btn.setToolTip(f"Filtros visuales ({count} activo(s))")
         else:
-            btn.setText("◫")
+            btn.setText("Filtros")
             btn.setToolTip("Filtros visuales")
 
     def apply_creation_filter(self, filter_state: VisualFilterState):
@@ -1896,6 +2353,12 @@ class CreationWorkspace(QWidget):
             self._focus_label.setText(text)
         if hasattr(self, "_global_focus_btn"):
             self._global_focus_btn.setVisible(active)
+        # BETA1-F02 (revisión): breadcrumb flotante — solo aparece cuando
+        # hay un foco activo; en reposo, cero ruido.
+        if hasattr(self, "_float_focus"):
+            self._float_focus_label.setText(text)
+            self._float_focus.setVisible(bool(active))
+            self._position_floats()
 
     def _entity_name(self, entity_id: str) -> str:
         entity = self._entity_by_id(entity_id)
@@ -2017,32 +2480,34 @@ class CreationWorkspace(QWidget):
         if not self.graph.center_selection():
             self.ctx.log("info", "No hay selección que centrar")
 
-    # ── Utility openers ────────────────────────────────────────────────────
+    # Utility openers
 
     def _on_graph_selection_changed(self, entity_ids: list[str], relation_ids: list[str]):
         has_selection = bool(entity_ids or relation_ids)
         n_e = len(entity_ids)
         n_r = len(relation_ids)
 
-        # Coherence button
         button = getattr(self, "_coherence_btn", None)
         if button is not None:
             button.setEnabled(has_selection)
             button.setStyleSheet(self._toolbar_btn_style if has_selection else self._toolbar_disabled_style)
-            if has_selection:
-                button.setToolTip(f"Analizar coherencia: {n_e} nodo(s), {n_r} relación(es)")
-            else:
-                button.setToolTip("Selecciona nodos o relaciones para analizar coherencia")
+            button.setToolTip(
+                f"Analizar coherencia: {n_e} nodo(s), {n_r} relacion(es)"
+                if has_selection else
+                "Selecciona nodos o relaciones para analizar coherencia"
+            )
 
-        # Suggest entity / relation buttons: always enabled, but update tooltip with context info
-        for attr, base in [("_suggest_entity_btn", "Sugerir hoja"), ("_suggest_relation_btn", "Sugerir relación")]:
+        for attr, base in (
+            ("_suggest_entity_btn", "Sugerir hoja"),
+            ("_suggest_branch_btn", "Sugerir rama"),
+        ):
             btn = getattr(self, attr, None)
             if btn is not None and btn.isEnabled():
-                if has_selection:
-                    btn.setToolTip(f"{base} con IA (contexto: {n_e} nodo(s), {n_r} relación(es) seleccionado(s))")
-                else:
-                    btn.setToolTip(f"{base} con IA (contexto: todo el proyecto)")
-
+                btn.setToolTip(
+                    f"{base} con IA (contexto: {n_e} nodo(s), {n_r} relacion(es) seleccionado(s))"
+                    if has_selection else
+                    f"{base} con IA (contexto: todo el proyecto)"
+                )
         # D04 explicit enablement for actions born disabled.
         branch_btn = getattr(self, "_suggest_branch_btn", None)
         if branch_btn is not None:
@@ -2194,7 +2659,7 @@ class CreationWorkspace(QWidget):
         drawer.set_content(view, title=title)
         drawer.open()
 
-    # ── Suggest node / relation via AI ─────────────────────────────────
+    # Suggest node / relation via AI
 
     def _suggest_branch(self):
         """Suggest 1-2 branch candidates from the current creation context."""
@@ -2241,7 +2706,7 @@ class CreationWorkspace(QWidget):
             relation_ids = []
             context_label = "todo el proyecto"
 
-        btn = getattr(self, "_suggest_entity_btn", None)
+        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
         if btn:
             btn.setEnabled(False)
             btn.setToolTip("Consultando IA...")
@@ -2252,7 +2717,7 @@ class CreationWorkspace(QWidget):
             entity_ids=entity_ids,
             relation_ids=relation_ids,
         )
-        self._suggest_worker.finished.connect(lambda: self._on_suggest_done("nodo", "_suggest_entity_btn", "_suggest_worker"))
+        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
         self._suggest_worker.start()
         self.ctx.log("info", f"Consultando IA para sugerir hojas (contexto: {context_label})...")
 
@@ -2365,7 +2830,7 @@ class CreationWorkspace(QWidget):
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Hoja creada en modo borrador")
         self.refresh()
-        # BETA1-B02: reveal without zooming — focus_entity did a fitInView
+        # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         # that yanked the camera on every contextual creation.
         self.graph.canvas.reveal_entity(entity_id)
         # Open detail panel for editing
@@ -2411,7 +2876,7 @@ class CreationWorkspace(QWidget):
         entity_id = getattr(entity, "id", "")
         self.ctx.log("info", "Rama creada en modo borrador")
         self.refresh()
-        # BETA1-B02: reveal without zooming (see _create_entity_on_graph)
+        # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         self.graph.canvas.reveal_entity(entity_id)
         self._open_tree_panel(entity_id, is_new=True)
         return entity_id
@@ -2488,7 +2953,7 @@ class CreationWorkspace(QWidget):
         self.refresh()
 
     def _open_ring_create_panel(self):
-        """BETA1-B03: 'Crear anillo…' — reuses the existing layer panel."""
+        """BETA1-B03: 'Crear anillo...' - reuses the existing layer panel."""
         if self.layer_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
             return
@@ -2497,7 +2962,7 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.open()
 
     def _open_ring_edit_panel(self, ring_id: str):
-        """BETA1-B03: 'Editar anillo…' — name and order via LayerController."""
+        """BETA1-B03: 'Editar anillo...' - name and order via LayerController."""
         if self.layer_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo editar anillo: servicio no disponible")
             return
@@ -2506,7 +2971,7 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.open()
 
     def _delete_ring(self, ring_id: str):
-        """BETA1-B03: 'Eliminar anillo' — soft delete (hide_layer) after
+        """BETA1-B03: 'Eliminar anillo' - soft delete (hide_layer) after
         confirmation. Entities keep their layer ids: they show as 'Sin
         clasificar' and the ring can be restored from the layers view."""
         if self.layer_controller is None:
@@ -2517,8 +2982,8 @@ class CreationWorkspace(QWidget):
         answer = QMessageBox.question(
             self,
             "Eliminar anillo",
-            f"¿Eliminar el anillo «{name}»?\n"
-            "Sus elementos pasarán a 'Sin clasificar' (el anillo puede restaurarse).",
+            f"Eliminar el anillo {name}?\n"
+            "Sus elementos pasaran a 'Sin clasificar' (el anillo puede restaurarse).",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -2595,11 +3060,14 @@ class CreationWorkspace(QWidget):
             ai_controller=self.ai_context_controller,
             is_new=is_new,
             on_focus_tree=self.focus_tree_scope,
+            milestone_controller=self._milestone_ctrl,
+            on_open_milestones=self._open_milestone_chronology_view,
+            on_suggest_milestone=self._suggest_related_milestone,
         )
         self.ctx.drawer.set_content(panel, title="Rama")
         self.ctx.drawer.open()
 
-    # ── Existing workspace methods (preserved) ─────────────────────────────
+    # Existing workspace methods (preserved)
 
     def _open_hito_panel(self):
         """Open the causal milestone creation/review drawer (B41-T03)."""
@@ -2610,6 +3078,58 @@ class CreationWorkspace(QWidget):
         panel = CausalMilestonePanel(self._milestone_ctrl, on_created=self.refresh)
         drawer.set_content(panel, title="Hitos causales")
         drawer.open()
+
+    def _open_milestone_chronology_view(self, target_kind: str = "", target_id: str = "", hito_id: str = ""):
+        """Open the H03 milestone chronology view without touching the graph."""
+        drawer = self.ctx.drawer
+        if self._milestone_ctrl is None or drawer is None:
+            self.ctx.log("error", "No se pudo abrir cronologia: servicio no disponible")
+            return
+        target_kind = str(target_kind or "")
+        target_id = str(target_id or "")
+        panel = MilestoneChronologyView(
+            self._milestone_ctrl,
+            project_getter=self._get_active_project,
+            entity_controller=self.entity_controller,
+            relation_controller=self.relation_controller,
+            layer_controller=self.layer_controller,
+            chronology_controller=self._chronology_ctrl,
+            on_saved=self.refresh,
+            initial_entity_id=target_id if target_kind in {"entity", "branch"} else "",
+            initial_relation_id=target_id if target_kind == "relation" else "",
+            initial_hito_id=str(hito_id or ""),
+        )
+        drawer.set_content(panel, title="Cronologia")
+        drawer.open()
+
+    def _suggest_related_milestone(self, target_kind: str, target_id: str) -> bool:
+        """Launch a reviewable AI job anchored to one existing detail-panel target."""
+        target_kind = str(target_kind or "entity")
+        target_id = str(target_id or "")
+        if not target_id:
+            self.ctx.log("warning", "Selecciona un elemento para sugerir un hito relacionado")
+            return False
+        scope = self._current_context_scope()
+        scope["selected_entity_ids"] = []
+        scope["selected_relation_ids"] = []
+        scope["h05_target_kind"] = target_kind
+        scope["h05_target_id"] = target_id
+        if target_kind in {"entity", "branch"}:
+            scope["selected_entity_ids"] = [target_id]
+        elif target_kind == "relation":
+            scope["selected_relation_ids"] = [target_id]
+            relation = self._relation_by_id(target_id)
+            endpoints = [
+                str(getattr(relation, "source_id", "") or ""),
+                str(getattr(relation, "target_id", "") or ""),
+            ] if relation is not None else []
+            scope["selected_entity_ids"] = [entity_id for entity_id in endpoints if entity_id]
+        prompt = (
+            "Sugiere un hito causal relacionado con la seleccion actual. "
+            "Devuelve el resultado como candidato revisable, sin modificar canon. "
+            "Incluye titulo, descripcion, justificacion, clave temporal narrativa y orden relativo si procede."
+        )
+        return self._launch_toolbar_ai_job(prompt, "Sugiriendo hito relacionado...", scope_override=scope)
 
     def _create_hito_from_selection(self):
         """Create a hito from current graph selection (B41-T04).
@@ -2654,8 +3174,10 @@ class CreationWorkspace(QWidget):
         project_service = getattr(project_controller, "ps", None)
         if project_service is None:
             self.ai_context_controller = None
+            self._chronology_ctrl = None
         else:
             self.ai_context_controller = AIContextController(project_service)
+            self._chronology_ctrl = ProjectChronologyController(project_service)
         if hasattr(self, "graph"):
             self.graph.set_ai_controller(self.ai_context_controller)
 
@@ -2695,7 +3217,7 @@ class CreationWorkspace(QWidget):
                 widget.refresh()
 
     def open_graph(self):
-        """Graph is always visible — this is now a no-op."""
+        """Graph is always visible - this is now a no-op."""
         pass
 
     def open_entity_create(self):
@@ -2760,9 +3282,12 @@ class CreationWorkspace(QWidget):
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
             relation_controller=self.relation_controller,
+            milestone_controller=self._milestone_ctrl,
             is_new=is_new,
             on_focus_neighborhood=lambda eid=entity_id: self.focus_neighborhood(eid, kind="entity"),
             on_convert_to_branch=self._on_node_converted_to_branch,
+            on_open_milestones=self._open_milestone_chronology_view,
+            on_suggest_milestone=self._suggest_related_milestone,
         )
         self.ctx.drawer.set_content(panel, title="Nodo")
         self.ctx.drawer.open()
@@ -2771,6 +3296,16 @@ class CreationWorkspace(QWidget):
         if self.relation_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de relación")
             return
+        # BETA1-F05: diagnóstico — si la construcción del panel falla, que
+        # se vea el motivo en vez de un click que "no hace nada".
+        try:
+            self._open_relation_panel_impl(relation_id, is_new=is_new)
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+            _apptrace("relation_panel_error " + traceback.format_exc(limit=4))
+            self.ctx.log("error", f"El panel de relación falló al construirse: {exc}")
+
+    def _open_relation_panel_impl(self, relation_id: str, *, is_new: bool = False):
         panel = RelationDetailPanel(
             self.ctx,
             self.relation_controller,
@@ -2778,8 +3313,11 @@ class CreationWorkspace(QWidget):
             on_saved=self.refresh,
             ai_controller=self.ai_context_controller,
             entity_controller=self.entity_controller,
+            milestone_controller=self._milestone_ctrl,
             is_new=is_new,
             on_focus_neighborhood=lambda rid=relation_id: self.focus_neighborhood(rid, kind="relation"),
+            on_open_milestones=self._open_milestone_chronology_view,
+            on_suggest_milestone=self._suggest_related_milestone,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
@@ -2792,6 +3330,16 @@ class CreationWorkspace(QWidget):
         for entity in getattr(project, "entities", []) or []:
             if getattr(entity, "id", None) == entity_id:
                 return entity
+        return None
+
+    def _relation_by_id(self, relation_id: str):
+        pc = self.ctx.project_controller
+        project = pc.ps.active_project if pc else None
+        if project is None:
+            return None
+        for relation in getattr(project, "relations", []) or []:
+            if getattr(relation, "id", None) == relation_id:
+                return relation
         return None
 
     def _entity_label(self, entity_id: str) -> str:
@@ -2867,7 +3415,7 @@ class CreationWorkspace(QWidget):
         """True if a relation exists between the pair (either direction).
 
         BETA1-B03: with ignore_structural=True the structural 'contiene'
-        relation doesn't count — a branch must be able to hold narrative
+        relation does not count - a branch must be able to hold narrative
         relations with its own content and nested branches."""
         if self.relation_controller is None:
             return False
@@ -2929,7 +3477,7 @@ class CreationWorkspace(QWidget):
         if source_id == target_id:
             self.ctx.log("warning", "No se puede crear una relación sobre la misma entidad")
             return
-        # BETA1-B03: 'contiene' is structural, not narrative — it must not
+        # BETA1-B03: 'contiene' is structural, not narrative - it must not
         # block creating a real relation between a branch and its content.
         if self._relation_exists(source_id, target_id, ignore_structural=True):
             self.ctx.log("warning", "Ya existe una relación entre esas entidades")
@@ -2984,7 +3532,7 @@ class GalleryWorkspace(QWidget):
         ))
         filters = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar por nombre, tipo o descripción…")
+        self.search.setPlaceholderText("Buscar por nombre, tipo o descripción...")
         self.search.textChanged.connect(self.refresh)
         filters.addWidget(self.search, 2)
         self.kind_filter = QComboBox()
@@ -3056,7 +3604,7 @@ class GalleryWorkspace(QWidget):
                 "kind": enum_human(kind_key),
                 "kind_key": kind_key,
                 "subtitle": getattr(entity, "brief_description", "") or getattr(entity, "brief", "") or getattr(entity, "description", ""),
-                "symbol": "◆",
+                "symbol": "*",
                 "badges": [(enum_human(canon or "canon"), "success"), (enum_human(visibility or "visible"), "info")],
                 "relation_summary": self._entity_relations(project, getattr(entity, "id", "")),
                 "group_type": enum_human(kind_key),
@@ -3071,7 +3619,7 @@ class GalleryWorkspace(QWidget):
                 "kind": "Campaña",
                 "kind_key": "campaña",
                 "subtitle": getattr(campaign, "description", "") or "Campaña narrativa",
-                "symbol": "◎",
+                "symbol": "*",
                 "badges": [("Campaña", "info")],
                 "relation_summary": f"Sesiones: {len(getattr(campaign, 'session_ids', []) or [])}",
                 "group_type": "Campaña",
@@ -3086,7 +3634,7 @@ class GalleryWorkspace(QWidget):
                 "kind": "Facción",
                 "kind_key": "faccion",
                 "subtitle": getattr(faction, "description", "") or "Facción del mundo",
-                "symbol": "◈",
+                "symbol": "*",
                 "badges": [("Facción", "warning")],
                 "relation_summary": f"Aliados/enemigos: {len(getattr(faction, 'ally_faction_ids', []) or [])}/{len(getattr(faction, 'enemy_faction_ids', []) or [])}",
                 "group_type": "Facción",
@@ -3101,7 +3649,7 @@ class GalleryWorkspace(QWidget):
                 "kind": "Sesión",
                 "kind_key": "sesión",
                 "subtitle": getattr(session, "context_summary", "") or getattr(session, "summary", "") or "Sesión preparada",
-                "symbol": "◌",
+                "symbol": "*",
                 "badges": [("Sesión", "info")],
                 "relation_summary": f"Escenas: {len(getattr(session, 'scenes', []) or [])}",
                 "group_type": "Sesión",
@@ -3117,7 +3665,7 @@ class GalleryWorkspace(QWidget):
                     "kind": "Secreto",
                     "kind_key": "secreto",
                     "subtitle": getattr(secret, "content", "") or getattr(secret, "description", "") or "Secreto narrativo",
-                    "symbol": "✦",
+                    "symbol": "*",
                     "badges": [("GM", "danger")],
                     "relation_summary": "Visible solo para dirección",
                     "group_type": "Secretos/Pistas",
@@ -3132,7 +3680,7 @@ class GalleryWorkspace(QWidget):
                     "kind": "Pista",
                     "kind_key": "pista",
                     "subtitle": getattr(clue, "content", "") or getattr(clue, "description", "") or "Pista narrativa",
-                    "symbol": "✧",
+                    "symbol": "*",
                     "badges": [("GM", "success")],
                     "relation_summary": "Revelación controlada",
                     "group_type": "Secretos/Pistas",
@@ -3222,6 +3770,7 @@ class GalleryWorkspace(QWidget):
 
 
 class SessionWorkspace(QTabWidget):
+    # Normal-mode labels kept visible for static UX contract: Campaña, Preparación, En vivo/Post.
     """Session space divided into Campaña, Preparación and En vivo/Post."""
 
     def __init__(self, ctx: AppContext, *, campaign_view, faction_view, session_view,
@@ -3363,7 +3912,7 @@ class SessionPreparationWorkspace(QWidget):
             left = QLabel(label)
             left.setObjectName("mutedLabel")
             line.addWidget(left)
-            right = QLabel(value or "—")
+            right = QLabel(value or "-")
             right.setWordWrap(True)
             line.addWidget(right, 1)
             layout.addLayout(line)
@@ -3388,8 +3937,8 @@ class SessionPreparationWorkspace(QWidget):
         btn = QPushButton("Detalle")
         btn.clicked.connect(lambda: self._detail(title, "Escena", scene, [
             ("Tipo", scene_type),
-            ("Descripción", getattr(scene, "description", "") or "—"),
-            ("Notas", getattr(scene, "notes", "") or "—"),
+            ("Descripcion", getattr(scene, "description", "") or "-"),
+            ("Notas", getattr(scene, "notes", "") or "-"),
             ("NPCs", str(len(getattr(scene, "npc_ids", []) or []))),
         ]))
         row.addWidget(btn)
@@ -3407,8 +3956,8 @@ class SessionPreparationWorkspace(QWidget):
         if self._is_gm():
             btn = QPushButton("Detalle")
             btn.clicked.connect(lambda: self._detail("Secreto", state, secret, [
-                ("Contenido", getattr(secret, "content", "") or "—"),
-                ("Consecuencias", ", ".join(getattr(secret, "revelation_consequences", []) or []) or "—"),
+                ("Contenido", getattr(secret, "content", "") or "-"),
+                ("Consecuencias", ", ".join(getattr(secret, "revelation_consequences", []) or []) or "-"),
                 ("Pistas asociadas", str(len(getattr(secret, "associated_clue_ids", []) or []))),
             ]))
             row.addWidget(btn)
@@ -3425,9 +3974,9 @@ class SessionPreparationWorkspace(QWidget):
         row.addStretch()
         btn = QPushButton("Detalle")
         btn.clicked.connect(lambda: self._detail("Pista", state, clue, [
-            ("Contenido", getattr(clue, "content", "") or "—"),
-            ("Interpretación probable", getattr(clue, "probable_interpretation", "") or "—"),
-            ("Riesgo de pérdida", str(getattr(clue, "loss_risk", 3))),
+            ("Contenido", getattr(clue, "content", "") or "-"),
+            ("Interpretacion probable", getattr(clue, "probable_interpretation", "") or "-"),
+            ("Riesgo de perdida", str(getattr(clue, "loss_risk", 3))),
         ]))
         row.addWidget(btn)
         return card
@@ -3512,7 +4061,7 @@ class SessionPreparationWorkspace(QWidget):
             checklist.extend(getattr(session, "player_known_objectives", []) or [])
         if checklist:
             for item in checklist[:12]:
-                self.cards.addWidget(Card("•", str(item)))
+                self.cards.addWidget(Card("ï¿½?ï¿½", str(item)))
         else:
             self.cards.addWidget(EmptyState("Sin checklist", "No hay elementos de preparación pendientes."))
         self.cards.addStretch()
@@ -3642,14 +4191,14 @@ class SessionOverview(QWidget):
         btn.clicked.connect(lambda: self._open_detail("Clock", clock, [
             ("Estado", enum_human(str(getattr(getattr(clock, "state", None), "value", getattr(clock, "state", ""))))),
             ("Progreso", f"{current}/{max_value}"),
-            ("Condiciones de avance", ", ".join(getattr(clock, "advance_conditions", []) or []) or "—"),
+            ("Condiciones de avance", ", ".join(getattr(clock, "advance_conditions", []) or []) or "-"),
         ]))
         btn_row.addStretch()
         btn_row.addWidget(btn)
         return card
 
     def _simple_card(self, title: str, subtitle: str, badge: str, tone: str, obj, details: list[tuple[str, str]]):
-        card = Card(title, subtitle or "Sin descripción")
+        card = Card(title, subtitle or "Sin descripcion")
         row = card.add_row()
         row.addWidget(Badge(badge, tone))
         row.addStretch()
@@ -3660,7 +4209,7 @@ class SessionOverview(QWidget):
 
     def _open_detail(self, title: str, obj, details: list[tuple[str, str]]):
         if self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo abrir detalle de sesión")
+            self.ctx.log("error", "No se pudo abrir detalle de sesion")
             return
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -3668,7 +4217,7 @@ class SessionOverview(QWidget):
         layout.setSpacing(12)
         name = getattr(obj, "name", title)
         layout.addWidget(SectionHeader(str(name), title))
-        description = getattr(obj, "description", "") or getattr(obj, "relation_with_pcs", "") or "Sin descripción"
+        description = getattr(obj, "description", "") or getattr(obj, "relation_with_pcs", "") or "Sin descripcion"
         desc = QLabel(str(description))
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -3677,7 +4226,7 @@ class SessionOverview(QWidget):
             left = QLabel(label)
             left.setObjectName("mutedLabel")
             row.addWidget(left)
-            value_label = QLabel(value or "—")
+            value_label = QLabel(value or "-")
             value_label.setWordWrap(True)
             row.addWidget(value_label, 1)
             layout.addLayout(row)
@@ -3687,7 +4236,7 @@ class SessionOverview(QWidget):
         technical.setVisible(self._advanced_mode)
         layout.addWidget(technical)
         layout.addStretch()
-        self.ctx.drawer.set_content(panel, title="Sesión")
+        self.ctx.drawer.set_content(panel, title="Sesion")
         self.ctx.drawer.open()
 
     def refresh(self):
@@ -3696,40 +4245,40 @@ class SessionOverview(QWidget):
         if project is None:
             self.campaign_selector.clear()
             self.status_label.setText("Sin proyecto")
-            self.layout_cards.addWidget(EmptyState("Sin proyecto", "Abre un proyecto desde Configuración."))
+            self.layout_cards.addWidget(EmptyState("Sin proyecto", "Abre un proyecto desde Configuracion."))
             self.layout_cards.addStretch()
             return
         self._populate_campaign_selector(project)
         campaign = self._selected_campaign(project)
         if campaign is None:
-            self.status_label.setText("Sin campañas")
-            self.layout_cards.addWidget(EmptyState("Sin campañas", "Crea una campaña para preparar sesiones."))
+            self.status_label.setText("Sin campanas")
+            self.layout_cards.addWidget(EmptyState("Sin campanas", "Crea una campana para preparar sesiones."))
             self.layout_cards.addStretch()
             return
         self.status_label.setText(enum_human(str(getattr(getattr(campaign, "state", None), "value", getattr(campaign, "state", "activa")))))
-        summary = Card(getattr(campaign, "name", "Campaña"), getattr(campaign, "description", "") or "Campaña activa")
+        summary = Card(getattr(campaign, "name", "Campana"), getattr(campaign, "description", "") or "Campana activa")
         row = summary.add_row()
         for label, value, tone in [
-            ("Sistema", getattr(campaign, "game_system", "") or "—", "info"),
-            ("Tono", getattr(campaign, "tone", "") or "—", "info"),
+            ("Sistema", getattr(campaign, "game_system", "") or "-", "info"),
+            ("Tono", getattr(campaign, "tone", "") or "-", "info"),
             ("Sesiones", str(len(getattr(campaign, "session_ids", []) or [])), "success"),
             ("Jugadores", str(len(getattr(campaign, "players", []) or [])), "success"),
         ]:
             row.addWidget(Badge(f"{label}: {value}", tone))
         row.addStretch()
         detail_row = summary.add_row()
-        detail_btn = QPushButton("Detalle campaña")
-        detail_btn.clicked.connect(lambda: self._open_detail("Campaña", campaign, [
-            ("Sistema", getattr(campaign, "game_system", "") or "—"),
-            ("Tono", getattr(campaign, "tone", "") or "—"),
-            ("Género", getattr(campaign, "genre", "") or "—"),
+        detail_btn = QPushButton("Detalle campana")
+        detail_btn.clicked.connect(lambda: self._open_detail("Campana", campaign, [
+            ("Sistema", getattr(campaign, "game_system", "") or "-"),
+            ("Tono", getattr(campaign, "tone", "") or "-"),
+            ("Genero", getattr(campaign, "genre", "") or "-"),
         ]))
         detail_row.addStretch()
         detail_row.addWidget(detail_btn)
         self.layout_cards.addWidget(summary)
 
         clocks = self._clocks_for_campaign(project, campaign)
-        self.layout_cards.addWidget(SectionHeader("Clocks", "Progreso visual de amenazas, frentes y cuenta atrás."))
+        self.layout_cards.addWidget(SectionHeader("Clocks", "Progreso visual de amenazas, frentes y cuenta atras."))
         if clocks:
             for clock in clocks:
                 self.layout_cards.addWidget(self._progress_card(clock))
@@ -3764,7 +4313,7 @@ class SessionOverview(QWidget):
                     enum_human(str(getattr(getattr(faction, "state", None), "value", getattr(faction, "state", "activa")))),
                     "info",
                     faction,
-                    [("Aliados", str(len(getattr(faction, "ally_faction_ids", []) or []))), ("Enemigos", str(len(getattr(faction, "enemy_faction_ids", []) or []))), ("Recursos", ", ".join(getattr(faction, "resources", []) or []) or "—")]
+                    [("Aliados", str(len(getattr(faction, "ally_faction_ids", []) or []))), ("Enemigos", str(len(getattr(faction, "enemy_faction_ids", []) or []))), ("Recursos", ", ".join(getattr(faction, "resources", []) or []) or "-")]
                 ))
         else:
             self.layout_cards.addWidget(EmptyState("Sin facciones", "No hay facciones activas vinculadas."))
@@ -3779,7 +4328,7 @@ class SessionOverview(QWidget):
 
 
 class _SuggestWorker(QThread):
-    """Background worker for AI suggestions (nodes or relations) — keeps UI responsive."""
+    """Background worker for AI suggestions (nodes or relations) - keeps UI responsive."""
 
     def __init__(self, ai_controller, action: str, entity_ids: list[str] | None = None, relation_ids: list[str] | None = None):
         super().__init__()

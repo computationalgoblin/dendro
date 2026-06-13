@@ -303,11 +303,18 @@ def test_engine_performance_budget(body_count):
     import time
 
     rng = random.Random(42)
-    bodies = [
-        Body(f"n{i}", rng.uniform(-800, 800), rng.uniform(-800, 800),
-             target_radius=400.0, band_inner=250.0, band_outer=600.0)
-        for i in range(body_count)
-    ]
+    # Corpus realista: los cuerpos se reparten en 3 coronas con espacio
+    # suficiente (forzar 50 cuerpos de radio 62 en una sola corona es
+    # físicamente imposible — churn permanente; en el canvas real los
+    # anillos se EXPANDEN vía _refresh_ring_spans).
+    coronas = [(250.0, 400.0, 550.0), (650.0, 800.0, 950.0), (1050.0, 1200.0, 1350.0)]
+    bodies = []
+    for i in range(body_count):
+        inner, target, outer = coronas[i % 3]
+        bodies.append(Body(
+            f"n{i}", rng.uniform(-800, 800), rng.uniform(-800, 800),
+            target_radius=target, band_inner=inner, band_outer=outer,
+        ))
     springs = [
         Spring(f"n{i}", f"n{(i * 7 + 3) % body_count}")
         for i in range(min(body_count, 30))

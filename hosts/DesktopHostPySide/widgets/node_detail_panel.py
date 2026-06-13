@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from PySide6.QtCore import QTimer, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QColorDialog,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -29,8 +31,9 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import Badge, enum_human, human_ref
+from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge, enum_human, human_ref
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
+from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
 from packages.domain.result import Error
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
@@ -252,9 +255,12 @@ class NodeDetailPanel(QWidget):
         on_saved=None,
         ai_controller=None,
         relation_controller=None,
+        milestone_controller=None,
         is_new: bool = False,
         on_focus_neighborhood=None,
         on_convert_to_branch=None,
+        on_open_milestones=None,
+        on_suggest_milestone=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -263,8 +269,11 @@ class NodeDetailPanel(QWidget):
         self.on_saved = on_saved
         self.ai_controller = ai_controller
         self.relation_controller = relation_controller
+        self.milestone_controller = milestone_controller
         self.on_focus_neighborhood = on_focus_neighborhood
         self.on_convert_to_branch = on_convert_to_branch
+        self.on_open_milestones = on_open_milestones
+        self.on_suggest_milestone = on_suggest_milestone
         self.is_new = bool(is_new)
         self._entity = None
         self._current_color: str = ""
@@ -299,11 +308,8 @@ class NodeDetailPanel(QWidget):
         self.type_badge = Badge("Hoja", "info")
         head.addWidget(self.type_badge)
         root.addLayout(head)
-        if self.on_focus_neighborhood is not None:
-            focus_btn = QPushButton("Enfocar vecindad")
-            focus_btn.setToolTip("Ver este nodo y sus relaciones cercanas")
-            focus_btn.clicked.connect(self.on_focus_neighborhood)
-            root.addWidget(focus_btn)
+        # BETA1-F04: "Enfocar vecindad" fuera del panel editorial (la
+        # navegación vive en el grafo: doble click / menú contextual).
 
         # -- Compact summary line --
         self.summary = QLabel("")
@@ -324,61 +330,80 @@ class NodeDetailPanel(QWidget):
         form_layout.labelAlignment = 0x0002  # Qt.AlignmentFlag.AlignRight
         _label_ss = f"color: {_LABEL_COLOR}; background: transparent; font-weight: 600;"
 
-        # Nombre
-        name_label = QLabel("Nombre:")
-        name_label.setStyleSheet(_label_ss)
+        # BETA1-F05 layout exacto: NOMBRE + TIPO + ANILLO en UNA fila fluida.
+        first_row = QHBoxLayout()
+        first_row.setSpacing(8)
         self.name_edit = QLineEdit()
-        form_layout.addRow(name_label, self.name_edit)
-
-        # Tipo + Color (on one row)
-        type_label = QLabel("Tipo:")
-        type_label.setStyleSheet(_label_ss)
-        type_row = QHBoxLayout()
-        type_row.setSpacing(8)
+        self.name_edit.setPlaceholderText("Nombre")
+        first_row.addWidget(self.name_edit, 3)
         self.type_combo = QComboBox()
         self.type_combo.setEditable(True)
         for item in EntityType:
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
-        type_row.addWidget(self.type_combo, 1)
-
+        first_row.addWidget(self.type_combo, 2)
+        self.layer_label = QLabel("")  # legacy ref (visibilidad del combo)
+        self.layer_combo = QComboBox()
+        self.layer_combo.addItem("— Sin anillo —", "")
+        first_row.addWidget(self.layer_combo, 2)
         self.color_btn = QPushButton()
         self.color_btn.setFixedSize(28, 28)
         self.color_btn.setToolTip("Color del nodo")
-        self.color_btn.setCursor(self.color_btn.cursor())
         self.color_btn.clicked.connect(self._pick_color)
-        type_row.addWidget(self.color_btn)
-        form_layout.addRow(type_label, type_row)
+        first_row.addWidget(self.color_btn)
+        form_layout.addRow(first_row)
 
-        # Descripción breve
-        brief_label = QLabel("Descripción breve:")
-        brief_label.setStyleSheet(_label_ss)
+        # Descripción breve: tras la imagen (montada fuera del form) — el
+        # widget se crea aquí, se monta más abajo en el orden F05.
         self.brief_edit = QTextEdit()
-        self.brief_edit.setMaximumHeight(56)
-        form_layout.addRow(brief_label, self.brief_edit)
+        self.brief_edit.setMaximumHeight(64)
+        self.brief_edit.setPlaceholderText("Descripción breve…")
+        # BETA1-F05: viñetas protagonistas (breve y cuerpo)
+        _card_ss = (
+            "QTextEdit { background: #FFFDF7; border: 1px solid #E7E3D4; "
+            "border-radius: 12px; padding: 10px; font-size: 13px; color: #3F3D2E; } "
+            "QTextEdit:focus { border: 1px solid #C9C0A0; background: #FFFFFF; }"
+        )
+        self.brief_edit.setStyleSheet(_card_ss)
+        self._editorial_card_ss = _card_ss
 
-        # Cuerpo
-        body_label = QLabel("Cuerpo:")
-        body_label.setStyleSheet(_label_ss)
-        self.extended_edit = QTextEdit()
-        self.extended_edit.setMaximumHeight(120)
-        form_layout.addRow(body_label, self.extended_edit)
-
-        # Estado (simplified canon: Borrador / Canon)
-        canon_label = QLabel("Estado:")
-        canon_label.setStyleSheet(_label_ss)
+        # Estado/canon → submenú "Más opciones" (BETA1-F04); se crea aquí,
+        # se monta más abajo.
         self.canon_combo = QComboBox()
         for val in _SIMPLE_CANON:
             self.canon_combo.addItem(enum_human(val), val)
-        form_layout.addRow(canon_label, self.canon_combo)
-
-        self.layer_label = QLabel("Anillo:")
-        self.layer_label.setStyleSheet(_label_ss)
-        self.layer_combo = QComboBox()
-        self.layer_combo.addItem("— Sin anillo —", "")
-        form_layout.addRow(self.layer_label, self.layer_combo)
 
         root.addWidget(form_card)
+
+        # BETA1-F04: imagen opcional (placeholder + importar; persistencia
+        # mínima en custom_metadata — gestión avanzada de assets = deuda)
+        self.image_preview = QLabel()
+        self.image_preview.setVisible(False)
+        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_preview.setStyleSheet("border: 1px solid #D8D6C8; border-radius: 10px; background: rgba(255,255,255,0.4); padding: 4px;")
+        self.image_preview.setMaximumHeight(160)
+        root.addWidget(self.image_preview)
+        image_row = QHBoxLayout()
+        self.image_btn = QPushButton("Añadir imagen…")
+        self.image_btn.setFixedHeight(26)
+        self.image_btn.clicked.connect(self._pick_image)
+        image_row.addWidget(self.image_btn)
+        image_row.addStretch(1)
+        root.addLayout(image_row)
+
+        # BETA1-F05: descripción breve tras la imagen
+        root.addWidget(self.brief_edit)
+
+        # BETA1-F04: el CUERPO es el centro del panel — sin tope de altura,
+        # con prioridad de espacio (~70-80% del panel).
+        body_label = QLabel("Cuerpo")
+        body_label.setStyleSheet(_label_ss)
+        root.addWidget(body_label)
+        self.extended_edit = QTextEdit()
+        self.extended_edit.setMinimumHeight(300)
+        self.extended_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.extended_edit.setStyleSheet(self._editorial_card_ss)
+        root.addWidget(self.extended_edit, 1)
 
         # -- Hidden fields (only in advanced mode) --
         self._advanced_widgets: list[QWidget] = []
@@ -391,23 +416,9 @@ class NodeDetailPanel(QWidget):
         for item in VisibilityState:
             self.visibility_combo.addItem(enum_human(item.value), item.value)
 
-        adv_notes_label = QLabel("Notas privadas:")
-        adv_notes_label.setStyleSheet(_label_ss)
-        form_layout.addRow(adv_notes_label, self.private_notes_edit)
-        self._advanced_widgets.append(adv_notes_label)
-        self._advanced_widgets.append(self.private_notes_edit)
-
-        adv_export_label = QLabel("Notas exportables:")
-        adv_export_label.setStyleSheet(_label_ss)
-        form_layout.addRow(adv_export_label, self.exportable_notes_edit)
-        self._advanced_widgets.append(adv_export_label)
-        self._advanced_widgets.append(self.exportable_notes_edit)
-
-        adv_vis_label = QLabel("Visibilidad:")
-        adv_vis_label.setStyleSheet(_label_ss)
-        form_layout.addRow(adv_vis_label, self.visibility_combo)
-        self._advanced_widgets.append(adv_vis_label)
-        self._advanced_widgets.append(self.visibility_combo)
+        # BETA1-F05: notas privadas/exportables y visibilidad DESAPARECEN de
+        # la UI. Los widgets existen sin montar: la carga/guardado los sigue
+        # leyendo y ningún dato se pierde.
 
         # -- Compact context summary --
         self.context_box = QGroupBox("Contexto")
@@ -427,7 +438,22 @@ class NodeDetailPanel(QWidget):
             w.setObjectName("mutedLabel")
             w.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
             context_layout.addWidget(w)
-        root.addWidget(self.context_box)
+        # BETA1-F04: contexto → submenú "Más opciones" (montado más abajo)
+
+        self.related_milestones_panel = None
+        if self.milestone_controller is not None:
+            self.related_milestones_panel = RelatedMilestonesPanel(
+                milestone_controller=self.milestone_controller,
+                target_kind="entity",
+                target_id=self.entity_id,
+                project_getter=self._project,
+                entity_controller=self.entity_controller,
+                relation_controller=self.relation_controller,
+                on_open_chronology=self.on_open_milestones,
+                on_suggest_milestone=self.on_suggest_milestone,
+                on_created=self.on_saved,
+            )
+            # BETA1-F04: hitos relacionados → submenú "Más opciones"
 
         # -- B39: Convert to branch button (hidden by default, wired in T02) --
         self.convert_to_branch_btn = QPushButton("Convertir en rama")
@@ -439,7 +465,7 @@ class NodeDetailPanel(QWidget):
         )
         self.convert_to_branch_btn.setVisible(False)
         self.convert_to_branch_btn.clicked.connect(self._convert_to_branch)
-        root.addWidget(self.convert_to_branch_btn)
+        # BETA1-F04: convertir en rama → submenú "Más opciones"
 
         # -- AI suggestion section --
         ai_card = QFrame()
@@ -477,31 +503,18 @@ class NodeDetailPanel(QWidget):
         self.ai_coherence_btn.clicked.connect(self._open_coherence)
         ai_layout.addWidget(self.ai_coherence_btn)
 
-        causal_row = QHBoxLayout()
-        causal_row.setSpacing(6)
+        # BETA1-F05: destino causal / expandir hacia anillo inferior /
+        # explicar desde causas superiores ELIMINADOS del panel (deuda F:
+        # futuras acciones contextuales del grafo). Los widgets existen sin
+        # montar porque varios métodos los referencian.
         self.target_layer_label = QLabel("Destino causal:")
         self.target_layer_combo = QComboBox()
         self.target_layer_combo.addItem("— Anillo inferior —", "")
-        causal_row.addWidget(self.target_layer_label)
-        causal_row.addWidget(self.target_layer_combo, 1)
-        ai_layout.addLayout(causal_row)
         self.expand_down_btn = QPushButton("Expandir hacia anillo inferior")
-        self.expand_down_btn.setEnabled(self.ai_controller is not None)
         self.expand_down_btn.clicked.connect(self._start_expand_down)
-        ai_layout.addWidget(self.expand_down_btn)
         self.explain_causes_btn = QPushButton("Explicar desde causas superiores")
-        self.explain_causes_btn.setEnabled(self.ai_controller is not None)
         self.explain_causes_btn.clicked.connect(self._start_explain_from_causes)
-        ai_layout.addWidget(self.explain_causes_btn)
-
-        for extra_ai_widget in (
-            self.ai_coherence_btn,
-            self.target_layer_label,
-            self.target_layer_combo,
-            self.expand_down_btn,
-            self.explain_causes_btn,
-        ):
-            extra_ai_widget.setVisible(False)
+        self.ai_coherence_btn.setVisible(False)
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -576,7 +589,24 @@ class NodeDetailPanel(QWidget):
         self.technical_text.setReadOnly(True)
         self.technical_text.setMaximumHeight(120)
         technical_layout.addWidget(self.technical_text)
-        root.addWidget(self.technical_box)
+
+        # BETA1-F04: submenú "Más opciones" — todo lo secundario, plegado.
+        # (Estado/canon, contexto, hitos, convertir en rama, datos técnicos
+        # —estos últimos siguen además sujetos al modo avanzado—.)
+        self.more_section = AdvancedSection("Más opciones")
+        canon_row = QHBoxLayout()
+        canon_mini_label = QLabel("Estado:")
+        canon_mini_label.setStyleSheet(_label_ss)
+        canon_row.addWidget(canon_mini_label)
+        canon_row.addWidget(self.canon_combo, 1)
+        self.more_section.body_layout.addLayout(canon_row)
+        # BETA1-F05: contexto y datos técnicos FUERA del producto (los
+        # widgets viven sin montar; _refresh_context/_refresh_technical
+        # siguen escribiendo en ellos sin coste visual).
+        if self.related_milestones_panel is not None:
+            self.more_section.body_layout.addWidget(self.related_milestones_panel)
+        self.more_section.body_layout.addWidget(self.convert_to_branch_btn)
+        root.addWidget(self.more_section)
 
         # -- Actions --
         actions = QHBoxLayout()
@@ -600,6 +630,40 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Colour helpers
     # ------------------------------------------------------------------
+
+    # ── BETA1-F04: imagen opcional ───────────────────────────────────────
+
+    def _pick_image(self):
+        """Importa una imagen y la asocia a la hoja (persistencia mínima:
+        ruta en custom_metadata. Gestión avanzada de assets = deuda F)."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Importar imagen", "", "Imágenes (*.png *.jpg *.jpeg *.webp)"
+        )
+        if not path:
+            return
+        entity = self._entity_by_id(self.entity_id)
+        metadata = dict(getattr(entity, "custom_metadata", {}) or {}) if entity is not None else {}
+        metadata["_image_path"] = path
+        result = self.entity_controller.update(self.entity_id, {"custom_metadata": metadata})
+        if isinstance(result, Error):
+            self.ctx.log("error", f"No se pudo asociar la imagen: {result.error}")
+            return
+        self._show_image(path)
+        self.ctx.log("info", "Imagen asociada a la hoja")
+
+    def _show_image(self, path: str):
+        from pathlib import Path as _Path
+        if not path or not _Path(path).exists():
+            self.image_preview.setVisible(False)
+            self.image_btn.setText("Añadir imagen…")
+            return
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            self.image_preview.setVisible(False)
+            return
+        self.image_preview.setPixmap(pixmap.scaledToHeight(150, Qt.TransformationMode.SmoothTransformation))
+        self.image_preview.setVisible(True)
+        self.image_btn.setText("Cambiar imagen…")
 
     def _update_color_swatch(self, hex_color: str):
         self._current_color = hex_color
@@ -1035,6 +1099,9 @@ class NodeDetailPanel(QWidget):
                 self.save_btn.setEnabled(False)
                 return
             entity = result.value
+            # BETA1-F04: imagen asociada (si la hay)
+            metadata = dict(getattr(entity, "custom_metadata", {}) or {})
+            self._show_image(str(metadata.get("_image_path", "")))
             self._entity = entity
             kind = _enum_value(getattr(entity, "entity_type", None), "entidad")
             self.title.setText(getattr(entity, "name", "Sin nombre") or "Sin nombre")
@@ -1072,6 +1139,8 @@ class NodeDetailPanel(QWidget):
                 self._update_color_swatch(_default_color_for_type(kind))
 
             self._refresh_context(entity)
+            if self.related_milestones_panel is not None:
+                self.related_milestones_panel.refresh()
             self._refresh_technical(entity)
             self.set_advanced_mode(self.ctx.advanced_mode)
 

@@ -48,6 +48,10 @@ class CausalMilestoneController:
         _apptrace(f"CTRL CausalMilestoneController.update hito_id={hito_id!r}"[:120])
         return self.svc.update_hito(hito_id, data)
 
+    def delete(self, hito_id: str):
+        _apptrace(f"CTRL CausalMilestoneController.delete hito_id={hito_id!r}"[:120])
+        return self.svc.delete_hito(hito_id)
+
     # ── Queries ──
 
     def list_all(self):

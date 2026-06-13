@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 import json
 import re
 import time
@@ -27,6 +27,7 @@ import uuid
 from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
 from packages.application.ai_request_gateway import ModelParams
+from packages.application.command_bar_planner import CommandBarPlan, CommandBarPlannerService
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 
 
@@ -75,6 +76,10 @@ class CommandBarIntent:
     expected_output_type: str
     needs_confirmation: bool = False
     rationale: str = ""
+    actions: list[dict[str, Any]] = field(default_factory=list)
+    retrieval_needs: list[str] = field(default_factory=list)
+    clarifying_question: str | None = None
+    planner_source: str = "heuristic"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +89,10 @@ class CommandBarIntent:
             "expected_output_type": self.expected_output_type,
             "needs_confirmation": self.needs_confirmation,
             "rationale": self.rationale,
+            "actions": list(self.actions),
+            "retrieval_needs": list(self.retrieval_needs),
+            "clarifying_question": self.clarifying_question,
+            "planner_source": self.planner_source,
         }
 
 
@@ -272,6 +281,49 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
     return ["plan revisable"]
 
 
+def _expected_output_for_intent(intent_type: AIJobType) -> str:
+    if intent_type == AIJobType.GENERATE_ENTITIES:
+        return "entity_candidates"
+    if intent_type == AIJobType.GENERATE_TREE:
+        return "tree_candidates"
+    if intent_type == AIJobType.SUGGEST_RELATIONS:
+        return "relation_candidates"
+    if intent_type == AIJobType.ANALYZE_COHERENCE:
+        return "analysis_report"
+    if intent_type == AIJobType.EXPAND_WORLDBUILDING:
+        return "worldbuilding_candidates"
+    if intent_type == AIJobType.EXPLAIN_FROM_CAUSES:
+        return "explanation_report"
+    if intent_type == AIJobType.REVIEW_GRAPH:
+        return "analysis_report"
+    if intent_type == AIJobType.FREEFORM_PLANNING:
+        return "plan_report"
+    if intent_type == AIJobType.EDIT_ENTITIES:
+        return "edit_candidates"
+    if intent_type == AIJobType.PROPOSE_MILESTONES:
+        return "milestone_candidates"
+    return "clarification_or_plan"
+
+
+def _intent_from_command_bar_plan(plan: CommandBarPlan) -> CommandBarIntent:
+    try:
+        intent_type = AIJobType(plan.intent_type)
+    except ValueError:
+        intent_type = AIJobType.UNKNOWN
+    return CommandBarIntent(
+        intent_type=intent_type,
+        confidence=plan.confidence,
+        target_scope=plan.target_scope,
+        expected_output_type=plan.expected_output_type or _expected_output_for_intent(intent_type),
+        needs_confirmation=plan.needs_confirmation,
+        rationale=plan.rationale,
+        actions=[action.to_dict() for action in plan.actions],
+        retrieval_needs=list(plan.retrieval_needs),
+        clarifying_question=plan.clarifying_question,
+        planner_source="ai",
+    )
+
+
 def build_job_plan(intent: CommandBarIntent, prompt: str, context: dict[str, Any] | None = None, *, job_id: str = "") -> AIJobPlan:
     context = dict(context or {})
     label = prompt.strip().replace("\n", " ")[:72] or "Tarea IA"
@@ -299,6 +351,16 @@ def _first_active_layer(context_scope: dict[str, Any]) -> str:
     if isinstance(layers, (list, tuple)) and layers:
         return str(layers[0])
     return ""
+
+
+def _selected_entity_ids(context_scope: dict[str, Any]) -> list[str]:
+    value = context_scope.get("selected_entity_ids") or []
+    return [str(item) for item in value if str(item)] if isinstance(value, (list, tuple)) else []
+
+
+def _selected_relation_ids(context_scope: dict[str, Any]) -> list[str]:
+    value = context_scope.get("selected_relation_ids") or []
+    return [str(item) for item in value if str(item)] if isinstance(value, (list, tuple)) else []
 
 
 def _candidate(
@@ -359,7 +421,63 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     """Convert model payload to reviewable candidates/report. Never mutates canon."""
     payload = dict(model_payload or {})
     layer_id = _first_active_layer(job.context_scope)
+    selected_entity_ids = _selected_entity_ids(job.context_scope)
+    selected_relation_ids = _selected_relation_ids(job.context_scope)
     candidates: list[dict[str, Any]] = []
+
+    chronology = payload.get("project_chronology_suggestion") or payload.get("chronology_suggestion")
+    if isinstance(chronology, dict):
+        proposed = {"kind": "project_chronology_suggestion", **chronology}
+        candidates.append(_candidate(
+            title=str(proposed.get("title") or "Propuesta de calendario"),
+            candidate_type="sugerencia_ia",
+            proposed_data=proposed,
+            job=job,
+            justification=str(proposed.get("rationale") or "Propuesta de cronologia/calendario generada por IA."),
+            confidence=0.58,
+            expected_impact="Propone configurar la cronologia del proyecto; no se aplica sin aceptacion.",
+        ))
+
+    for milestone in _safe_list(payload.get("hitos") or payload.get("milestones")):
+        if not isinstance(milestone, dict):
+            continue
+        title = str(milestone.get("title") or milestone.get("titulo") or "Hito sugerido").strip()
+        if not title:
+            continue
+        summary = str(milestone.get("summary") or milestone.get("description") or milestone.get("resumen") or "").strip()
+        body = str(milestone.get("body") or milestone.get("rationale") or milestone.get("justification") or "").strip()
+        chronology_position = str(milestone.get("chronology_position") or milestone.get("chronology_key") or "").strip()
+        try:
+            sort_index = int(milestone.get("sort_index", 0) or 0)
+        except (TypeError, ValueError):
+            sort_index = 0
+        primary = selected_entity_ids[0] if selected_entity_ids else ""
+        hito_payload = {
+            "title": title,
+            "description": summary,
+            "rationale": body,
+            "status": "candidate",
+            "affected_entity_ids": list(selected_entity_ids),
+            "caused_relation_ids": list(selected_relation_ids),
+            "layer_ids": [layer_id] if layer_id else [],
+            "metadata": {
+                "body": body,
+                "chronology_key": chronology_position,
+                "sort_index": sort_index,
+                "primary_entity_id": primary,
+                "ai_job_id": job.id,
+                "origin_prompt": job.prompt,
+            },
+        }
+        candidates.append(_candidate(
+            title=f"Hito sugerido: {title}",
+            candidate_type="sugerencia_ia",
+            proposed_data={"kind": "causal_milestone", "milestone": hito_payload},
+            job=job,
+            justification=str(milestone.get("rationale") or milestone.get("justification") or "Hito sugerido desde una seleccion existente."),
+            confidence=0.60,
+            expected_impact="Propone un hito relacionado; al aceptar se crea por la ruta segura de hitos.",
+        ))
 
     # Process hojas (B39) — also accept legacy "entities" key for backward compatibility
     for entity in _safe_list(payload.get("hojas") or payload.get("entities")):
@@ -587,11 +705,42 @@ def build_model_user_message(plan: AIJobPlan) -> str:
             "no_ids_inventados": True,
             "usar_prompt_exacto_como_instruccion_principal": True,
         },
+        "formatos_h05": {
+            "project_chronology_suggestion": {
+                "kind": "project_chronology_suggestion",
+                "title": "string",
+                "mode": "none | vague_periods | full_calendar",
+                "summary": "string",
+                "periods": ["Antiguedad", "Historia reciente", "Actualidad"],
+                "eras": ["string"],
+                "era_lengths": {"Era Antigua": "integer years"},
+                "months": ["string"],
+                "month_lengths": {"Enero": "integer days"},
+                "weekdays": ["string"],
+                "current_date": {"era": "string", "year": "integer", "month": "string", "day": "integer"},
+                "units": ["string"],
+                "display_format": "string",
+                "supports_exact_dates": "boolean",
+                "date_resolution": "string",
+                "rationale": "string",
+                "risks": ["string"],
+                "questions_for_user": ["string"],
+            },
+            "milestones": [{
+                "title": "string",
+                "summary": "string",
+                "body": "string",
+                "chronology_position": "string",
+                "sort_index": "integer",
+                "rationale": "string",
+                "confidence": "low | medium | high",
+            }],
+        },
     }, ensure_ascii=False, indent=2)
 
 
 # Backward-compatible helper kept only for tests that inject explicit mock jobs.
-def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow_simulated: bool = True) -> dict[str, Any]:
+def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow_simulated: bool = False) -> dict[str, Any]:
     service = AIJobService(provider=provider or SimulatedAIProvider(), allow_simulated=allow_simulated)
     service._jobs[job.id] = job
     result = service.execute_job(job.id)
@@ -610,12 +759,24 @@ class AIJobService:
         allow_simulated: bool = False,
         observability_log: AIObservabilityLog | None = None,
         timeout_seconds: int = DEFAULT_AI_TIMEOUT_SECONDS,
+        use_ai_planner: bool | None = None,
+        rag_service: Any | None = None,
+        project_provider: Callable[[], Any] | None = None,
+        prompt_trace_store: Any | None = None,
     ):
         self._jobs: dict[str, AIJob] = {}
         self._provider = provider if provider is not None else create_provider()
         self.allow_simulated = allow_simulated
         self.observability_log = observability_log or AIObservabilityLog()
         self.timeout_seconds = max(1, int(timeout_seconds or DEFAULT_AI_TIMEOUT_SECONDS))
+        self.use_ai_planner = (
+            bool(use_ai_planner)
+            if use_ai_planner is not None
+            else bool(getattr(self._provider, "supports_command_bar_planner", False))
+        )
+        self._rag_service = rag_service
+        self._project_provider = project_provider
+        self._prompt_trace_store = prompt_trace_store
 
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None) -> Result:
         prompt = (prompt or "").strip()
@@ -708,6 +869,100 @@ class AIJobService:
             raw_prompt=job.prompt,
         ))
 
+    def _build_execution_plan(self, job: AIJob) -> Result:
+        if self.use_ai_planner:
+            planned = CommandBarPlannerService(self._provider).plan(
+                job.prompt,
+                job.context_scope,
+                timeout_seconds=self.timeout_seconds,
+            )
+            if isinstance(planned, Error):
+                return Error(f"No se pudo interpretar la peticion con IA: {_sanitize_error(planned.error)}")
+            intent = _intent_from_command_bar_plan(planned.value)
+            context = dict(job.context_scope)
+            context["command_bar_plan"] = planned.value.to_dict()
+            return Ok((intent, build_job_plan(intent, job.prompt, context, job_id=job.id)))
+
+        intent = classify_intent(job.prompt, job.context_scope)
+        return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
+
+    def _with_rag_context(self, job: AIJob, plan: AIJobPlan) -> AIJobPlan:
+        if self._rag_service is None:
+            return plan
+
+        from packages.application.rag_context import RAGContextBuilder
+
+        context = dict(plan.context)
+        project = None
+        if self._project_provider is not None:
+            try:
+                project = self._project_provider()
+            except Exception as exc:  # pragma: no cover - defensive UI boundary
+                context["rag_context_pack"] = {
+                    "schema": "context_pack/v1",
+                    "warnings": [f"rag_project_provider_error: {_sanitize_error(str(exc))}"],
+                    "items": [],
+                    "truncated": False,
+                }
+                return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
+
+        built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, plan)
+        if isinstance(built, Error):
+            context["rag_context_pack"] = {
+                "schema": "context_pack/v1",
+                "warnings": [f"rag_context_error: {_sanitize_error(built.error)}"],
+                "items": [],
+                "truncated": False,
+            }
+            return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
+
+        context["rag_context_pack"] = built.value.to_dict()
+        return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
+
+    def _trace_prompt_request(
+        self,
+        *,
+        job: AIJob,
+        plan: AIJobPlan,
+        provider_name: str,
+        model_user_message: str,
+    ) -> None:
+        if self._prompt_trace_store is None:
+            return
+        try:
+            self._prompt_trace_store.record_request(
+                job_id=job.id,
+                provider=provider_name,
+                prompt=job.prompt,
+                system_prompt=COMMAND_BAR_SYSTEM_PROMPT_ES,
+                model_user_message=model_user_message,
+                plan=plan.to_dict(),
+            )
+        except Exception:
+            return
+
+    def _trace_prompt_response(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        response_text: str = "",
+        error: str = "",
+        elapsed_ms: float = 0.0,
+    ) -> None:
+        if self._prompt_trace_store is None:
+            return
+        try:
+            self._prompt_trace_store.record_response(
+                job_id,
+                status=status,
+                response_text=response_text,
+                error=error,
+                elapsed_ms=elapsed_ms,
+            )
+        except Exception:
+            return
+
     def _execute_job_pre_d03(self, job_id: str, progress_callback=None) -> Result:
         job = self._jobs.get(job_id)
         if job is None:
@@ -729,21 +984,31 @@ class AIJobService:
         if progress_callback:
             progress_callback(job)
         plan = build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)
+        plan = self._with_rag_context(job, plan)
         job.type = intent.intent_type
         job.plan = plan.to_dict()
         self.update_status(job_id, AIJobStatus.WAITING_FOR_MODEL, message="Consultando IA…", progress=0.60)
         if progress_callback:
             progress_callback(job)
+        model_user_message = build_model_user_message(plan)
+        self._trace_prompt_request(
+            job=job,
+            plan=plan,
+            provider_name=provider_name,
+            model_user_message=model_user_message,
+        )
         try:
-            text, error = self._provider.chat(COMMAND_BAR_SYSTEM_PROMPT_ES, build_model_user_message(plan))
+            text, error = self._provider.chat(COMMAND_BAR_SYSTEM_PROMPT_ES, model_user_message)
         except Exception as exc:
             text, error = None, str(exc)
         if error:
             safe = _sanitize_error(error)
+            self._trace_prompt_response(job_id=job.id, status="error", error=safe)
             self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=safe, progress=1.0)
             return Error(safe)
         if not text:
             msg = "El proveedor IA no devolvió contenido."
+            self._trace_prompt_response(job_id=job.id, status="error", error=msg)
             self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=msg, progress=1.0)
             return Error(msg)
         self.update_status(job_id, AIJobStatus.POSTPROCESSING, message="Preparando candidatos…", progress=0.80)
@@ -751,6 +1016,7 @@ class AIJobService:
             progress_callback(job)
         payload = _extract_json(text)
         result = stage_results(payload, job)
+        self._trace_prompt_response(job_id=job.id, status="ok", response_text=text)
         result["provider"] = provider_name
         updated = self.update_status(
             job_id,
@@ -797,15 +1063,20 @@ class AIJobService:
         if cancelled:
             return cancelled
 
-        intent = classify_intent(job.prompt, job.context_scope)
-        job.intent = intent.to_dict()
         self.update_status(job_id, AIJobStatus.PLANNING, message="Interpretando peticion...", progress=0.35)
         emit_current()
         cancelled = cancelled_error()
         if cancelled:
             return cancelled
 
-        plan = build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)
+        planned = self._build_execution_plan(job)
+        if isinstance(planned, Error):
+            self.update_status(job_id, AIJobStatus.FAILED, message="No se pudo interpretar la peticion", error=planned.error, progress=1.0)
+            self._record_observability(job, status="error", error_type="planner_error")
+            return planned
+        intent, plan = planned.value
+        plan = self._with_rag_context(job, plan)
+        job.intent = intent.to_dict()
         job.type = intent.intent_type
         job.plan = plan.to_dict()
         self.update_status(job_id, AIJobStatus.WAITING_FOR_MODEL, message="Pensando...", progress=0.60)
@@ -814,11 +1085,18 @@ class AIJobService:
         if cancelled:
             return cancelled
 
+        model_user_message = build_model_user_message(plan)
+        self._trace_prompt_request(
+            job=job,
+            plan=plan,
+            provider_name=provider_name,
+            model_user_message=model_user_message,
+        )
         started = time.monotonic()
         try:
             text, error = self._provider.chat(
                 COMMAND_BAR_SYSTEM_PROMPT_ES,
-                build_model_user_message(plan),
+                model_user_message,
                 timeout=self.timeout_seconds,
             )
         except Exception as exc:
@@ -830,16 +1108,19 @@ class AIJobService:
             return cancelled
         if elapsed > self.timeout_seconds:
             msg = f"Timeout IA: el job supero {self.timeout_seconds}s."
+            self._trace_prompt_response(job_id=job.id, status="error", error=msg, elapsed_ms=elapsed * 1000)
             self.update_status(job_id, AIJobStatus.FAILED, message="Timeout IA", error=msg, progress=1.0)
             self._record_observability(job, status="error", error_type="timeout", duration_ms=elapsed * 1000)
             return Error(msg)
         if error:
             safe = _sanitize_error(error)
+            self._trace_prompt_response(job_id=job.id, status="error", error=safe, elapsed_ms=elapsed * 1000)
             self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=safe, progress=1.0)
             self._record_observability(job, status="error", error_type="provider_error", duration_ms=elapsed * 1000)
             return Error(safe)
         if not text:
             msg = "El proveedor IA no devolvio contenido."
+            self._trace_prompt_response(job_id=job.id, status="error", error=msg, elapsed_ms=elapsed * 1000)
             self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=msg, progress=1.0)
             self._record_observability(job, status="error", error_type="empty_response", duration_ms=elapsed * 1000)
             return Error(msg)
@@ -852,6 +1133,7 @@ class AIJobService:
 
         payload = _extract_json(text)
         result = stage_results(payload, job)
+        self._trace_prompt_response(job_id=job.id, status="ok", response_text=text, elapsed_ms=elapsed * 1000)
         result["provider"] = provider_name
         result["timeout_seconds"] = self.timeout_seconds
         model_name = str(getattr(self._provider, "model", provider_name))
