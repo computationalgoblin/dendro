@@ -24,6 +24,7 @@ from typing import Any
 class ImportFormat(str, Enum):
     """Supported document formats for import (§17.2)."""
     TEXT_PLAIN = "text_plain"
+    MARKDOWN = "markdown"
     PDF = "pdf"
 
 

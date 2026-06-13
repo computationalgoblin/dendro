@@ -121,6 +121,10 @@ class NarrativeRelation:
     temporality: str = ""
     causality: str = ""
 
+    # --- Temporal (BETA1-G06) ---
+    birth_year: int | None = None   # año diegético en que nace la relación
+    death_year: int | None = None   # año diegético en que termina; None = activa
+
     # --- State (10–12, reused from entity.py) ---
     canon_state: CanonState = CanonState.BORRADOR
     visibility_state: VisibilityState = VisibilityState.VISIBLE_USUARIO
@@ -167,6 +171,8 @@ class NarrativeRelation:
             "intensity": self.intensity.value,
             "temporality": self.temporality,
             "causality": self.causality,
+            "birth_year": self.birth_year,
+            "death_year": self.death_year,
             "canon_state": self.canon_state.value,
             "visibility_state": self.visibility_state.value,
             "certainty_level": self.certainty_level.value,
@@ -205,6 +211,8 @@ class NarrativeRelation:
             ),
             temporality=data.get("temporality", ""),
             causality=data.get("causality", ""),
+            birth_year=_parse_optional_int(data.get("birth_year")),
+            death_year=_parse_optional_int(data.get("death_year")),
             canon_state=_parse_enum(
                 CanonState, data.get("canon_state"), CanonState.BORRADOR,
             ),
@@ -278,6 +286,15 @@ def _parse_datetime(value: Any) -> datetime:
         except (ValueError, TypeError):
             pass
     return _now()
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_list(value: Any) -> list:

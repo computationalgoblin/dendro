@@ -6,7 +6,7 @@ mode while normal mode starts from clean cards/overviews.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QSettings, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -36,6 +36,8 @@ from hosts.DesktopHostPySide.controllers.project_chronology_controller import Pr
 from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget, GraphSearchResult, VisualFilterState, relation_family
 from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
+from hosts.DesktopHostPySide.widgets.chrono_canvas import ChronoCanvasView
+from hosts.DesktopHostPySide.controllers.era_controller import EraController
 from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
@@ -49,6 +51,17 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     human_ref,
     make_scroll_area,
     pulse_feedback,
+    GOLD,
+    GOLD_DEEP,
+    GOLD_SOFT,
+    GOLD_TINT,
+    INK,
+    INK_SOFT,
+    INK_STRONG,
+    INK_MUTED,
+    LINE,
+    SURFACE,
+    SURFACE_HI,
 )
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
@@ -73,6 +86,15 @@ class _SimpleFormPanel(QWidget):
         label.setWordWrap(True)
         self.layout.addWidget(label)
         return label
+
+
+def _utility_title(view) -> str:
+    try:
+        raw_title = getattr(view, "windowTitle", "")
+        title = raw_title() if callable(raw_title) else raw_title
+    except RuntimeError:
+        title = ""
+    return str(title or "Herramienta")
 
 
 class RingInfoPanel(_SimpleFormPanel):
@@ -285,6 +307,117 @@ class RingEditPanel(_SimpleFormPanel):
             self.status.setText(result.error)
             return
         self.status.setText("Anillo actualizado")
+        self.on_saved()
+
+
+class _EraFormMixin:
+    """BETA1-G03: campos comunes de los paneles de era."""
+
+    def _build_era_form(self):
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.start = QSpinBox()
+        self.start.setRange(-999999999, 999999999)
+        self.open_ended = QCheckBox("Era abierta (sin año final)")
+        self.open_ended.setChecked(True)
+        self.end = QSpinBox()
+        self.end.setRange(-999999999, 999999999)
+        self.end.setEnabled(False)
+        self.open_ended.toggled.connect(lambda on: self.end.setEnabled(not on))
+        form.addRow("Nombre", self.name)
+        form.addRow("Año inicial", self.start)
+        form.addRow("", self.open_ended)
+        form.addRow("Año final", self.end)
+        self.layout.addLayout(form)
+
+    def _era_payload(self) -> dict:
+        return {
+            "name": self.name.text().strip(),
+            "start_year": int(self.start.value()),
+            "end_year": None if self.open_ended.isChecked() else int(self.end.value()),
+        }
+
+
+class EraQuickCreatePanel(_SimpleFormPanel, _EraFormMixin):
+    """BETA1-G03: crear era desde el panel de filtros (patrón Anillos)."""
+
+    def __init__(self, controller, on_created):
+        super().__init__("Nueva era", "Un estrato temporal del mundo (los años pueden ser negativos).")
+        self.controller = controller
+        self.on_created = on_created
+        self._build_era_form()
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        save = QPushButton("Crear era")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addStretch(1)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        payload = self._era_payload()
+        if not payload["name"]:
+            self.status.setText("El nombre no puede estar vacio")
+            return
+        result = self.controller.create(payload)
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        self.status.setText("Era creada")
+        self.on_created()
+
+
+class EraEditPanel(_SimpleFormPanel, _EraFormMixin):
+    """BETA1-G03: editar/eliminar una era."""
+
+    def __init__(self, controller, era_id: str, on_saved):
+        super().__init__("Editar era", "Nombre y límites del estrato temporal.")
+        self.controller = controller
+        self.era_id = era_id
+        self.on_saved = on_saved
+        self._build_era_form()
+        current = controller.get(era_id) if hasattr(controller, "get") else None
+        era = getattr(current, "value", None)
+        if era is not None:
+            self.name.setText(str(getattr(era, "name", "")))
+            self.start.setValue(int(getattr(era, "start_year", 0) or 0))
+            end = getattr(era, "end_year", None)
+            self.open_ended.setChecked(end is None)
+            if end is not None:
+                self.end.setValue(int(end))
+        self.status = self.add_status()
+        row = QHBoxLayout()
+        delete = QPushButton("Eliminar era")
+        delete.clicked.connect(self._delete)
+        row.addWidget(delete)
+        row.addStretch(1)
+        save = QPushButton("Guardar era")
+        save.setObjectName("primaryButton")
+        save.clicked.connect(self._save)
+        row.addWidget(save)
+        self.layout.addLayout(row)
+        self.layout.addStretch(1)
+
+    def _save(self):
+        payload = self._era_payload()
+        if not payload["name"]:
+            self.status.setText("El nombre no puede estar vacio")
+            return
+        result = self.controller.update(self.era_id, payload)
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        self.status.setText("Era actualizada")
+        self.on_saved()
+
+    def _delete(self):
+        result = self.controller.delete(self.era_id)
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        self.status.setText("Era eliminada")
         self.on_saved()
 
 
@@ -1100,6 +1233,9 @@ class CreationFilterPanel(_SimpleFormPanel):
         # técnico aparte.
         if self._worldbuilding_active():
             self._build_rings_section()
+        # BETA1-G03: las eras y el año presente viven aquí (patrón Anillos).
+        # El tiempo aplica SIEMPRE — sin gate de worldbuilding.
+        self._build_eras_section()
         self.layout.addStretch(1)
         self._sync_status()
 
@@ -1144,6 +1280,69 @@ class CreationFilterPanel(_SimpleFormPanel):
     def _worldbuilding_active(self) -> bool:
         project = self.workspace._get_active_project()
         return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
+
+    def _build_eras_section(self):
+        """BETA1-G03: CRUD de eras + año presente del mundo."""
+        controller = getattr(self.workspace, "era_controller", None)
+        if controller is None:
+            return
+        header = QLabel("Eras")
+        header.setStyleSheet(
+            "color: #6F6A42; font-size: 11px; font-weight: 700; letter-spacing: 1px; "
+            "text-transform: uppercase; background: transparent; border: none; padding-top: 8px;"
+        )
+        self.layout.addWidget(header)
+        try:
+            eras = list(controller.list_all() or [])
+        except Exception:  # noqa: BLE001
+            eras = []
+        for era in eras:
+            row = QHBoxLayout()
+            name = QLabel(str(getattr(era, "name", "Era")))
+            name.setStyleSheet("color: #504B2E; font-size: 12px; background: transparent; border: none;")
+            row.addWidget(name, 1)
+            end = getattr(era, "end_year", None)
+            span = QLabel(f"{getattr(era, 'start_year', 0)} → {end if end is not None else '…'}")
+            span.setStyleSheet("color: #7C806E; font-size: 11px; background: transparent; border: none;")
+            row.addWidget(span)
+            edit = QPushButton("Editar")
+            edit.setFixedHeight(24)
+            edit.setToolTip("Nombre y límites de la era")
+            edit.clicked.connect(
+                lambda _=False, eid=str(getattr(era, "id", "")): self.workspace._open_era_edit_panel(eid)
+            )
+            row.addWidget(edit)
+            self.layout.addLayout(row)
+        actions = QHBoxLayout()
+        new_btn = QPushButton("Nueva era")
+        new_btn.clicked.connect(self.workspace._open_era_create_panel)
+        actions.addWidget(new_btn)
+        actions.addStretch(1)
+        self.layout.addLayout(actions)
+        present_row = QHBoxLayout()
+        present_label = QLabel("Año presente")
+        present_label.setStyleSheet("color: #504B2E; font-size: 12px; background: transparent; border: none;")
+        present_row.addWidget(present_label, 1)
+        self.present_year_spin = QSpinBox()
+        self.present_year_spin.setRange(-999999999, 999999999)
+        try:
+            self.present_year_spin.setValue(int(controller.present_year()))
+        except Exception:  # noqa: BLE001
+            self.present_year_spin.setValue(0)
+        self.present_year_spin.editingFinished.connect(self._apply_present_year)
+        present_row.addWidget(self.present_year_spin)
+        self.layout.addLayout(present_row)
+
+    def _apply_present_year(self):
+        controller = getattr(self.workspace, "era_controller", None)
+        if controller is None:
+            return
+        result = controller.set_present_year(int(self.present_year_spin.value()))
+        if isinstance(result, Error):
+            self.status.setText(result.error)
+            return
+        self.status.setText("Año presente actualizado")
+        self.workspace.refresh()
 
     def _add_unique(self, combo: QComboBox, label: str, value: str, seen: set[str]):
         value = str(value or "").lower()
@@ -1556,9 +1755,11 @@ class CreationWorkspace(QWidget):
             self.ai_context_controller = AIContextController(project_service)
             self._milestone_ctrl = CausalMilestoneController(project_service)
             self._chronology_ctrl = ProjectChronologyController(project_service)
+            self.era_controller = EraController(project_service)  # BETA1-G03
         else:
             self._milestone_ctrl = None
             self._chronology_ctrl = None
+            self.era_controller = None
 
         self._build_ui()
 
@@ -1611,6 +1812,18 @@ class CreationWorkspace(QWidget):
         self.graph.nodeExtractFromTreeRequested.connect(self._extract_node_from_tree)
         layout.addWidget(self.graph, 1)
 
+        # BETA1-G04: vista cronológica — el mismo árbol mirado desde el lado.
+        # Complementaria a la concéntrica; SIN física (layout determinista).
+        self.chrono = ChronoCanvasView()
+        self.chrono.set_atmosphere_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
+        self.chrono.setVisible(False)
+        self.chrono.entityActivated.connect(self._open_panel_for_entity)
+        self.chrono.milestoneActivated.connect(
+            lambda hito_id: self._open_milestone_chronology_view(hito_id=hito_id)
+        )
+        layout.addWidget(self.chrono, 1)
+        self._active_view = "concentric"
+
         # Command bar area replaces the old bottom button toolbar.
         self._command_bar = self._build_command_bar()
         command_bar = self._command_bar
@@ -1620,30 +1833,33 @@ class CreationWorkspace(QWidget):
         # command bar. Símbolos monocromos, minimalistas, con leve vaivén.
         self._float_left = self._build_float_cluster([
             ("⌕", "Buscar y enfocar elementos", self._open_search_panel),
-            ("◎", "Filtros y anillos", self._open_filter_panel),
-            ("◷", "Cronología e hitos", self._open_milestone_chronology_view),
+            ("◎", "Filtros, anillos y eras", self._open_filter_panel),
         ])
         self._float_right = self._build_float_cluster([
             ("✶", "Centro IA — tareas y propuestas", self._open_ai_center),
             ("⤓", "Guardar proyecto", self._save_project_from_canvas),
         ])
+        # BETA1-G04: ◷ deja de abrir el panel de cronología — es el alternador
+        # de vista (concéntrica ↔ cronológica), en posición central prominente.
+        # El detalle H03 sigue accesible: doble click en un hito de la vista.
+        self._float_view_toggle = self._build_view_toggle()
         # Breadcrumb flotante de foco (sustituye al de la barra retirada)
         self._float_focus = QFrame(self)
         self._float_focus.setStyleSheet(
-            "QFrame { background: rgba(250,248,240,0.92); border: 1px solid #D8D6C8; border-radius: 12px; }"
+            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {LINE}; border-radius: 12px; }}"
         )
         focus_layout = QHBoxLayout(self._float_focus)
         focus_layout.setContentsMargins(12, 4, 8, 4)
         focus_layout.setSpacing(6)
         self._float_focus_label = QLabel("")
-        self._float_focus_label.setStyleSheet("color: #6F6A42; font-size: 11px; background: transparent; border: none;")
+        self._float_focus_label.setStyleSheet(f"color: {INK_SOFT}; font-size: 11px; font-weight: 600; background: transparent; border: none;")
         focus_layout.addWidget(self._float_focus_label)
         focus_exit = QPushButton("✕")
         focus_exit.setToolTip("Volver a mostrar todo el grafo")
         focus_exit.setFixedSize(20, 20)
         focus_exit.setStyleSheet(
-            "QPushButton { background: transparent; border: none; color: #6F6A42; font-size: 11px; } "
-            "QPushButton:hover { color: #504B2E; }"
+            f"QPushButton {{ background: transparent; border: none; color: {INK_SOFT}; font-size: 11px; }} "
+            f"QPushButton:hover {{ color: {INK_STRONG}; }}"
         )
         focus_exit.clicked.connect(self.clear_focus_scope)
         focus_layout.addWidget(focus_exit)
@@ -1660,6 +1876,14 @@ class CreationWorkspace(QWidget):
 
         self.setMouseTracking(True)
         self.graph.setMouseTracking(True)
+
+        # BETA1-G04: restaura la vista activa (preferencia persistida)
+        try:
+            saved_view = str(QSettings("Dendro", "DesktopHost").value("creation/active_view", "concentric"))
+        except Exception:  # noqa: BLE001
+            saved_view = "concentric"
+        if saved_view == "chrono":
+            self.set_active_view("chrono")
 
     def _build_top_toolbar(self) -> QWidget:
         """Persistent B38 toolbar: creative actions left, utilities right."""
@@ -1766,12 +1990,79 @@ class CreationWorkspace(QWidget):
 
         return bar
 
+    def _build_view_toggle(self) -> QFrame:
+        """BETA1-G04: píldora central que alterna entre las dos vistas
+        principales del árbol — desde arriba (anillos) y desde el lado
+        (tiempo). Misma estética calmada que los clusters."""
+        pill = QFrame(self)
+        pill.setStyleSheet(
+            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; border-radius: 19px; }}"
+        )
+        row = QHBoxLayout(pill)
+        row.setContentsMargins(6, 3, 6, 3)
+        row.setSpacing(0)
+        self._view_toggle_btn = QPushButton("◷  Cronología")
+        self._view_toggle_btn.setToolTip("Ver el mundo en el tiempo: eras, vidas e hitos")
+        self._view_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._view_toggle_btn.setFixedHeight(32)
+        self._view_toggle_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; border-radius: 16px; "
+            f"color: {INK_SOFT}; font-size: 13px; font-weight: 600; padding: 0 16px; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; color: {INK_STRONG}; }} "
+            f"QPushButton:pressed {{ background: {GOLD_SOFT}; }}"
+        )
+        self._view_toggle_btn.clicked.connect(self._toggle_chrono_view)
+        row.addWidget(self._view_toggle_btn)
+        pill.adjustSize()
+        pill.raise_()
+        return pill
+
+    def _toggle_chrono_view(self):
+        self.set_active_view("chrono" if getattr(self, "_active_view", "concentric") != "chrono" else "concentric")
+
+    def set_active_view(self, view: str):
+        """BETA1-G04: alterna concéntrica ↔ cronológica y persiste la elección."""
+        view = "chrono" if str(view) == "chrono" else "concentric"
+        self._active_view = view
+        chrono_on = view == "chrono"
+        if chrono_on:
+            self.chrono.set_project(self._get_active_project())
+            self.chrono.fit_all()
+        self.chrono.setVisible(chrono_on)
+        self.graph.setVisible(not chrono_on)
+        button = getattr(self, "_view_toggle_btn", None)
+        if button is not None:
+            button.setText("◉  Grafo" if chrono_on else "◷  Cronología")
+            button.setToolTip(
+                "Volver a la vista concéntrica (el estado del mundo)"
+                if chrono_on
+                else "Ver el mundo en el tiempo: eras, vidas e hitos"
+            )
+        try:
+            QSettings("Dendro", "DesktopHost").setValue("creation/active_view", view)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _open_panel_for_entity(self, entity_id: str):
+        """BETA1-G04: doble click en una cabeza de línea de vida → su panel
+        editorial (hoja u rama), coherente con la vista concéntrica."""
+        project = self._get_active_project()
+        for entity in getattr(project, "entities", []) or []:
+            if str(getattr(entity, "id", "")) != str(entity_id):
+                continue
+            kind = str(getattr(getattr(entity, "entity_type", None), "value", getattr(entity, "entity_type", "")) or "").lower()
+            if kind == "contenedor":
+                self._open_tree_panel(entity_id)
+            else:
+                self._open_node_panel(entity_id)
+            return
+
     def _build_float_cluster(self, actions: list[tuple[str, str, object]]) -> QFrame:
         """BETA1-F02: cluster flotante de iconos monocromos sobre la command
         bar. Estética común: redondos, sin color, calmados."""
         cluster = QFrame(self)
         cluster.setStyleSheet(
-            "QFrame { background: rgba(250,248,240,0.94); border: 1px solid #D8D6C8; border-radius: 23px; }"
+            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {LINE}; border-radius: 23px; }}"
         )
         row = QHBoxLayout(cluster)
         row.setContentsMargins(8, 5, 8, 5)
@@ -1782,10 +2073,10 @@ class CreationWorkspace(QWidget):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setFixedSize(36, 36)
             button.setStyleSheet(
-                "QPushButton { background: transparent; border: none; border-radius: 18px; "
-                "color: #6F6A42; font-size: 17px; } "
-                "QPushButton:hover { background: rgba(175,167,122,0.22); color: #504B2E; } "
-                "QPushButton:pressed { background: rgba(175,167,122,0.35); }"
+                f"QPushButton {{ background: transparent; border: none; border-radius: 18px; "
+                f"color: {INK_SOFT}; font-size: 17px; }} "
+                f"QPushButton:hover {{ background: {GOLD_TINT}; color: {INK_STRONG}; }} "
+                f"QPushButton:pressed {{ background: {GOLD_SOFT}; }}"
             )
             button.clicked.connect(callback)
             row.addWidget(button)
@@ -1811,6 +2102,12 @@ class CreationWorkspace(QWidget):
             right.adjustSize()
             right.move(self.width() - right.width() - 18, int(top - bob))
             right.raise_()
+        # BETA1-G04: alternador de vista, centrado y prominente
+        toggle = getattr(self, "_float_view_toggle", None)
+        if toggle is not None:
+            toggle.adjustSize()
+            toggle.move((self.width() - toggle.width()) // 2, int(top + bob * 0.5))
+            toggle.raise_()
         focus = getattr(self, "_float_focus", None)
         if focus is not None and focus.isVisible():
             focus.adjustSize()
@@ -1877,18 +2174,20 @@ class CreationWorkspace(QWidget):
         bar = QFrame()
         bar.setObjectName("aiCommandBar")
         bar.setStyleSheet(
-            "QFrame#aiCommandBar { background: rgba(250,248,240,0.97); "
-            "border-top: 1px solid #D8D6C8; }"
+            f"QFrame#aiCommandBar {{ background: {SURFACE_HI}; "
+            f"border-top: 1px solid {LINE}; }}"
         )
-        bar.setFixedHeight(66)
+        bar.setFixedHeight(68)
+        # BETA1-G08: separación por borde + superficie sólida (sin efecto
+        # gráfico, que cacheaba el render y ocultaba botones al actualizar).
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(72, 10, 72, 10)
+        layout.setContentsMargins(72, 11, 72, 11)
         layout.setSpacing(10)
 
         prompt_label = QLabel("Dendro")
         prompt_label.setStyleSheet(
-            "color: #6F6A42; font-size: 12px; font-weight: 700; "
-            "background: transparent; border: none; padding-right: 4px;"
+            f"color: {GOLD_DEEP}; font-size: 12px; font-weight: 700; letter-spacing: 0.4px; "
+            f"background: transparent; border: none; padding-right: 4px;"
         )
         prompt_label.setToolTip("Las respuestas IA son candidatas revisables; no cambian canon automáticamente.")
         layout.addWidget(prompt_label)
@@ -1897,10 +2196,11 @@ class CreationWorkspace(QWidget):
         self._command_input.setObjectName("aiCommandInput")
         self._command_input.setPlaceholderText("Pide una accion revisable: sugerir personaje, detectar contradiccion, expandir causa...")
         self._command_input.setStyleSheet(
-            "QLineEdit#aiCommandInput { background: rgba(255,255,255,0.90); "
-            "border: 1px solid #D0CCB8; border-radius: 20px; padding: 9px 16px; "
-            "font-size: 13px; color: #504B2E; } "
-            "QLineEdit#aiCommandInput:focus { border: 2px solid #AFA77A; padding: 8px 15px; background: #FFFFFF; }"
+            f"QLineEdit#aiCommandInput {{ background: #FFFFFF; "
+            f"border: 1px solid {LINE}; border-radius: 20px; padding: 9px 16px; "
+            f"font-size: 13px; color: {INK}; }} "
+            f"QLineEdit#aiCommandInput:hover {{ border-color: {GOLD_SOFT}; }} "
+            f"QLineEdit#aiCommandInput:focus {{ border: 2px solid {GOLD}; padding: 8px 15px; background: #FFFFFF; }}"
         )
         self._command_input.returnPressed.connect(self._submit_ai_command)
         layout.addWidget(self._command_input, 1)
@@ -1908,18 +2208,18 @@ class CreationWorkspace(QWidget):
         self._command_submit_btn = QPushButton("Crear")
         self._command_submit_btn.setToolTip("Crear una tarea IA revisable")
         self._command_submit_btn.setStyleSheet(
-            "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
-            "border-radius: 18px; min-width: 62px; min-height: 36px; font-size: 12px; font-weight: 700; } "
-            "QPushButton:hover { background: #504B2E; } "
-            "QPushButton:pressed { background: #403B24; padding-top: 2px; }"
+            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
+            f"border-radius: 18px; min-width: 64px; min-height: 36px; font-size: 12px; font-weight: 700; }} "
+            f"QPushButton:hover {{ background: {GOLD_DEEP}; }} "
+            f"QPushButton:pressed {{ background: #5E5427; padding-top: 2px; }}"
         )
         self._command_submit_btn.clicked.connect(self._submit_ai_command)
         layout.addWidget(self._command_submit_btn)
 
         self._job_status_label = QLabel("Sin tareas IA activas")
         self._job_status_label.setStyleSheet(
-            "color: #6F6A42; font-size: 11px; min-width: 190px; "
-            "background: transparent; border: none;"
+            f"color: {INK_MUTED}; font-size: 11px; min-width: 190px; "
+            f"background: transparent; border: none;"
         )
         self._job_status_label.setToolTip("Estado de las tareas IA. Todo resultado queda pendiente de revisión.")
         layout.addWidget(self._job_status_label)
@@ -2374,19 +2674,9 @@ class CreationWorkspace(QWidget):
             f"focused={self.graph.focused_ring_id() if hasattr(self.graph, 'focused_ring_id') else ''!r}",
         )
         self._set_focus_breadcrumb(f"Anillo seleccionado: {display_name}", active=True)
-        ring = self.graph.ring_visual_by_id(ring_id) if hasattr(self.graph, "ring_visual_by_id") else None
-        drawer = self.ctx.drawer
-        if drawer is not None and ring is not None:
-            panel = RingInfoPanel(
-                display_name=ring.display_name,
-                count_label=ring.count_label,
-                causal_rank=ring.causal_rank,
-                state=ring.state,
-                on_enter=lambda _checked=False, rid=ring_id: self.focus_ring_scope(rid),
-                on_global=lambda _checked=False: self.clear_focus_scope(),
-            )
-            drawer.set_content(panel, title=f"Anillo: {ring.display_name}")
-            drawer.open()
+        # BETA1-G-fix: el panel de anillo YA NO emerge en cada click (misma
+        # filosofía que hojas/relaciones: click = seleccionar). Entrar al
+        # anillo = doble click; editarlo = menú contextual / filtros.
         self.ctx.log("info", f"Anillo seleccionado: {display_name}")
 
     def _on_ring_focused(self, ring_id: str, display_name: str):
@@ -2646,17 +2936,13 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.set_content(panel, title="Coherencia")
         self.ctx.drawer.open()
 
-    def _open_utility(self, view):
+    def _open_utility(self, view, title: str | None = None):
         """Open a utility view in the right drawer."""
         drawer = self.ctx.drawer
         if drawer is None or view is None:
             return
-        title = getattr(view, "windowTitle", "")
-        if callable(title):
-            title = title()
-        if not title:
-            title = "Herramienta"
-        drawer.set_content(view, title=title)
+        resolved_title = title or _utility_title(view)
+        drawer.set_content(view, title=resolved_title)
         drawer.open()
 
     # Suggest node / relation via AI
@@ -2970,6 +3256,24 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.set_content(panel, title="Editar anillo")
         self.ctx.drawer.open()
 
+    def _open_era_create_panel(self):
+        """BETA1-G03: 'Nueva era' desde el panel de filtros."""
+        if self.era_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo crear era: servicio no disponible")
+            return
+        panel = EraQuickCreatePanel(self.era_controller, on_created=self.refresh)
+        self.ctx.drawer.set_content(panel, title="Nueva era")
+        self.ctx.drawer.open()
+
+    def _open_era_edit_panel(self, era_id: str):
+        """BETA1-G03: 'Editar era' — nombre y límites via EraController."""
+        if self.era_controller is None or self.ctx.drawer is None:
+            self.ctx.log("error", "No se pudo editar era: servicio no disponible")
+            return
+        panel = EraEditPanel(self.era_controller, era_id, on_saved=self.refresh)
+        self.ctx.drawer.set_content(panel, title="Editar era")
+        self.ctx.drawer.open()
+
     def _delete_ring(self, ring_id: str):
         """BETA1-B03: 'Eliminar anillo' - soft delete (hide_layer) after
         confirmation. Entities keep their layer ids: they show as 'Sin
@@ -3213,8 +3517,14 @@ class CreationWorkspace(QWidget):
         for widget in [self.graph, self.import_export_view, self.writing_view, self.timeline_view,
                        self.framework_view, self.corpus_view, self.relation_view, self.candidate_view,
                        self.source_view, self.layer_view]:
-            if widget is not None and hasattr(widget, "refresh"):
-                widget.refresh()
+            try:
+                if widget is not None and hasattr(widget, "refresh"):
+                    widget.refresh()
+            except RuntimeError:
+                continue
+        # BETA1-G04: la cronológica se reconstruye solo si está activa
+        if getattr(self, "_active_view", "concentric") == "chrono" and hasattr(self, "chrono"):
+            self.chrono.set_project(self._get_active_project())
 
     def open_graph(self):
         """Graph is always visible - this is now a no-op."""

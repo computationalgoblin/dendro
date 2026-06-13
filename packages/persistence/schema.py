@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (G02: world time — eras + years)
-CURRENT_SCHEMA_VERSION: int = 25
+# Current schema version for new projects (G06: relation temporal fields)
+CURRENT_SCHEMA_VERSION: int = 26
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 25
+MAX_SUPPORTED_VERSION: int = 26
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +770,40 @@ def _apply_migration_v24_to_v25(data):
 
     migrated["schema_version"] = 25
     return migrated
+
+def _apply_migration_v25_to_v26(data: dict[str, Any]) -> dict[str, Any]:
+    """v25 → v26: relation temporal fields (BETA1-G06).
+
+    Promotes birth_year/death_year from custom_metadata to first-class
+    relation fields. Relations without those metadata keys default to None.
+    """
+    migrated = dict(data)
+    relations = migrated.get("relations")
+    if isinstance(relations, list):
+        patched = []
+        for raw in relations:
+            if isinstance(raw, dict):
+                raw = dict(raw)
+                meta = raw.get("custom_metadata") or {}
+                # Promote from metadata if present; otherwise default to None.
+                if "birth_year" not in raw:
+                    raw["birth_year"] = _parse_int_or_none(meta.get("birth_year"))
+                if "death_year" not in raw:
+                    raw["death_year"] = _parse_int_or_none(meta.get("death_year"))
+            patched.append(raw)
+        migrated["relations"] = patched
+    migrated["schema_version"] = 26
+    return migrated
+
+
+def _parse_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
 
 # Structural validation
 # ---------------------------------------------------------------------------

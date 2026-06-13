@@ -10,6 +10,7 @@ import pytest
 from packages.domain.import_models import ImportFormat
 from packages.domain.result import is_ok, is_error, unwrap
 from packages.infrastructure.text_extractor import (
+    MarkdownExtractor,
     PlainTextExtractor,
     PDFExtractor,
     create_extractor,
@@ -197,6 +198,10 @@ class TestExtractorFactory:
     def test_creates_pdf_extractor(self):
         extractor = create_extractor(ImportFormat.PDF)
         assert isinstance(extractor, PDFExtractor)
+
+    def test_creates_markdown_extractor(self):
+        extractor = create_extractor(ImportFormat.MARKDOWN)
+        assert isinstance(extractor, MarkdownExtractor)
 
     def test_unknown_format_raises(self):
         with pytest.raises(ValueError, match="Unsupported import format"):

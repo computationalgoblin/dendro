@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QColorDialog,
@@ -184,35 +184,6 @@ class _TreeAIWorker(QThread):
             self.finished.emit("", str(exc))
 
 
-class _TreeContextActionWorker(QThread):
-    """Runs candidate-producing contextual AI actions for a tree entity."""
-
-    finished = Signal(str, str)
-
-    def __init__(self, ai_controller, entity_id: str, action_type: str, prompt_hint: str, language: str = "es"):
-        super().__init__()
-        self.ai_controller = ai_controller
-        self.entity_id = entity_id
-        self.action_type = action_type
-        self.prompt_hint = prompt_hint
-        self.language = language
-
-    def run(self):
-        try:
-            if not hasattr(self.ai_controller, "node_action"):
-                self.finished.emit("", "IA contextual no disponible en esta versión.")
-                return
-            result = self.ai_controller.node_action(self.entity_id, self.action_type, prompt_hint=self.prompt_hint)
-            if isinstance(result, Error):
-                self.finished.emit("", result.error)
-                return
-            summary = self.ai_controller.result_summary(result) if hasattr(self.ai_controller, "result_summary") else "IA contextual completada."
-            body = getattr(result.value, "raw_text", "") or ""
-            self.finished.emit((summary + ("\n\n" + body if body else "")).strip(), "")
-        except Exception as exc:
-            self.finished.emit("", str(exc))
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # TreeDetailPanel
 # ═══════════════════════════════════════════════════════════════════════
@@ -292,7 +263,11 @@ class TreeDetailPanel(QWidget):
         self.tree_type_combo = _styled_combo(TREE_TYPES, "— Sin tipo —")
         first_row.addWidget(self.tree_type_combo, 2)
         self.layer_combo = _styled_combo([], "— Sin anillo —")
-        self.layer_label = QLabel("")  # legacy ref
+        # Legacy ref kept for older code paths; never shown as UI. If this
+        # empty label is made visible without a layout, Qt opens it as a
+        # top-level blank popout.
+        self.layer_label = QLabel("", self)
+        self.layer_label.hide()
         first_row.addWidget(self.layer_combo, 2)
         self.color_edit = _styled_edit("#D0D8E0")
         self.color_edit.setVisible(False)  # editable desde el botón
@@ -305,6 +280,42 @@ class TreeDetailPanel(QWidget):
         self.color_btn.clicked.connect(self._pick_color)
         first_row.addWidget(self.color_btn)
         form.addRow(first_row)
+
+        # BETA1-G03: fila temporal DISCRETA — una rama también vive y cae.
+        time_row = QHBoxLayout()
+        time_row.setSpacing(6)
+        _time_label_ss = f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
+        _year_ss = (
+            "QLineEdit { background: transparent; border: none; "
+            "border-bottom: 1px solid #D8D6C8; border-radius: 0; "
+            "font-size: 12px; color: #3F3D2E; padding: 1px 2px; } "
+            "QLineEdit:focus { border-bottom: 1px solid #C9C0A0; }"
+        )
+        _year_validator = QIntValidator(-999999999, 999999999, self)
+        born_label = QLabel("Nace")
+        born_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(born_label)
+        self.birth_year_edit = QLineEdit()
+        self.birth_year_edit.setValidator(_year_validator)
+        self.birth_year_edit.setFixedWidth(64)
+        self.birth_year_edit.setStyleSheet(_year_ss)
+        self.birth_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_row.addWidget(self.birth_year_edit)
+        dies_label = QLabel("· Muere")
+        dies_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(dies_label)
+        self.death_year_edit = QLineEdit()
+        self.death_year_edit.setValidator(_year_validator)
+        self.death_year_edit.setFixedWidth(64)
+        self.death_year_edit.setPlaceholderText("—")
+        self.death_year_edit.setStyleSheet(_year_ss)
+        self.death_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_row.addWidget(self.death_year_edit)
+        self.era_label = QLabel("")
+        self.era_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(self.era_label, 1)
+        self.birth_year_edit.textEdited.connect(self._refresh_era_label)
+        form.addRow(time_row)
 
         # Descripción breve: se monta tras la imagen (orden F05)
         self.brief_edit = _styled_edit("Descripción breve...")
@@ -542,15 +553,8 @@ class TreeDetailPanel(QWidget):
             ai_btn_row.addWidget(btn)
         ai_layout.addLayout(ai_btn_row)
 
-        # BETA1-F05: destino causal / expandir / explicar ELIMINADOS del
-        # panel de rama (deuda F: acciones contextuales futuras del grafo).
-        # Widgets vivos sin montar — refresh() y las rutas los referencian.
-        self.target_layer_label = QLabel("Destino causal")
-        self.target_layer_combo = _styled_combo([], "— Anillo inferior —")
-        self.ai_expand_down_btn = QPushButton("Expandir hacia anillo inferior")
-        self.ai_expand_down_btn.clicked.connect(self._start_expand_down)
-        self.ai_explain_causes_btn = QPushButton("Explicar desde causas superiores")
-        self.ai_explain_causes_btn.clicked.connect(self._start_explain_from_causes)
+        # BETA1-F00B: las acciones causales antiguas ya no viven en este
+        # panel; se invocan desde command bar/menu contextual.
 
         # Custom prompt
         prompt_row = QHBoxLayout()
@@ -569,10 +573,6 @@ class TreeDetailPanel(QWidget):
             self.ai_subtrees_btn,
             self.ai_coherence_btn,
             self.ai_questions_btn,
-            self.target_layer_label,
-            self.target_layer_combo,
-            self.ai_expand_down_btn,
-            self.ai_explain_causes_btn,
         ):
             extra_ai_widget.setVisible(False)
 
@@ -669,36 +669,8 @@ class TreeDetailPanel(QWidget):
         idx = self.layer_combo.findData(current)
         self.layer_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.layer_combo.blockSignals(False)
-        visible = self._worldbuilding_active()
-        self.layer_label.setVisible(visible)
-        self.layer_combo.setVisible(visible)
-
-    def _refresh_target_layer_combo(self, entity=None):
-        project = self._project()
-        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
-        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in layers}
-        current_id = str((getattr(entity, "layer_ids", []) or [""])[0] or "") if entity is not None else ""
-        current_layer = layer_by_id.get(current_id)
-        current_rank = get_causal_rank(current_layer) if current_layer is not None else None
-        self.target_layer_combo.blockSignals(True)
-        self.target_layer_combo.clear()
-        self.target_layer_combo.addItem("— Anillo inferior —", "")
-        for layer in sort_layers_by_causal_rank(layers):
-            if not getattr(layer, "is_visible", True):
-                continue
-            rank = get_causal_rank(layer)
-            if rank is None or (current_rank is not None and rank <= current_rank):
-                continue
-            self.target_layer_combo.addItem(f"{rank}. {getattr(layer, 'name', 'Capa')}", str(getattr(layer, "id", "")))
-        if self.target_layer_combo.count() > 1:
-            self.target_layer_combo.setCurrentIndex(1)
-        self.target_layer_combo.blockSignals(False)
-        visible = self._worldbuilding_active()
-        for widget in (self.target_layer_label, self.target_layer_combo, self.ai_expand_down_btn, self.ai_explain_causes_btn):
-            widget.setVisible(visible)
-        has_ai = self.ai_controller is not None
-        self.ai_expand_down_btn.setEnabled(has_ai)
-        self.ai_explain_causes_btn.setEnabled(has_ai)
+        self.layer_label.hide()
+        self.layer_combo.setVisible(self._worldbuilding_active())
 
     def refresh(self):
         _apptrace(f"UI tree set_entity entity_id={self.entity_id!r}")
@@ -716,6 +688,14 @@ class TreeDetailPanel(QWidget):
 
         # Identidad
         self.name_edit.setText(entity.name)
+
+        # BETA1-G03: fila temporal
+        birth = getattr(entity, "birth_year", None)
+        death = getattr(entity, "death_year", None)
+        self.birth_year_edit.setText("" if birth is None else str(birth))
+        self.death_year_edit.setText("" if death is None else str(death))
+        self._refresh_era_label()
+
         self.brief_edit.setText(entity.brief_description)
         self.extended_edit.setPlainText(entity.extended_description)
         color = entity.custom_metadata.get("tree_color", "#D0D8E0")
@@ -749,7 +729,6 @@ class TreeDetailPanel(QWidget):
         self._set_combo_value(self.visibility_combo, _enum_value(entity.visibility_state))
         self._set_combo_value(self.certainty_combo, _enum_value(entity.certainty_level))
         self._refresh_layer_combo(entity)
-        self._refresh_target_layer_combo(entity)
 
         # Notes
         self.private_notes_edit.setPlainText(entity.private_notes)
@@ -944,6 +923,9 @@ class TreeDetailPanel(QWidget):
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(entity, "layer_ids", []) or []),
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
+            # BETA1-G03: fila temporal
+            "birth_year": self._parse_year_edit(self.birth_year_edit, getattr(entity, "birth_year", None)),
+            "death_year": self._parse_year_edit(self.death_year_edit, None),
         }
 
         result = self.entity_controller.update(self.entity_id, data)
@@ -1066,53 +1048,6 @@ class TreeDetailPanel(QWidget):
         ]
         return "; ".join(rules) if rules else "ninguna definida"
 
-    def _target_layer_text(self) -> str:
-        return self.target_layer_combo.currentText().strip() or "anillo inferior adecuado"
-
-    def _start_expand_down(self):
-        target_layer = self._target_layer_text()
-        entity = self._entity_by_id(self.entity_id)
-        entity_name = getattr(entity, "name", self.entity_id)
-        prompt = (
-            f"B36: Expandir consecuencias descendentes del árbol hacia {target_layer}. "
-            f"Árbol: {entity_name}. "
-            f"Miembros actuales: {self._get_members_text()}. Reglas internas: {self._get_rules_text()}. "
-            "Proponer nodos, árboles y relaciones causales candidatas; no canonizar."
-        )
-        self._start_context_action("expand_causal_down", prompt, "Expandiendo consecuencias…")
-
-    def _start_explain_from_causes(self):
-        prompt = (
-            f"B36: Explicar este árbol desde causas superiores relevantes. "
-            f"Miembros actuales: {self._get_members_text()}. Reglas internas: {self._get_rules_text()}. "
-            "Proponer explicación causal y relaciones causales candidatas; no canonizar."
-        )
-        self._start_context_action("explain_from_causes", prompt, "Buscando causas superiores…")
-
-    def _start_context_action(self, action_type: str, prompt_hint: str, status_text: str):
-        if self.ai_controller is None:
-            self._show_ai_error("IA no disponible.")
-            return
-        if self._ai_worker is not None and self._ai_worker.isRunning():
-            return
-        for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
-                    self.ai_coherence_btn, self.ai_questions_btn,
-                    self.ai_expand_down_btn, self.ai_explain_causes_btn,
-                    self.ai_run_btn):
-            btn.setEnabled(False)
-        self.suggestion_text.setPlainText(status_text)
-        self.suggestion_frame.setVisible(True)
-        self.accept_btn.setEnabled(False)
-        self._ai_worker = _TreeContextActionWorker(
-            self.ai_controller,
-            self.entity_id,
-            action_type,
-            prompt_hint,
-            language=getattr(self.ctx, "language", "es"),
-        )
-        self._ai_worker.finished.connect(self._on_ai_finished)
-        self._ai_worker.start()
-
     def _start_ai(self, action: str):
         if self.ai_controller is None:
             self._show_ai_error("IA no disponible.")
@@ -1166,7 +1101,6 @@ class TreeDetailPanel(QWidget):
         # Disable buttons while running
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
                      self.ai_coherence_btn, self.ai_questions_btn,
-                     self.ai_expand_down_btn, self.ai_explain_causes_btn,
                      self.ai_run_btn):
             btn.setEnabled(False)
 
@@ -1184,7 +1118,6 @@ class TreeDetailPanel(QWidget):
         has_ai = self.ai_controller is not None
         for btn in (self.ai_desc_btn, self.ai_members_btn, self.ai_subtrees_btn,
                      self.ai_coherence_btn, self.ai_questions_btn,
-                     self.ai_expand_down_btn, self.ai_explain_causes_btn,
                      self.ai_run_btn):
             btn.setEnabled(has_ai)
 
@@ -1272,6 +1205,35 @@ class TreeDetailPanel(QWidget):
     def _project(self):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
+
+    # BETA1-G03: helpers temporales -----------------------------------
+
+    @staticmethod
+    def _parse_year_edit(edit, fallback):
+        text = edit.text().strip()
+        if not text or text == "-":
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            return fallback
+
+    def _refresh_era_label(self, *_args):
+        """Era derivada del año de nacimiento — solo lectura (contrato G01)."""
+        year = self._parse_year_edit(self.birth_year_edit, None)
+        if year is None:
+            self.era_label.setText("")
+            return
+        project = self._project()
+        chronology = getattr(project, "project_chronology", None) if project else None
+        era = None
+        if chronology is not None:
+            try:
+                chronology.ensure_default_era()
+                era = chronology.era_for_year(year)
+            except Exception:
+                era = None
+        self.era_label.setText(f"· {era.name}" if era is not None else "")
 
     def _entity_by_id(self, eid: str):
         proj = self._project()

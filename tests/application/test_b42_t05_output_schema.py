@@ -28,6 +28,9 @@ class TestSchemaRegistry:
     def test_edit_schema_exists(self):
         assert "edit_entities" in EXPECTED_SCHEMAS
 
+    def test_import_extraction_schema_exists(self):
+        assert "import_extraction" in EXPECTED_SCHEMAS
+
 
 class TestValidJson:
     def test_valid_entity_output(self):
@@ -45,6 +48,11 @@ class TestValidJson:
     def test_valid_coherence_output(self):
         text = '{"verdict": "coherent", "findings": [], "severity": "ok"}'
         result = validate_ai_output(text, "coherence")
+        assert result.is_valid
+
+    def test_valid_import_extraction_output(self):
+        text = '{"candidates": [{"kind": "entity", "name": "Eldrin"}]}'
+        result = validate_ai_output(text, "import_extraction")
         assert result.is_valid
 
 

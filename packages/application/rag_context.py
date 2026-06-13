@@ -158,6 +158,8 @@ class RAGContextBuilder:
         if not retrieval_needs and isinstance(ctx.get("command_bar_plan"), dict):
             retrieval_needs = _string_list(ctx["command_bar_plan"].get("retrieval_needs"))
         include_kinds = _include_kinds_for(intent_type, retrieval_needs, prompt)
+        if bool(ctx.get("include_unaccepted_imports", False)) or bool(ctx.get("include_import_documents", False)):
+            include_kinds = _dedupe_kinds([*include_kinds, CorpusItemKind.IMPORT_DOCUMENT])
         active_layer_ids = _dedupe(
             _string_list(ctx.get("active_layer_ids"))
             + _ring_as_layer_ids(ctx.get("active_ring_id") or ctx.get("focused_ring_id"))
@@ -295,6 +297,8 @@ def _include_kinds_for(intent_type: str, retrieval_needs: list[str], prompt: str
         kinds.extend((CorpusItemKind.ISSUE, CorpusItemKind.RELATION))
     if prompt_tokens & {"anillo", "anillos", "capa", "capas", "worldbuilding"}:
         kinds.extend((CorpusItemKind.WORLD_LAYER, CorpusItemKind.BRANCH))
+    if prompt_tokens & {"documento", "documentos", "importacion", "importaciones", "importado", "importados", "chunk", "chunks"}:
+        kinds.append(CorpusItemKind.IMPORT_DOCUMENT)
 
     kinds.append(CorpusItemKind.CREATIVE_CONFIG)
     return _dedupe_kinds(kinds)

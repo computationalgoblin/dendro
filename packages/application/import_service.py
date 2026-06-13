@@ -37,6 +37,21 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _milestone_year(payload: dict[str, Any]) -> int | None:
+    values = [payload.get("year")]
+    structured = payload.get("structured_date")
+    if isinstance(structured, dict):
+        values.extend([structured.get("year"), structured.get("current_year")])
+    for value in values:
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 # ── Candidate type mapping ─────────────────────────────────────────────
 
 
@@ -135,6 +150,8 @@ class ImportService:
     project_service: Any  # ProjectService
     candidate_service: Any = None  # CandidateService
     source_service: Any = None  # SourceService
+    entity_service: Any = None  # EntityService
+    relation_service: Any = None  # RelationService
 
     def _proj(self) -> Result[Any, str]:
         p = self.project_service.active_project
@@ -351,9 +368,14 @@ class ImportService:
             updated_at=now,
             metadata={
                 "source_id": source_id,
+                "document_id": source_id,
+                "file_name": Path(path).name if path else "",
                 "file_path": path,
                 "format": format,
+                "import_format": format,
                 "created_at": now,
+                "imported_at": now,
+                "extraction_warnings": [],
             },
         )
 
@@ -482,9 +504,13 @@ class ImportService:
             return Error(f"Cannot edit candidate in state '{import_cand.review_state.value}'")
         if import_cand.proposed_data is None or not isinstance(import_cand.proposed_data, dict):
             import_cand.proposed_data = {}
-        if "name" in data: import_cand.proposed_data["entity_name"] = data["name"]
-        if "desc" in data: import_cand.proposed_data["entity_description"] = data["desc"]
-        if "type" in data: import_cand.candidate_type = data["type"]
+        for key, value in dict(data or {}).items():
+            if key in {"candidate_type", "type"}:
+                import_cand.candidate_type = str(value)
+            elif key == "desc":
+                import_cand.proposed_data["description"] = value
+            else:
+                import_cand.proposed_data[str(key)] = value
         if import_cand.review_state == ImportReviewState.PENDIENTE:
             import_cand.review_state = ImportReviewState.EDITADO
         basket.updated_at = _now_iso()
@@ -498,25 +524,14 @@ class ImportService:
         for b in proj.import_baskets:
             if b.id == basket_id: basket = b; break
         if basket is None: return Error(f"Import basket '{basket_id[:8]}' not found")
-        sources = []
-        for cid in cand_ids:
-            for ic in basket.import_candidates:
-                if ic.id == cid and ic.review_state in (ImportReviewState.PENDIENTE, ImportReviewState.EDITADO, ImportReviewState.PARCIAL):
-                    sources.append(ic); break
-        if len(sources) < 2: return Error("Need at least 2 mergeable candidates")
-        names = []
-        descs = []
-        for c in sources:
-            names.append(c.proposed_data.get("entity_name", c.id[:8]) if isinstance(c.proposed_data, dict) else c.id[:8])
-            descs.append(c.proposed_data.get("entity_description", "") if isinstance(c.proposed_data, dict) else "")
-        merged_name = " + ".join(n for n in names if n)[:80]
-        merged_desc = ". ".join(d for d in descs if d)[:200]
-        merged = ImportCandidate(
-            proposed_data={"entity_name": merged_name, "entity_description": merged_desc, "merged_from": [s.id for s in sources]},
-            candidate_type=sources[0].candidate_type, review_state=ImportReviewState.FUSIONADO,
-            confidence=max(s.confidence for s in sources))
-        for s in sources: s.review_state = ImportReviewState.FUSIONADO
-        basket.import_candidates.append(merged)
+        from packages.application.import_deduplication_service import ImportDeduplicationService
+        dedupe = ImportDeduplicationService(project=proj)
+        suggestion = dedupe.create_merge_suggestion(basket, list(cand_ids), reason="manual_merge")
+        if isinstance(suggestion, Error):
+            return suggestion
+        accepted = dedupe.accept_merge_suggestion(basket, suggestion.value.id)
+        if isinstance(accepted, Error):
+            return accepted
         basket.updated_at = _now_iso()
         return Ok(basket)
 
@@ -528,6 +543,283 @@ class ImportService:
             for ic in basket.import_candidates:
                 if ic.id == cand_id: import_cand = ic; break
         return basket, import_cand
+
+    # ── AI extraction (I03) ──────────────────────────────────────────────
+
+    def extract_ai_candidates(
+        self,
+        basket_id: str,
+        *,
+        provider=None,
+        allow_simulated: bool = False,
+        replace_existing: bool = False,
+        project_context: dict[str, Any] | None = None,
+    ) -> Result[list[ImportCandidate], str]:
+        """Analyze imported chunks with AI and append reviewable candidates.
+
+        This method mutates only the import review basket. It never creates
+        entities, relations, milestones or other canon objects.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id:
+                basket = b
+                break
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+
+        from packages.application.import_ai_extraction_service import ImportAIExtractionService
+
+        context = dict(project_context or {})
+        context.setdefault("project_name", getattr(proj, "name", ""))
+        extractor = ImportAIExtractionService(
+            provider=provider,
+            allow_simulated=allow_simulated,
+        )
+        return extractor.extract_for_basket(
+            basket,
+            project_context=context,
+            replace_existing=replace_existing,
+        )
+
+    # ── Deduplication / aliases (I04) ────────────────────────────────────
+
+    def analyze_import_duplicates(self, basket_id: str) -> Result[list[ImportCandidate], str]:
+        """Create merge suggestions for duplicate/alias import candidates."""
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id:
+                basket = b
+                break
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        from packages.application.import_deduplication_service import ImportDeduplicationService
+        return ImportDeduplicationService(project=proj).analyze_basket(basket, append=True)
+
+    def accept_import_merge_suggestion(
+        self, basket_id: str, suggestion_id: str
+    ) -> Result[ImportCandidate, str]:
+        """Accept a merge suggestion and create a merged review candidate."""
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id:
+                basket = b
+                break
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        from packages.application.import_deduplication_service import ImportDeduplicationService
+        return ImportDeduplicationService(project=proj).accept_merge_suggestion(basket, suggestion_id)
+
+    def reject_import_merge_suggestion(self, basket_id: str, suggestion_id: str) -> Result[None, str]:
+        """Reject a merge suggestion without changing source candidates."""
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id:
+                basket = b
+                break
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        from packages.application.import_deduplication_service import ImportDeduplicationService
+        return ImportDeduplicationService(project=proj).reject_merge_suggestion(basket, suggestion_id)
+
+    # ── Review application (I05) ─────────────────────────────────────────
+
+    def apply_import_candidate_to_canon(
+        self,
+        basket_id: str,
+        cand_id: str,
+    ) -> Result[Any, str]:
+        """Apply a reviewed import candidate through normal app services.
+
+        This is the explicit Review Workspace accept action. It never lets the
+        UI write directly to project collections.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket, import_cand = self._find_basket_cand(proj, basket_id, cand_id)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        if import_cand is None:
+            return Error(f"Import candidate '{cand_id[:8]}' not found")
+        if import_cand.review_state not in (
+            ImportReviewState.PENDIENTE, ImportReviewState.EDITADO, ImportReviewState.PARCIAL,
+        ):
+            return Error(f"Cannot apply candidate in state '{import_cand.review_state.value}'")
+
+        payload = dict(import_cand.proposed_data or {})
+        kind = str(payload.get("kind") or "").lower()
+        if kind == "merge_suggestion":
+            return self.accept_import_merge_suggestion(basket_id, cand_id)
+        if kind == "import_issue":
+            return Error("Import issues cannot be applied to canon")
+        if kind in {"milestone", "causal_milestone"}:
+            result = self._apply_milestone_candidate(proj, basket, import_cand, payload)
+            if isinstance(result, Error):
+                return result
+            import_cand.review_state = ImportReviewState.ACEPTADO
+            basket.updated_at = _now_iso()
+            return result
+        if import_cand.candidate_type == CandidateType.RELACION.value or kind == "relation":
+            result = self._apply_relation_candidate(proj, basket, import_cand, payload)
+        else:
+            result = self._apply_entity_candidate(basket, import_cand, payload)
+        if isinstance(result, Error):
+            return result
+        import_cand.review_state = ImportReviewState.ACEPTADO
+        basket.updated_at = _now_iso()
+        return result
+
+    def _apply_entity_candidate(
+        self,
+        basket: ImportBasket,
+        import_cand: ImportCandidate,
+        payload: dict[str, Any],
+    ) -> Result[Any, str]:
+        name = str(payload.get("name") or payload.get("title") or payload.get("entity_name") or "").strip()
+        if not name:
+            return Error("Entity import candidate needs a name")
+        kind = str(payload.get("kind") or "entity").lower()
+        entity_type = (
+            payload.get("entity_type")
+            or payload.get("branch_type")
+            or ("contenedor" if kind == "branch" else "nota")
+        )
+        custom_metadata = dict(payload.get("custom_metadata") or {})
+        custom_metadata.update({
+            "import_basket_id": basket.id,
+            "import_candidate_id": import_cand.id,
+            "source_references": list(payload.get("source_references") or []),
+        })
+        if kind == "branch":
+            custom_metadata.setdefault("display_type", "rama")
+            custom_metadata.setdefault("candidate_tree", True)
+        data = {
+            "name": name,
+            "aliases": list(payload.get("aliases") or []),
+            "entity_type": entity_type,
+            "brief_description": payload.get("brief_description") or payload.get("summary") or "",
+            "extended_description": payload.get("description") or payload.get("body") or "",
+            "canon_state": "borrador",
+            "visibility_state": payload.get("visibility") or "visible_usuario",
+            "origin": "import_review",
+            "custom_metadata": custom_metadata,
+        }
+        from packages.application.entity_service import EntityService
+        entity_service = self.entity_service or EntityService(self.project_service)
+        return entity_service.create_entity(data)
+
+    def _apply_relation_candidate(
+        self,
+        proj,
+        basket: ImportBasket,
+        import_cand: ImportCandidate,
+        payload: dict[str, Any],
+    ) -> Result[Any, str]:
+        source_id = str(payload.get("source_id") or "").strip()
+        target_id = str(payload.get("target_id") or "").strip()
+        if not source_id or not target_id:
+            source_id, target_id = self._resolve_relation_endpoints_by_name(proj, payload)
+        if not source_id or not target_id:
+            return Error("No se pudieron encontrar las entidades para esta relacion importada")
+        data = dict(payload)
+        data["source_id"] = source_id
+        data["target_id"] = target_id
+        data.setdefault("description", payload.get("summary") or payload.get("body") or payload.get("evidence") or "")
+        data.setdefault("source", "import_review")
+        data["custom_metadata"] = dict(payload.get("custom_metadata") or {})
+        data["custom_metadata"].update({
+            "import_basket_id": basket.id,
+            "import_candidate_id": import_cand.id,
+            "source_references": list(payload.get("source_references") or []),
+        })
+        from packages.application.relation_service import RelationService
+        relation_service = self.relation_service or RelationService(self.project_service)
+        return relation_service.create_relation(
+            source_id=source_id,
+            target_id=target_id,
+            relation_type=payload.get("relation_type") or "esta_relacionado_con",
+            data=data,
+        )
+
+    def _apply_milestone_candidate(
+        self,
+        proj,
+        basket: ImportBasket,
+        import_cand: ImportCandidate,
+        payload: dict[str, Any],
+    ) -> Result[Any, str]:
+        title = str(payload.get("title") or payload.get("name") or "").strip()
+        if not title:
+            return Error("Milestone import candidate needs a title")
+        milestone_payload = {
+            "id": payload.get("id") or "",
+            "title": title,
+            "description": payload.get("description") or payload.get("summary") or payload.get("body") or "",
+            "milestone_type": payload.get("milestone_type") or "otro",
+            "layer_ids": list(payload.get("layer_ids") or payload.get("linked_ring_ids") or []),
+            "affected_entity_ids": list(payload.get("affected_entity_ids") or payload.get("linked_entity_ids") or []),
+            "affected_branch_ids": list(payload.get("affected_branch_ids") or payload.get("linked_branch_ids") or []),
+            "affected_layer_ids": list(payload.get("affected_layer_ids") or []),
+            "caused_relation_ids": list(payload.get("caused_relation_ids") or payload.get("linked_relation_ids") or []),
+            "causal_parent_hito_ids": list(payload.get("causal_parent_hito_ids") or []),
+            "causal_child_hito_ids": list(payload.get("causal_child_hito_ids") or []),
+            "source_ids": [basket.source_id] if basket.source_id else [],
+            "confidence": import_cand.confidence,
+            "rationale": payload.get("confidence_reason") or payload.get("evidence") or "",
+            "tags": list(payload.get("tags") or []),
+            "visibility_state": payload.get("visibility") or "visible_usuario",
+            "metadata": {
+                "import_basket_id": basket.id,
+                "import_candidate_id": import_cand.id,
+                "source_references": list(payload.get("source_references") or []),
+                "date_label": payload.get("date_label", ""),
+                "structured_date": payload.get("structured_date") or {},
+            },
+            "year": _milestone_year(payload),
+        }
+        from packages.application.causal_milestone_service import CausalMilestoneService
+        milestone_service = CausalMilestoneService(project_service=self.project_service)
+        result = milestone_service.create_hito_manual(milestone_payload)
+        if isinstance(result, Error):
+            return result
+        chronology = getattr(proj, "project_chronology", None)
+        if chronology is not None and hasattr(chronology, "link_milestone"):
+            chronology.link_milestone(result.value.id)
+        return result
+
+    @staticmethod
+    def _resolve_relation_endpoints_by_name(project: Any, proposed_data: dict) -> tuple[str, str]:
+        source_name = str(proposed_data.get("source_name") or "").strip().lower()
+        target_name = str(proposed_data.get("target_name") or "").strip().lower()
+        sid = ""
+        tid = ""
+        for entity in list(getattr(project, "entities", []) or []):
+            name = str(getattr(entity, "name", "") or "").strip().lower()
+            aliases = [str(alias).strip().lower() for alias in getattr(entity, "aliases", []) or []]
+            names = [name, *aliases]
+            if not sid and source_name and any(source_name == n or source_name in n for n in names):
+                sid = str(getattr(entity, "id", ""))
+            if not tid and target_name and any(target_name == n or target_name in n for n in names):
+                tid = str(getattr(entity, "id", ""))
+        return sid, tid
 
     # ── Partial / Filtered view ──────────────────────────────────────────
 

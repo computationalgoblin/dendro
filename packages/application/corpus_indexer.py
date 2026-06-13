@@ -362,6 +362,7 @@ def _make_record(
     indexed_at: str,
 ) -> CorpusIndexRecord:
     safe_metadata = _safe_metadata(metadata or {})
+    safe_metadata.setdefault("source_type", "canon")
     safe_references = [ref for ref in (references or []) if ref]
     content_hash = _content_hash(kind, ref_id, rendered_text, safe_references, safe_metadata)
     return CorpusIndexRecord(
@@ -536,46 +537,232 @@ def _creative_record(project: Any, indexed_at: str) -> CorpusIndexRecord | None:
 
 def _iter_import_records(project: Any, options: IndexingOptions) -> Iterable[dict[str, Any]]:
     for basket in getattr(project, "import_baskets", []) or []:
-        basket_state = str(getattr(basket, "review_state", "") or "").lower()
-        basket_allowed = basket_state in {"aceptado", "editado", "fusionado", "parcial"} or options.include_unaccepted_imports
+        basket_state = _import_review_state(getattr(basket, "review_state", ""))
+        basket_rag_state = _import_rag_state(basket_state)
+        basket_allowed = _import_state_included(basket_state, options)
+        segment_by_id = {
+            str(getattr(segment, "id", "")): segment
+            for segment in getattr(basket, "segments", []) or []
+        }
         if basket_allowed:
             for segment in getattr(basket, "segments", []) or []:
+                segment_metadata = getattr(segment, "metadata", {}) or {}
+                source_refs = _source_reference_metadata_from_segment(basket, segment)
                 text = _join_lines([
                     _line("Kind", "Import segment"),
+                    _line("Import state", basket_rag_state),
                     _line("Section", getattr(segment, "section", "")),
                     _line("Text", getattr(segment, "raw_text", "")),
                 ])
                 yield {
                     "kind": CorpusItemKind.IMPORT_DOCUMENT,
                     "ref_id": f"{getattr(basket, 'id', '')}:{getattr(segment, 'id', '')}",
-                    "source": "project.import_baskets.segments",
+                    "source": f"project.import_baskets.{basket_rag_state}.segments",
                     "rendered_text": text,
-                    "references": [f"source:{getattr(segment, 'source_id', '')}"],
+                    "references": _import_references(
+                        source_id=getattr(segment, "source_id", ""),
+                        segment_id=getattr(segment, "id", ""),
+                        source_references=source_refs,
+                    ),
                     "metadata": {
                         "basket_id": getattr(basket, "id", ""),
                         "segment_id": getattr(segment, "id", ""),
                         "review_state": basket_state,
+                        "import_rag_state": basket_rag_state,
+                        "source_type": basket_rag_state,
+                        "namespace": basket_rag_state,
+                        "source_id": getattr(segment, "source_id", ""),
+                        "chunk_id": segment_metadata.get("chunk_id", getattr(segment, "id", "")),
+                        "section_path": segment_metadata.get("section_path", getattr(segment, "section", "")),
+                        "source_references": source_refs,
                     },
                     "updated_at": _string_value(getattr(basket, "updated_at", "")),
                 }
         for candidate in getattr(basket, "import_candidates", []) or []:
-            state = str(_enum_value(getattr(candidate, "review_state", ""))).lower()
-            if state not in {"aceptado", "editado", "fusionado", "parcial"} and not options.include_unaccepted_imports:
+            state = _import_review_state(getattr(candidate, "review_state", ""))
+            if not _import_state_included(state, options):
                 continue
+            rag_state = _import_rag_state(state)
+            source_refs = _source_reference_metadata_from_candidate(candidate, basket, segment_by_id)
+            candidate_references = _import_references(
+                source_id=getattr(basket, "source_id", ""),
+                segment_id=getattr(candidate, "segment_id", ""),
+                source_references=source_refs,
+            )
             yield {
                 "kind": CorpusItemKind.IMPORT_DOCUMENT,
                 "ref_id": str(getattr(candidate, "id", "")),
-                "source": "project.import_baskets.import_candidates",
+                "source": f"project.import_baskets.{rag_state}.import_candidates",
                 "rendered_text": _join_lines([
                     _line("Kind", "Import candidate"),
+                    _line("Import state", rag_state),
                     _line("Type", getattr(candidate, "candidate_type", "")),
                     _line("State", state),
                     _line("Proposed data", _compact_json(getattr(candidate, "proposed_data", {}) or {})),
                 ]),
-                "references": [f"segment:{getattr(candidate, 'segment_id', '')}"],
-                "metadata": {"basket_id": getattr(basket, "id", ""), "review_state": state},
+                "references": candidate_references,
+                "metadata": {
+                    "basket_id": getattr(basket, "id", ""),
+                    "candidate_id": getattr(candidate, "id", ""),
+                    "segment_id": getattr(candidate, "segment_id", ""),
+                    "candidate_type": getattr(candidate, "candidate_type", ""),
+                    "review_state": state,
+                    "import_rag_state": rag_state,
+                    "source_type": rag_state,
+                    "namespace": rag_state,
+                    "source_references": source_refs,
+                },
                 "updated_at": _string_value(getattr(basket, "updated_at", "")),
             }
+            if rag_state == "accepted":
+                yield _accepted_import_candidate_record(
+                    basket=basket,
+                    candidate=candidate,
+                    references=candidate_references,
+                    source_references=source_refs,
+                )
+
+
+def _accepted_import_candidate_record(
+    *,
+    basket: Any,
+    candidate: Any,
+    references: list[str],
+    source_references: list[dict[str, Any]],
+) -> dict[str, Any]:
+    proposed = getattr(candidate, "proposed_data", {}) or {}
+    kind = _canon_kind_from_import_candidate(candidate)
+    title = proposed.get("name") or proposed.get("title") or proposed.get("label") or getattr(candidate, "id", "")
+    return {
+        "kind": kind,
+        "ref_id": f"import_candidate:{getattr(candidate, 'id', '')}",
+        "source": "project.import_baskets.accepted.import_candidates.as_canon",
+        "rendered_text": _join_lines([
+            _line("Kind", _canon_kind_label(kind)),
+            _line("Name", title),
+            _line("Type", proposed.get("entity_type") or proposed.get("branch_type") or proposed.get("relation_type") or getattr(candidate, "candidate_type", "")),
+            _line("Summary", proposed.get("summary") or proposed.get("brief_description")),
+            _line("Body", proposed.get("body") or proposed.get("description") or proposed.get("branch_description")),
+            _line("Proposed data", _compact_json(proposed)),
+        ]),
+        "references": references,
+        "metadata": {
+            "source_type": "canon",
+            "import_rag_state": "accepted",
+            "import_candidate_id": getattr(candidate, "id", ""),
+            "basket_id": getattr(basket, "id", ""),
+            "segment_id": getattr(candidate, "segment_id", ""),
+            "candidate_type": getattr(candidate, "candidate_type", ""),
+            "source_references": source_references,
+            "canon_from_import": True,
+        },
+        "updated_at": _string_value(getattr(basket, "updated_at", "")),
+    }
+
+
+def _import_review_state(value: Any) -> str:
+    return _enum_value(value).strip().lower() or "pendiente"
+
+
+def _import_rag_state(review_state: str) -> str:
+    if review_state in {"aceptado", "editado_aceptado"}:
+        return "accepted"
+    if review_state in {"editado", "fusionado", "parcial", "parcialmente_aceptado"}:
+        return "reviewed"
+    if review_state in {"rechazado", "archivado"}:
+        return "rejected"
+    return "raw_import"
+
+
+def _import_state_included(review_state: str, options: IndexingOptions) -> bool:
+    rag_state = _import_rag_state(review_state)
+    if rag_state in {"accepted", "reviewed"}:
+        return True
+    if rag_state == "rejected":
+        return bool(options.include_unaccepted_imports and options.include_rejected_candidates)
+    return bool(options.include_unaccepted_imports)
+
+
+def _canon_kind_from_import_candidate(candidate: Any) -> CorpusItemKind:
+    proposed = getattr(candidate, "proposed_data", {}) or {}
+    kind = str(proposed.get("kind", "") or "").strip().lower()
+    candidate_type = str(getattr(candidate, "candidate_type", "") or "").strip().lower()
+    if kind == "branch":
+        return CorpusItemKind.BRANCH
+    if kind == "relation" or candidate_type in {"relacion", "relation"}:
+        return CorpusItemKind.RELATION
+    if kind == "milestone" or candidate_type in {"hito", "milestone", "cambio"}:
+        return CorpusItemKind.MILESTONE
+    return CorpusItemKind.ENTITY
+
+
+def _canon_kind_label(kind: CorpusItemKind) -> str:
+    return {
+        CorpusItemKind.BRANCH: "Branch",
+        CorpusItemKind.RELATION: "Relation",
+        CorpusItemKind.MILESTONE: "Milestone",
+    }.get(kind, "Entity")
+
+
+def _source_reference_metadata_from_segment(basket: Any, segment: Any) -> list[dict[str, Any]]:
+    metadata = getattr(segment, "metadata", {}) or {}
+    return [{
+        "source_id": getattr(segment, "source_id", "") or getattr(basket, "source_id", ""),
+        "source_name": metadata.get("file_name", ""),
+        "segment_id": getattr(segment, "id", ""),
+        "chunk_id": metadata.get("chunk_id", getattr(segment, "id", "")),
+        "section_path": metadata.get("section_path", getattr(segment, "section", "")),
+        "page_start": metadata.get("page_start"),
+        "page_end": metadata.get("page_end"),
+        "char_start": getattr(segment, "start_offset", 0),
+        "char_end": getattr(segment, "end_offset", 0),
+        "quote_excerpt": str(getattr(segment, "raw_text", "") or "")[:280],
+        "extraction_method": metadata.get("extraction_method") or metadata.get("extractor", ""),
+    }]
+
+
+def _source_reference_metadata_from_candidate(
+    candidate: Any,
+    basket: Any,
+    segment_by_id: dict[str, Any],
+) -> list[dict[str, Any]]:
+    proposed = getattr(candidate, "proposed_data", {}) or {}
+    raw_refs = proposed.get("source_references")
+    refs = [dict(ref) for ref in raw_refs if isinstance(ref, dict)] if isinstance(raw_refs, list) else []
+    if refs:
+        return refs
+    segment = segment_by_id.get(str(getattr(candidate, "segment_id", "")))
+    if segment is not None:
+        return _source_reference_metadata_from_segment(basket, segment)
+    return [{
+        "source_id": getattr(basket, "source_id", ""),
+        "segment_id": getattr(candidate, "segment_id", ""),
+        "chunk_id": getattr(candidate, "segment_id", ""),
+    }]
+
+
+def _import_references(
+    *,
+    source_id: Any,
+    segment_id: Any,
+    source_references: list[dict[str, Any]],
+) -> list[str]:
+    refs: list[str] = []
+    if source_id:
+        refs.append(f"source:{source_id}")
+    if segment_id:
+        refs.append(f"segment:{segment_id}")
+    for ref in source_references:
+        ref_source = ref.get("source_id")
+        ref_segment = ref.get("segment_id")
+        ref_chunk = ref.get("chunk_id")
+        if ref_source:
+            refs.append(f"source:{ref_source}")
+        if ref_segment:
+            refs.append(f"segment:{ref_segment}")
+        if ref_chunk:
+            refs.append(f"chunk:{ref_chunk}")
+    return _dedupe(refs)
 
 
 def _contains_maps(relations: list[Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
@@ -831,6 +1018,17 @@ def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item)]
+
+
+def _dedupe(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text and text not in seen:
+            seen.add(text)
+            result.append(text)
+    return result
 
 
 def _has_content(value: Any) -> bool:

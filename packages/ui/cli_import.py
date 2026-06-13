@@ -28,8 +28,19 @@ def _import_service(project_path: Path) -> ImportService:
 def _format_flag(args: argparse.Namespace) -> ImportFormat:
     mapping = {
         "txt": ImportFormat.TEXT_PLAIN,
+        "md": ImportFormat.MARKDOWN,
+        "markdown": ImportFormat.MARKDOWN,
         "pdf": ImportFormat.PDF,
     }
+    if args.format == "auto":
+        suffix = Path(args.file).suffix.lower()
+        suffix_mapping = {
+            ".txt": ImportFormat.TEXT_PLAIN,
+            ".md": ImportFormat.MARKDOWN,
+            ".markdown": ImportFormat.MARKDOWN,
+            ".pdf": ImportFormat.PDF,
+        }
+        return suffix_mapping.get(suffix, ImportFormat.TEXT_PLAIN)
     return mapping.get(args.format, ImportFormat.TEXT_PLAIN)
 
 
@@ -43,8 +54,8 @@ def register_import_commands(sub: argparse._SubParsersAction) -> None:
     # import document
     doc = imp_subs.add_parser("document", help="Import a document file")
     doc.add_argument("file", help="Path to the document file")
-    doc.add_argument("--format", choices=["txt", "pdf"], default="txt",
-                     help="Document format (txt=text_plain, pdf=PDF)")
+    doc.add_argument("--format", choices=["auto", "txt", "md", "markdown", "pdf"], default="auto",
+                     help="Document format (auto by suffix, txt=text_plain, md=Markdown, pdf=PDF)")
 
     # import basket
     basket = imp_subs.add_parser("basket", help="Manage import baskets")

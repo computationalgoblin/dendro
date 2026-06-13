@@ -189,7 +189,7 @@ def test_graph_rebuild_no_duplicate_edges_and_handle_selectable_after_reload(qap
     assert len(graph.canvas._nodes) == 2
     assert len(graph.canvas._edges) == 1
     edge = graph.canvas._edges[0]
-    assert edge.handle_item.toolTip() == "Abrir relación"
+    assert edge.handle_item.toolTip() == ""
     graph.canvas._set_single_edge_selection(edge)
     graph.canvas.relationSelected.emit(edge.edge.relation_id)
     assert graph.selected_relation_ids() == [edge.edge.relation_id]

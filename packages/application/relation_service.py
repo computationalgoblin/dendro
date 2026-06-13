@@ -237,6 +237,7 @@ class RelationService:
                     "source_id", "target_id", "description", "temporality", "causality",
                     "conditions", "source", "direction", "intensity", "canon_state",
                     "visibility_state", "validity_conditions", "tags", "layer_ids",
+                    "birth_year", "death_year",  # BETA1-G06: relation temporal interval
                 )
                 for key in scalar_fields:
                     if key in data:

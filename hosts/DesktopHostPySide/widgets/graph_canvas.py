@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QRadialGradient, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -25,17 +25,34 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
-from hosts.DesktopHostPySide.widgets.design_system import EmptyState, enum_human
+from hosts.DesktopHostPySide.widgets.canvas_atmosphere import CanvasAtmosphere
+from hosts.DesktopHostPySide.widgets.design_system import (
+    EmptyState,
+    enum_human,
+    GOLD,
+    GOLD_DEEP,
+    GOLD_SOFT,
+    GOLD_TINT,
+    INK_SOFT,
+    INK_STRONG,
+    LINE,
+    SURFACE,
+    SURFACE_HI,
+)
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.world_layer import default_world_layers
 from packages.ui.graph_physics import (
@@ -151,6 +168,10 @@ class _NodeView:
     visibility: str
     layer_id: str = ""
     proposed: bool = False
+    # BETA1-G06: vida temporal de la entidad (None = sin dato / pre-migración,
+    # death None = sigue viva). Permite la "fotografía" del grafo en un año.
+    birth_year: int | None = None
+    death_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +187,12 @@ class _EdgeView:
     proposed: bool = False
     inter_ring: bool = False
     causal: bool = False
+    # BETA1-G06: intervalo temporal EXPLÍCITO de la relación (opcional). Por
+    # defecto None → la existencia se deriva de la de sus extremos. Si se
+    # define (custom_metadata.birth_year/death_year), acota la relación a un
+    # tramo propio (p. ej. dos personajes longevos que se enemistan en el año 50).
+    birth_year: int | None = None
+    death_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -238,6 +265,30 @@ def _enum_value(value: Any, default: str = "") -> str:
     return str(getattr(value, "value", value))
 
 
+def _parse_optional_year(value: Any) -> int | None:
+    """BETA1-G06: lee un año entero o None (acepta strings, ignora basura)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def interval_contains_year(birth: int | None, death: int | None, year: int) -> bool:
+    """BETA1-G06: ¿el intervalo [birth, death] contiene ``year``? (puro, testeable).
+
+    - ``birth is None`` → sin fecha de nacimiento conocida: no se oculta nunca
+      (entidad pre-migración o relación derivada de extremos).
+    - ``death is None`` → sigue existiendo (intervalo abierto).
+    """
+    if birth is None:
+        return True
+    if year < int(birth):
+        return False
+    return death is None or year <= int(death)
+
+
 def _entity_view(entity: Any) -> _NodeView:
     kind = _enum_value(getattr(entity, "entity_type", None), "entidad")
     subtitle = (
@@ -255,6 +306,8 @@ def _entity_view(entity: Any) -> _NodeView:
         canon=_enum_value(getattr(entity, "canon_state", None), ""),
         visibility=_enum_value(getattr(entity, "visibility_state", None), ""),
         layer_id=str((getattr(entity, "layer_ids", []) or [""])[0] or ""),
+        birth_year=_parse_optional_year(getattr(entity, "birth_year", None)),
+        death_year=_parse_optional_year(getattr(entity, "death_year", None)),
     )
 
 
@@ -274,6 +327,14 @@ def _relation_view(relation: Any) -> _EdgeView:
         direction=direction,
         color=color,
         causal=relation_family(kind) == "causal",
+        # BETA1-G06: leer del campo de dominio (v26+); caer a custom_metadata
+        # como respaldo para SimpleNamespace de tests que no tienen el atributo.
+        birth_year=_parse_optional_year(
+            getattr(relation, "birth_year", meta.get("birth_year"))
+        ),
+        death_year=_parse_optional_year(
+            getattr(relation, "death_year", meta.get("death_year"))
+        ),
     )
 
 
@@ -1278,9 +1339,15 @@ class GraphCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        # BETA1-F05: lienzo un punto más oscuro — las hojas blancas y los
-        # velos claros de las ramas destacan sin esfuerzo.
-        self.setBackgroundBrush(QBrush(QColor("#ECE5D4")))
+        # BETA1-G07: lienzo con VIÑETA radial cálida centrada en el origen — el
+        # "corazón" del mundo (centro de los anillos) recibe una luz suave que
+        # se hunde hacia los bordes. Da profundidad e inmersión sin distraer;
+        # las hojas blancas y los velos de rama siguen destacando.
+        vignette = QRadialGradient(QPointF(0.0, 0.0), 1500.0)
+        vignette.setColorAt(0.0, QColor("#EFE8D7"))
+        vignette.setColorAt(0.55, QColor("#E6DFCD"))
+        vignette.setColorAt(1.0, QColor("#DBD2BB"))
+        self.setBackgroundBrush(QBrush(vignette))
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
         self.setScene(self.scene_obj)
@@ -1298,6 +1365,10 @@ class GraphCanvasView(QGraphicsView):
         self._selected_ring_id = ""
         self._focused_ring_id = ""
         self._visual_filter = VisualFilterState()
+        # BETA1-G06: "fotografía temporal". None = atemporal (se ve todo, como
+        # siempre). Un entero = el grafo se filtra al estado del mundo en ese
+        # año: solo entidades vivas y relaciones existentes entonces.
+        self._view_year: int | None = None
         self._membership: dict[str, str] = {}  # entity_id -> tree_entity_id
         self._pending_source: GraphNodeItem | None = None
         self._drag_source: GraphNodeItem | None = None
@@ -1326,6 +1397,12 @@ class GraphCanvasView(QGraphicsView):
         # assignment. Relation creation lives in the context menu only.
         self._moving_item: GraphNodeItem | GraphTreeItem | None = None
         self._move_origin_scene = QPointF()
+        # BETA1-G06: un click (press+release sin arrastrar) abre el panel de
+        # detalle. Esta bandera evita que el release final de un doble click lo
+        # reabra ("pop ups de nuevo").
+        self._suppress_release_click = False
+        # BETA1-G06: relación presionada — emite en release, no en press.
+        self._pressed_edge_id: str = ""
         # BETA1-F05: al ROZAR una rama con el item arrastrado, la física se
         # CONGELA por completo — sin esto, la repulsión pelea contra el gesto
         # de anidar (meter una hoja en una subrama era una lucha).
@@ -1346,6 +1423,22 @@ class GraphCanvasView(QGraphicsView):
         self._physics_timer = QTimer(self)
         self._physics_timer.setInterval(33)  # ~30 Hz
         self._physics_timer.timeout.connect(self._physics_tick)
+        # BETA1-G08: atmósfera de fondo (hojas + brisa) MUY sutil, detrás de
+        # todo. Se pinta en drawBackground (viewport coords) y se pausa cuando
+        # el lienzo no está visible.
+        self._atmosphere = CanvasAtmosphere(self, ctx=None, count=11)
+
+    def drawBackground(self, painter, rect):  # noqa: N802 (Qt API)
+        super().drawBackground(painter, rect)  # viñeta cálida
+        self._atmosphere.paint(painter)
+
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        self._atmosphere.start()
+
+    def hideEvent(self, event):  # noqa: N802 (Qt API)
+        self._atmosphere.stop()
+        super().hideEvent(event)
 
     def selected_entity_ids(self) -> list[str]:
         return list(self._selected_entity_ids)
@@ -2086,6 +2179,9 @@ class GraphCanvasView(QGraphicsView):
             super().mousePressEvent(event)
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            # BETA1-G06: cada press nuevo reabre la posibilidad de "click →
+            # panel". El doble click la vuelve a suprimir (ver doubleClick).
+            self._suppress_release_click = False
             # BETA1-B01: a relation started from the context menu has
             # _drag_source set without a held button; the next click picks
             # the target (or cancels on background). Normal drags never enter
@@ -2132,7 +2228,11 @@ class GraphCanvasView(QGraphicsView):
                     event.accept()
                     return
                 self._set_single_edge_selection(edge)
-                self.relationSelected.emit(edge.edge.relation_id)
+                # BETA1-G06: emitir en release como los nodos para que el doble
+                # click suprima el segundo pop. Press2 de un doble click ya
+                # tendría _suppress_release_click=True en el doubleClickEvent,
+                # así que el release final NO reabrirá el panel.
+                self._pressed_edge_id = edge.edge.relation_id
                 event.accept()
                 return
 
@@ -2142,7 +2242,9 @@ class GraphCanvasView(QGraphicsView):
                     event.accept()
                     return
                 self._set_single_node_selection(node)
-                self.entitySelected.emit(node.node.entity_id)
+                # BETA1-G06: NO se emite aquí. El panel se abre en el release
+                # SOLO si el elemento no se arrastró (click vs drag) — así un
+                # click simple abre el detalle sin que arrastrar dispare pop-ups.
                 # BETA1-B03: plain drag moves the item (ItemIsMovable does the
                 # work once the item receives the press). Relation creation
                 # moved to the context menu in B01, so the old drag-to-relate
@@ -2173,12 +2275,24 @@ class GraphCanvasView(QGraphicsView):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            # BETA1-G06: el click simple ya abrió el panel en su release. El
+            # doble click NO debe reabrirlo (causa de los "pop ups de nuevo"):
+            # suprimimos el release-click que cierra esta secuencia.
+            self._suppress_release_click = True
             items = self.items(event.position().toPoint())
             _b44trace(
                 "mouse_double "
                 f"layout={self._layout_mode_active} pos=({event.position().x():.1f},{event.position().y():.1f}) "
                 f"items={[type(item).__name__ for item in items[:8]]!r}"
             )
+            # BETA1-G06: hojas y relaciones ya abren su panel con un click
+            # simple → el doble click no reemite (evita el doble pop). Las
+            # RAMAS (GraphTreeItem) caen al super() para conservar su colapso
+            # por doble click en la cabecera; el vacío sigue al foco de anillo.
+            kind, hit = self._topmost_node_or_edge_at(event.position())
+            if kind == "edge" or (kind == "node" and isinstance(hit, GraphNodeItem)):
+                event.accept()
+                return
             node = self._item_node_at(event.position())
             edge = self._item_edge_at(event.position())
             if node is None and edge is None:
@@ -2289,6 +2403,21 @@ class GraphCanvasView(QGraphicsView):
                         moving.node.entity_id, center.x(), center.y()
                     )
                     self._physics_reheat()
+            elif not self._suppress_release_click:
+                # BETA1-G06: no se movió → fue un click. Abre el panel de
+                # detalle de la hoja/rama (el doble click suprime esta rama).
+                self.entitySelected.emit(moving.node.entity_id)
+            self._suppress_release_click = False
+            self._pressed_edge_id = ""
+            return
+        # BETA1-G06: edge click → emitir en release con la misma guardia de
+        # supresión que los nodos (evita el segundo pop en doble click).
+        if self._pressed_edge_id and event.button() == Qt.MouseButton.LeftButton:
+            rel_id = self._pressed_edge_id
+            self._pressed_edge_id = ""
+            if not self._suppress_release_click:
+                self.relationSelected.emit(rel_id)
+            self._suppress_release_click = False
             return
         self._pending_source = None
         self._alt_source = None
@@ -2503,8 +2632,57 @@ class GraphCanvasView(QGraphicsView):
         collapsed = bool(getattr(parent_item, "_collapsed", False)) if parent_item is not None else False
         return parent_id, parent_name, collapsed
 
+    def _node_exists_at_view_year(self, node: _NodeView) -> bool:
+        """BETA1-G06: ¿la entidad existe en el año-cámara actual?"""
+        if self._view_year is None:
+            return True
+        return interval_contains_year(node.birth_year, node.death_year, self._view_year)
+
+    def _edge_exists_at_view_year(self, edge: _EdgeView) -> bool:
+        """BETA1-G06: existencia EXPLÍCITA de la relación en el año-cámara.
+
+        La existencia derivada (extremos vivos) la garantiza el filtro de nodos
+        — aquí solo se aplica el intervalo propio si la relación lo declara.
+        """
+        if self._view_year is None or edge.birth_year is None:
+            return True
+        return interval_contains_year(edge.birth_year, edge.death_year, self._view_year)
+
+    def _temporal_snapshot(self, nodes: list[_NodeView], edges: list[_EdgeView]) -> tuple[list[_NodeView], list[_EdgeView]]:
+        """BETA1-G06: aplica SOLO la cámara temporal (sin filtros visuales).
+
+        Se usa en la rama de foco de anillo, que omite ``_filtered_graph``."""
+        if self._view_year is None:
+            return list(nodes), list(edges)
+        fnodes = [node for node in nodes if self._node_exists_at_view_year(node)]
+        visible = {node.entity_id for node in fnodes}
+        fedges = [
+            edge for edge in edges
+            if edge.source_id in visible and edge.target_id in visible and self._edge_exists_at_view_year(edge)
+        ]
+        return fnodes, fedges
+
+    def set_view_year(self, year: int | None):
+        """BETA1-G06: fija el año-cámara (None = atemporal) y reconstruye el
+        grafo como la 'fotografía' del mundo en ese momento."""
+        new_year = None if year is None else int(year)
+        if new_year == self._view_year:
+            return
+        self._view_year = new_year
+        self.set_graph(
+            self._all_nodes,
+            self._all_edges,
+            layout_mode=self._layout_mode_active,
+            layers=self._all_layers,
+        )
+
+    def view_year(self) -> int | None:
+        return self._view_year
+
     def _node_passes_filter(self, node: _NodeView, allowed_tree_ids: set[str] | None = None) -> bool:
         vf = self._visual_filter
+        if not self._node_exists_at_view_year(node):
+            return False
         if allowed_tree_ids is not None and node.entity_id not in allowed_tree_ids:
             return False
         if vf.focus_entity_ids and node.entity_id not in vf.focus_entity_ids:
@@ -2522,6 +2700,8 @@ class GraphCanvasView(QGraphicsView):
     def _edge_passes_filter(self, edge: _EdgeView, visible_node_ids: set[str]) -> bool:
         vf = self._visual_filter
         if edge.source_id not in visible_node_ids or edge.target_id not in visible_node_ids:
+            return False
+        if not self._edge_exists_at_view_year(edge):
             return False
         if edge.kind.lower() == "contiene":
             return True
@@ -3153,8 +3333,10 @@ class GraphCanvasView(QGraphicsView):
         if layout_mode == "concentric_rings" and self._focused_ring_id:
             # Ring focus is a concentric-view scope, not a generic visual filter.
             # Build from the full canonical graph so moving an item between rings
-            # cannot be hidden by a stale layer filter.
-            nodes, edges = list(self._all_nodes), list(self._all_edges)
+            # cannot be hidden by a stale layer filter. The temporal camera
+            # (BETA1-G06) still applies — focusing a ring at year N must show
+            # that ring's snapshot at year N, not its whole history.
+            nodes, edges = self._temporal_snapshot(self._all_nodes, self._all_edges)
         else:
             nodes, edges = self._filtered_graph(self._all_nodes, self._all_edges)
         _b44trace(
@@ -3700,6 +3882,7 @@ class GraphCanvasWidget(QWidget):
         layout.addWidget(self.empty)
 
         self.canvas = GraphCanvasView()
+        self.canvas._atmosphere.set_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
         self.canvas.entitySelected.connect(self._entity_selected)
         self.canvas.relationSelected.connect(self._relation_selected)
         self.canvas.relationCreateRequested.connect(self.relationCreateRequested.emit)
@@ -3725,6 +3908,197 @@ class GraphCanvasWidget(QWidget):
         self.canvas.nodeExtractFromTreeRequested.connect(self.nodeExtractFromTreeRequested.emit)
         layout.addWidget(self.canvas, 1)
         self.canvas.setVisible(False)
+
+        # BETA1-G06: scrubber temporal — la "máquina del tiempo" del grafo
+        # concéntrico. Overlay flotante (no en el layout) sobre el lienzo.
+        self._time_year_range = (0, 0)
+        self._time_present_year = 0
+        self._time_bar = self._build_time_bar()
+        self._time_bar.setVisible(False)
+
+    # ── BETA1-G06: scrubber temporal ──────────────────────────────────────
+
+    def _build_time_bar(self) -> QFrame:
+        """Barra flotante para 'fotografiar' el grafo en cualquier año."""
+        bar = QFrame(self)
+        bar.setObjectName("timeScrubber")
+        bar.setStyleSheet(
+            f"QFrame#timeScrubber {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: 17px; }}"
+        )
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 5, 10, 5)
+        row.setSpacing(8)
+
+        self._time_toggle = QPushButton("◷")
+        self._time_toggle.setCheckable(True)
+        self._time_toggle.setToolTip("Recorrer el tiempo: ver el grafo tal como estaba en un año")
+        self._time_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._time_toggle.setFixedSize(30, 30)
+        self._time_toggle.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; border-radius: 15px; "
+            f"color: {INK_SOFT}; font-size: 16px; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; }} "
+            f"QPushButton:checked {{ background: {GOLD}; color: #FCF8EC; }}"
+        )
+        self._time_toggle.toggled.connect(self._on_time_toggle)
+        row.addWidget(self._time_toggle)
+
+        self._time_slider = QSlider(Qt.Orientation.Horizontal)
+        self._time_slider.setObjectName("timeSlider")
+        self._time_slider.setEnabled(False)
+        self._time_slider.setMinimumWidth(220)
+        self._time_slider.setStyleSheet(
+            f"QSlider#timeSlider::groove:horizontal {{ height: 4px; border-radius: 2px; background: {LINE}; }} "
+            f"QSlider#timeSlider::sub-page:horizontal {{ background: {GOLD_SOFT}; border-radius: 2px; }} "
+            f"QSlider#timeSlider::handle:horizontal {{ background: {GOLD}; border: 2px solid {SURFACE_HI}; "
+            f"width: 14px; height: 14px; margin: -6px 0; border-radius: 9px; }} "
+            f"QSlider#timeSlider::handle:horizontal:hover {{ background: {GOLD_DEEP}; }} "
+            f"QSlider#timeSlider:disabled {{ }} "
+            f"QSlider#timeSlider::handle:horizontal:disabled {{ background: {LINE}; border-color: {SURFACE_HI}; }}"
+        )
+        self._time_slider.valueChanged.connect(self._on_time_slider)
+        row.addWidget(self._time_slider, 1)
+
+        self._time_readout = QLabel("Todo el tiempo")
+        self._time_readout.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: 12px; font-weight: 600; background: transparent; border: none;"
+        )
+        self._time_readout.setMinimumWidth(120)
+        self._time_readout.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        row.addWidget(self._time_readout)
+
+        self._time_present_btn = QPushButton("Presente")
+        self._time_present_btn.setToolTip("Saltar al año presente del mundo")
+        self._time_present_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._time_present_btn.setFixedHeight(26)
+        self._time_present_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {LINE}; "
+            f"border-radius: 12px; padding: 2px 10px; color: {INK_SOFT}; font-size: 11px; font-weight: 600; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}"
+        )
+        self._time_present_btn.clicked.connect(self._on_time_present)
+        row.addWidget(self._time_present_btn)
+        bar.adjustSize()
+        bar.raise_()
+        return bar
+
+    def _project_year_bounds(self, project) -> tuple[int, int, int]:
+        """(min_year, max_year, present_year) a partir del calendario y las vidas."""
+        chronology = getattr(project, "project_chronology", None)
+        try:
+            present = int(getattr(chronology, "present_year", 0) or 0)
+        except (TypeError, ValueError):
+            present = 0
+        years: list[int] = [present]
+        for era in list(getattr(chronology, "eras", []) or []):
+            start = _parse_optional_year(getattr(era, "start_year", None))
+            if start is not None:
+                years.append(start)
+            end = _parse_optional_year(getattr(era, "end_year", None))
+            if end is not None:
+                years.append(end)
+        for entity in list(getattr(project, "entities", []) or []):
+            birth = _parse_optional_year(getattr(entity, "birth_year", None))
+            if birth is not None:
+                years.append(birth)
+            death = _parse_optional_year(getattr(entity, "death_year", None))
+            if death is not None:
+                years.append(death)
+        for hito in list(getattr(project, "causal_milestones", []) or []):
+            year = _parse_optional_year(getattr(hito, "year", None))
+            if year is not None:
+                years.append(year)
+        lo, hi = min(years), max(years)
+        return lo, max(hi, present), present
+
+    def _era_name_for_year(self, project, year: int) -> str:
+        chronology = getattr(project, "project_chronology", None)
+        for era in list(getattr(chronology, "eras", []) or []):
+            contains = getattr(era, "contains", None)
+            try:
+                if callable(contains) and contains(year):
+                    return str(getattr(era, "name", "") or "")
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
+
+    def _sync_time_bar(self):
+        """Recalcula el rango del scrubber con el proyecto actual."""
+        project = self._project()
+        if project is None:
+            self._time_bar.setVisible(False)
+            return
+        lo, hi, present = self._project_year_bounds(project)
+        self._time_year_range = (lo, hi)
+        self._time_present_year = present
+        block = self._time_slider.blockSignals(True)
+        self._time_slider.setMinimum(lo)
+        self._time_slider.setMaximum(max(hi, lo))
+        current = self.canvas.view_year()
+        if current is not None:
+            self._time_slider.setValue(max(lo, min(hi, current)))
+        elif lo <= present <= hi:
+            self._time_slider.setValue(present)
+        self._time_slider.blockSignals(block)
+        self._time_slider.setEnabled(self._time_toggle.isChecked() and hi > lo)
+        self._update_time_readout()
+
+    def _update_time_readout(self):
+        year = self.canvas.view_year()
+        if year is None:
+            self._time_readout.setText("Todo el tiempo")
+            return
+        project = self._project()
+        era = self._era_name_for_year(project, year) if project is not None else ""
+        suffix = f" · {era}" if era else ""
+        self._time_readout.setText(f"Año {year}{suffix}")
+
+    def _on_time_toggle(self, checked: bool):
+        if checked:
+            lo, hi = self._time_year_range
+            self._time_slider.setEnabled(hi > lo)
+            self.canvas.set_view_year(int(self._time_slider.value()))
+        else:
+            self._time_slider.setEnabled(False)
+            self.canvas.set_view_year(None)
+        self._update_time_readout()
+
+    def _on_time_slider(self, value: int):
+        if self._time_toggle.isChecked():
+            self.canvas.set_view_year(int(value))
+            self._update_time_readout()
+
+    def _on_time_present(self):
+        lo, hi = self._time_year_range
+        present = max(lo, min(hi, self._time_present_year))
+        if not self._time_toggle.isChecked():
+            self._time_toggle.setChecked(True)  # activa modo temporal (dispara set_view_year)
+        block = self._time_slider.blockSignals(True)
+        self._time_slider.setValue(present)
+        self._time_slider.blockSignals(block)
+        self.canvas.set_view_year(present)
+        self._update_time_readout()
+
+    def set_view_year(self, year: int | None):
+        self.canvas.set_view_year(year)
+        self._update_time_readout()
+
+    def view_year(self) -> int | None:
+        return self.canvas.view_year()
+
+    def _position_time_bar(self):
+        bar = getattr(self, "_time_bar", None)
+        if bar is None:
+            return
+        width = max(420, min(self.width() - 80, 760))
+        bar.setFixedWidth(width)
+        bar.move((self.width() - width) // 2, 14)
+        bar.raise_()
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._position_time_bar()
 
     def _project(self):
         pc = self.ctx.project_controller
@@ -3910,6 +4284,7 @@ class GraphCanvasWidget(QWidget):
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
             self.empty.setVisible(True)
+            self._time_bar.setVisible(False)
             return
         entities = []
         seen_entity_ids: set[str] = set()
@@ -3943,6 +4318,7 @@ class GraphCanvasWidget(QWidget):
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
             self.empty.setVisible(True)
+            self._time_bar.setVisible(False)
             return
         self.empty.setVisible(False)
         self.canvas.setVisible(True)
@@ -3955,6 +4331,11 @@ class GraphCanvasWidget(QWidget):
             f"layout={self._layout_mode!r} effective_layers={len(layers)} layer_ids={[str(getattr(layer, 'id', '')) for layer in layers]!r}"
         )
         self.canvas.set_graph(entities, relations, layout_mode=self._layout_mode, layers=layers)
+        # BETA1-G06: el scrubber refleja el calendario actual y se muestra
+        # sobre el lienzo concéntrico (se oculta con él en la vista cronológica).
+        self._sync_time_bar()
+        self._time_bar.setVisible(True)
+        self._position_time_bar()
         _b44trace(
             "widget_refresh_after_set_graph "
             f"canvas_layout={self.canvas._layout_mode_active!r} canvas_visible={self.canvas.isVisible()} empty_visible={self.empty.isVisible()} "

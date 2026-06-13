@@ -76,6 +76,7 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "coherence":           ModelParams(temperature=0.2, max_tokens=2000),
     "consistency":         ModelParams(temperature=0.2, max_tokens=2000),
     "extract":             ModelParams(temperature=0.15, max_tokens=1500),
+    "import_extraction":   ModelParams(temperature=0.15, max_tokens=3000),
     "classify":            ModelParams(temperature=0.15, max_tokens=1000),
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
     "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),

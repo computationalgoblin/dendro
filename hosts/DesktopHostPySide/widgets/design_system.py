@@ -8,9 +8,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QEasingCurve, QEvent, QObject, QParallelAnimationGroup, QPropertyAnimation
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -23,127 +25,276 @@ from PySide6.QtWidgets import (
 )
 
 
-APP_STYLESHEET = """
-QMainWindow, QWidget {
-    background: #F7F5EA;
-    color: #4F4D38;
-    font-family: "Georgia", "Courier New", serif;
+# ─────────────────────────────────────────────────────────────────────────
+# Dendro — paleta con identidad ("tinta, pergamino y oro botánico")
+#
+# Una sola fuente de verdad para el color. Pergamino cálido con una escalera
+# tonal real (de hundido a elevado), tinta profunda para contraste serio, y un
+# ÚNICO acento de oro-oliva con carácter para las acciones. La estética sigue
+# siendo orgánica y editorial; lo que cambia es la PROFUNDIDAD y el aplomo.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Superficies (escalera cálida: de lo hundido a lo elevado)
+PAPER       = "#E8E1CF"   # base de la app (detrás de todo)
+CANVAS      = "#E6DFCD"   # lienzo del grafo (con viñeta propia)
+WELL        = "#DDD5BF"   # carriles/pozos hundidos
+SURFACE     = "#F4EFE1"   # tarjetas, cajones
+SURFACE_HI  = "#FBF8EF"   # tarjetas elevadas, barras flotantes
+INPUT_BG    = "#FFFDF8"   # campos de texto
+
+# Tinta (texto) — más profunda y cálida, para contraste profesional
+INK_STRONG  = "#34301E"
+INK         = "#45402E"
+INK_SOFT    = "#6E6950"
+INK_MUTED   = "#948C6E"
+
+# Líneas y bordes
+LINE        = "#D2CAB1"
+LINE_SOFT   = "#E3DCC8"
+LINE_STRONG = "#BCB28E"
+
+# Acento — oro-oliva (identidad / acciones)
+GOLD        = "#8B7A36"
+GOLD_DEEP   = "#6E622E"
+GOLD_SOFT   = "#BBAA66"
+GOLD_TINT   = "#ECE4C7"   # relleno sutil de acento (hover/selección)
+
+# Verde botánico (secundario, con mucha mesura: vida, foco orgánico)
+SAGE        = "#6E7E58"
+SAGE_DEEP   = "#54624330"  # noqa: usado solo como referencia documental
+
+# Sombra cálida base (RGB) — las sombras nunca son grises neutros aquí
+SHADOW_RGB  = (52, 47, 28)
+
+
+def _qss() -> str:
+    """Hoja de estilo global construida desde la paleta (una sola verdad)."""
+    return f"""
+QMainWindow, QWidget {{
+    background: {PAPER};
+    color: {INK};
+    font-family: "Georgia", "Iowan Old Style", "Palatino Linotype", serif;
     font-size: 13px;
-}
-QPushButton {
-    background: #F8F6ED;
-    border: 1px solid #D6D2BF;
-    border-radius: 10px;
-    padding: 8px 12px;
-    color: #5C5A3E;
-}
-QPushButton:hover { background: #FFFFFF; border-color: #AAA579; }
-QPushButton:focus { border: 2px solid #8F8A54; padding: 7px 11px; }
-QPushButton:pressed { background: #E7E4D4; padding-top: 9px; padding-bottom: 7px; }
-QPushButton:disabled { background: #EEEBDD; color: #AAA694; border-color: #E0DDD0; }
-QPushButton#primaryButton {
-    background: #7A733D;
-    border: 1px solid #6C6536;
-    color: #FFFDF5;
+}}
+QToolTip {{
+    background: {INK_STRONG};
+    color: {SURFACE_HI};
+    border: 1px solid {GOLD_DEEP};
+    border-radius: 6px;
+    padding: 5px 8px;
+}}
+QPushButton {{
+    background: {SURFACE_HI};
+    border: 1px solid {LINE};
+    border-radius: 11px;
+    padding: 8px 14px;
+    color: {INK_SOFT};
     font-weight: 600;
-}
-QPushButton#primaryButton:hover { background: #696335; border-color: #565229; }
-QPushButton#primaryButton:disabled { background: #B8B299; color: #F7F5EA; }
-QToolButton {
+}}
+QPushButton:hover {{ background: {INPUT_BG}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}
+QPushButton:focus {{ border: 2px solid {GOLD}; padding: 7px 13px; }}
+QPushButton:pressed {{ background: {WELL}; padding-top: 9px; padding-bottom: 7px; }}
+QPushButton:disabled {{ background: {SURFACE}; color: {INK_MUTED}; border-color: {LINE_SOFT}; }}
+QPushButton#primaryButton {{
+    background: {GOLD};
+    border: 1px solid {GOLD_DEEP};
+    color: #FCF8EC;
+    font-weight: 700;
+    padding: 9px 16px;
+}}
+QPushButton#primaryButton:hover {{ background: {GOLD_DEEP}; border-color: {GOLD_DEEP}; }}
+QPushButton#primaryButton:pressed {{ background: #5E5427; }}
+QPushButton#primaryButton:disabled {{ background: {GOLD_SOFT}; color: {SURFACE}; border-color: {GOLD_SOFT}; }}
+QToolButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 9px;
     padding: 6px 8px;
-    color: #5C5A3E;
-}
-QToolButton:hover { background: #F8F6ED; border-color: #D8D6C8; }
-QLabel#mutedLabel { color: #747866; }
-QLabel#sectionTitle {
-    font-size: 18px;
+    color: {INK_SOFT};
+}}
+QToolButton:hover {{ background: {SURFACE_HI}; border-color: {LINE}; color: {INK_STRONG}; }}
+QToolButton:checked {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}
+QLabel#mutedLabel {{ color: {INK_MUTED}; }}
+QLabel#sectionTitle {{
+    font-size: 19px;
     font-weight: 700;
-    color: #5D603F;
-    font-family: Georgia, "Courier New", serif;
-}
-QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget {
-    background: #FFFDF7;
-    border: 1px solid #D8D6C8;
-    border-radius: 8px;
-    color: #4F4D38;
+    color: {INK_STRONG};
+    font-family: Georgia, "Iowan Old Style", serif;
+}}
+QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget, QSpinBox, QDoubleSpinBox {{
+    background: {INPUT_BG};
+    border: 1px solid {LINE};
+    border-radius: 9px;
+    color: {INK};
     padding: 8px 10px;
     min-height: 28px;
-    selection-background-color: #B5BBA5;
-    font-family: "Segoe UI", "Inter", "Arial";
-}
-QTextEdit:focus, QPlainTextEdit:focus, QLineEdit:focus, QComboBox:focus {
-    border: 2px solid #AFA77A;
+    selection-background-color: {GOLD_SOFT};
+    selection-color: {INK_STRONG};
+    font-family: "Segoe UI", "Inter", "Helvetica Neue", "Arial";
+}}
+QTextEdit:hover, QPlainTextEdit:hover, QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{
+    border-color: {LINE_STRONG};
+}}
+QTextEdit:focus, QPlainTextEdit:focus, QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{
+    border: 2px solid {GOLD};
     background: #FFFFFF;
     padding: 7px 9px;
-}
-QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled {
-    background: #EEEBDD;
-    color: #A19D8C;
-    border-color: #E0DDD0;
-}
-QComboBox {
-    min-height: 32px;
-    padding: 6px 28px 6px 10px;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 24px;
-}
-QComboBox::down-arrow {
+}}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled {{
+    background: {SURFACE};
+    color: {INK_MUTED};
+    border-color: {LINE_SOFT};
+}}
+QComboBox {{ min-height: 32px; padding: 6px 28px 6px 10px; }}
+QComboBox::drop-down {{ border: none; width: 24px; }}
+QComboBox::down-arrow {{
     image: none;
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
-    border-top: 6px solid #7C806E;
-}
-QComboBox QAbstractItemView {
-    background: #FFFDF7;
-    border: 1px solid #D8D6C8;
-    border-radius: 6px;
-    color: #4F4D38;
-    selection-background-color: #D6D2BF;
-    selection-color: #3A3826;
+    border-top: 6px solid {INK_SOFT};
+    margin-right: 8px;
+}}
+QComboBox QAbstractItemView {{
+    background: {INPUT_BG};
+    border: 1px solid {LINE};
+    border-radius: 9px;
+    color: {INK};
+    selection-background-color: {GOLD_TINT};
+    selection-color: {INK_STRONG};
     padding: 4px;
     outline: none;
-}
-QComboBox QAbstractItemView::item {
-    padding: 6px 8px;
-    min-height: 28px;
-    color: #4F4D38;
-}
-QComboBox QAbstractItemView::item:hover {
-    background: #ECE9DA;
-}
-QComboBox QAbstractItemView::item:selected {
-    background: #D6D2BF;
-    color: #3A3826;
-}
-QTextEdit, QPlainTextEdit {
-    min-height: 60px;
-}
-QTabWidget::pane { border: 1px solid #D8D6C8; border-radius: 12px; background: #F8F6ED; }
-QTabBar::tab {
-    background: #ECE9DA;
-    color: #777660;
-    padding: 8px 14px;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+}}
+QComboBox QAbstractItemView::item {{ padding: 7px 8px; min-height: 28px; color: {INK}; border-radius: 6px; }}
+QComboBox QAbstractItemView::item:hover {{ background: {SURFACE}; }}
+QComboBox QAbstractItemView::item:selected {{ background: {GOLD_TINT}; color: {INK_STRONG}; }}
+QTextEdit, QPlainTextEdit {{ min-height: 60px; }}
+QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: 14px; background: {SURFACE}; }}
+QTabBar::tab {{
+    background: transparent;
+    color: {INK_MUTED};
+    padding: 8px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
     margin-right: 2px;
-}
-QTabBar::tab:selected { background: #FFFDF7; color: #5C5A3E; }
-QTableWidget { gridline-color: #E1DEC9; }
-QHeaderView::section { background: #ECE9DA; color: #5C5A3E; padding: 6px; border: none; }
-QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
-QScrollBar::handle:vertical { background: #C7C6B8; border-radius: 4px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #AFA77A; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { background: transparent; height: 8px; margin: 0; }
-QScrollBar::handle:horizontal { background: #C7C6B8; border-radius: 4px; min-width: 30px; }
-QScrollBar::handle:horizontal:hover { background: #AFA77A; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+}}
+QTabBar::tab:hover {{ color: {INK_SOFT}; }}
+QTabBar::tab:selected {{ color: {INK_STRONG}; border-bottom: 2px solid {GOLD}; }}
+QTableWidget {{ gridline-color: {LINE_SOFT}; }}
+QHeaderView::section {{ background: {SURFACE}; color: {INK_SOFT}; padding: 7px; border: none; font-weight: 600; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {LINE_STRONG}; border-radius: 5px; min-height: 34px; }}
+QScrollBar::handle:vertical:hover {{ background: {GOLD_SOFT}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: {LINE_STRONG}; border-radius: 5px; min-width: 34px; }}
+QScrollBar::handle:horizontal:hover {{ background: {GOLD_SOFT}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
 """
+
+
+APP_STYLESHEET = _qss()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Elevación y movimiento — la profundidad y las microanimaciones que dan
+# aplomo "de producto". Todo falla en silencio: el pulido nunca rompe la lógica.
+# ─────────────────────────────────────────────────────────────────────────
+
+def apply_shadow(
+    widget: QWidget,
+    *,
+    blur: float = 26.0,
+    y: float = 8.0,
+    x: float = 0.0,
+    alpha: int = 48,
+) -> QGraphicsDropShadowEffect:
+    """Sombra cálida suave para dar elevación a una superficie."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setXOffset(x)
+    effect.setYOffset(y)
+    effect.setColor(QColor(SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], alpha))
+    widget.setGraphicsEffect(effect)
+    return effect
+
+
+class _HoverLift(QObject):
+    """Filtro de eventos que ELEVA una superficie al pasar el ratón.
+
+    Anima la sombra (blur + desplazamiento) para que la tarjeta/botón parezca
+    despegarse del lienzo. Movimiento sutil, ~150 ms, OutCubic."""
+
+    def __init__(
+        self,
+        widget: QWidget,
+        *,
+        rest_blur: float,
+        rest_y: float,
+        rest_alpha: int,
+        lift_blur: float,
+        lift_y: float,
+        lift_alpha: int,
+        duration: int = 160,
+    ):
+        super().__init__(widget)
+        self._w = widget
+        self._rest = (rest_blur, rest_y, rest_alpha)
+        self._lift = (lift_blur, lift_y, lift_alpha)
+        self._duration = duration
+        self._effect = apply_shadow(widget, blur=rest_blur, y=rest_y, alpha=rest_alpha)
+        self._group: QParallelAnimationGroup | None = None
+        widget.installEventFilter(self)
+
+    def _animate_to(self, blur: float, y: float, alpha: int):
+        try:
+            if self._group is not None:
+                self._group.stop()
+            group = QParallelAnimationGroup(self)
+            for prop, end in ((b"blurRadius", blur), (b"yOffset", y)):
+                anim = QPropertyAnimation(self._effect, prop)
+                anim.setDuration(self._duration)
+                anim.setEndValue(end)
+                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                group.addAnimation(anim)
+            color = QColor(SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], alpha)
+            self._effect.setColor(color)
+            self._group = group
+            group.start()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        etype = event.type()
+        if etype == QEvent.Type.Enter:
+            self._animate_to(*self._lift)
+        elif etype == QEvent.Type.Leave:
+            self._animate_to(*self._rest)
+        return False
+
+
+def install_hover_lift(
+    widget: QWidget,
+    *,
+    rest_blur: float = 20.0,
+    rest_y: float = 6.0,
+    rest_alpha: int = 38,
+    lift_blur: float = 38.0,
+    lift_y: float = 12.0,
+    lift_alpha: int = 64,
+    duration: int = 160,
+) -> _HoverLift | None:
+    """Instala una elevación-al-hover sobre *widget* y devuelve el filtro."""
+    try:
+        return _HoverLift(
+            widget,
+            rest_blur=rest_blur, rest_y=rest_y, rest_alpha=rest_alpha,
+            lift_blur=lift_blur, lift_y=lift_y, lift_alpha=lift_alpha,
+            duration=duration,
+        )
+    except Exception:  # noqa: BLE001
+        return None
 
 
 ICON_GLYPHS = {
@@ -169,23 +320,36 @@ ICON_GLYPHS = {
 
 
 class Card(QFrame):
-    """Soft bordered card used by normal-mode product UI."""
+    """Soft bordered card used by normal-mode product UI.
 
-    def __init__(self, title: str = "", subtitle: str = "", parent: QWidget | None = None):
+    Ahora con elevación real (sombra cálida) y, opcionalmente, una leve
+    elevación al pasar el ratón — el aplomo "de producto"."""
+
+    def __init__(
+        self,
+        title: str = "",
+        subtitle: str = "",
+        parent: QWidget | None = None,
+        *,
+        elevated: bool = True,
+        hover: bool = True,
+    ):
         super().__init__(parent)
         self.setObjectName("card")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(
-            "QFrame#card { background: #FFFDF7; border: 1px solid #D8D6C8; "
-            "border-radius: 16px; }"
+            f"QFrame#card {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
+            f"border-radius: 16px; }}"
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(14, 12, 14, 12)
+        self.layout.setContentsMargins(16, 14, 16, 14)
         self.layout.setSpacing(8)
         if title:
             self.title = QLabel(title)
-            self.title.setStyleSheet("font-size: 16px; font-weight: 700;")
+            self.title.setStyleSheet(
+                f"font-size: 16px; font-weight: 700; color: {INK_STRONG}; background: transparent;"
+            )
             self.title.setWordWrap(True)
             self.layout.addWidget(self.title)
         if subtitle:
@@ -193,6 +357,13 @@ class Card(QFrame):
             self.subtitle.setObjectName("mutedLabel")
             self.subtitle.setWordWrap(True)
             self.layout.addWidget(self.subtitle)
+        # BETA1-G08: la elevación de las tarjetas se consigue por CONTRASTE
+        # (SURFACE_HI brillante sobre superficies más profundas) + borde, NO con
+        # QGraphicsDropShadowEffect. Las tarjetas viven en scroll areas y se
+        # reconstruyen al refrescar; un efecto gráfico ahí cachea el render y
+        # deja menús/botones en blanco al cambiar. La estabilidad manda.
+        self._elevated = bool(elevated)
+        self._hover = bool(hover)
 
     def add_text(self, text: str, muted: bool = False) -> QLabel:
         label = QLabel(text)
@@ -215,16 +386,17 @@ class Badge(QLabel):
     def __init__(self, text: str, tone: str = "neutral", parent: QWidget | None = None):
         super().__init__(text, parent)
         colors = {
-            "neutral": ("#E8E5D6", "#5C5A3E"),
-            "info": ("#E2E6D8", "#5F6F4D"),
-            "success": ("#E4EBDD", "#58744A"),
-            "warning": ("#EFE3C7", "#8A6849"),
-            "danger": ("#F0D8D0", "#8A4E43"),
+            "neutral": (GOLD_TINT, INK_SOFT),
+            "info": ("#DDE4D6", "#566B47"),
+            "success": ("#DCE8D2", "#4F6E3F"),
+            "warning": ("#EFE2C3", "#8A6534"),
+            "danger": ("#EFD4C9", "#8C4A3C"),
+            "gold": (GOLD, "#FCF8EC"),
         }
         bg, fg = colors.get(tone, colors["neutral"])
         self.setStyleSheet(
             f"background: {bg}; color: {fg}; border-radius: 9px; "
-            "padding: 3px 8px; font-size: 12px; font-weight: 600;"
+            "padding: 3px 9px; font-size: 12px; font-weight: 700;"
         )
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -246,10 +418,10 @@ class SectionHeader(QWidget):
 
 class EmptyState(Card):
     def __init__(self, title: str, message: str, parent: QWidget | None = None):
-        super().__init__(title, message, parent)
+        super().__init__(title, message, parent, elevated=False)
         self.setStyleSheet(
-            "QFrame#card { background: #F8F6ED; border: 1px dashed #C9C5B1; "
-            "border-radius: 14px; }"
+            f"QFrame#card {{ background: {SURFACE}; border: 1px dashed {LINE_STRONG}; "
+            f"border-radius: 14px; }}"
         )
 
 

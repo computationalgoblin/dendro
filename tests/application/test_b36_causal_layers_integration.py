@@ -13,6 +13,7 @@ from packages.domain.entity import EntityType, NarrativeEntity
 from packages.domain.project import Project
 from packages.domain.relation import NarrativeRelation, RelationType
 from packages.domain.result import Ok
+from packages.domain.world_layer import default_world_layers
 
 
 class ProjectServiceStub:
@@ -22,7 +23,9 @@ class ProjectServiceStub:
 
 def _project() -> Project:
     now = datetime.now(timezone.utc)
-    return Project(id="proj_b36_integration", name="B36 integración", created_at=now, updated_at=now, worldbuilding_active=True)
+    project = Project(id="proj_b36_integration", name="B36 integración", created_at=now, updated_at=now, worldbuilding_active=True)
+    project.world_layers = default_world_layers()
+    return project
 
 
 def _entity(entity_id: str, name: str, layer_id: str, entity_type: EntityType = EntityType.NOTA) -> NarrativeEntity:
@@ -135,10 +138,15 @@ def test_desktop_ui_exposes_b36_layer_view_controls_without_modals() -> None:
 
     assert "Vista Anillos causales" in workspace
     assert "set_worldbuilding_active" in workspace
-    assert "Expandir hacia anillo inferior" in node_panel
-    assert "Explicar desde causas superiores" in node_panel
-    assert "Anillo causal" in tree_panel
+    assert "self.layer_combo" in node_panel
+    assert "self.layer_combo" in tree_panel
+    assert "Expandir hacia anillo inferior" not in node_panel
+    assert "Explicar desde causas superiores" not in node_panel
+    assert "Destino causal" not in node_panel
+    assert "Expandir hacia anillo inferior" not in tree_panel
+    assert "Explicar desde causas superiores" not in tree_panel
+    assert "Destino causal" not in tree_panel
     assert "_set_graph_by_layers" in graph_canvas
-    combined = workspace + node_panel + tree_panel
-    assert "QInputDialog" not in combined
-    assert "QMessageBox" not in combined
+    panel_sources = node_panel + tree_panel
+    assert "QInputDialog" not in panel_sources
+    assert "QMessageBox" not in panel_sources

@@ -29,7 +29,20 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
-from hosts.DesktopHostPySide.widgets.design_system import Badge, make_scroll_area, ICON_GLYPHS
+from hosts.DesktopHostPySide.widgets.design_system import (
+    Badge,
+    make_scroll_area,
+    ICON_GLYPHS,
+    GOLD,
+    GOLD_DEEP,
+    GOLD_SOFT,
+    INK,
+    INK_MUTED,
+    INK_SOFT,
+    INK_STRONG,
+    LINE,
+    SURFACE_HI,
+)
 
 try:  # BETA1-F01: QtMultimedia viene con PySide6, pero protegemos el import
     from PySide6.QtCore import QUrl
@@ -441,7 +454,7 @@ class HomeNode(QFrame):
         self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._subtitle_label.setWordWrap(True)
         self._subtitle_label.setStyleSheet(
-            "font-size: 13px; color: #6E705E; background: transparent; border: none;"
+            f"font-size: 13px; color: {INK_SOFT}; background: transparent; border: none;"
         )
         layout.addWidget(self._subtitle_label)
 
@@ -457,10 +470,11 @@ class HomeNode(QFrame):
 
         layout.addStretch(1)
 
-        self._hint = QLabel("Entrar")
+        self._hint = QLabel("E N T R A R")
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setStyleSheet(
-            f"font-size: 12px; color: {self._fg_default}; background: transparent; border: none; letter-spacing: 1px;"
+            f"font-size: 11px; font-weight: 700; color: {GOLD_DEEP}; background: transparent; "
+            f"border: none; letter-spacing: 3px;"
         )
         layout.addWidget(self._hint)
 
@@ -471,7 +485,7 @@ class HomeNode(QFrame):
 
     def _apply_tone_style(self, tone: str):
         tones = {
-            "creation": ("#F7F4EA", "#7A733D", "#AFA77A"),
+            "creation": (SURFACE_HI, GOLD_DEEP, GOLD_SOFT),
             "gallery": ("#F3F5EE", "#6E7B59", "#B5BBA5"),
             "session": ("#F6F1E8", "#8A6849", "#C8AF8C"),
         }
@@ -482,7 +496,7 @@ class HomeNode(QFrame):
         self.setStyleSheet(
             f"QFrame#dendroNode {{ background: {bg}; border: 1px solid {border}; "
             "border-radius: 36px; }} "
-            f"QFrame#dendroNode:hover {{ background: #FBFAF4; border: 2px solid {fg}; }}"
+            f"QFrame#dendroNode:hover {{ background: #FFFFFF; border: 2px solid {GOLD}; }}"
         )
 
     def set_dimmed(self, dimmed: bool):
@@ -536,17 +550,17 @@ class QuietIconButton(QPushButton):
         self._icon_only = icon_only
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         if icon_only:
-            self.setFixedSize(QSize(32, 32))
+            self.setFixedSize(QSize(34, 34))
             self.setStyleSheet(
-                "QPushButton { background: rgba(255,255,255,0.45); border: 1px solid #D8D6C8; "
-                "border-radius: 16px; padding: 0px; color: #6F6A42; font-size: 16px; } "
-                "QPushButton:hover { background: #F8F5EA; border: 1px solid #AFA77A; color: #504B2E; }"
+                f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
+                f"border-radius: 17px; padding: 0px; color: {INK_SOFT}; font-size: 16px; }} "
+                f"QPushButton:hover {{ background: #FFFFFF; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
             )
         else:
             self.setStyleSheet(
-                "QPushButton { background: rgba(255,255,255,0.45); border: 1px solid #D8D6C8; "
-                "border-radius: 18px; padding: 8px 14px; color: #6F6A42; font-size: 12px; } "
-                "QPushButton:hover { background: #F8F5EA; border: 1px solid #AFA77A; color: #504B2E; }"
+                f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
+                f"border-radius: 18px; padding: 8px 14px; color: {INK_SOFT}; font-size: 12px; font-weight: 600; }} "
+                f"QPushButton:hover {{ background: #FFFFFF; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
             )
 
 
@@ -584,8 +598,8 @@ class HomeView(QWidget):
         content = QWidget()
         content.setObjectName("dendroHome")
         content.setStyleSheet(
-            "QWidget#dendroHome { background: qlineargradient(x1:0,y1:0,x2:1,y2:1, "
-            "stop:0 #F7F5EA, stop:0.55 #EEEEDF, stop:1 #E8E8DC); }"
+            "QWidget#dendroHome { background: qlineargradient(x1:0,y1:0,x2:0.6,y2:1, "
+            "stop:0 #F1EAD9, stop:0.5 #E8E1CF, stop:1 #DBD2BB); }"
         )
         # BETA1-F01: atmósfera (hojas + raíces) detrás de las cards; no
         # intercepta el ratón y se pausa cuando el Home no está visible.
@@ -599,15 +613,15 @@ class HomeView(QWidget):
         title_box.setSpacing(4)
         self._project_label = QLabel("Dendro")
         self._project_label.setStyleSheet(
-            "font-size: 42px; font-weight: 600; color: #67643A; "
-            "font-family: Georgia, 'Courier New', serif; background: transparent; border: none;"
+            f"font-size: 44px; font-weight: 700; color: {INK_STRONG}; letter-spacing: 0.5px; "
+            f"font-family: Georgia, 'Iowan Old Style', serif; background: transparent; border: none;"
         )
         title_box.addWidget(self._project_label)
         self._subtitle_label = QLabel("Un escritorio tranquilo para crear mundos, relatos y sesiones.")
-        self._subtitle_label.setStyleSheet("font-size: 14px; color: #7C806E; background: transparent; border: none;")
+        self._subtitle_label.setStyleSheet(f"font-size: 14px; color: {INK_SOFT}; background: transparent; border: none;")
         title_box.addWidget(self._subtitle_label)
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("font-size: 12px; color: #8C8A74; background: transparent; border: none;")
+        self._status_label.setStyleSheet(f"font-size: 12px; color: {INK_MUTED}; background: transparent; border: none;")
         title_box.addWidget(self._status_label)
         self._continue_btn = QuietIconButton("↳", "Continuar", icon_only=False)
         self._continue_btn.setVisible(False)

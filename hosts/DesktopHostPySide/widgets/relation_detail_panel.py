@@ -543,6 +543,33 @@ class RelationDetailPanel(QWidget):
         more_dir_label = QLabel("Dirección:")
         more_dir_label.setStyleSheet(_label_ss)
         more_form.addRow(more_dir_label, self.direction_combo)
+
+        # BETA1-G06: intervalo temporal de la relación
+        more_temp_label = QLabel("Temporal:")
+        more_temp_label.setStyleSheet(_label_ss)
+        _temp_row = QHBoxLayout()
+        _temp_row.setSpacing(6)
+        _nace_lbl = QLabel("Nace")
+        _nace_lbl.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;")
+        self.birth_year_edit = QLineEdit()
+        self.birth_year_edit.setPlaceholderText("—")
+        self.birth_year_edit.setMaximumWidth(72)
+        self.birth_year_edit.setToolTip("Año diegético en que nace la relación (puede ser negativo)")
+        _termina_lbl = QLabel("Termina")
+        _termina_lbl.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;")
+        self.death_year_edit = QLineEdit()
+        self.death_year_edit.setPlaceholderText("—")
+        self.death_year_edit.setMaximumWidth(72)
+        self.death_year_edit.setToolTip("Año en que termina la relación; vacío = activa indefinidamente")
+        _temp_row.addWidget(_nace_lbl)
+        _temp_row.addWidget(self.birth_year_edit)
+        _temp_row.addWidget(_termina_lbl)
+        _temp_row.addWidget(self.death_year_edit)
+        _temp_row.addStretch()
+        _temp_widget = QWidget()
+        _temp_widget.setLayout(_temp_row)
+        more_form.addRow(more_temp_label, _temp_widget)
+
         more_canon_label = QLabel("Estado:")
         more_canon_label.setStyleSheet(_label_ss)
         more_form.addRow(more_canon_label, self.canon_combo)
@@ -556,6 +583,11 @@ class RelationDetailPanel(QWidget):
 
         # -- Technical box (advanced only) --
         self.technical_box = QGroupBox("Datos técnicos")
+        # BETA1-G07: vive SIN montar (FUERA del producto, F05). Sin padre, al
+        # hacerse visible se abriría como VENTANA flotante (los "pop ups").
+        # Anclarlo al panel lo impide; set_advanced_mode ya no lo muestra.
+        self.technical_box.setParent(self)
+        self.technical_box.hide()
         self.technical_box.setStyleSheet(
             f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
             f"border: 1px solid #D8D6C8; border-radius: 10px; "
@@ -678,6 +710,8 @@ class RelationDetailPanel(QWidget):
         self.notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.temporality_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.causality_edit.textChanged.connect(self._schedule_autosave_if_active)
+        self.birth_year_edit.textChanged.connect(self._schedule_autosave)
+        self.death_year_edit.textChanged.connect(self._schedule_autosave)
 
     def _schedule_autosave(self):
         if self._refreshing:
@@ -962,6 +996,11 @@ class RelationDetailPanel(QWidget):
             self.notes_edit.setPlainText(notes_text)
             self.temporality_edit.setPlainText(getattr(relation, "temporality", "") or "")
             self.causality_edit.setPlainText(getattr(relation, "causality", "") or "")
+            # BETA1-G06: temporal interval
+            by = getattr(relation, "birth_year", None)
+            dy = getattr(relation, "death_year", None)
+            self.birth_year_edit.setText("" if by is None else str(by))
+            self.death_year_edit.setText("" if dy is None else str(dy))
             canon_val = _enum_value(getattr(relation, "canon_state", None), "")
             if "canon" in canon_val.lower():
                 self.canon_combo.setCurrentIndex(1)
@@ -1003,7 +1042,9 @@ class RelationDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def set_advanced_mode(self, enabled: bool):
-        self.technical_box.setVisible(bool(enabled))
+        # BETA1-G07: technical_box vive SIN montar — togglearlo lo abría como
+        # ventana flotante ("pop ups"). No se toca su visibilidad; el texto se
+        # rellena por _refresh_technical para quien lo lea por código.
         for w in self._advanced_widgets:
             w.setVisible(bool(enabled))
 
@@ -1055,6 +1096,16 @@ class RelationDetailPanel(QWidget):
         if direction_choice == "target_to_source":
             source_id, target_id = target_id, source_id
 
+        # BETA1-G06: parse temporal fields (empty string → None = no constraint)
+        def _parse_year(text: str) -> int | None:
+            t = text.strip()
+            if not t:
+                return None
+            try:
+                return int(t)
+            except ValueError:
+                return None
+
         payload = {
             "source_id": source_id,
             "target_id": target_id,
@@ -1064,6 +1115,8 @@ class RelationDetailPanel(QWidget):
             "description": self.description_edit.toPlainText().strip(),
             "temporality": self.temporality_edit.toPlainText().strip(),
             "causality": self.causality_edit.toPlainText().strip(),
+            "birth_year": _parse_year(self.birth_year_edit.text()),
+            "death_year": _parse_year(self.death_year_edit.text()),
             "validity_conditions": [],
             "tags": [],
             "canon_state": canon_value,

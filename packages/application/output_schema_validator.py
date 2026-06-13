@@ -52,6 +52,10 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
         "required_fields": [],
         "optional_structure": True,
     },
+    "import_extraction": {
+        "container_key": "candidates",
+        "required_item_fields": ["kind"],
+    },
 }
 
 # Intents that are always valid (freeform text)

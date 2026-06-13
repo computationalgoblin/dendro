@@ -44,11 +44,15 @@ def test_d06_detail_panels_expose_single_ai_prompt():
     relation_panel = _read("hosts/DesktopHostPySide/widgets/relation_detail_panel.py")
 
     assert "self.ai_generate_btn.setText(\"Consultar\")" in node_panel
-    assert "extra_ai_widget.setVisible(False)" in node_panel
+    assert "Expandir hacia anillo inferior" not in node_panel
+    assert "Explicar desde causas superiores" not in node_panel
+    assert "Destino causal" not in node_panel
 
     assert "self.ai_run_btn = QPushButton(\"Consultar\")" in tree_panel
     assert "self.ai_prompt_edit" in tree_panel
-    assert "extra_ai_widget.setVisible(False)" in tree_panel
+    assert "Expandir hacia anillo inferior" not in tree_panel
+    assert "Explicar desde causas superiores" not in tree_panel
+    assert "Destino causal" not in tree_panel
 
     assert "self.ai_generate_btn.setText(\"Consultar\")" in relation_panel
     assert "self.ai_coherence_btn.setVisible(False)" in relation_panel
@@ -58,5 +62,5 @@ def test_d06_detail_panels_expose_single_ai_prompt():
 def test_d06_context_menu_preserves_multiselection_for_ai():
     canvas = _read("hosts/DesktopHostPySide/widgets/graph_canvas.py")
 
-    assert "if node.node.entity_id not in self._selected_entity_ids" in canvas
-    assert "if edge.edge.relation_id not in self._selected_relation_ids" in canvas
+    assert "if hit.node.entity_id not in self._selected_entity_ids" in canvas
+    assert "if hit.edge.relation_id not in self._selected_relation_ids" in canvas

@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QColorDialog,
@@ -209,36 +209,6 @@ class _NodeRefineWorker(QThread):
             self.finished.emit("", str(exc))
 
 
-class _NodeContextActionWorker(QThread):
-    """Runs a candidate-producing contextual AI action in background."""
-
-    finished = Signal(str, str)
-
-    def __init__(self, ai_controller, entity_id: str, action_type: str, prompt_hint: str, language: str = "es"):
-        super().__init__()
-        self.ai_controller = ai_controller
-        self.entity_id = entity_id
-        self.action_type = action_type
-        self.prompt_hint = prompt_hint
-        self.language = language
-
-    def run(self):
-        try:
-            if not hasattr(self.ai_controller, "node_action"):
-                self.finished.emit("", "La acción IA contextual no está disponible.")
-                return
-            result = self.ai_controller.node_action(self.entity_id, self.action_type, prompt_hint=self.prompt_hint)
-            if isinstance(result, Error):
-                self.finished.emit("", result.error)
-                return
-            summary = self.ai_controller.result_summary(result) if hasattr(self.ai_controller, "result_summary") else "IA contextual completada."
-            value = result.value
-            body = getattr(value, "raw_text", "") or ""
-            self.finished.emit((summary + ("\n\n" + body if body else "")).strip(), "")
-        except Exception as exc:
-            self.finished.emit("", str(exc))
-
-
 # ---------------------------------------------------------------------------
 # NodeDetailPanel
 # ---------------------------------------------------------------------------
@@ -342,7 +312,11 @@ class NodeDetailPanel(QWidget):
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         first_row.addWidget(self.type_combo, 2)
-        self.layer_label = QLabel("")  # legacy ref (visibilidad del combo)
+        # Legacy ref kept for older code paths; never shown as UI. If this
+        # empty label is made visible without a layout, Qt opens it as a
+        # top-level blank popout.
+        self.layer_label = QLabel("", self)
+        self.layer_label.hide()
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("— Sin anillo —", "")
         first_row.addWidget(self.layer_combo, 2)
@@ -352,6 +326,43 @@ class NodeDetailPanel(QWidget):
         self.color_btn.clicked.connect(self._pick_color)
         first_row.addWidget(self.color_btn)
         form_layout.addRow(first_row)
+
+        # BETA1-G03: fila temporal DISCRETA bajo la identidad —
+        # Nace [año] · Muere [año|—] · Era (derivada, solo lectura).
+        time_row = QHBoxLayout()
+        time_row.setSpacing(6)
+        _time_label_ss = f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
+        _year_ss = (
+            "QLineEdit { background: transparent; border: none; "
+            "border-bottom: 1px solid #D8D6C8; border-radius: 0; "
+            "font-size: 12px; color: #3F3D2E; padding: 1px 2px; } "
+            "QLineEdit:focus { border-bottom: 1px solid #C9C0A0; }"
+        )
+        _year_validator = QIntValidator(-999999999, 999999999, self)
+        born_label = QLabel("Nace")
+        born_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(born_label)
+        self.birth_year_edit = QLineEdit()
+        self.birth_year_edit.setValidator(_year_validator)
+        self.birth_year_edit.setFixedWidth(64)
+        self.birth_year_edit.setStyleSheet(_year_ss)
+        self.birth_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_row.addWidget(self.birth_year_edit)
+        dies_label = QLabel("· Muere")
+        dies_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(dies_label)
+        self.death_year_edit = QLineEdit()
+        self.death_year_edit.setValidator(_year_validator)
+        self.death_year_edit.setFixedWidth(64)
+        self.death_year_edit.setPlaceholderText("—")
+        self.death_year_edit.setStyleSheet(_year_ss)
+        self.death_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_row.addWidget(self.death_year_edit)
+        self.era_label = QLabel("")
+        self.era_label.setStyleSheet(_time_label_ss)
+        time_row.addWidget(self.era_label, 1)
+        self.birth_year_edit.textEdited.connect(self._refresh_era_label)
+        form_layout.addRow(time_row)
 
         # Descripción breve: tras la imagen (montada fuera del form) — el
         # widget se crea aquí, se monta más abajo en el orden F05.
@@ -422,6 +433,11 @@ class NodeDetailPanel(QWidget):
 
         # -- Compact context summary --
         self.context_box = QGroupBox("Contexto")
+        # BETA1-G07: este box vive SIN montar (dato, no UI — ver más abajo). Un
+        # QGroupBox sin padre, al hacerse visible, se convierte en una VENTANA
+        # flotante (los "pop ups"). Darle padre lo ancla al panel: jamás flota.
+        self.context_box.setParent(self)
+        self.context_box.hide()
         self.context_box.setStyleSheet(
             f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
             f"border: 1px solid #D8D6C8; border-radius: 10px; "
@@ -503,17 +519,8 @@ class NodeDetailPanel(QWidget):
         self.ai_coherence_btn.clicked.connect(self._open_coherence)
         ai_layout.addWidget(self.ai_coherence_btn)
 
-        # BETA1-F05: destino causal / expandir hacia anillo inferior /
-        # explicar desde causas superiores ELIMINADOS del panel (deuda F:
-        # futuras acciones contextuales del grafo). Los widgets existen sin
-        # montar porque varios métodos los referencian.
-        self.target_layer_label = QLabel("Destino causal:")
-        self.target_layer_combo = QComboBox()
-        self.target_layer_combo.addItem("— Anillo inferior —", "")
-        self.expand_down_btn = QPushButton("Expandir hacia anillo inferior")
-        self.expand_down_btn.clicked.connect(self._start_expand_down)
-        self.explain_causes_btn = QPushButton("Explicar desde causas superiores")
-        self.explain_causes_btn.clicked.connect(self._start_explain_from_causes)
+        # BETA1-F00B: las acciones causales antiguas ya no viven en este
+        # panel; se invocan desde command bar/menu contextual.
         self.ai_coherence_btn.setVisible(False)
 
         if self.ai_controller is None:
@@ -578,6 +585,10 @@ class NodeDetailPanel(QWidget):
 
         # -- Technical box (advanced only) --
         self.technical_box = QGroupBox("Datos técnicos")
+        # BETA1-G07: igual que context_box — anclado al panel para que nunca
+        # flote como ventana (popup) al togglear el modo avanzado.
+        self.technical_box.setParent(self)
+        self.technical_box.hide()
         self.technical_box.setStyleSheet(
             f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
             f"border: 1px solid #D8D6C8; border-radius: 10px; "
@@ -706,6 +717,9 @@ class NodeDetailPanel(QWidget):
         self.visibility_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
+        # BETA1-G03: años de vida
+        self.birth_year_edit.textEdited.connect(self._schedule_autosave)
+        self.death_year_edit.textEdited.connect(self._schedule_autosave)
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -747,49 +761,6 @@ class NodeDetailPanel(QWidget):
             f"Instrucción opcional del usuario: {instruction or '—'}"
         )
 
-    def _target_layer_text(self) -> str:
-        return self.target_layer_combo.currentText().strip() or "anillo inferior adecuado"
-
-    def _start_expand_down(self):
-        if self.ai_controller is None:
-            self._show_ai_error("IA contextual no disponible en esta sesión.")
-            return
-        target_layer = self._target_layer_text()
-        prompt = self._build_ai_instruction(
-            f"B36: Expandir consecuencias descendentes hacia {target_layer}. "
-            "Proponer nodos candidatos, árboles candidatos y relaciones causales candidatas; no canonizar."
-        )
-        self._start_context_action("expand_causal_down", prompt, "Expandiendo…")
-
-    def _start_explain_from_causes(self):
-        if self.ai_controller is None:
-            self._show_ai_error("IA contextual no disponible en esta sesión.")
-            return
-        prompt = self._build_ai_instruction(
-            "B36: Explicar este elemento desde causas superiores relevantes. "
-            "Proponer explicación causal y relaciones causales candidatas; no canonizar."
-        )
-        self._start_context_action("explain_from_causes", prompt, "Buscando causas…")
-
-    def _start_context_action(self, action_type: str, prompt_hint: str, status_text: str):
-        if self._ai_worker is not None and self._ai_worker.isRunning():
-            return
-        self.ai_generate_btn.setEnabled(False)
-        self.expand_down_btn.setEnabled(False)
-        self.explain_causes_btn.setEnabled(False)
-        self.suggestion_text.setPlainText(status_text)
-        self.suggestion_frame.setVisible(True)
-        self.accept_btn.setEnabled(False)
-        self._ai_worker = _NodeContextActionWorker(
-            self.ai_controller,
-            self.entity_id,
-            action_type,
-            prompt_hint,
-            getattr(self.ctx, "language", "es"),
-        )
-        self._ai_worker.finished.connect(self._on_ai_finished)
-        self._ai_worker.start()
-
     def _start_ai_suggestion(self):
         _apptrace(f"UI node generate_ai_suggestion entity_id={self.entity_id!r}")
         if self.ai_controller is None:
@@ -821,8 +792,6 @@ class NodeDetailPanel(QWidget):
         has_ai = self.ai_controller is not None
         self.ai_generate_btn.setEnabled(has_ai)
         self.ai_generate_btn.setText("Generar sugerencia")
-        self.expand_down_btn.setEnabled(has_ai)
-        self.explain_causes_btn.setEnabled(has_ai)
         self.refine_btn.setEnabled(True)
         self.suggestion_text.setPlainText(f"Error IA: {message}")
         self.suggestion_frame.setVisible(True)
@@ -834,8 +803,6 @@ class NodeDetailPanel(QWidget):
         has_ai = self.ai_controller is not None
         self.ai_generate_btn.setEnabled(has_ai)
         self.ai_generate_btn.setText("Generar sugerencia")
-        self.expand_down_btn.setEnabled(has_ai)
-        self.explain_causes_btn.setEnabled(has_ai)
         if error:
             self._show_ai_error(error)
             return
@@ -1011,6 +978,35 @@ class NodeDetailPanel(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
+    # BETA1-G03: helpers temporales -----------------------------------
+
+    @staticmethod
+    def _parse_year_edit(edit, fallback):
+        text = edit.text().strip()
+        if not text or text == "-":
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            return fallback
+
+    def _refresh_era_label(self, *_args):
+        """Era derivada del año de nacimiento — solo lectura (contrato G01)."""
+        year = self._parse_year_edit(self.birth_year_edit, None)
+        if year is None:
+            self.era_label.setText("")
+            return
+        project = self._project()
+        chronology = getattr(project, "project_chronology", None) if project else None
+        era = None
+        if chronology is not None:
+            try:
+                chronology.ensure_default_era()
+                era = chronology.era_for_year(year)
+            except Exception:
+                era = None
+        self.era_label.setText(f"· {era.name}" if era is not None else "")
+
     def _worldbuilding_active(self) -> bool:
         project = self._project()
         return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
@@ -1033,37 +1029,8 @@ class NodeDetailPanel(QWidget):
         idx = self.layer_combo.findData(current)
         self.layer_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.layer_combo.blockSignals(False)
-        visible = self._worldbuilding_active()
-        self.layer_label.setVisible(visible)
-        self.layer_combo.setVisible(visible)
-
-    def _refresh_target_layer_combo(self, entity=None):
-        current_rank = None
-        project = self._project()
-        layers = list(getattr(project, "world_layers", []) or []) if project is not None else []
-        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in layers}
-        if entity is not None:
-            current_id = str((getattr(entity, "layer_ids", []) or [""])[0] or "")
-            current_layer = layer_by_id.get(current_id)
-            current_rank = get_causal_rank(current_layer) if current_layer is not None else None
-        self.target_layer_combo.blockSignals(True)
-        self.target_layer_combo.clear()
-        self.target_layer_combo.addItem("— Anillo inferior —", "")
-        for layer in sort_layers_by_causal_rank(layers):
-            if not getattr(layer, "is_visible", True):
-                continue
-            rank = get_causal_rank(layer)
-            if rank is None or (current_rank is not None and rank <= current_rank):
-                continue
-            self.target_layer_combo.addItem(f"{rank}. {getattr(layer, 'name', 'Capa')}", str(getattr(layer, "id", "")))
-        if self.target_layer_combo.count() > 1:
-            self.target_layer_combo.setCurrentIndex(1)
-        self.target_layer_combo.blockSignals(False)
-        visible = self._worldbuilding_active()
-        self.target_layer_label.setVisible(visible)
-        self.target_layer_combo.setVisible(visible)
-        self.expand_down_btn.setVisible(visible)
-        self.explain_causes_btn.setVisible(visible)
+        self.layer_label.hide()
+        self.layer_combo.setVisible(self._worldbuilding_active())
 
     def _entity_by_id(self, entity_id: str):
         project = self._project()
@@ -1113,10 +1080,16 @@ class NodeDetailPanel(QWidget):
                 f"{enum_human(kind)} · {enum_human(canon_val)}"
             )
             self._refresh_layer_combo(entity)
-            self._refresh_target_layer_combo(entity)
 
             self.name_edit.setText(getattr(entity, "name", ""))
             self._set_combo_value(self.type_combo, kind)
+
+            # BETA1-G03: fila temporal
+            birth = getattr(entity, "birth_year", None)
+            death = getattr(entity, "death_year", None)
+            self.birth_year_edit.setText("" if birth is None else str(birth))
+            self.death_year_edit.setText("" if death is None else str(death))
+            self._refresh_era_label()
             self.brief_edit.setPlainText(getattr(entity, "brief_description", "") or "")
             self.extended_edit.setPlainText(getattr(entity, "extended_description", "") or "")
             self.private_notes_edit.setPlainText(getattr(entity, "private_notes", "") or "")
@@ -1205,7 +1178,10 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def set_advanced_mode(self, enabled: bool):
-        self.technical_box.setVisible(bool(enabled))
+        # BETA1-G07: technical_box vive SIN montar (FUERA del producto, F05).
+        # NO se togglea su visibilidad: hacerlo lo abría como ventana flotante
+        # (los "pop ups" al seleccionar en modo avanzado). El texto se sigue
+        # rellenando por _refresh_technical para quien lo lea por código.
         for w in self._advanced_widgets:
             w.setVisible(bool(enabled))
 
@@ -1261,6 +1237,10 @@ class NodeDetailPanel(QWidget):
             "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
+            # BETA1-G03: fila temporal (vacío en Nace → conserva el valor;
+            # vacío en Muere → sigue viva)
+            "birth_year": self._parse_year_edit(self.birth_year_edit, getattr(self._entity, "birth_year", None)),
+            "death_year": self._parse_year_edit(self.death_year_edit, None),
         }
         self.ctx.log(
             "info",

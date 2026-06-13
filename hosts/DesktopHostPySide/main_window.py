@@ -54,7 +54,16 @@ from hosts.DesktopHostPySide.views.source_view import SourceView
 from hosts.DesktopHostPySide.views.timeline_view import TimelineView
 from hosts.DesktopHostPySide.views.writing_view import WritingView
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace
-from hosts.DesktopHostPySide.widgets.design_system import APP_STYLESHEET
+from hosts.DesktopHostPySide.widgets.design_system import (
+    APP_STYLESHEET,
+    GOLD,
+    INK_MUTED,
+    INK_SOFT,
+    INK_STRONG,
+    LINE,
+    SURFACE,
+    SURFACE_HI,
+)
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
@@ -65,6 +74,16 @@ from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_
 # Index constants for the stack widget (BETA1-A01: only Home + Creation in runtime)
 _IDX_HOME = 0
 _IDX_CREATION = 1
+
+
+def _qt_widget_alive(widget) -> bool:
+    if widget is None:
+        return False
+    try:
+        widget.objectName()
+    except RuntimeError:
+        return False
+    return True
 
 
 class MainWindow(QMainWindow):
@@ -126,7 +145,7 @@ class MainWindow(QMainWindow):
         self.corpus_view = CorpusView(self.ctx, self.ec)
         self.relation_view = RelationView(self.ctx, self.rc)
         self.candidate_view = CandidateView(self.ctx, self.cc)
-        self.import_export_view = ImportExportView(self.ctx, self.controller, self.export_service)
+        self.import_export_view = self._make_import_export_view()
         self.writing_view = WritingView(self.ctx, self.wc)
         self.timeline_view = TimelineView(self.ctx, self.tlc)
         self.framework_view = FrameworkView(self.ctx, self.fwc)
@@ -163,6 +182,11 @@ class MainWindow(QMainWindow):
         # BETA1-A01: GalleryWorkspace / SessionWorkspace (and its
         # SessionPreparationWorkspace) are no longer instantiated.
         # Their code remains in views/workspaces.py for future phases.
+
+    def _make_import_export_view(self):
+        view = ImportExportView(self.ctx, self.controller, self.export_service)
+        view.setWindowTitle("Importación documental")
+        return view
 
     # ── Shell ────────────────────────────────────────────────────────────────
 
@@ -209,11 +233,15 @@ class MainWindow(QMainWindow):
         self.log.setVisible(False)
         root.addWidget(self.log)
 
+        # BETA1-G08: la elevación del cajón la pinta el propio RightDrawer en su
+        # borde izquierdo (paintEvent) — NADA de QGraphicsDropShadowEffect, que
+        # cachea el render del panel y deja menús/botones en blanco al tocar.
+
         status = QStatusBar()
         status.setObjectName("ambientStatusBar")
         status.setStyleSheet(
-            "QStatusBar#ambientStatusBar { background: #F2F0E4; color: #6F6A42; "
-            "border-top: 1px solid #D8D6C8; padding-left: 8px; }"
+            f"QStatusBar#ambientStatusBar {{ background: {SURFACE}; color: {INK_MUTED}; "
+            f"border-top: 1px solid {LINE}; padding-left: 10px; font-size: 11px; }}"
         )
         status.setSizeGripEnabled(False)
         self.setStatusBar(status)
@@ -237,7 +265,7 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("topbar")
         bar.setStyleSheet(
-            "QFrame#topbar { background: #EEECDD; border-bottom: 1px solid #D8D6C8; }"
+            f"QFrame#topbar {{ background: {SURFACE_HI}; border-bottom: 1px solid {LINE}; }}"
         )
         bar.setFixedHeight(40)
         layout = QHBoxLayout(bar)
@@ -284,27 +312,27 @@ class MainWindow(QMainWindow):
         navbar = QFrame()
         navbar.setObjectName("spaceNavbar")
         navbar.setStyleSheet(
-            "QFrame#spaceNavbar { background: #EEECDD; border-bottom: 1px solid #D8D6C8; }"
+            f"QFrame#spaceNavbar {{ background: {SURFACE_HI}; border-bottom: 1px solid {LINE}; }}"
         )
-        navbar.setFixedHeight(42)
+        navbar.setFixedHeight(44)
         nav_layout = QHBoxLayout(navbar)
-        nav_layout.setContentsMargins(12, 4, 16, 4)
+        nav_layout.setContentsMargins(12, 5, 16, 5)
 
         back_btn = QPushButton("←")
         back_btn.setToolTip("Volver a Dendro")
         back_btn.setFixedSize(34, 30)
         back_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #D0CCB8; "
-            "border-radius: 15px; padding: 0px; color: #6F6A42; font-size: 16px; } "
-            "QPushButton:hover { background: #F8F5EA; color: #504B2E; }"
+            f"QPushButton {{ background: transparent; border: 1px solid {LINE}; "
+            f"border-radius: 15px; padding: 0px; color: {INK_SOFT}; font-size: 16px; }} "
+            f"QPushButton:hover {{ background: {SURFACE}; border-color: {GOLD}; color: {INK_STRONG}; }}"
         )
         back_btn.clicked.connect(lambda: self._go_space(back_idx))
         nav_layout.addWidget(back_btn)
 
         space_title = QLabel(title)
         space_title.setStyleSheet(
-            "font-size: 15px; font-weight: 700; color: #5C5A3E; "
-            "font-family: Georgia, 'Courier New', serif; background: transparent; border: none;"
+            f"font-size: 15px; font-weight: 700; color: {INK_STRONG}; letter-spacing: 0.3px; "
+            f"font-family: Georgia, 'Iowan Old Style', serif; background: transparent; border: none;"
         )
         nav_layout.addWidget(space_title)
         nav_layout.addStretch()
@@ -496,7 +524,9 @@ class MainWindow(QMainWindow):
         self._go_space(_IDX_CREATION)
         workspace = getattr(self, "creation_workspace", None)
         if workspace is not None and hasattr(workspace, "_open_utility"):
-            workspace._open_utility(workspace.import_export_view)
+            self.import_export_view = self._make_import_export_view()
+            workspace.import_export_view = self.import_export_view
+            workspace._open_utility(self.import_export_view, title="Importación documental")
 
     def _open_config_panel(self):
         _apptrace("UI open_config_panel")
@@ -690,6 +720,8 @@ class MainWindow(QMainWindow):
             self.writing_view, self.timeline_view, self.framework_view,
             self.source_view, self.layer_view, self.home_view,
         ]:
+            if not _qt_widget_alive(widget):
+                continue
             if hasattr(widget, "set_advanced_mode"):
                 try:
                     widget.set_advanced_mode(enabled)

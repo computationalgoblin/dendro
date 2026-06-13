@@ -58,6 +58,16 @@ def milestone_sort_value(milestone: Any) -> tuple[int, Any, str]:
 
     meta = _metadata(milestone)
     sort_index = meta.get("sort_index")
+
+    # BETA1-G03: el año diegético (G02) es el tiempo canónico; el
+    # sort_index manual desempata dentro del mismo año.
+    year = getattr(milestone, "year", None)
+    if isinstance(year, int) and not isinstance(year, bool):
+        try:
+            tiebreak = float(sort_index)
+        except (TypeError, ValueError):
+            tiebreak = 0.0
+        return (0, (float(year), tiebreak), str(getattr(milestone, "title", "")))
     try:
         return (0, float(sort_index), str(getattr(milestone, "title", "")))
     except (TypeError, ValueError):
@@ -100,6 +110,10 @@ def milestone_temporal_label(milestone: Any) -> str:
         value = str(getattr(temporality, attr, "") or "").strip()
         if value:
             return value
+    # BETA1-G03: sin etiqueta manual, el año diegético ubica el hito
+    year = getattr(milestone, "year", None)
+    if isinstance(year, int) and not isinstance(year, bool):
+        return f"Año {year}"
     return "Sin ubicar"
 
 
@@ -216,6 +230,9 @@ class MilestoneChronologyView(QWidget):
         self.temporal_edit.setPlaceholderText("Era, periodo o clave de calendario")
         self.exact_date_picker = CalendarDatePicker(compact=True)
         self.exact_date_picker.setObjectName("milestoneExactDatePicker")
+        # BETA1-G03: año diegético del hito (G02) — tiempo canónico
+        self.year_edit = QSpinBox()
+        self.year_edit.setRange(-999999999, 999999999)
         self.sort_edit = QSpinBox()
         self.sort_edit.setRange(-999999, 999999)
         self.primary_entity_combo = QComboBox()
@@ -231,6 +248,7 @@ class MilestoneChronologyView(QWidget):
         form.addRow("Titulo", self.title_edit)
         form.addRow("Resumen", self.summary_edit)
         form.addRow("Cuerpo", self.body_edit)
+        form.addRow("Año", self.year_edit)
         form.addRow("Fecha / posicion", self.temporal_edit)
         form.addRow("Fecha exacta", self.exact_date_picker)
         form.addRow("Orden relativo", self.sort_edit)
@@ -469,6 +487,11 @@ class MilestoneChronologyView(QWidget):
             self.sort_edit.setValue(int(meta.get("sort_index", 0) or 0))
         except (TypeError, ValueError):
             self.sort_edit.setValue(0)
+        # BETA1-G03: año (None pre-migración → present_year del calendario)
+        year = getattr(hito, "year", None)
+        if not isinstance(year, int) or isinstance(year, bool):
+            year = int(getattr(self.chronology(), "present_year", 0) or 0)
+        self.year_edit.setValue(year)
         self.primary_entity_combo.blockSignals(True)
         self.primary_entity_combo.clear()
         self.primary_entity_combo.addItem("Sin entidad principal", "")
@@ -515,6 +538,7 @@ class MilestoneChronologyView(QWidget):
             "status": str(self.status_combo.currentData() or "candidate"),
             "affected_entity_ids": affected,
             "metadata": meta,
+            "year": int(self.year_edit.value()),  # BETA1-G03
         }
         result = self.controller.update(hito_id, payload)
         if isinstance(result, Error):
