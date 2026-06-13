@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from PySide6.QtCore import QTimer, QThread, Signal
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,

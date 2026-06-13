@@ -64,6 +64,8 @@ class CausalMilestone:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+    # BETA1-G02: año diegético del hito (None solo transitorio pre-migración)
+    year: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the 22-field B41-T01 contract."""
@@ -90,6 +92,7 @@ class CausalMilestone:
             "metadata": dict(self.metadata),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "year": self.year,
         }
 
     @classmethod
@@ -126,6 +129,7 @@ class CausalMilestone:
             metadata=_parse_dict(data.get("metadata")),
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
+            year=_parse_optional_year(data.get("year")),
         )
 
 
@@ -150,6 +154,16 @@ def _parse_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _parse_optional_year(value: Any) -> int | None:
+    """BETA1-G02: año entero (negativos permitidos) o None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_optional_float(value: Any) -> float | None:

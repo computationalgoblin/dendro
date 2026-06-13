@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (H02: project chronology)
-CURRENT_SCHEMA_VERSION: int = 24
+# Current schema version for new projects (G02: world time — eras + years)
+CURRENT_SCHEMA_VERSION: int = 25
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 24
+MAX_SUPPORTED_VERSION: int = 25
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +715,60 @@ def _apply_migration_v23_to_v24(data):
         from packages.domain.project_chronology import ProjectChronology
         migrated["project_chronology"] = ProjectChronology().to_dict()
     migrated["schema_version"] = 24
+    return migrated
+
+
+def _apply_migration_v24_to_v25(data):
+    """v24 -> v25: world time (BETA1-G02).
+
+    No-atemporalidad: garantiza era "Presente" + present_year en
+    project_chronology y backfill de birth_year (entidades) y year (hitos)
+    a 0. Sin pérdida, sin intervención manual.
+    """
+    migrated = dict(data)
+
+    # 1-2. Chronology: era "Presente" + present_year
+    chronology = migrated.get("project_chronology")
+    if not isinstance(chronology, dict):
+        from packages.domain.project_chronology import ProjectChronology
+        chronology = ProjectChronology().to_dict()
+    else:
+        chronology = dict(chronology)
+    if not isinstance(chronology.get("present_year"), int) or isinstance(chronology.get("present_year"), bool):
+        chronology["present_year"] = 0
+    eras = chronology.get("eras")
+    if not isinstance(eras, list) or not eras:
+        from packages.domain.era import Era
+        chronology["eras"] = [
+            Era(name="Presente", start_year=0, end_year=None, order=0).to_dict()
+        ]
+    migrated["project_chronology"] = chronology
+
+    # 3. Backfill: entidades sin birth_year → 0; hitos sin year → 0
+    entities = migrated.get("entities")
+    if isinstance(entities, list):
+        patched_entities = []
+        for raw in entities:
+            if isinstance(raw, dict):
+                raw = dict(raw)
+                if raw.get("birth_year") is None:
+                    raw["birth_year"] = 0
+                raw.setdefault("death_year", None)
+            patched_entities.append(raw)
+        migrated["entities"] = patched_entities
+
+    milestones = migrated.get("causal_milestones")
+    if isinstance(milestones, list):
+        patched_milestones = []
+        for raw in milestones:
+            if isinstance(raw, dict):
+                raw = dict(raw)
+                if raw.get("year") is None:
+                    raw["year"] = 0
+            patched_milestones.append(raw)
+        migrated["causal_milestones"] = patched_milestones
+
+    migrated["schema_version"] = 25
     return migrated
 
 # Structural validation

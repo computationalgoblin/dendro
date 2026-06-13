@@ -28,7 +28,11 @@ DEFECTO (asignación automática), nunca por bloqueo del flujo de creación.
 - Existe `MilestoneChronologyView` (Hermes H03) — panel en drawer, ordenación
   no temporal-espacial. Se conserva como base/acceso, la vista G04 lo
   trasciende.
-- Schema de persistencia actual: v7 → la fase introduce v8.
+- Schema de persistencia actual: **v24** (corrección G02: el contrato decía
+  v7 por error) → la fase introduce **v25**.
+- Existe `ProjectChronology` (Hermes H02) como contenedor de calendario:
+  decisión G02 — las **eras** y el **present_year** viven DENTRO de
+  `ProjectChronology` (se extiende la pieza de Hermes, no se duplica).
 
 ## 3. Modelo temporal
 
@@ -46,7 +50,8 @@ Era:
 
 Reglas: las eras de un proyecto no se solapan (validación suave: warning, no
 bloqueo); siempre existe al menos una era; el proyecto tiene `present_year:
-int` (año "ahora" del mundo, default 0) que vive en la era abierta.
+int` (año "ahora" del mundo, default 0) que vive en la era abierta. Ubicación
+(G02): `eras` y `present_year` son campos de `ProjectChronology`.
 
 ### 3.2 Entidad (campos nuevos en NarrativeEntity)
 
@@ -78,14 +83,14 @@ puede ser legítimo: "su leyenda creció").
   aceptados, etc.) pasan por `EntityService.create_entity` → el default vive
   EN EL SERVICIO, no en la UI (una sola fuente).
 
-## 5. Migración (v7 → v8)
+## 5. Migración (v24 → v25)
 
-Al abrir un proyecto v7:
+Al abrir un proyecto v24:
 1. Crear `Era(name="Presente", start_year=0, end_year=None, order=0)` si no
    hay eras.
 2. `project.present_year = 0` si no existe.
 3. Toda entidad sin `birth_year` → 0; hitos sin `year` → 0.
-4. Bump schema a v8. Sin pérdida, sin intervención manual, reversible por
+4. Bump schema a v25. Sin pérdida, sin intervención manual, reversible por
    backup (la migración no borra nada).
 
 ## 6. UI temporal (G03)
@@ -124,7 +129,8 @@ Al abrir un proyecto v7:
 | Ticket | Alcance | Riesgo |
 |---|---|---|
 | G01 | Este contrato | — |
-| G02 | Dominio+persistencia: Era, campos, defaults en servicios, migración v8, EraService/EraController, tests (`test_beta1_time_domain.py`) | Medio (toca dominio — coordinar con Hermes) |
+| G-fix | **Bug de los "pop-outs" al seleccionar entidades** (reportado al cierre de F): diagnosticar qué elemento emerge al seleccionar (¿tooltip nativo, panel de anillo auto-abriéndose, drawer?) y eliminarlo/suavizarlo según estética F. Se ejecuta ANTES de G02 | Bajo |
+| G02 | Dominio+persistencia: Era, campos, defaults en servicios, migración v25, EraService/EraController, tests (`test_beta1_time_domain.py`) | Medio (toca dominio — coordinar con Hermes) |
 | G03 | UI temporal: fila de fechas en paneles, sección Eras en filtros, present_year, año en hitos | Bajo |
 | G04 | Vista cronológica + toggle + layout determinista + tests (`test_beta1_chrono_view.py`) | Alto (canvas nuevo) |
 | G05 | Smoke 2-vistas + cierre (`docs/cierres/G05_time_smoke.md`) | — |

@@ -60,6 +60,23 @@ class CausalMilestoneService:
         except Exception:
             pass
 
+    def _apply_default_year(self, hito: CausalMilestone) -> None:
+        """BETA1-G02: no-atemporalidad — hito sin año recibe el present_year.
+
+        El default vive en el servicio (una sola fuente); nunca bloquea.
+        """
+        if hito.year is not None:
+            return
+        proj = self._proj()
+        if isinstance(proj, Error):
+            hito.year = 0
+            return
+        chronology = getattr(proj.value, "project_chronology", None)
+        try:
+            hito.year = int(getattr(chronology, "present_year", 0) or 0)
+        except (TypeError, ValueError):
+            hito.year = 0
+
     def create_hito_candidate(
         self,
         data: dict[str, Any],
@@ -70,6 +87,7 @@ class CausalMilestoneService:
             return Error("CandidateService not available")
         hito = CausalMilestone.from_dict(data)
         hito.status = CausalMilestoneStatus.CANDIDATE
+        self._apply_default_year(hito)
         return self.candidate_service.create_causal_milestone_candidate(
             hito,
             source=source,
@@ -83,6 +101,7 @@ class CausalMilestoneService:
             return proj
         hito = CausalMilestone.from_dict(data)
         hito.status = CausalMilestoneStatus.CANON
+        self._apply_default_year(hito)
         now = _now_iso()
         if not hito.created_at:
             hito.created_at = now
@@ -113,6 +132,7 @@ class CausalMilestoneService:
 
         hito = CausalMilestone.from_dict(proposed["milestone"])
         hito.status = CausalMilestoneStatus.CANON
+        self._apply_default_year(hito)
         hito.candidate_id = candidate.id
         now = _now_iso()
         if not hito.created_at:

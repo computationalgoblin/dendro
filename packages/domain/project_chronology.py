@@ -10,10 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from packages.domain.era import Era
+
 
 @dataclass
 class ProjectChronology:
-    """Project-owned chronology/calendar metadata for milestone views."""
+    """Project-owned chronology/calendar metadata for milestone views.
+
+    BETA1-G02: además del registro de hitos, es el CALENDARIO del proyecto —
+    contiene las eras y el año presente. Toda entidad pertenece a una era
+    derivadamente (la que contiene su birth_year): no hay atemporalidad.
+    """
 
     id: str = "project_chronology"
     calendar_name: str = ""
@@ -23,6 +30,28 @@ class ProjectChronology:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
+    # BETA1-G02: tiempo del mundo
+    eras: list[Era] = field(default_factory=list)
+    present_year: int = 0
+
+    # ── BETA1-G02: helpers temporales ───────────────────────────────────
+
+    def ensure_default_era(self) -> Era:
+        """Garantiza al menos una era (la abierta 'Presente'). Idempotente."""
+        if not self.eras:
+            self.eras.append(Era(name="Presente", start_year=self.present_year, end_year=None, order=0))
+        return self.eras[-1]
+
+    def era_for_year(self, year: int) -> Era | None:
+        """Era que contiene *year* (la más específica si hubiera solape)."""
+        candidates = [era for era in self.eras if era.contains(year)]
+        if not candidates:
+            return None
+        # La de inicio más tardío gana (más específica)
+        return max(candidates, key=lambda era: era.start_year)
+
+    def sorted_eras(self) -> list[Era]:
+        return sorted(self.eras, key=lambda era: (era.start_year, era.order))
 
     def link_milestone(self, milestone_id: str) -> None:
         normalized = str(milestone_id).strip()
@@ -46,6 +75,8 @@ class ProjectChronology:
             "metadata": dict(self.metadata),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "eras": [era.to_dict() for era in self.eras],
+            "present_year": int(self.present_year),
         }
 
     @classmethod
@@ -62,6 +93,8 @@ class ProjectChronology:
             metadata=_parse_dict(data.get("metadata")),
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
+            eras=_parse_eras(data.get("eras")),
+            present_year=_parse_int(data.get("present_year"), 0),
         )
 
 
@@ -75,6 +108,19 @@ def _parse_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _parse_eras(value: Any) -> list[Era]:
+    if isinstance(value, list):
+        return [Era.from_dict(item) for item in value if isinstance(item, dict)]
+    return []
+
+
+def _parse_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 __all__ = ["ProjectChronology"]

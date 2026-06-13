@@ -178,6 +178,12 @@ class NarrativeEntity:
     custom_type_id: str | None = None
     custom_fields: list[Any] = field(default_factory=list)  # list[CustomFieldValue]
 
+    # --- Tiempo del mundo (BETA1-G02) ---
+    # birth_year es obligatorio por DEFAULT en EntityService (present_year);
+    # None solo transitorio pre-migración. La era es DERIVADA del birth_year.
+    birth_year: int | None = None
+    death_year: int | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -225,6 +231,8 @@ class NarrativeEntity:
                 )
                 for f in self.custom_fields
             ],
+            "birth_year": self.birth_year,
+            "death_year": self.death_year,
         }
 
     @classmethod
@@ -269,6 +277,8 @@ class NarrativeEntity:
                 CustomFieldValue.from_dict(f) if isinstance(f, dict) else f
                 for f in _parse_list(data.get("custom_fields"))
             ],
+            birth_year=_parse_optional_year(data.get("birth_year")),
+            death_year=_parse_optional_year(data.get("death_year")),
         )
 
 
@@ -300,12 +310,30 @@ def validate_entity(entity: NarrativeEntity) -> list[str]:
     if entity.updated_at is None:
         issues.append("Entity updated_at is missing")
 
+    # BETA1-G02: coherencia temporal (validación suave — no bloquea creación)
+    if (
+        entity.birth_year is not None
+        and entity.death_year is not None
+        and entity.death_year < entity.birth_year
+    ):
+        issues.append("Entity death_year is earlier than birth_year")
+
     return issues
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Internal helpers
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_optional_year(value: Any) -> int | None:
+    """BETA1-G02: año entero (negativos permitidos) o None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_list(value: Any) -> list:

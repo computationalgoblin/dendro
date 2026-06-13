@@ -87,6 +87,13 @@ class EntityService:
         entity = NarrativeEntity.from_dict(data)
         entity.name = name
 
+        # BETA1-G02: no-atemporalidad por defecto. Toda entidad nace en el
+        # present_year del proyecto salvo que la llamada indique otro año.
+        # El default vive AQUI (una sola fuente), nunca bloquea la creación.
+        if entity.birth_year is None:
+            chronology = getattr(proj.value, "project_chronology", None)
+            entity.birth_year = int(getattr(chronology, "present_year", 0) or 0)
+
         issues = validate_entity(entity)
         if issues:
             return Error(f"Entity validation failed: {'; '.join(issues)}")
@@ -141,6 +148,7 @@ class EntityService:
             "domain_ids", "layer_ids", "private_notes", "exportable_notes",
             "narrative_importance", "development_level", "custom_metadata",
             "custom_type_id", "custom_fields",
+            "birth_year", "death_year",  # BETA1-G02
         }
         merged = found.to_dict()
         for key in editable_fields:
