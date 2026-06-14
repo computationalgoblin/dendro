@@ -35,24 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
-from packages.domain.project import Project
-from packages.domain.project_chronology import ProjectChronology
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
-from hosts.DesktopHostPySide.widgets.design_system import (
-    GOLD,
-    GOLD_DEEP,
-    GOLD_SOFT,
-    GOLD_TINT,
-    INK,
-    INK_MUTED,
-    INK_SOFT,
-    INK_STRONG,
-    LINE,
-    PAPER,
-    SURFACE,
-    SURFACE_HI,
-)
 from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     AI_DEPTH_OPTIONS,
     AI_OUTPUT_OPTIONS,
@@ -63,6 +46,7 @@ from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     AI_UNCERTAINTY_OPTIONS,
     AUDIENCE_OPTIONS,
     CHANGE_OPTIONS,
+    CONFLICT_OPTIONS,
     CONTRADICTION_OPTIONS,
     DIALOGUE_OPTIONS,
     DISTANCE_OPTIONS,
@@ -75,7 +59,6 @@ from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     PROGRESSION_OPTIONS,
     STATUS_OPTIONS,
     TENSION_OPTIONS,
-    CONFLICT_OPTIONS,
     ListEditor,
     TagInput,
     _make_combo,
@@ -83,6 +66,21 @@ from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     _make_slider,
     _make_textarea,
 )
+from hosts.DesktopHostPySide.widgets.design_system import (
+    GOLD,
+    GOLD_DEEP,
+    GOLD_TINT,
+    INK_MUTED,
+    INK_SOFT,
+    INK_STRONG,
+    LINE,
+    PAPER,
+    SURFACE,
+    SURFACE_HI,
+)
+from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
+from packages.domain.project import Project
+from packages.domain.project_chronology import ProjectChronology
 
 
 def _names_from_length_text(text: str) -> list[str]:

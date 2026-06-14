@@ -61,7 +61,7 @@ GOLD_TINT   = "#ECE4C7"   # relleno sutil de acento (hover/selección)
 
 # Verde botánico (secundario, con mucha mesura: vida, foco orgánico)
 SAGE        = "#6E7E58"
-SAGE_DEEP   = "#54624330"  # noqa: usado solo como referencia documental
+SAGE_DEEP   = "#546243"  # verde profundo (reservado; aún sin uso)
 
 # Sombra cálida base (RGB) — las sombras nunca son grises neutros aquí
 SHADOW_RGB  = (52, 47, 28)
