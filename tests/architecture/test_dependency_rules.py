@@ -12,8 +12,8 @@ when packages aren't installed or when layers are empty/not yet implemented.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import os
+import sys
 from pathlib import Path
 from typing import Iterator
 
@@ -100,8 +100,14 @@ ALWAYS_ALLOWED = {
 
 
 def _is_stdlib(modname: str) -> bool:
-    """Check if a module name is part of Python stdlib."""
-    return modname in ALWAYS_ALLOWED or importlib.util.find_spec(modname) is not None
+    """Check if a module name is allowed without explicit layer matching.
+
+    The current checker compares only top-level import names, so project imports
+    all arrive as ``packages``. Keep that historical project-namespace behavior,
+    but do not treat arbitrary installed third-party packages (for example numpy
+    when the project venv is on PYTHONPATH) as stdlib.
+    """
+    return modname == "packages" or modname in ALWAYS_ALLOWED or modname in sys.stdlib_module_names
 
 
 def _iter_py_files(package_path: Path) -> Iterator[Path]:

@@ -411,6 +411,11 @@ def main() -> None:
         handle_export(args, session)
         return
 
+    if args.command == "timeline":
+        from packages.ui.cli_timeline import handle_timeline_command
+        handle_timeline_command(args, session)
+        return
+
     if args.command == "writing":
         from packages.ui.cli_writing import handle_writing_command
         handle_writing_command(args, session)

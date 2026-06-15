@@ -134,10 +134,25 @@ def _clean_env() -> dict[str, str]:
     return dict(os.environ)
 
 
+def _pytest_env() -> dict[str, str]:
+    """Environment for pytest subprocesses.
+
+    Preserve an existing PYTHONPATH (needed in WSL/Hermes when pytest and other
+    project dependencies are provided by the repo venv's site-packages) while
+    ensuring the workspace itself has priority.
+    """
+    import os
+
+    env = _clean_env()
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(WORKSPACE) if not existing else f"{WORKSPACE}{os.pathsep}{existing}"
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return env
+
+
 def run_suite(label: str, paths: list[str], timeout: int = 600) -> tuple[bool, float, int]:
     cmd = [sys.executable, "-m", "pytest", "-q", "--tb=short", *paths]
-    env = {**_clean_env(), "PYTHONPATH": str(WORKSPACE)}
-    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env = _pytest_env()
     t0 = time.perf_counter()
     try:
         result = subprocess.run(

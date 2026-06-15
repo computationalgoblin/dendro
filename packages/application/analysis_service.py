@@ -125,11 +125,16 @@ class AnalysisService:
                 itype_enum = StructuredIssueType(itype)
             except ValueError:
                 itype_enum = StructuredIssueType.INVALID_ENTITY_TYPE
+            metadata = {"ai_mode": ai_mode, "source": "ia"}
+            affected_source_ids = []
+            if src_id:
+                metadata["source_id"] = src_id
+                affected_source_ids.append(src_id)
             issue = StructuredIssue(
                 description=data.get("description", f"AI {ai_mode} issue"),
                 affected_entity_ids=[],
-                source="ia",
-                metadata={"ai_mode": ai_mode, "source_id": src_id} if src_id else {"ai_mode": ai_mode},
+                affected_source_ids=affected_source_ids,
+                metadata=metadata,
                 type=itype_enum,
             )
             self._is.add_issue(issue)

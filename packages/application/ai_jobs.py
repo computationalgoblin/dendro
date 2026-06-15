@@ -26,7 +26,7 @@ import uuid
 
 from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
-from packages.application.ai_request_gateway import ModelParams
+from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
 from packages.application.command_bar_planner import CommandBarPlan, CommandBarPlannerService
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 
@@ -65,7 +65,77 @@ class AIJobType(str, Enum):
     FREEFORM_PLANNING = "freeform_planning"
     EDIT_ENTITIES = "edit_entities"
     PROPOSE_MILESTONES = "propose_milestones"
+    # BETA1-AI02: text-only intents. Free text, no JSON staging — the suggestion
+    # stays inline (e.g. the entity detail panel) until the user saves.
+    IMPROVE_TEXT = "improve_text"
+    GENERATE_TEXT = "generate_text"
     UNKNOWN = "unknown"
+
+
+# BETA1-AI02: intents that return free text instead of staged candidates.
+_TEXT_INTENTS: frozenset[AIJobType] = frozenset({AIJobType.IMPROVE_TEXT, AIJobType.GENERATE_TEXT})
+
+
+def _is_text_intent(intent_type: Any) -> bool:
+    try:
+        key = intent_type if isinstance(intent_type, AIJobType) else AIJobType(str(intent_type))
+    except ValueError:
+        return False
+    return key in _TEXT_INTENTS
+
+
+def _text_result(text: str) -> dict[str, Any]:
+    """Result shape for text-only intents: free text, no staged candidates."""
+    cleaned = (text or "").strip()
+    return {
+        "summary": "Sugerencia de texto lista",
+        "report": "",
+        "text": cleaned,
+        "candidates": [],
+        "open_questions": [],
+        "model_payload": {},
+    }
+
+
+# BETA1-AI02: single registry of "focused tasks" — the context-menu/panel
+# action_type maps directly to an explicit AIJobType (no classification). This
+# replaces the legacy `_NODE_ACTIONS`/`_GRAPH_ACTIONS` AIMode maps.
+ACTION_TO_JOB_TYPE: dict[str, AIJobType] = {
+    # Graph / selection menu
+    "suggest_nodes": AIJobType.GENERATE_ENTITIES,
+    "suggest_branches": AIJobType.GENERATE_TREE,
+    "suggest_relations": AIJobType.SUGGEST_RELATIONS,
+    "analyze_coherence": AIJobType.ANALYZE_COHERENCE,
+    "suggest_missing_nodes": AIJobType.GENERATE_ENTITIES,
+    "suggest_missing_relations": AIJobType.SUGGEST_RELATIONS,
+    "detect_isolated_zones": AIJobType.ANALYZE_COHERENCE,
+    "detect_inconsistencies": AIJobType.ANALYZE_COHERENCE,
+    "suggest_emergent_plots": AIJobType.EXPAND_WORLDBUILDING,
+    # Node / relation menu
+    "create_candidate": AIJobType.GENERATE_ENTITIES,
+    "expand_causal_down": AIJobType.EXPAND_WORLDBUILDING,
+    "explain_from_causes": AIJobType.EXPLAIN_FROM_CAUSES,
+    "suggest_conflict": AIJobType.ANALYZE_COHERENCE,
+    "detect_contradictions": AIJobType.ANALYZE_COHERENCE,
+    "detect_contradiction": AIJobType.ANALYZE_COHERENCE,
+    "propose_milestones": AIJobType.PROPOSE_MILESTONES,
+    # Text-only (detail panel / inline)
+    "improve_text": AIJobType.IMPROVE_TEXT,
+    "generate_text": AIJobType.GENERATE_TEXT,
+    "deepen": AIJobType.IMPROVE_TEXT,
+    "summarize": AIJobType.GENERATE_TEXT,
+    "describe_tree": AIJobType.GENERATE_TEXT,
+}
+
+
+def job_type_for_action(action_type: str) -> AIJobType:
+    """Resolve a context-menu/panel action_type to its focused AIJobType."""
+    return ACTION_TO_JOB_TYPE.get(action_type, AIJobType.UNKNOWN)
+
+
+# BETA1-AI02: per-job generation params now live in the gateway's INTENT_PARAMS
+# (keyed by AIJobType.value), so the command bar and the import track share a
+# single source of truth. Resolve them via ModelParams.from_intent(job.type.value).
 
 
 @dataclass
@@ -128,6 +198,9 @@ class AIJob:
 
     id: str = field(default_factory=lambda: f"job_{uuid.uuid4().hex[:10]}")
     type: AIJobType = AIJobType.REVIEW_GRAPH
+    # BETA1-AI02: set for focused jobs (context menu / detail panel) so the
+    # pipeline uses this intent verbatim instead of classifying the prompt.
+    explicit_intent: AIJobType | None = None
     prompt: str = ""
     status: AIJobStatus = AIJobStatus.QUEUED
     created_at: str = field(default_factory=_now_iso)
@@ -145,6 +218,7 @@ class AIJob:
         return {
             "id": self.id,
             "type": self.type.value,
+            "explicit_intent": self.explicit_intent.value if self.explicit_intent else None,
             "prompt": self.prompt,
             "status": self.status.value,
             "created_at": self.created_at,
@@ -161,9 +235,15 @@ class AIJob:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AIJob":
+        raw_explicit = data.get("explicit_intent")
+        try:
+            explicit_intent = AIJobType(raw_explicit) if raw_explicit else None
+        except ValueError:
+            explicit_intent = None
         return cls(
             id=data.get("id") or f"job_{uuid.uuid4().hex[:10]}",
             type=AIJobType(data.get("type") or AIJobType.REVIEW_GRAPH.value),
+            explicit_intent=explicit_intent,
             prompt=data.get("prompt", ""),
             status=AIJobStatus(data.get("status") or AIJobStatus.QUEUED.value),
             created_at=data.get("created_at") or _now_iso(),
@@ -278,6 +358,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["candidatos de edición de cuerpo/campos de hojas o ramas existentes"]
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return ["candidatos de hito causal", "relaciones causales candidatas"]
+    if intent_type in _TEXT_INTENTS:
+        return ["texto sugerido (no canon hasta guardar)"]
     return ["plan revisable"]
 
 
@@ -302,6 +384,8 @@ def _expected_output_for_intent(intent_type: AIJobType) -> str:
         return "edit_candidates"
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return "milestone_candidates"
+    if intent_type in _TEXT_INTENTS:
+        return "text"
     return "clarification_or_plan"
 
 
@@ -394,23 +478,75 @@ def _candidate(
     }
 
 
+def _strip_code_fences(raw: str) -> str:
+    """Unwrap a ```json … ``` (or plain ```…```) markdown block if present."""
+    match = re.search(r"```(?:json)?\s*(.+?)\s*```", raw, re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else raw
+
+
+def _first_balanced_json(raw: str) -> str | None:
+    """Return the first balanced {...} object, ignoring braces inside strings."""
+    start = raw.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start:i + 1]
+    return None
+
+
 def _extract_json(text: str) -> dict[str, Any]:
-    raw = (text or "").strip()
+    """Coax a JSON object out of a model response (BETA1-AI01: hardened).
+
+    Handles plain JSON, ```json fenced blocks, and a JSON object embedded in
+    prose. Falls back to a {summary, report} so nothing is silently lost."""
+    original = str(text or "")
+    raw = _strip_code_fences(original.strip())
     if not raw:
         return {}
+    # 1. Whole payload is JSON.
     try:
         parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {"report": raw}
+        return parsed if isinstance(parsed, dict) else {"report": original}
     except Exception:
         pass
+    # 2. First balanced object embedded in prose.
+    candidate = _first_balanced_json(raw)
+    if candidate:
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    # 3. Last resort: greedy first-to-last brace.
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         try:
             parsed = json.loads(match.group(0))
-            return parsed if isinstance(parsed, dict) else {"report": raw}
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
             pass
-    return {"summary": "Respuesta no estructurada", "report": raw}
+    return {"summary": "Respuesta no estructurada", "report": original}
 
 
 def _safe_list(value: Any) -> list[Any]:
@@ -692,11 +828,64 @@ def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# BETA1-AI01: the chronology/milestone output spec, attached ONLY to time-
+# related jobs (before it rode along on every message — pure noise + tokens).
+_CHRONOLOGY_OUTPUT_FORMATS: dict[str, Any] = {
+    "project_chronology_suggestion": {
+        "kind": "project_chronology_suggestion",
+        "title": "string",
+        "mode": "none | vague_periods | full_calendar",
+        "summary": "string",
+        "periods": ["Antiguedad", "Historia reciente", "Actualidad"],
+        "eras": ["string"],
+        "era_lengths": {"Era Antigua": "integer years"},
+        "months": ["string"],
+        "month_lengths": {"Enero": "integer days"},
+        "weekdays": ["string"],
+        "current_date": {"era": "string", "year": "integer", "month": "string", "day": "integer"},
+        "units": ["string"],
+        "display_format": "string",
+        "supports_exact_dates": "boolean",
+        "date_resolution": "string",
+        "rationale": "string",
+        "risks": ["string"],
+        "questions_for_user": ["string"],
+    },
+    "milestones": [{
+        "title": "string",
+        "summary": "string",
+        "body": "string",
+        "chronology_position": "string",
+        "sort_index": "integer",
+        "rationale": "string",
+        "confidence": "low | medium | high",
+    }],
+}
+
+_CHRONOLOGY_HINT_TOKENS = ("hito", "cronolog", "calendar", "era", "milestone", "linea temporal", "línea temporal")
+
+
+def _wants_chronology_formats(plan: AIJobPlan) -> bool:
+    if getattr(plan.intent, "intent_type", None) == AIJobType.PROPOSE_MILESTONES:
+        return True
+    text = f"{getattr(plan.intent.intent_type, 'value', '')} {plan.prompt}".lower()
+    return any(token in text for token in _CHRONOLOGY_HINT_TOKENS)
+
+
 def build_model_user_message(plan: AIJobPlan) -> str:
-    return json.dumps({
+    # BETA1-AI01: leaner message. The context lived TWICE (full `plan` dump +
+    # `contexto_autorizado`); now the plan carries only its shape and the
+    # context appears once. Chronology spec attached on demand.
+    message: dict[str, Any] = {
         "prompt_exacto_usuario": plan.prompt,
         "intent": plan.intent.to_dict(),
-        "plan": plan.to_dict(),
+        "plan": {
+            "title": plan.title,
+            "steps": list(plan.steps),
+            "target_scope": plan.target_scope,
+            "expected_result": plan.expected_result,
+            "creates": list(plan.creates),
+        },
         "contexto_autorizado": _context_for_prompt(plan.context),
         "perfil_creativo_b40": _b40_prompt_profile(plan.context),
         "restricciones": {
@@ -705,38 +894,10 @@ def build_model_user_message(plan: AIJobPlan) -> str:
             "no_ids_inventados": True,
             "usar_prompt_exacto_como_instruccion_principal": True,
         },
-        "formatos_h05": {
-            "project_chronology_suggestion": {
-                "kind": "project_chronology_suggestion",
-                "title": "string",
-                "mode": "none | vague_periods | full_calendar",
-                "summary": "string",
-                "periods": ["Antiguedad", "Historia reciente", "Actualidad"],
-                "eras": ["string"],
-                "era_lengths": {"Era Antigua": "integer years"},
-                "months": ["string"],
-                "month_lengths": {"Enero": "integer days"},
-                "weekdays": ["string"],
-                "current_date": {"era": "string", "year": "integer", "month": "string", "day": "integer"},
-                "units": ["string"],
-                "display_format": "string",
-                "supports_exact_dates": "boolean",
-                "date_resolution": "string",
-                "rationale": "string",
-                "risks": ["string"],
-                "questions_for_user": ["string"],
-            },
-            "milestones": [{
-                "title": "string",
-                "summary": "string",
-                "body": "string",
-                "chronology_position": "string",
-                "sort_index": "integer",
-                "rationale": "string",
-                "confidence": "low | medium | high",
-            }],
-        },
-    }, ensure_ascii=False, indent=2)
+    }
+    if _wants_chronology_formats(plan):
+        message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
+    return json.dumps(message, ensure_ascii=False, indent=2)
 
 
 # Backward-compatible helper kept only for tests that inject explicit mock jobs.
@@ -763,9 +924,13 @@ class AIJobService:
         rag_service: Any | None = None,
         project_provider: Callable[[], Any] | None = None,
         prompt_trace_store: Any | None = None,
+        gateway: AIRequestGateway | None = None,
     ):
         self._jobs: dict[str, AIJob] = {}
         self._provider = provider if provider is not None else create_provider()
+        # BETA1-AI02: single provider chokepoint. Every model call goes through
+        # the gateway (sanitize → params → dispatch). Injectable for tests.
+        self._gateway = gateway if gateway is not None else AIRequestGateway(provider=self._provider)
         self.allow_simulated = allow_simulated
         self.observability_log = observability_log or AIObservabilityLog()
         self.timeout_seconds = max(1, int(timeout_seconds or DEFAULT_AI_TIMEOUT_SECONDS))
@@ -778,7 +943,7 @@ class AIJobService:
         self._project_provider = project_provider
         self._prompt_trace_store = prompt_trace_store
 
-    def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None) -> Result:
+    def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, explicit: bool = False) -> Result:
         prompt = (prompt or "").strip()
         if not prompt:
             return Error("El prompt no puede estar vacío")
@@ -787,12 +952,25 @@ class AIJobService:
             resolved_type = job_type if isinstance(job_type, AIJobType) else AIJobType(str(job_type))
         except ValueError:
             resolved_type = AIJobType.REVIEW_GRAPH
-        intent = classify_intent(prompt, context)
-        if resolved_type not in (AIJobType.UNKNOWN, intent.intent_type):
-            # UI may pass a legacy heuristic type; keep explicit type but preserve classifier rationale.
-            intent.intent_type = resolved_type
+        if explicit:
+            # BETA1-AI02: focused job — the caller's intent is authoritative, so
+            # skip prompt classification and run this exact task type.
+            intent = CommandBarIntent(
+                intent_type=resolved_type,
+                confidence=1.0,
+                target_scope=_scope_from_context(_norm(prompt), context),
+                expected_output_type=_expected_output_for_intent(resolved_type),
+                rationale="Acción enfocada (intent explícito).",
+                planner_source="explicit",
+            )
+        else:
+            intent = classify_intent(prompt, context)
+            if resolved_type not in (AIJobType.UNKNOWN, intent.intent_type):
+                # UI may pass a legacy heuristic type; keep explicit type but preserve classifier rationale.
+                intent.intent_type = resolved_type
         job = AIJob(
             type=intent.intent_type,
+            explicit_intent=resolved_type if explicit else None,
             prompt=prompt,
             context_scope=context,
             message="Job creado. Pendiente de ejecución.",
@@ -803,6 +981,18 @@ class AIJobService:
         job.plan = plan.to_dict()
         self._jobs[job.id] = job
         return Ok(job)
+
+    def run_focused_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, progress_callback=None) -> Result:
+        """Create and execute a focused (explicit-intent) job in one call.
+
+        Entry point for contextual callers (graph menu, detail panel) that
+        already know the task type and seed their own context. Goes through the
+        exact same execute_job pipeline as the command bar.
+        """
+        created = self.create_job(job_type, prompt, context_scope=context_scope, explicit=True)
+        if isinstance(created, Error):
+            return created
+        return self.execute_job(created.value.id, progress_callback=progress_callback)
 
     def list_jobs(self) -> list[AIJob]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at)
@@ -870,6 +1060,18 @@ class AIJobService:
         ))
 
     def _build_execution_plan(self, job: AIJob) -> Result:
+        if job.explicit_intent is not None:
+            # BETA1-AI02: focused job — use the given intent verbatim, no classify.
+            intent = CommandBarIntent(
+                intent_type=job.explicit_intent,
+                confidence=1.0,
+                target_scope=_scope_from_context(_norm(job.prompt), job.context_scope),
+                expected_output_type=_expected_output_for_intent(job.explicit_intent),
+                rationale="Acción enfocada (intent explícito).",
+                planner_source="explicit",
+            )
+            return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
+
         if self.use_ai_planner:
             planned = CommandBarPlannerService(self._provider).plan(
                 job.prompt,
@@ -998,7 +1200,14 @@ class AIJobService:
             model_user_message=model_user_message,
         )
         try:
-            text, error = self._provider.chat(COMMAND_BAR_SYSTEM_PROMPT_ES, model_user_message)
+            gw = self._gateway.execute(GatewayRequest(
+                intent=plan.intent.intent_type.value,
+                user_prompt=model_user_message,
+                system_prompt_override=COMMAND_BAR_SYSTEM_PROMPT_ES,
+                json_mode=True,
+                validate=False,
+            ))
+            text, error = gw.text, gw.error
         except Exception as exc:
             text, error = None, str(exc)
         if error:
@@ -1093,12 +1302,17 @@ class AIJobService:
             model_user_message=model_user_message,
         )
         started = time.monotonic()
+        is_text = _is_text_intent(plan.intent.intent_type)
         try:
-            text, error = self._provider.chat(
-                COMMAND_BAR_SYSTEM_PROMPT_ES,
-                model_user_message,
+            gw = self._gateway.execute(GatewayRequest(
+                intent=plan.intent.intent_type.value,
+                user_prompt=model_user_message,
+                system_prompt_override=COMMAND_BAR_SYSTEM_PROMPT_ES,
                 timeout=self.timeout_seconds,
-            )
+                json_mode=not is_text,
+                validate=False,
+            ))
+            text, error = gw.text, gw.error
         except Exception as exc:
             text, error = None, str(exc)
         elapsed = time.monotonic() - started
@@ -1131,8 +1345,11 @@ class AIJobService:
         if cancelled:
             return cancelled
 
-        payload = _extract_json(text)
-        result = stage_results(payload, job)
+        if is_text:
+            result = _text_result(text)
+        else:
+            payload = _extract_json(text)
+            result = stage_results(payload, job)
         self._trace_prompt_response(job_id=job.id, status="ok", response_text=text, elapsed_ms=elapsed * 1000)
         result["provider"] = provider_name
         result["timeout_seconds"] = self.timeout_seconds

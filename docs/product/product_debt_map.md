@@ -15,7 +15,6 @@
 | DC-036 | get_tree no escala >1000 entidades | baja | abierta | B27 |
 | DC-040 | CLI flakes secrets/clues | baja | abierta | — |
 | DC-044 | improvise fallback determinista | baja | abierta | B27 |
-| DC-045 | AnalysisService sin tests unitarios | media | abierta | B25 |
 | DC-B28-UI-WIN | B28 sin validación Desktop Windows | media | abierta | B28 |
 | DC-034-01 | Layout contenedores no persiste posiciones | baja | abierta | B34 |
 | DC-034-02 | _tree_context sin cache | baja | abierta | B34 |
@@ -32,6 +31,7 @@
 | DC-022 | CandidateService sin tests | B15.8 |
 | DC-024 | OrchestratorService sin tests | B15.8 |
 | DC-028 | PDFExtractor requiere pymupdf | BETA1-I08 |
+| DC-045 | AnalysisService sin tests unitarios | BETA1-H01 |
 
 ## Reglas
 

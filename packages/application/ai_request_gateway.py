@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from packages.application.context_sanitizer import sanitize_nested
-from packages.application.output_schema_validator import validate_ai_output
-from packages.infrastructure.ai_provider import AIProvider, create_provider
+from packages.application.output_schema_validator import ValidationResult, validate_ai_output
+from packages.infrastructure.ai_provider import AIProvider, create_provider, provider_chat
 
 
 DEFAULT_AI_TIMEOUT_SECONDS = 300
@@ -87,17 +87,34 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "freeform":            ModelParams(temperature=0.7, max_tokens=2000),
     "explain":             ModelParams(temperature=0.5, max_tokens=2000),
     "edit":                ModelParams(temperature=0.5, max_tokens=1500),
-    "edit_entities":       ModelParams(temperature=0.5, max_tokens=2000),
+    "edit_entities":       ModelParams(temperature=0.5, max_tokens=2200),
     "suggest":             ModelParams(temperature=0.6, max_tokens=2000),
     "node_text_suggestion": ModelParams(temperature=0.6, max_tokens=1500),
     "relation_text_suggestion": ModelParams(temperature=0.6, max_tokens=1500),
     # Higher temperature: creative generation
-    "generate_entities":   ModelParams(temperature=0.8, max_tokens=2000),
+    "generate_entities":   ModelParams(temperature=0.8, max_tokens=2200),
     "generate_trees":      ModelParams(temperature=0.8, max_tokens=2000),
     "generate_relations":  ModelParams(temperature=0.7, max_tokens=2000),
     "improvise":           ModelParams(temperature=0.85, max_tokens=2500),
     "expand":              ModelParams(temperature=0.75, max_tokens=2000),
     "wizard_suggestion":   ModelParams(temperature=0.8, max_tokens=2000),
+
+    # BETA1-AI02: command-bar AIJobType.value intents. Single source of truth —
+    # these replace the old `_JOB_MODEL_PARAMS` map in ai_jobs.py. Keyed by the
+    # literal AIJobType values (kept as strings here to avoid an import cycle:
+    # ai_jobs already imports ModelParams from this module). Analytical jobs run
+    # cold, creative jobs run warm.
+    "generate_tree":       ModelParams(temperature=0.8, max_tokens=2400),
+    "suggest_relations":   ModelParams(temperature=0.55, max_tokens=2000),
+    "analyze_coherence":   ModelParams(temperature=0.2, max_tokens=2600),
+    "expand_worldbuilding": ModelParams(temperature=0.8, max_tokens=2600),
+    "explain_from_causes": ModelParams(temperature=0.4, max_tokens=2200),
+    "freeform_planning":   ModelParams(temperature=0.7, max_tokens=2000),
+    "propose_milestones":  ModelParams(temperature=0.7, max_tokens=2200),
+    # Text-only intents (BETA1-AI02 Fase 2): free text, no JSON staging.
+    "improve_text":        ModelParams(temperature=0.6, max_tokens=1500),
+    "generate_text":       ModelParams(temperature=0.7, max_tokens=1800),
+    "unknown":             ModelParams(temperature=0.6, max_tokens=1500),
 }
 
 
@@ -113,6 +130,13 @@ class GatewayRequest:
     context: dict[str, Any] = field(default_factory=dict)
     system_prompt_override: str | None = None
     timeout: int | None = None
+    # BETA1-AI01: opt-in strict JSON output (provider response_format). Off by
+    # default so free-text callers (e.g. text suggestions) are unaffected.
+    json_mode: bool = False
+    # BETA1-AI02: callers that own their parsing/staging (the command-bar job
+    # pipeline tolerates Spanish container keys like `hojas`/`ramas` that the
+    # English EXPECTED_SCHEMAS would reject) can skip schema validation here.
+    validate: bool = True
 
 
 @dataclass
@@ -181,14 +205,24 @@ class AIRequestGateway:
                 ctx_block = ctx_block[:8000] + "\n...[truncated]"
             system = f"{system}\n\nContext: {ctx_block}" if system else f"Context: {ctx_block}"
 
-        # 4. Call provider
-        text, error = self.provider.chat(
-            system_prompt=system,
-            user_message=request.user_prompt,
+        # 4. Call provider — BETA1-AI01: actually apply the intent's params
+        # (provider_chat passes only the kwargs the provider declares).
+        text, error = provider_chat(
+            self.provider,
+            system,
+            request.user_prompt,
             timeout=request.timeout or DEFAULT_AI_TIMEOUT_SECONDS,
+            temperature=params.temperature,
+            max_tokens=params.max_tokens,
+            json_mode=request.json_mode,
         )
 
-        validation = validate_ai_output(text, request.intent)
+        # The job pipeline (validate=False) parses and stages results itself;
+        # only validate when the caller relies on the gateway's schema check.
+        if request.validate:
+            validation = validate_ai_output(text, request.intent)
+        else:
+            validation = ValidationResult(is_valid=True, parsed=None)
 
         # 5. Build response
         duration_ms = (time.time() - t0) * 1000
@@ -202,7 +236,9 @@ class AIRequestGateway:
             "output_size": len(text) if text else 0,
             "duration_ms": round(duration_ms, 1),
             "status": "ok" if not error and validation.is_valid else "error",
-            "error_type": type(error).__name__ if error else ("validation" if not validation.is_valid else None),
+            # BETA1-AI01: error is a string message, not an exception — report a
+            # stable category instead of always "str".
+            "error_type": "provider_error" if error else ("validation" if not validation.is_valid else None),
             "validation_error": validation.error,
             "retry_hint": validation.retry_hint,
         }

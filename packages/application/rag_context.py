@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+import math
 import re
 
 from packages.application.corpus_indexer import CorpusIndexRecord, IndexingOptions, NarrativeCorpusIndex
@@ -191,10 +192,13 @@ class RAGContextBuilder:
             )
 
         tokens = _tokens(plan.query)
+        # BETA1-AI01: IDF over the corpus so distinctive query words drive
+        # retrieval, not raw word count (a step up from naive token overlap).
+        idf = _idf_map(index, tokens)
         scored = [
             scored_record
             for record in index.items()
-            if (scored_record := _score_record(record, plan, tokens)) is not None
+            if (scored_record := _score_record(record, plan, tokens, idf)) is not None
         ]
         scored.sort(key=lambda item: item.sort_key)
 
@@ -233,7 +237,7 @@ class RAGContextBuilder:
         )
 
 
-def _score_record(record: CorpusIndexRecord, plan: RetrievalPlan, query_tokens: set[str]) -> _ScoredRecord | None:
+def _score_record(record: CorpusIndexRecord, plan: RetrievalPlan, query_tokens: set[str], idf: dict[str, float] | None = None) -> _ScoredRecord | None:
     reasons: list[str] = []
     score = 0.0
     priority = ContextPriority.LOW
@@ -258,9 +262,9 @@ def _score_record(record: CorpusIndexRecord, plan: RetrievalPlan, query_tokens: 
         priority = _max_priority(priority, ContextPriority.NORMAL)
         reasons.append("intent_relevant_kind")
 
-    overlap = _text_overlap(record, query_tokens)
-    if overlap:
-        score += min(36.0, float(overlap) * 4.0)
+    overlap = _text_overlap_score(record, query_tokens, idf or {})
+    if overlap > 0:
+        score += min(40.0, overlap * 3.0)
         priority = _max_priority(priority, ContextPriority.NORMAL)
         reasons.append("text_overlap")
 
@@ -377,12 +381,37 @@ def _matches_active_layer(record: CorpusIndexRecord, plan: RetrievalPlan) -> boo
     return bool(set(_string_list((record.metadata or {}).get("layer_ids"))).intersection(active))
 
 
-def _text_overlap(record: CorpusIndexRecord, query_tokens: set[str]) -> int:
-    if not query_tokens:
-        return 0
-    text_tokens = _tokens(record.rendered_text)
+def _record_text_tokens(record: CorpusIndexRecord) -> set[str]:
     metadata_tokens = _tokens(" ".join(str(value) for value in (record.metadata or {}).values()))
-    return len(query_tokens.intersection(text_tokens | metadata_tokens))
+    return _tokens(record.rendered_text) | metadata_tokens
+
+
+def _idf_map(index: NarrativeCorpusIndex, query_tokens: set[str]) -> dict[str, float]:
+    """Inverse document frequency for the query tokens over the corpus.
+
+    Rare words (appear in few records) weigh more than common ones. Computed
+    only for the query tokens, so it stays cheap."""
+    if not query_tokens:
+        return {}
+    records = list(index.items())
+    total = len(records) or 1
+    df = {token: 0 for token in query_tokens}
+    for record in records:
+        record_tokens = _record_text_tokens(record)
+        for token in query_tokens:
+            if token in record_tokens:
+                df[token] += 1
+    return {token: math.log(1.0 + total / (1.0 + count)) for token, count in df.items()}
+
+
+def _text_overlap_score(record: CorpusIndexRecord, query_tokens: set[str], idf: dict[str, float]) -> float:
+    """IDF-weighted overlap between the query and a record (BETA1-AI01)."""
+    if not query_tokens:
+        return 0.0
+    shared = query_tokens & _record_text_tokens(record)
+    if not shared:
+        return 0.0
+    return sum(idf.get(token, 1.0) for token in shared)
 
 
 def _selection_ref_tokens(plan: RetrievalPlan) -> set[str]:
