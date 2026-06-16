@@ -17,6 +17,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
+from packages.application.ai_jobs import (
+    AIJobType,
+    CommandAction,
+    CommandScope,
+    job_type_for_command,
+)
+
 # ---------------------------------------------------------------------------
 # @-mentions (used by Editar and Explicar)
 # ---------------------------------------------------------------------------
@@ -164,3 +171,174 @@ def consecutive_batches(
         return []
     size = max(1, int(batch_size))
     return [ids[i:i + size] for i in range(0, len(ids), size)]
+
+
+# ---------------------------------------------------------------------------
+# Submission planner — one user submission → the concrete job(s) to create
+# ---------------------------------------------------------------------------
+
+MAX_SUGGESTIONS = 3          # Crear Hoja/Rama
+MAX_EDIT_SELECTION = 6       # Editar: max 6 elements
+MAX_EXPLAIN_CREATIONS = 3    # Explicar: max 3 created entities/hitos
+
+
+@dataclass
+class PlannedJob:
+    """One job to create: a job type, the prompt, and context to merge in."""
+
+    job_type: AIJobType
+    prompt: str
+    context_overrides: dict = field(default_factory=dict)
+
+
+@dataclass
+class CommandPlan:
+    jobs: list[PlannedJob] = field(default_factory=list)
+    error: str | None = None          # blocking: nothing is created
+    warnings: list[str] = field(default_factory=list)
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = low
+    return max(low, min(high, v))
+
+
+def plan_command_jobs(
+    action: "CommandAction | str",
+    scope: "CommandScope | str",
+    prompt: str,
+    *,
+    selected_entity_ids: Iterable[str] | None = None,
+    selected_relation_ids: Iterable[str] | None = None,
+    known_mentions: Iterable[tuple[str, str, str]] | None = None,
+    suggestion_count: int = 1,
+    active_ring_id: str = "",
+) -> CommandPlan:
+    """Expand one deterministic submission into the job(s) to create.
+
+    Pure: no IA, no Qt, no project access — the host passes the selection and the
+    known mention targets. Encodes the per-cell behaviours: relation fan-out,
+    Crear-Anillo's no-selection rule, suggestion count, Editar's selection/@ caps,
+    Explicar's branching hint, and consecutive batching for large Analizar runs.
+    """
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return CommandPlan(error="Escribe una orden para Dendro")
+    try:
+        act = action if isinstance(action, CommandAction) else CommandAction(str(action))
+        scp = scope if isinstance(scope, CommandScope) else CommandScope(str(scope))
+        base_type = job_type_for_command(act, scp)
+    except ValueError as exc:
+        return CommandPlan(error=str(exc))
+
+    entities = [e for e in (str(x) for x in (selected_entity_ids or [])) if e]
+    relations = [r for r in (str(x) for x in (selected_relation_ids or [])) if r]
+
+    warnings: list[str] = []
+    mentions = parse_mentions(prompt, known_mentions or [])
+    if mentions.overflow:
+        warnings.append("Solo se usan las 2 primeras @menciones.")
+    if mentions.unresolved:
+        warnings.append("Referencias @ no encontradas: " + ", ".join(mentions.unresolved))
+
+    common: dict = {
+        "command_action": act.value,
+        "command_scope": scp.value,
+        "mentions": mentions.to_dict(),
+    }
+
+    # --- Crear + Relación: one job per pair (fan-out) ----------------------
+    if act is CommandAction.CREAR and scp is CommandScope.RELACION:
+        if len(entities) < 2:
+            return CommandPlan(error="Selecciona al menos dos entidades para crear relaciones.")
+        pairs, overflow = relation_fanout_pairs(entities)
+        if overflow:
+            warnings.append(
+                f"Se crean {len(pairs)} relaciones (máx {MAX_RELATION_JOBS}); reduce la selección."
+            )
+        jobs = [
+            PlannedJob(base_type, prompt, {
+                **common,
+                "selected_entity_ids": list(pair),
+                "fanout_pair": list(pair),
+                "fanout_index": i,
+                "fanout_total": len(pairs),
+            })
+            for i, pair in enumerate(pairs)
+        ]
+        return CommandPlan(jobs=jobs, warnings=warnings)
+
+    # --- Crear + Anillo: no selection; uses creative config + previous ring -
+    if act is CommandAction.CREAR and scp is CommandScope.ANILLO:
+        if entities or relations:
+            return CommandPlan(
+                error=(
+                    "Crear Anillo no admite selección: se basa en la configuración "
+                    "creativa y el anillo anterior."
+                ),
+            )
+        return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+            **common,
+            "ring_template": True,
+            "previous_ring_id": active_ring_id,
+        })], warnings=warnings)
+
+    # --- Crear + Hoja/Rama: configurable suggestion count ------------------
+    if act is CommandAction.CREAR and scp in (CommandScope.HOJA, CommandScope.RAMA):
+        count = _clamp(suggestion_count, 1, MAX_SUGGESTIONS)
+        return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+            **common,
+            "selected_entity_ids": entities,
+            "suggestion_count": count,
+        })], warnings=warnings)
+
+    # --- Analizar: consecutive batches when selection > 6 ------------------
+    if act is CommandAction.ANALIZAR:
+        if len(entities) <= MAX_ENTITIES_PER_JOB:
+            return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+                **common, "selected_entity_ids": entities, "selected_relation_ids": relations,
+            })], warnings=warnings)
+        batches = consecutive_batches(entities)
+        warnings.append(
+            f"Selección > {MAX_ENTITIES_PER_JOB}: {len(batches)} análisis consecutivos."
+        )
+        jobs = [
+            PlannedJob(base_type, prompt, {
+                **common, "selected_entity_ids": batch,
+                "batch_index": i, "batch_total": len(batches),
+            })
+            for i, batch in enumerate(batches)
+        ]
+        return CommandPlan(jobs=jobs, warnings=warnings)
+
+    # --- Editar: cap selection at 6, mentions already parsed (max 2) -------
+    if act is CommandAction.EDITAR:
+        used = entities
+        if len(entities) > MAX_EDIT_SELECTION:
+            used = entities[:MAX_EDIT_SELECTION]
+            warnings.append(
+                f"Editar admite máx {MAX_EDIT_SELECTION} elementos; se usan los primeros."
+            )
+        return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+            **common, "selected_entity_ids": used, "selected_relation_ids": relations,
+        })], warnings=warnings)
+
+    # --- Explicar / Expandir: branching hint + active ring -----------------
+    if act in (CommandAction.EXPLICAR, CommandAction.EXPANDIR):
+        explain_target = "modify_refs" if mentions.refs else "create_in_active_ring"
+        return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+            **common,
+            "selected_entity_ids": entities,
+            "selected_relation_ids": relations,
+            "active_ring_id": active_ring_id,
+            "explain_target": explain_target,
+            "max_creations": MAX_EXPLAIN_CREATIONS,
+        })], warnings=warnings)
+
+    # --- Fallback: single job ---------------------------------------------
+    return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
+        **common, "selected_entity_ids": entities, "selected_relation_ids": relations,
+    })], warnings=warnings)

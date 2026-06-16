@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import pytest
 
+from packages.application.ai_jobs import AIJobType, CommandAction, CommandScope
 from packages.application.command_expansion import (
     MAX_RELATION_JOBS,
     consecutive_batches,
     parse_mentions,
+    plan_command_jobs,
     relation_fanout_pairs,
 )
+
+A = CommandAction
+S = CommandScope
 
 # (id, name, type) — mirrors what the host derives from the active project.
 KNOWN = [
@@ -120,3 +125,83 @@ def test_selection_over_six_splits_consecutively():
 
 def test_empty_selection_no_batches():
     assert consecutive_batches([]) == []
+
+
+# --- plan_command_jobs (orchestration) -------------------------------------
+
+def test_plan_empty_prompt_errors():
+    plan = plan_command_jobs(A.CREAR, S.HOJA, "   ")
+    assert plan.error and not plan.jobs
+
+
+def test_plan_crear_hoja_clamps_suggestion_count():
+    plan = plan_command_jobs(A.CREAR, S.HOJA, "tres magos", suggestion_count=9)
+    assert plan.error is None
+    assert len(plan.jobs) == 1
+    job = plan.jobs[0]
+    assert job.job_type is AIJobType.GENERATE_ENTITIES
+    assert job.context_overrides["suggestion_count"] == 3  # clamped to MAX
+
+
+def test_plan_crear_relacion_fans_out_one_job_per_pair():
+    plan = plan_command_jobs(A.CREAR, S.RELACION, "relaciona", selected_entity_ids=["a", "b", "c"])
+    assert len(plan.jobs) == 3
+    assert all(j.job_type is AIJobType.SUGGEST_RELATIONS for j in plan.jobs)
+    pairs = {tuple(j.context_overrides["fanout_pair"]) for j in plan.jobs}
+    assert pairs == {("a", "b"), ("a", "c"), ("b", "c")}
+
+
+def test_plan_crear_relacion_needs_two_entities():
+    plan = plan_command_jobs(A.CREAR, S.RELACION, "relaciona", selected_entity_ids=["solo"])
+    assert plan.error and not plan.jobs
+
+
+def test_plan_crear_relacion_overflow_warns_and_caps():
+    # C(5,2) = 10 pairs, capped to 6.
+    plan = plan_command_jobs(A.CREAR, S.RELACION, "rel", selected_entity_ids=list("abcde"))
+    assert len(plan.jobs) == MAX_RELATION_JOBS == 6
+    assert any("máx" in w for w in plan.warnings)
+
+
+def test_plan_crear_anillo_rejects_selection():
+    plan = plan_command_jobs(A.CREAR, S.ANILLO, "plantilla", selected_entity_ids=["x"])
+    assert plan.error and not plan.jobs
+
+
+def test_plan_crear_anillo_without_selection_flags_template():
+    plan = plan_command_jobs(A.CREAR, S.ANILLO, "plantilla causal", active_ring_id="ring_prev")
+    assert plan.error is None and len(plan.jobs) == 1
+    job = plan.jobs[0]
+    assert job.job_type is AIJobType.CREATE_RING_TEMPLATE
+    assert job.context_overrides["ring_template"] is True
+    assert job.context_overrides["previous_ring_id"] == "ring_prev"
+
+
+def test_plan_analizar_small_selection_single_job():
+    plan = plan_command_jobs(A.ANALIZAR, S.HOJA, "coherencia", selected_entity_ids=list("abc"))
+    assert len(plan.jobs) == 1
+    assert plan.jobs[0].job_type is AIJobType.ANALYZE_COHERENCE
+
+
+def test_plan_analizar_large_selection_splits_consecutively():
+    ids = [f"e{i}" for i in range(7)]
+    plan = plan_command_jobs(A.ANALIZAR, S.HOJA, "total", selected_entity_ids=ids)
+    assert len(plan.jobs) == 2  # 6 + 1
+    assert any("consecutiv" in w for w in plan.warnings)
+
+
+def test_plan_editar_caps_selection_at_six():
+    ids = [f"e{i}" for i in range(8)]
+    plan = plan_command_jobs(A.EDITAR, S.HOJA, "edit", selected_entity_ids=ids)
+    assert len(plan.jobs) == 1
+    assert len(plan.jobs[0].context_overrides["selected_entity_ids"]) == 6
+    assert any("máx 6" in w for w in plan.warnings)
+
+
+def test_plan_explicar_branches_on_mentions():
+    known = [("h1", "Guerra del Trono", "milestone")]
+    with_ref = plan_command_jobs(A.EXPLICAR, S.HOJA, "con @Guerra del Trono", known_mentions=known)
+    assert with_ref.jobs[0].context_overrides["explain_target"] == "modify_refs"
+    without = plan_command_jobs(A.EXPLICAR, S.HOJA, "explica el origen", active_ring_id="r1")
+    assert without.jobs[0].context_overrides["explain_target"] == "create_in_active_ring"
+    assert without.jobs[0].context_overrides["active_ring_id"] == "r1"

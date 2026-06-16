@@ -790,6 +790,76 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             expected_impact=f"Editar {field} de '{entity_name}' tras revisión humana.",
         ))
 
+    # Structured edits for relations / rings / milestones (deterministic "Editar"
+    # cells). Each becomes a reviewable sugerencia_ia candidate; never canon.
+    for kind_key, label in (
+        ("relation_edits", "relación"),
+        ("ring_edits", "anillo"),
+        ("milestone_edits", "hito"),
+    ):
+        for edit in _safe_list(payload.get(kind_key)):
+            if not isinstance(edit, dict):
+                continue
+            target_name = str(
+                edit.get("target_name") or edit.get("name") or edit.get("title") or ""
+            ).strip()
+            field = str(edit.get("field") or "description").strip()
+            proposed_value = str(edit.get("proposed_value") or "").strip()
+            if not (target_name and proposed_value):
+                continue
+            candidates.append(_candidate(
+                title=f"Editar {field} de {label}: {target_name}",
+                candidate_type="sugerencia_ia",
+                proposed_data={
+                    "report": f"Propuesta de edición de {label} '{target_name}':\n\n{proposed_value}",
+                    "edit_kind": kind_key,
+                    "edit_target_name": target_name,
+                    "edit_field": field,
+                    "edit_proposed_value": proposed_value,
+                    "issues": [],
+                    "proposals": [{"title": f"Editar {field} de {target_name}", "description": proposed_value[:200]}],
+                    "open_questions": [],
+                    "prompt": job.prompt,
+                },
+                job=job,
+                justification=str(edit.get("rationale") or f"Edición propuesta de {field} para {label} existente."),
+                confidence=0.65,
+                expected_impact=f"Editar {field} de {label} '{target_name}' tras revisión humana.",
+            ))
+
+    # Ring template (CREATE_RING_TEMPLATE): initial rings as a causal domain
+    # structure. Rings are world layers, not entities, so each stages as a
+    # reviewable sugerencia_ia card describing the proposed ring.
+    for ring in _safe_list(payload.get("rings") or payload.get("anillos")):
+        if not isinstance(ring, dict):
+            continue
+        ring_name = str(ring.get("name") or ring.get("domain") or "").strip()
+        if not ring_name:
+            continue
+        ring_desc = str(ring.get("description") or ring.get("brief_description") or "").strip()
+        try:
+            ring_order = int(ring.get("order", 0) or 0)
+        except (TypeError, ValueError):
+            ring_order = 0
+        candidates.append(_candidate(
+            title=f"Anillo propuesto: {ring_name}",
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "kind": "ring_template",
+                "ring_name": ring_name,
+                "domain": str(ring.get("domain") or ring_name),
+                "description": ring_desc,
+                "order": ring_order,
+                "derived_from": str(ring.get("derived_from") or ""),
+                "report": f"Anillo '{ring_name}' (orden {ring_order}).\n\n{ring_desc}",
+                "prompt": job.prompt,
+            },
+            job=job,
+            justification=str(ring.get("rationale") or "Anillo propuesto como plantilla causal inicial."),
+            confidence=0.58,
+            expected_impact="Propone un anillo/estrato; al aceptar se crea por la ruta segura de anillos.",
+        ))
+
     selected = set(str(x) for x in (job.context_scope.get("selected_entity_ids") or []))
     relevant = job.context_scope.get("relevant_entities") or []
     relevant_ids = {str(e.get("id")) for e in relevant if isinstance(e, dict) and e.get("id")}
@@ -966,6 +1036,61 @@ def _wants_chronology_formats(plan: AIJobPlan) -> bool:
     return any(token in text for token in _CHRONOLOGY_HINT_TOKENS)
 
 
+def _fase2_directives(context: dict[str, Any]) -> dict[str, Any] | None:
+    """Surface the deterministic per-cell behaviours as explicit model directives.
+
+    The host seeds these into context_scope via plan_command_jobs (suggestion
+    count, @references, Explicar branching, ring template, relation fan-out pair)
+    so the model honours them instead of guessing from prose."""
+    ctx = dict(context or {})
+    params: dict[str, Any] = {}
+    instructions: list[str] = []
+
+    count = ctx.get("suggestion_count")
+    if count:
+        params["numero_sugerencias"] = int(count)
+        instructions.append(f"Devuelve exactamente {int(count)} sugerencia(s), ni más ni menos.")
+
+    mentions = ctx.get("mentions") if isinstance(ctx.get("mentions"), dict) else {}
+    refs = mentions.get("refs") or []
+    if refs:
+        params["referencias_at"] = refs
+        names = ", ".join(str(r.get("name", "")) for r in refs if isinstance(r, dict))
+        instructions.append(f"Usa como referencia SOLO las entidades/hitos mencionados con @: {names}.")
+
+    explain_target = ctx.get("explain_target")
+    if explain_target == "modify_refs":
+        params["modo_explicar"] = "modificar_referencias"
+        instructions.append(
+            "Explicar con @referencias: modifica el TEXTO de las entidades/relaciones referenciadas "
+            "para que expliquen la selección (claves 'entity_edits'/'relation_edits'); no crees entidades nuevas."
+        )
+    elif explain_target == "create_in_active_ring":
+        params["modo_explicar"] = "crear_en_anillo_activo"
+        ring = ctx.get("active_ring_id") or "el activo"
+        instructions.append(
+            f"Explicar sin referencias: crea hitos/entidades (máx {ctx.get('max_creations', 3)}) "
+            f"en el anillo activo ({ring}) que expliquen la selección."
+        )
+
+    if ctx.get("ring_template"):
+        params["plantilla_anillo"] = {"previous_ring_id": ctx.get("previous_ring_id") or ""}
+        instructions.append(
+            "Crear Anillo: genera UNA plantilla de anillos como estructura causal de dominios, derivando "
+            "del anillo anterior y la configuración creativa. Clave 'rings' (name, domain, description, order, "
+            "derived_from). Ignora cualquier selección."
+        )
+
+    pair = ctx.get("fanout_pair")
+    if pair:
+        params["par_relacion"] = list(pair)
+        instructions.append("Propón UNA relación entre exactamente este par de entidades (clave 'relations').")
+
+    if not params and not instructions:
+        return None
+    return {"parametros": params, "instrucciones": instructions}
+
+
 def build_model_user_message(plan: AIJobPlan) -> str:
     # BETA1-AI01: leaner message. The context lived TWICE (full `plan` dump +
     # `contexto_autorizado`); now the plan carries only its shape and the
@@ -989,6 +1114,9 @@ def build_model_user_message(plan: AIJobPlan) -> str:
             "usar_prompt_exacto_como_instruccion_principal": True,
         },
     }
+    directives = _fase2_directives(plan.context)
+    if directives:
+        message["directivas"] = directives
     if _wants_chronology_formats(plan):
         message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
     return json.dumps(message, ensure_ascii=False, indent=2)
