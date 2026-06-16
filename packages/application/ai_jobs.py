@@ -176,7 +176,7 @@ ACTION_LABELS: dict[CommandAction, str] = {
     CommandAction.EDITAR: "Editar",
     CommandAction.ANALIZAR: "Analizar",
     CommandAction.EXPLICAR: "Explicar",
-    CommandAction.EXPANDIR: "Expandir (WB)",
+    CommandAction.EXPANDIR: "Expandir",
 }
 
 SCOPE_LABELS: dict[CommandScope, str] = {
