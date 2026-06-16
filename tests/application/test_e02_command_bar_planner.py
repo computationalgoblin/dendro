@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 
-from packages.application.ai_jobs import AIJobService, AIJobStatus, AIJobType
 from packages.application.command_bar_planner import (
     COMMAND_BAR_PLANNER_SYSTEM_PROMPT_ES,
     CommandBarPlannerService,
@@ -135,38 +134,7 @@ def test_e02_planner_service_sanitizes_context_before_provider_call():
     assert "selected_entity_ids" in sent
 
 
-def test_e02_ai_job_service_uses_planner_before_final_generation():
-    provider = PlannerAwareProvider()
-    service = AIJobService(provider=provider, timeout_seconds=300)
-    job = service.create_job(
-        AIJobType.UNKNOWN,
-        "Haz que esta faccion tenga una razon historica para odiar a este linaje, pero no contradigas la cronologia.",
-        context_scope={"selected_entity_ids": ["faccion", "linaje"]},
-    ).value
-
-    result = service.execute_job(job.id)
-
-    assert isinstance(result, Ok)
-    ready = result.value
-    assert ready.status is AIJobStatus.READY_FOR_REVIEW
-    assert ready.type is AIJobType.PROPOSE_MILESTONES
-    assert ready.intent["planner_source"] == "ai"
-    assert ready.intent["retrieval_needs"] == ["selection", "relations", "chronology", "milestones"]
-    assert len(provider.calls) == 2
-    assert provider.calls[0][0] == COMMAND_BAR_PLANNER_SYSTEM_PROMPT_ES
-    assert ready.result["candidates"][0]["proposed_data"]["kind"] == "causal_milestone"
-    assert ready.result["candidates"][1]["candidate_type"] == "relacion"
-
-
-def test_e02_ai_job_service_fails_if_active_planner_cannot_plan():
-    provider = PlannerAwareProvider(planner_text="Esto no es JSON")
-    service = AIJobService(provider=provider)
-    job = service.create_job(AIJobType.UNKNOWN, "Crea una hoja").value
-
-    result = service.execute_job(job.id)
-
-    assert isinstance(result, Error)
-    failed = service.get_job(job.id).value
-    assert failed.status is AIJobStatus.FAILED
-    assert "No se pudo interpretar" in failed.error
-    assert len(provider.calls) == 1
+# NOTE: the AIJobService↔planner integration tests were removed with the
+# deterministic command matrix: the command bar no longer interprets intent via
+# the planner (every job is explicit-intent). CommandBarPlannerService itself is
+# still covered above; the module is retained pending full removal.

@@ -111,6 +111,11 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "explain_from_causes": ModelParams(temperature=0.4, max_tokens=2200),
     "freeform_planning":   ModelParams(temperature=0.7, max_tokens=2000),
     "propose_milestones":  ModelParams(temperature=0.7, max_tokens=2200),
+    # Deterministic command matrix (Acción × Ámbito) — new focused job types.
+    "create_ring_template": ModelParams(temperature=0.8, max_tokens=2600),
+    "edit_relation":       ModelParams(temperature=0.5, max_tokens=1800),
+    "edit_ring":           ModelParams(temperature=0.5, max_tokens=2000),
+    "edit_milestone":      ModelParams(temperature=0.5, max_tokens=1800),
     # Text-only intents (BETA1-AI02 Fase 2): free text, no JSON staging.
     "improve_text":        ModelParams(temperature=0.6, max_tokens=1500),
     "generate_text":       ModelParams(temperature=0.7, max_tokens=1800),

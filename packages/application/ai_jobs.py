@@ -27,7 +27,6 @@ import uuid
 from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
-from packages.application.command_bar_planner import CommandBarPlan, CommandBarPlannerService
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 
 
@@ -65,6 +64,11 @@ class AIJobType(str, Enum):
     FREEFORM_PLANNING = "freeform_planning"
     EDIT_ENTITIES = "edit_entities"
     PROPOSE_MILESTONES = "propose_milestones"
+    # Deterministic command matrix (Acción × Ámbito) — new focused job types.
+    CREATE_RING_TEMPLATE = "create_ring_template"
+    EDIT_RELATION = "edit_relation"
+    EDIT_RING = "edit_ring"
+    EDIT_MILESTONE = "edit_milestone"
     # BETA1-AI02: text-only intents. Free text, no JSON staging — the suggestion
     # stays inline (e.g. the entity detail panel) until the user saves.
     IMPROVE_TEXT = "improve_text"
@@ -131,6 +135,101 @@ ACTION_TO_JOB_TYPE: dict[str, AIJobType] = {
 def job_type_for_action(action_type: str) -> AIJobType:
     """Resolve a context-menu/panel action_type to its focused AIJobType."""
     return ACTION_TO_JOB_TYPE.get(action_type, AIJobType.UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic command matrix (Acción × Ámbito)
+#
+# Replaces the fragile keyword classifier on the command bar: the user picks an
+# action and a scope from two selectors and we resolve the AIJobType verbatim.
+# Every command-bar job is now explicit-intent, exactly like a focused job.
+# ---------------------------------------------------------------------------
+class CommandAction(str, Enum):
+    CREAR = "crear"
+    EDITAR = "editar"
+    ANALIZAR = "analizar"
+    EXPLICAR = "explicar"
+    EXPANDIR = "expandir"
+
+
+class CommandScope(str, Enum):
+    HOJA = "hoja"
+    RAMA = "rama"
+    RELACION = "relacion"
+    ANILLO = "anillo"
+    HITO = "hito"
+
+
+# UI labels (Spanish), kept beside the enums so the host and tests share them.
+ACTION_LABELS: dict[CommandAction, str] = {
+    CommandAction.CREAR: "Crear",
+    CommandAction.EDITAR: "Editar",
+    CommandAction.ANALIZAR: "Analizar",
+    CommandAction.EXPLICAR: "Explicar",
+    CommandAction.EXPANDIR: "Expandir (WB)",
+}
+
+SCOPE_LABELS: dict[CommandScope, str] = {
+    CommandScope.HOJA: "Hoja",
+    CommandScope.RAMA: "Rama",
+    CommandScope.RELACION: "Relación",
+    CommandScope.ANILLO: "Anillo/Estrato",
+    CommandScope.HITO: "Hito",
+}
+
+_ALL_SCOPES: tuple[CommandScope, ...] = tuple(CommandScope)
+
+# Per-scope mappings for the generative/edit actions; the analytical trio
+# (ANALIZAR/EXPLICAR/EXPANDIR) collapses to one job type for every scope.
+COMMAND_MATRIX: dict[tuple[CommandAction, CommandScope], AIJobType] = {
+    (CommandAction.CREAR, CommandScope.HOJA): AIJobType.GENERATE_ENTITIES,
+    (CommandAction.CREAR, CommandScope.RAMA): AIJobType.GENERATE_TREE,
+    (CommandAction.CREAR, CommandScope.RELACION): AIJobType.SUGGEST_RELATIONS,
+    (CommandAction.CREAR, CommandScope.ANILLO): AIJobType.CREATE_RING_TEMPLATE,
+    (CommandAction.CREAR, CommandScope.HITO): AIJobType.PROPOSE_MILESTONES,
+    (CommandAction.EDITAR, CommandScope.HOJA): AIJobType.EDIT_ENTITIES,
+    (CommandAction.EDITAR, CommandScope.RAMA): AIJobType.EDIT_ENTITIES,
+    (CommandAction.EDITAR, CommandScope.RELACION): AIJobType.EDIT_RELATION,
+    (CommandAction.EDITAR, CommandScope.ANILLO): AIJobType.EDIT_RING,
+    (CommandAction.EDITAR, CommandScope.HITO): AIJobType.EDIT_MILESTONE,
+}
+# Analytical trio: same job type regardless of scope.
+for _scope in _ALL_SCOPES:
+    COMMAND_MATRIX[(CommandAction.ANALIZAR, _scope)] = AIJobType.ANALYZE_COHERENCE
+    COMMAND_MATRIX[(CommandAction.EXPLICAR, _scope)] = AIJobType.EXPLAIN_FROM_CAUSES
+    COMMAND_MATRIX[(CommandAction.EXPANDIR, _scope)] = AIJobType.EXPAND_WORLDBUILDING
+del _scope
+
+
+def _coerce_action(action: "CommandAction | str") -> CommandAction:
+    return action if isinstance(action, CommandAction) else CommandAction(str(action))
+
+
+def _coerce_scope(scope: "CommandScope | str") -> CommandScope:
+    return scope if isinstance(scope, CommandScope) else CommandScope(str(scope))
+
+
+def valid_scopes_for_action(action: "CommandAction | str") -> list[CommandScope]:
+    """Scopes the second selector should offer for a given action.
+
+    All five scopes are valid for every action today; kept as a function so the
+    UI filters through one source of truth if combinations are restricted later.
+    """
+    act = _coerce_action(action)
+    return [scope for scope in _ALL_SCOPES if (act, scope) in COMMAND_MATRIX]
+
+
+def job_type_for_command(action: "CommandAction | str", scope: "CommandScope | str") -> AIJobType:
+    """Resolve the two command-bar selectors to a deterministic AIJobType.
+
+    Raises ValueError for an unmapped (action, scope) pair so the UI never
+    silently runs the wrong job.
+    """
+    key = (_coerce_action(action), _coerce_scope(scope))
+    try:
+        return COMMAND_MATRIX[key]
+    except KeyError as exc:
+        raise ValueError(f"Combinación acción/ámbito no soportada: {key[0].value}/{key[1].value}") from exc
 
 
 # BETA1-AI02: per-job generation params now live in the gateway's INTENT_PARAMS
@@ -285,7 +384,10 @@ def _scope_from_context(text: str, context: dict[str, Any]) -> str:
 
 
 def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> CommandBarIntent:
-    """Classify command-bar intent without generating final content."""
+    """DEPRECATED keyword classifier. The command bar now resolves intent from
+    two deterministic selectors (see COMMAND_MATRIX / job_type_for_command); no
+    UI surface calls this anymore. Retained only for the non-explicit create_job
+    fallback and legacy tests, pending removal."""
     context = dict(context or {})
     text = _norm(prompt)
     worldbuilding = bool(context.get("worldbuilding_active", False))
@@ -339,7 +441,8 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
 
 
 def classify_ai_job_intent(prompt: str, *, worldbuilding_active: bool = False) -> AIJobType:
-    """Backward-compatible wrapper returning only the job type."""
+    """DEPRECATED wrapper around classify_intent. No production caller remains;
+    the command bar/toolbar/menu all pass an explicit AIJobType now."""
     return classify_intent(prompt, {"worldbuilding_active": worldbuilding_active}).intent_type
 
 
@@ -354,8 +457,16 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["informe", "propuestas", "preguntas abiertas"]
     if intent_type == AIJobType.EXPAND_WORLDBUILDING:
         return ["candidatos de anillo/rama", "relaciones causales candidatas"]
+    if intent_type == AIJobType.CREATE_RING_TEMPLATE:
+        return ["plantilla de anillo (estructura causal de dominios)", "relaciones causales candidatas"]
     if intent_type == AIJobType.EDIT_ENTITIES:
         return ["candidatos de edición de cuerpo/campos de hojas o ramas existentes"]
+    if intent_type == AIJobType.EDIT_RELATION:
+        return ["candidatos de edición de relación existente"]
+    if intent_type == AIJobType.EDIT_RING:
+        return ["candidatos de edición de anillo (descripción y orden)"]
+    if intent_type == AIJobType.EDIT_MILESTONE:
+        return ["candidatos de edición de hito existente"]
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return ["candidatos de hito causal", "relaciones causales candidatas"]
     if intent_type in _TEXT_INTENTS:
@@ -374,38 +485,21 @@ def _expected_output_for_intent(intent_type: AIJobType) -> str:
         return "analysis_report"
     if intent_type == AIJobType.EXPAND_WORLDBUILDING:
         return "worldbuilding_candidates"
+    if intent_type == AIJobType.CREATE_RING_TEMPLATE:
+        return "worldbuilding_candidates"
     if intent_type == AIJobType.EXPLAIN_FROM_CAUSES:
         return "explanation_report"
     if intent_type == AIJobType.REVIEW_GRAPH:
         return "analysis_report"
     if intent_type == AIJobType.FREEFORM_PLANNING:
         return "plan_report"
-    if intent_type == AIJobType.EDIT_ENTITIES:
+    if intent_type in (AIJobType.EDIT_ENTITIES, AIJobType.EDIT_RELATION, AIJobType.EDIT_RING, AIJobType.EDIT_MILESTONE):
         return "edit_candidates"
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return "milestone_candidates"
     if intent_type in _TEXT_INTENTS:
         return "text"
     return "clarification_or_plan"
-
-
-def _intent_from_command_bar_plan(plan: CommandBarPlan) -> CommandBarIntent:
-    try:
-        intent_type = AIJobType(plan.intent_type)
-    except ValueError:
-        intent_type = AIJobType.UNKNOWN
-    return CommandBarIntent(
-        intent_type=intent_type,
-        confidence=plan.confidence,
-        target_scope=plan.target_scope,
-        expected_output_type=plan.expected_output_type or _expected_output_for_intent(intent_type),
-        needs_confirmation=plan.needs_confirmation,
-        rationale=plan.rationale,
-        actions=[action.to_dict() for action in plan.actions],
-        retrieval_needs=list(plan.retrieval_needs),
-        clarifying_question=plan.clarifying_question,
-        planner_source="ai",
-    )
 
 
 def build_job_plan(intent: CommandBarIntent, prompt: str, context: dict[str, Any] | None = None, *, job_id: str = "") -> AIJobPlan:
@@ -702,7 +796,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     allowed_ids = selected | relevant_ids
 
     report = str(payload.get("report") or payload.get("summary") or "Resultado IA listo para revisión.")
-    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES}
+    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES, AIJobType.EDIT_RELATION, AIJobType.EDIT_RING, AIJobType.EDIT_MILESTONE}
     # BUG 1 fix: only add sugerencia_ia candidate for truly analytical jobs.
     # For generative jobs (entities/trees/relations), the structural candidates
     # are the real output; a synthetic "proposal" card is noise.
@@ -920,7 +1014,6 @@ class AIJobService:
         allow_simulated: bool = False,
         observability_log: AIObservabilityLog | None = None,
         timeout_seconds: int = DEFAULT_AI_TIMEOUT_SECONDS,
-        use_ai_planner: bool | None = None,
         rag_service: Any | None = None,
         project_provider: Callable[[], Any] | None = None,
         prompt_trace_store: Any | None = None,
@@ -934,14 +1027,15 @@ class AIJobService:
         self.allow_simulated = allow_simulated
         self.observability_log = observability_log or AIObservabilityLog()
         self.timeout_seconds = max(1, int(timeout_seconds or DEFAULT_AI_TIMEOUT_SECONDS))
-        self.use_ai_planner = (
-            bool(use_ai_planner)
-            if use_ai_planner is not None
-            else bool(getattr(self._provider, "supports_command_bar_planner", False))
-        )
         self._rag_service = rag_service
         self._project_provider = project_provider
         self._prompt_trace_store = prompt_trace_store
+
+    @property
+    def provider(self) -> AIProvider:
+        """The backing AI provider (read-only). Lets callers that share this
+        service reuse the exact same provider instance for their checks."""
+        return self._provider
 
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, explicit: bool = False) -> Result:
         prompt = (prompt or "").strip()
@@ -1072,19 +1166,10 @@ class AIJobService:
             )
             return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
 
-        if self.use_ai_planner:
-            planned = CommandBarPlannerService(self._provider).plan(
-                job.prompt,
-                job.context_scope,
-                timeout_seconds=self.timeout_seconds,
-            )
-            if isinstance(planned, Error):
-                return Error(f"No se pudo interpretar la peticion con IA: {_sanitize_error(planned.error)}")
-            intent = _intent_from_command_bar_plan(planned.value)
-            context = dict(job.context_scope)
-            context["command_bar_plan"] = planned.value.to_dict()
-            return Ok((intent, build_job_plan(intent, job.prompt, context, job_id=job.id)))
-
+        # DEPRECATED fallback: every UI surface now creates explicit-intent jobs
+        # (deterministic command matrix / focused actions). This heuristic path is
+        # only reachable from non-explicit create_job calls in legacy tests and is
+        # scheduled for removal once those tests migrate to the matrix.
         intent = classify_intent(job.prompt, job.context_scope)
         return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
 
