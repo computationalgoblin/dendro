@@ -1180,6 +1180,15 @@ class AIJobService:
         service reuse the exact same provider instance for their checks."""
         return self._provider
 
+    def set_provider(self, provider: AIProvider) -> None:
+        """Swap the backing provider (and its gateway) at runtime — e.g. after the
+        user configures a real provider in Settings, so existing jobs/services
+        that share this instance stop using the simulated fallback."""
+        if provider is None:
+            return
+        self._provider = provider
+        self._gateway = AIRequestGateway(provider=provider)
+
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, explicit: bool = False) -> Result:
         prompt = (prompt or "").strip()
         if not prompt:
