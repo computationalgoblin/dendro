@@ -34,6 +34,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _opt_float(value: Any) -> float | None:
+    """Coerce a context value to float, or None when absent/invalid."""
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _opt_int(value: Any) -> int | None:
+    """Coerce a context value to int, or None when absent/invalid."""
+    return int(value) if isinstance(value, (int, float)) else None
+
+
 from packages.application.prompt_registry import get_prompt
 
 # Legacy constant — now sourced from Prompt Registry (B43-T01)
@@ -1117,6 +1127,11 @@ def build_model_user_message(plan: AIJobPlan) -> str:
     directives = _fase2_directives(plan.context)
     if directives:
         message["directivas"] = directives
+    # F3.2: causal-deductive ordering of the context (Anillos→Ramas→Hojas),
+    # seeded by the host via order_context_by_causality.
+    causal = plan.context.get("contexto_causal") if isinstance(plan.context, dict) else None
+    if isinstance(causal, dict) and causal:
+        message["contexto_causal"] = causal
     if _wants_chronology_formats(plan):
         message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
     return json.dumps(message, ensure_ascii=False, indent=2)
@@ -1516,6 +1531,9 @@ class AIJobService:
         )
         started = time.monotonic()
         is_text = _is_text_intent(plan.intent.intent_type)
+        # F3: UI radial tuners may override the intent's recommended params.
+        temp_override = _opt_float(job.context_scope.get("model_temperature"))
+        tokens_override = _opt_int(job.context_scope.get("model_max_tokens"))
         try:
             gw = self._gateway.execute(GatewayRequest(
                 intent=plan.intent.intent_type.value,
@@ -1524,6 +1542,8 @@ class AIJobService:
                 timeout=self.timeout_seconds,
                 json_mode=not is_text,
                 validate=False,
+                temperature=temp_override,
+                max_tokens=tokens_override,
             ))
             text, error = gw.text, gw.error
         except Exception as exc:

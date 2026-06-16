@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from packages.application.ai_jobs import (
+    BRANCH_TYPES,
     AIJobType,
     CommandAction,
     CommandScope,
@@ -342,3 +343,87 @@ def plan_command_jobs(
     return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
         **common, "selected_entity_ids": entities, "selected_relation_ids": relations,
     })], warnings=warnings)
+
+
+# ---------------------------------------------------------------------------
+# Causal-deductive context ordering (Anillos → Ramas → Hojas)
+# ---------------------------------------------------------------------------
+
+CAUSAL_ORDER_INSTRUCTION = (
+    "Prioriza el contexto por causalidad de forma deductiva: primero los anillos "
+    "y sus hitos (estratos causales superiores), luego las ramas y las relaciones/"
+    "hitos entre ellas, y por último las hojas y las relaciones entre hojas."
+)
+
+
+def _is_branch(entity: dict) -> bool:
+    if str(entity.get("display_type") or "").lower() == "rama":
+        return True
+    return str(entity.get("entity_type") or "").lower() in BRANCH_TYPES
+
+
+def order_context_by_causality(
+    *,
+    entities: Iterable[dict] | None = None,
+    relations: Iterable[dict] | None = None,
+    rings: Iterable[dict] | None = None,
+    milestones: Iterable[dict] | None = None,
+) -> dict:
+    """Group/sort the authorized context by causal hierarchy.
+
+    The model should read the result top-down (most causally-upstream first):
+    anillos (sorted by ``order``, each with its hitos) → ramas + relations/hitos
+    between branches → hojas + relations between leaves. Pure and defensive: each
+    input is a list of plain dicts and any may be missing.
+    """
+    ents = [e for e in (entities or []) if isinstance(e, dict)]
+    rels = [r for r in (relations or []) if isinstance(r, dict)]
+    ring_list = [r for r in (rings or []) if isinstance(r, dict)]
+    miles = [m for m in (milestones or []) if isinstance(m, dict)]
+
+    branches = [e for e in ents if _is_branch(e)]
+    leaves = [e for e in ents if not _is_branch(e)]
+    branch_ids = {str(e.get("id")) for e in branches}
+    leaf_ids = {str(e.get("id")) for e in leaves}
+
+    def _endpoints(rel: dict) -> tuple[str, str]:
+        return str(rel.get("source_id") or ""), str(rel.get("target_id") or "")
+
+    rel_between_branches = [r for r in rels if all(x in branch_ids for x in _endpoints(r))]
+    rel_between_leaves = [r for r in rels if all(x in leaf_ids for x in _endpoints(r))]
+    handled = {id(r) for r in rel_between_branches} | {id(r) for r in rel_between_leaves}
+    rel_mixed = [r for r in rels if id(r) not in handled]
+
+    def _ring_order(ring: dict) -> int:
+        try:
+            return int(ring.get("order", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _milestones_for_ring(ring_id: str) -> list[dict]:
+        if not ring_id:
+            return []
+        return [m for m in miles if ring_id in {str(x) for x in (m.get("layer_ids") or [])}]
+
+    anillos = []
+    for ring in sorted(ring_list, key=_ring_order):
+        ring_id = str(ring.get("id") or "")
+        anillos.append({**ring, "hitos": _milestones_for_ring(ring_id)})
+
+    ring_ids = {str(r.get("id") or "") for r in ring_list}
+    unbound_milestones = [
+        m for m in miles
+        if not ({str(x) for x in (m.get("layer_ids") or [])} & ring_ids)
+    ]
+
+    return {
+        "orden": ["anillos", "ramas", "hojas"],
+        "instruccion": CAUSAL_ORDER_INSTRUCTION,
+        "anillos": anillos,
+        "ramas": branches,
+        "relaciones_entre_ramas": rel_between_branches,
+        "hojas": leaves,
+        "relaciones_entre_hojas": rel_between_leaves,
+        "relaciones_mixtas": rel_mixed,
+        "hitos_sin_anillo": unbound_milestones,
+    }

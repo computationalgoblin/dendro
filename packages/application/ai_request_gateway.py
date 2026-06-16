@@ -142,6 +142,10 @@ class GatewayRequest:
     # pipeline tolerates Spanish container keys like `hojas`/`ramas` that the
     # English EXPECTED_SCHEMAS would reject) can skip schema validation here.
     validate: bool = True
+    # F3: optional UI overrides (radial tuners). When set, they take precedence
+    # over the intent's recommended ModelParams.
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 @dataclass
@@ -199,8 +203,12 @@ class AIRequestGateway:
         # 1. Sanitize context
         safe_ctx = self.sanitize_context(request.context)
 
-        # 2. Select model params
-        params = ModelParams.from_intent(request.intent)
+        # 2. Select model params (intent recommendation, optionally overridden
+        #    by the UI tuners on the request).
+        base = ModelParams.from_intent(request.intent)
+        temperature = base.temperature if request.temperature is None else float(request.temperature)
+        max_tokens = base.max_tokens if request.max_tokens is None else int(request.max_tokens)
+        params = ModelParams(temperature=max(0.0, min(2.0, temperature)), max_tokens=max(1, max_tokens))
 
         # 3. Build system prompt
         system = request.system_prompt_override or ""
