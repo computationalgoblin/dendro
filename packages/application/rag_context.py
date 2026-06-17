@@ -134,6 +134,10 @@ class RAGContextBuilder:
         options = IndexingOptions(
             include_pending_candidates=plan.include_pending_candidates,
             include_rejected_candidates=plan.include_rejected_candidates,
+            # Accepted candidates are excluded from RAG context: the canon they
+            # created is indexed on its own, so a deleted entity/ring cannot
+            # resurface through its leftover accepted-candidate record.
+            include_accepted_candidates=False,
             include_unaccepted_imports=plan.include_unaccepted_imports,
             audience=plan.audience,
         )

@@ -47,6 +47,21 @@ def _coherence_plan():
     )
 
 
+def test_e04_excludes_accepted_candidates_from_context():
+    # An accepted candidate duplicates the canon it created; if that canon is
+    # later deleted, the candidate must not resurface in RAG (it was making the
+    # model regenerate previously-deleted rings).
+    from packages.domain.candidate_issue import Candidate, CandidateState
+    project = _make_project()
+    project.candidates.append(Candidate(
+        title="Anillo propuesto: El Eón Infinito",
+        state=CandidateState.ACEPTADO,
+        proposed_data={"kind": "ring_template", "ring_name": "El Eón Infinito"},
+    ))
+    pack = RAGContextBuilder(RAGService()).build_for_job_plan(project, _coherence_plan()).value
+    assert all(item.kind.value != "candidate" for item in pack.items)
+
+
 def test_e04_context_pack_prioritizes_selection_and_related_context():
     project = _make_project()
     pack = RAGContextBuilder(RAGService()).build_for_job_plan(project, _coherence_plan()).value

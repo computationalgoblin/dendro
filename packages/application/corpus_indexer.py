@@ -66,6 +66,10 @@ REJECTED_CANDIDATE_STATES: frozenset[str] = frozenset({
 class IndexingOptions:
     include_pending_candidates: bool = False
     include_rejected_candidates: bool = False
+    # Accepted candidates duplicate the canon they created (entity/world_layer/…),
+    # which is indexed on its own. RAG context sets this False so deleted canon
+    # cannot resurface through its lingering accepted-candidate record.
+    include_accepted_candidates: bool = True
     include_unaccepted_imports: bool = False
     audience: str = "gm"
 
@@ -801,7 +805,7 @@ def _visibility_allowed(value: Any, audience: str) -> bool:
 def _candidate_included(candidate: Any, options: IndexingOptions) -> bool:
     state = _enum_value(getattr(candidate, "state", ""))
     if state in ACCEPTED_CANDIDATE_STATES:
-        return True
+        return options.include_accepted_candidates
     if state in PENDING_CANDIDATE_STATES:
         return options.include_pending_candidates
     if state in REJECTED_CANDIDATE_STATES:
