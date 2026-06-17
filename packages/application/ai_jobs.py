@@ -904,7 +904,10 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     # BUG 2 fix: for relations from the model that have names but lack real IDs,
     # create relacion candidates with source_name/target_name. On accept, the
     # service resolves names to entity IDs.
-    for rel in _safe_list(payload.get("relations")):
+    # Ring templates have no relation entities: the causal structure lives in each
+    # ring's order/derived_from, and the graph has no ring↔ring relations.
+    relations_payload = [] if job.type == AIJobType.CREATE_RING_TEMPLATE else _safe_list(payload.get("relations"))
+    for rel in relations_payload:
         if not isinstance(rel, dict):
             continue
         source_id = str(rel.get("source_id") or "")

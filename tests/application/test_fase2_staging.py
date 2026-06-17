@@ -64,6 +64,18 @@ def test_ring_template_stages_ring_candidates():
     assert rings[0]["proposed_data"].get("kind") == "ring_template"
 
 
+def test_ring_template_does_not_stage_ring_to_ring_relations():
+    # The model may volunteer causal relations between rings; the graph has no
+    # ring↔ring relation, so none should be staged.
+    result = _run(
+        AIJobType.CREATE_RING_TEMPLATE,
+        '{"rings": [{"name": "Materia", "order": 1}, {"name": "Vida", "order": 2}],'
+        ' "relations": [{"source_name": "Materia", "target_name": "Vida", "relation_type": "deriva"}]}',
+    )
+    assert _candidates_of_kind(result, kind="ring_template")  # rings still staged
+    assert all(c["candidate_type"] != "relacion" for c in result["candidates"])
+
+
 def test_edit_relation_stages_reviewable_edit():
     result = _run(
         AIJobType.EDIT_RELATION,

@@ -192,8 +192,8 @@ def _entry_html(entry: AIPromptDebugEntry) -> str:
   </div>
   <details open><summary>Razonamiento visible de depuracion</summary>{reasoning}</details>
   <details open><summary>ContextPack RAG</summary><pre>{escape(_pretty(entry.context_pack))}</pre></details>
-  <details><summary>Payload enviado al modelo</summary><pre>{escape(_pretty_text(entry.model_user_message))}</pre></details>
-  <details><summary>Prompt de sistema</summary><pre>{escape(entry.system_prompt)}</pre></details>
+  <details open><summary>Payload enviado al modelo</summary><pre>{escape(_pretty_text(entry.model_user_message))}</pre></details>
+  <details open><summary>Prompt de sistema</summary><pre>{escape(entry.system_prompt)}</pre></details>
   <details {'open' if response else ''}><summary>Respuesta / error</summary><pre>{escape(response)}</pre></details>
 </section>"""
 
