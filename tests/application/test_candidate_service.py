@@ -55,6 +55,30 @@ class TestCandidateService:
         assert not isinstance(result, Error)
         assert len(ps.active_project.relations) == 1
 
+    def test_accept_ring_template_creates_world_layer(self):
+        ps, svc, _, _ = _setup()
+        before = len(ps.active_project.world_layers)
+        c = svc.create_candidate({
+            "title": "Anillo propuesto: Materia",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "kind": "ring_template",
+                "ring_name": "Materia",
+                "description": "Sustrato físico",
+                "order": 1,
+                "domain": "Materia",
+                "derived_from": "",
+            },
+        }).value
+        result = svc.accept_candidate(c.id)
+        assert not isinstance(result, Error)
+        assert len(ps.active_project.world_layers) == before + 1
+        new_layer = ps.active_project.world_layers[-1]
+        assert new_layer.name == "Materia"
+        assert new_layer.order == 1
+        assert new_layer.is_default is False
+        assert new_layer.metadata.get("origin") == "ai_ring_template"
+
     def test_reject_no_mutation(self):
         ps, svc, es, _ = _setup()
         c = svc.create_candidate({"title": "Bad", "candidate_type": "entidad", "proposed_data": {"name": "Bad"}}).value

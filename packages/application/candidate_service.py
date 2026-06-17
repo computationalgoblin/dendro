@@ -9,6 +9,7 @@ from typing import Any
 
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
 from packages.domain.causal_milestone import CausalMilestone
+from packages.domain.world_layer import WorldLayer
 from packages.domain.result import Error, Ok, Result
 from packages.application.project_chronology_service import ProjectChronologyService
 
@@ -203,6 +204,26 @@ class CandidateService:
                 chronology.link_milestone(hito.id)
             if hasattr(proj.value, "touch"):
                 proj.value.touch()
+        elif c.proposed_data.get("kind") == "ring_template":
+            import uuid as _uuid
+            data = c.proposed_data
+            layer = WorldLayer(
+                id=f"layer_{_uuid.uuid4().hex[:10]}",
+                name=str(data.get("ring_name") or data.get("name") or "Anillo"),
+                description=str(data.get("description") or ""),
+                order=int(data.get("order", 0) or 0),
+                is_visible=True,
+                is_default=False,
+                metadata={
+                    "origin": "ai_ring_template",
+                    "domain": str(data.get("domain") or ""),
+                    "derived_from": str(data.get("derived_from") or ""),
+                },
+            )
+            proj.value.world_layers.append(layer)
+            if hasattr(proj.value, "touch"):
+                proj.value.touch()
+            entity_id = layer.id
         elif c.proposed_data.get("kind") == "project_chronology_suggestion":
             result = ProjectChronologyService(self.project_service).apply_candidate(c.proposed_data)
             if isinstance(result, Error):
