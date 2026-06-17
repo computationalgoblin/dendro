@@ -166,7 +166,8 @@ def test_b38_prompt_exact_is_sent_to_provider_and_results_are_prompt_sensitive()
 
     assert isinstance(result_a, Ok)
     assert isinstance(result_b, Ok)
-    assert provider.calls[0][0] == COMMAND_BAR_SYSTEM_PROMPT_ES
+    # Per-function system prompt: GENERATE_ENTITIES gets the "crear hojas" prompt.
+    assert "CREAR HOJAS" in provider.calls[0][0]
     sent_a = json.loads(provider.calls[0][1])
     sent_b = json.loads(provider.calls[1][1])
     assert sent_a["prompt_exacto_usuario"] == job_a.prompt

@@ -45,6 +45,7 @@ def _opt_int(value: Any) -> int | None:
 
 
 from packages.application.prompt_registry import get_prompt
+from packages.application.command_prompts import system_prompt_for_intent
 
 # Legacy constant — now sourced from Prompt Registry (B43-T01)
 COMMAND_BAR_SYSTEM_PROMPT_ES = get_prompt("command_bar", lang="es") or ""
@@ -1368,6 +1369,7 @@ class AIJobService:
         plan: AIJobPlan,
         provider_name: str,
         model_user_message: str,
+        system_prompt: str,
     ) -> None:
         if self._prompt_trace_store is None:
             return
@@ -1376,7 +1378,7 @@ class AIJobService:
                 job_id=job.id,
                 provider=provider_name,
                 prompt=job.prompt,
-                system_prompt=COMMAND_BAR_SYSTEM_PROMPT_ES,
+                system_prompt=system_prompt,
                 model_user_message=model_user_message,
                 plan=plan.to_dict(),
             )
@@ -1433,17 +1435,19 @@ class AIJobService:
         if progress_callback:
             progress_callback(job)
         model_user_message = build_model_user_message(plan)
+        system_prompt = system_prompt_for_intent(plan.intent.intent_type.value)
         self._trace_prompt_request(
             job=job,
             plan=plan,
             provider_name=provider_name,
             model_user_message=model_user_message,
+            system_prompt=system_prompt,
         )
         try:
             gw = self._gateway.execute(GatewayRequest(
                 intent=plan.intent.intent_type.value,
                 user_prompt=model_user_message,
-                system_prompt_override=COMMAND_BAR_SYSTEM_PROMPT_ES,
+                system_prompt_override=system_prompt,
                 json_mode=True,
                 validate=False,
             ))
@@ -1535,11 +1539,14 @@ class AIJobService:
             return cancelled
 
         model_user_message = build_model_user_message(plan)
+        # Per-function system prompt: each intent asks only for its own output.
+        system_prompt = system_prompt_for_intent(plan.intent.intent_type.value)
         self._trace_prompt_request(
             job=job,
             plan=plan,
             provider_name=provider_name,
             model_user_message=model_user_message,
+            system_prompt=system_prompt,
         )
         started = time.monotonic()
         is_text = _is_text_intent(plan.intent.intent_type)
@@ -1550,7 +1557,7 @@ class AIJobService:
             gw = self._gateway.execute(GatewayRequest(
                 intent=plan.intent.intent_type.value,
                 user_prompt=model_user_message,
-                system_prompt_override=COMMAND_BAR_SYSTEM_PROMPT_ES,
+                system_prompt_override=system_prompt,
                 timeout=self.timeout_seconds,
                 json_mode=not is_text,
                 validate=False,
