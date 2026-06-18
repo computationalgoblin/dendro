@@ -87,6 +87,9 @@ from packages.application.context_budget import (
     TIER_OUTPUT_TOKENS,
 )
 from hosts.DesktopHostPySide.widgets.radial_tuner import RadialTuner
+from hosts.DesktopHostPySide.widgets.seed_notifications import SeedNotificationLayer
+from hosts.DesktopHostPySide.widgets.seed_audio import ZenBell
+from hosts.DesktopHostPySide.widgets.candidate_review_panel import CandidateReviewPanel
 from packages.application.ai_prompt_debug import AIPromptDebugTraceStore
 from packages.application.rag_service import RAGService
 
@@ -1760,6 +1763,11 @@ class CreationWorkspace(QWidget):
             prompt_trace_store=self.prompt_trace_store,
         )
         self._ai_workers = {}
+        # Semillas (Fase A): notificaciones palpitantes abajo-derecha + campana zen.
+        self._zen_bell = ZenBell()
+        self._seed_notifications = SeedNotificationLayer(self)
+        self._seed_notifications.set_bottom_offset(72)  # libra la command bar inferior
+        self._seed_notifications.reviewRequested.connect(self._open_candidate_review)
         self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
@@ -2919,7 +2927,36 @@ class CreationWorkspace(QWidget):
         pulse_feedback(self._job_status_label)
         self._sync_jobs_indicator()
         self._refresh_ai_jobs_panel_if_open()
-        self._open_ai_job_result(job)
+        # PA-Semillas: auto-stage de candidatos + notificación palpitante por cada
+        # uno + arpegio zen. Sin panel intermedio "Resultado IA".
+        self._auto_stage_and_notify(job)
+
+    def _auto_stage_and_notify(self, job):
+        """Crea los candidatos del job y brota una notificación por cada uno."""
+        controller = getattr(self.candidate_view, "cc", None)
+        result = getattr(job, "result", {}) or {}
+        candidates = result.get("candidates") or []
+        if controller is None or not candidates:
+            # Jobs sin candidatos estructurales (reportes de coherencia/review):
+            # no germinan; se informa por el log.
+            self.ctx.log("info", job.message or "Resultado IA listo (sin candidatos)")
+            return
+        created = 0
+        for data in candidates:
+            res = controller.create(dict(data))
+            if isinstance(res, Error):
+                self.ctx.log("error", res.error)
+                continue
+            candidate = getattr(res, "value", None)
+            cid = str(getattr(candidate, "id", "") or "")
+            if not cid:
+                continue
+            label = str(getattr(candidate, "title", "") or "Candidato")
+            self._seed_notifications.add(cid, label)
+            created += 1
+        if created:
+            self._zen_bell.play_arpeggio(created)
+            self._on_suggestion_changed()
 
     def _on_ai_job_failed(self, job_id: str, error: str):
         self._job_status_label.setText(f"Error: {error}")
@@ -2928,6 +2965,8 @@ class CreationWorkspace(QWidget):
         self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
         self._sync_jobs_indicator()
         self._refresh_ai_jobs_panel_if_open()
+        # PA-Semillas: notificación de error (se descarta al pulsarla).
+        self._seed_notifications.add(f"error:{job_id}", f"Job fallido: {error}", kind="error")
         # Clear error styling after 8 seconds so it doesn't persist forever
         QTimer.singleShot(8000, self._reset_job_status_style)
 
@@ -2992,6 +3031,44 @@ class CreationWorkspace(QWidget):
     def _on_job_candidates_created(self):
         self._on_suggestion_changed()
         self._open_suggestion_inbox()
+
+    # ── PA-Semillas: revisión por-candidato desde la notificación ──────────
+
+    def _find_candidate(self, candidate_id: str):
+        project = self._get_active_project()
+        if project is None:
+            return None
+        for candidate in getattr(project, "candidates", []) or []:
+            if str(getattr(candidate, "id", "")) == str(candidate_id):
+                return candidate
+        return None
+
+    def _open_candidate_review(self, candidate_id: str):
+        candidate = self._find_candidate(candidate_id)
+        controller = getattr(self.candidate_view, "cc", None)
+        drawer = self.ctx.drawer
+        if candidate is None or controller is None or drawer is None:
+            self.ctx.log("warning", "No se pudo abrir la revisión de la semilla")
+            return
+        panel = CandidateReviewPanel(
+            candidate,
+            controller,
+            on_decision=self._on_candidate_decision,
+            log=self.ctx.log,
+        )
+        drawer.set_content(panel, title="Revisar semilla")
+        drawer.open()
+
+    def _on_candidate_decision(self, candidate_id: str, decision: str):
+        # Fase B añadirá aquí bloom_seed (accept) / wither_seed (reject) en el grafo.
+        self._seed_notifications.remove(candidate_id)
+        drawer = self.ctx.drawer
+        if drawer is not None:
+            try:
+                drawer.close()
+            except Exception:  # noqa: BLE001 — cerrar el drawer no es crítico
+                pass
+        self._on_suggestion_changed()
 
     def resizeEvent(self, event):
         """Position persistent layer drawer along the left edge."""
