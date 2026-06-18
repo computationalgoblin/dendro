@@ -1,10 +1,10 @@
-"""Tests for AI domain models (B15-T01)."""
-from packages.domain.ai_models import AIMode, AuthorizedContext, AIOperation, AIResponse
+"""Tests for AI domain models (B15-T01).
 
-class TestAIMode:
-    def test_8_values(self):
-        assert len(AIMode) == 11
-        assert AIMode.GENERATE_ENTITY.value == "generate_entity"
+BETA1-AI02: AIMode / AIOperation / AIResponse were removed; only the
+visibility-safe AuthorizedContext remains.
+"""
+from packages.domain.ai_models import AuthorizedContext
+
 
 class TestAuthorizedContext:
     def test_defaults(self):
@@ -25,22 +25,3 @@ class TestAuthorizedContext:
         ctx = AuthorizedContext.from_dict({})
         assert ctx.audience == "author"
         assert ctx.allowed_canon_states == []
-
-class TestAIOperation:
-    def test_roundtrip(self):
-        op = AIOperation(mode=AIMode.EXPAND_ENTITY, entity_id="e1", max_candidates=5)
-        d = op.to_dict()
-        o2 = AIOperation.from_dict(d)
-        assert o2.mode == AIMode.EXPAND_ENTITY
-        assert o2.entity_id == "e1"
-        assert o2.max_candidates == 5
-
-class TestAIResponse:
-    def test_roundtrip(self):
-        op = AIOperation()
-        resp = AIResponse(id="r1", operation=op, raw_text="hello", provider="simulated", latency_ms=12.5)
-        d = resp.to_dict()
-        r2 = AIResponse.from_dict(d)
-        assert r2.id == "r1"
-        assert r2.raw_text == "hello"
-        assert r2.latency_ms == 12.5

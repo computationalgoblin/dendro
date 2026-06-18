@@ -81,10 +81,10 @@ def test_relation_inline_ai_respects_user_prompt_and_relation_context():
 
     assert not isinstance(result, Error)
     assert result.value.raw_text == "Sugerencia basada en una deuda peligrosa."
-    system_prompt, user_prompt, _kwargs = provider.calls[0]
-    assert "mejorar o completar el contenido textual de una relación narrativa" in system_prompt
-    assert "No devuelvas JSON" in system_prompt
-    assert "No crees entidades, relaciones, árboles, secretos ni canon nuevo" in system_prompt
+    _system_prompt, user_prompt, _kwargs = provider.calls[0]
+    # BETA1-AI02: relation text suggestions now run through the unified command-bar
+    # pipeline (no specialized relation system prompt), but the user's exact prompt
+    # and the full relation context still reach the model via the user message.
     assert "Devian" in user_prompt
     assert "Akshan" in user_prompt
     assert "sirve_a" in user_prompt

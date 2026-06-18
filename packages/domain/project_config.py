@@ -121,6 +121,7 @@ class AIConfig:
         uncertainty_policy: How AI handles uncertain situations.
         default_strategy: Default narrative strategy.
         context_depth: How much context AI considers.
+        prompt_budget_tokens: Token budget for command-bar context prompts.
     """
 
     enabled: bool = False
@@ -133,6 +134,9 @@ class AIConfig:
     uncertainty_policy: str = "conservative_proposal"  # ask/conservative/invent/mark_gaps/interpretations
     default_strategy: str = "profundizar"  # profundizar/contrastar/complicar/extranar/conectar/reducir/intensificar/subvertir/coherente/ambiguo/emocional/extraño
     context_depth: str = "balanced"  # quick/balanced/deep
+    # Presupuesto de tokens de contexto para los prompts de la command bar.
+    # El usuario lo override por tarea con el tuner; este es el default del proyecto.
+    prompt_budget_tokens: int = 4000
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,23 @@ from hosts.DesktopHostPySide.widgets.technical_visibility import set_columns_vis
 from packages.domain.result import Error
 
 
+def _relation_type_value(relation) -> str:
+    return relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
+
+
+def _relation_display_label(relation) -> str:
+    meta = dict(getattr(relation, "custom_metadata", {}) or {})
+    custom = str(meta.get("custom_relation_label") or "").strip()
+    if custom:
+        return custom
+    return _relation_type_value(relation)
+
+
+def _slug_label(label: str) -> str:
+    value = "_".join((label or "").strip().lower().split())
+    return value or "esta_relacionado_con"
+
+
 class RelationCreateForm(DrawerForm):
     """Create relation form for RightDrawer."""
 
@@ -38,18 +55,36 @@ class RelationCreateForm(DrawerForm):
             self._src.addItem(e.name, e.id)
             self._tgt.addItem(e.name, e.id)
         self._type_cb = QComboBox()
-        self._type_cb.addItems([
-            "es_aliado_de", "es_enemigo_de", "ubicado_en",
-            "pertenece_a", "contiene", "causo",
-        ])
+        self._type_cb.setEditable(True)
+        self._type_cb.lineEdit().setPlaceholderText("Ej: mentor de, protege, depende de…")
+        self._type_cb.addItem("relacionado con", "esta_relacionado_con")
+        project = getattr(rc.ps, "active_project", None)
+        for custom in list(getattr(project, "custom_relation_types", []) or []) if project is not None else []:
+            if getattr(custom, "is_active", True):
+                self._type_cb.addItem(str(getattr(custom, "name", "")), f"custom:{getattr(custom, 'id', '')}")
         self.form_layout.addRow("Origen:", self._src)
         self.form_layout.addRow("Destino:", self._tgt)
         self.form_layout.addRow("Tipo:", self._type_cb)
 
     def _on_accept(self):
+        type_text = self._type_cb.currentText().strip()
+        type_data = str(self._type_cb.currentData() or "")
+        payload_meta: dict[str, str] = {}
+        payload: dict[str, object] = {"custom_metadata": payload_meta}
+        relation_type = "esta_relacionado_con"
+        if type_data.startswith("custom:"):
+            payload["custom_relation_type_id"] = type_data.split(":", 1)[1]
+            payload_meta["custom_relation_label"] = type_text
+        elif type_data and type_data != "esta_relacionado_con":
+            relation_type = type_data
+        elif type_text and _slug_label(type_text) != "esta_relacionado_con":
+            payload_meta["custom_relation_label"] = type_text
+        if not payload_meta:
+            payload.pop("custom_metadata")
         r = self._rc.create(
             self._src.currentData(), self._tgt.currentData(),
-            self._type_cb.currentText(),
+            relation_type,
+            payload,
         )
         if isinstance(r, Error):
             self.ctx.log("error", r.error)
@@ -137,9 +172,7 @@ class RelationView(QWidget):
             id_item = QTableWidgetItem(relation.id[:12])
             id_item.setData(Qt.ItemDataRole.UserRole, relation.id)
             self.table.setItem(i, 0, QTableWidgetItem(self._entity_name(relation.source_id)))
-            self.table.setItem(i, 1, QTableWidgetItem(
-                relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
-            ))
+            self.table.setItem(i, 1, QTableWidgetItem(_relation_display_label(relation)))
             self.table.setItem(i, 2, QTableWidgetItem(self._entity_name(relation.target_id)))
             self.table.setItem(i, 3, id_item)
             self.table.setItem(i, 4, QTableWidgetItem(
@@ -190,7 +223,7 @@ class RelationView(QWidget):
         lo = QVBoxLayout(w)
         lo.setContentsMargins(18, 14, 18, 14)
         lo.setSpacing(10)
-        rel_type = relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
+        rel_type = _relation_display_label(relation)
         canon = relation.canon_state.value if hasattr(relation.canon_state, "value") else str(relation.canon_state)
         lines = [
             ("Origen", self._entity_name(relation.source_id)),
@@ -224,7 +257,7 @@ class RelationView(QWidget):
             return
         relation = result.value
         self.ctx.selected_relation_id = relation.id
-        rel_type = relation.relation_type.value if hasattr(relation.relation_type, "value") else str(relation.relation_type)
+        rel_type = _relation_display_label(relation)
         self.detail.setText(
             f"{self._entity_name(relation.source_id)}\n"
             f"-- {rel_type} -->\n"

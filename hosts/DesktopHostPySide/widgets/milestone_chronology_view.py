@@ -238,7 +238,7 @@ class MilestoneChronologyView(QWidget):
         self.primary_entity_combo = QComboBox()
         self.status_combo = QComboBox()
         for raw, label in [
-            ("candidate", "Candidato"),
+            ("candidate", "Semilla"),
             ("canon", "Canon"),
             ("hypothesis", "Hipotesis"),
             ("rejected", "Rechazado"),

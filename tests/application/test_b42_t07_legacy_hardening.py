@@ -25,15 +25,13 @@ class TestLegacyMarkers:
         assert "legacy" in content.lower() or "deprecated" in content.lower(), \
             "OrchestratorService must have a legacy/deprecated marker"
 
-    def test_provider_invoke_has_legacy_marker(self):
-        """OpenAICompatibleProvider.invoke() must have a legacy note."""
-        path = WORKSPACE / "packages" / "infrastructure" / "openai_compatible_provider.py"
-        if not path.exists():
-            pytest.skip("openai_compatible_provider.py not found")
-        content = path.read_text(encoding="utf-8")
-        # The invoke method should warn about being legacy
-        assert "legacy" in content.lower() or "deprecated" in content.lower() or "do not use" in content.lower(), \
-            "OpenAICompatibleProvider.invoke must have a legacy/deprecated marker"
+    def test_provider_invoke_is_removed(self):
+        """BETA1-AI02: the legacy provider.invoke() path is gone entirely."""
+        from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider
+        from packages.infrastructure.openai_compatible_provider import OpenAICompatibleProvider
+        assert not hasattr(AIProvider, "invoke")
+        assert not hasattr(SimulatedAIProvider, "invoke")
+        assert not hasattr(OpenAICompatibleProvider, "invoke")
 
 
 class TestNoDirectInvokeInNewCode:
@@ -54,15 +52,15 @@ class TestNoDirectInvokeInNewCode:
             assert ".invoke(" not in content, \
                 f"{rel_path} should not use provider.invoke() — use provider.chat() via AIRequestGateway"
 
-    def test_ai_context_actions_uses_chat_for_text(self):
-        """ai_context_actions text methods should use .chat() not .invoke()."""
+    def test_ai_context_actions_routes_through_pipeline_not_invoke(self):
+        """BETA1-AI02: ai_context_actions must NOT call provider.invoke(). Every
+        action is a focused job through the shared command-bar pipeline
+        (run_focused_job → AIRequestGateway → provider.chat)."""
         path = WORKSPACE / "packages" / "application" / "ai_context_actions.py"
         if not path.exists():
             pytest.skip("ai_context_actions.py not found")
         content = path.read_text(encoding="utf-8")
-        # Count chat calls vs invoke calls
-        chat_count = content.count(".chat(")
-        invoke_count = content.count(".invoke(")
-        # We expect chat calls for text/coherence/repair
-        assert chat_count >= 4, \
-            f"ai_context_actions should use .chat() for text/coherence methods, found {chat_count} chat calls"
+        assert ".invoke(" not in content, \
+            "ai_context_actions should not use provider.invoke() — route through the job pipeline"
+        assert "run_focused_job(" in content, \
+            "ai_context_actions should run focused jobs through AIJobService.run_focused_job"

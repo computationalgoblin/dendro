@@ -39,8 +39,6 @@ class AppContext:
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large
     font_family: str = "Georgia"
-    fullscreen: bool = False
-    dark_mode: bool = False
     animation_intensity: str = "normal"  # low, normal, high
     language: str = "es"  # es, en
 
@@ -98,8 +96,6 @@ class AppContext:
             # Appearance preferences (B31-UX-FIX-02-T04)
             self.font_size = str(data.get("font_size", self.font_size)) or "medium"
             self.font_family = str(data.get("font_family", self.font_family)) or "Georgia"
-            self.fullscreen = bool(data.get("fullscreen", False))
-            self.dark_mode = bool(data.get("dark_mode", False))
             self.animation_intensity = str(data.get("animation_intensity", self.animation_intensity)) or "normal"
             self.language = str(data.get("language", self.language)) or "es"
             self.ai_provider = str(data.get("ai_provider", self.ai_provider)) or "simulated"
@@ -132,8 +128,6 @@ class AppContext:
                 "current_audience": self.current_audience,
                 "font_size": self.font_size,
                 "font_family": self.font_family,
-                "fullscreen": self.fullscreen,
-                "dark_mode": self.dark_mode,
                 "animation_intensity": self.animation_intensity,
                 "language": self.language,
                 "ai_provider": self.ai_provider,

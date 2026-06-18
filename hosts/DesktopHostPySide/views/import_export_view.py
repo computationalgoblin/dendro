@@ -139,7 +139,7 @@ class ImportExportView(QWidget):
         layout.setSpacing(14)
         layout.addWidget(SectionHeader(
             "Importación documental",
-            "Revisa candidatos como tarjetas. IDs, segmentos y JSON quedan en Datos técnicos."
+            "Revisa semillas como tarjetas. IDs, segmentos y JSON quedan en Datos técnicos."
         ))
 
         act = QHBoxLayout()
@@ -466,7 +466,7 @@ class ImportExportView(QWidget):
             else:
                 accepted += 1
         self.detail.setPlainText(
-            f"Candidatos aceptados: {accepted}" + (f"\nErrores: {len(errors)}" if errors else "")
+            f"Semillas aceptadas: {accepted}" + (f"\nErrores: {len(errors)}" if errors else "")
         )
         self.refresh()
 
@@ -590,7 +590,7 @@ class ImportExportView(QWidget):
                     self.detail.setPlainText(f"No se pudo analizar duplicados: {result.error}")
                     return
                 total += len(result.value if hasattr(result, "value") else result)
-        self.detail.setPlainText(f"Sugerencias de fusion detectadas: {total}")
+        self.detail.setPlainText(f"Semillas de fusión detectadas: {total}")
         self.refresh()
 
     def _export_all(self, audience):
@@ -621,7 +621,7 @@ class ImportExportView(QWidget):
             def __init__(self, ctx):
                 super().__init__(ctx, title="Exportar elemento")
                 self.kind = QComboBox()
-                self.kind.addItems(["entity", "session", "campaign"])
+                self.kind.addItems(["entity"])
                 self.audience = QComboBox()
                 self.audience.addItems(["gm", "player", "public"])
                 self.item = QComboBox()
@@ -637,12 +637,6 @@ class ImportExportView(QWidget):
                 if kind == "entity":
                     for entity in project.entities:
                         self.item.addItem(entity.name, entity.id)
-                elif kind == "session":
-                    for session in project.sessions:
-                        self.item.addItem(session.name, session.id)
-                else:
-                    for campaign in project.campaigns:
-                        self.item.addItem(campaign.name, campaign.id)
 
             def _on_accept(self):
                 kind = self.kind.currentText()
@@ -652,12 +646,7 @@ class ImportExportView(QWidget):
                     view.detail.setPlainText("No hay elemento seleccionable")
                     self._close_drawer()
                     return
-                if kind == "entity":
-                    result = view.export.export_entity_profile(item_id, audience)
-                elif kind == "session":
-                    result = view.export.export_session_player_summary(item_id)
-                else:
-                    result = view.export.export_campaign_report(item_id, audience)
+                result = view.export.export_entity_profile(item_id, audience)
                 if isinstance(result, Error):
                     view.detail.setPlainText(f"Error: {result.error}")
                 else:

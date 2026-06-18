@@ -1,4 +1,4 @@
-"""CandidateView — inbox with accept/reject and B31 technical visibility."""
+"""CandidateView — Semilla inbox; internal model remains Candidate."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -36,7 +36,7 @@ class CandidateView(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "Título", "Tipo", "Estado", "Origen"])
+        self.table.setHorizontalHeaderLabels(["ID", "Semilla", "Tipo", "Estado", "Origen"])
         self.table.itemSelectionChanged.connect(self._show_detail)
         layout.addWidget(self.table)
 
@@ -107,18 +107,18 @@ class CandidateView(QWidget):
                         f"Tipo: {candidate.candidate_type.value}\n"
                         f"Estado: {candidate.state.value}\n"
                         f"Confianza: {candidate.confidence:.0%}\n\n"
-                        "Aceptar convierte este candidato mediante el servicio correspondiente."
+                        "Aceptar convierte esta semilla mediante el servicio correspondiente."
                     )
                 break
 
     def _accept(self):
         if self.ctx.selected_candidate_id:
             result = self.cc.accept(self.ctx.selected_candidate_id)
-            self.ctx.log("info" if not isinstance(result, Error) else "error", "Accepted" if not isinstance(result, Error) else result.error)
+            self.ctx.log("info" if not isinstance(result, Error) else "error", "Semilla aceptada" if not isinstance(result, Error) else result.error)
             self.refresh()
 
     def _reject(self):
         if self.ctx.selected_candidate_id:
             self.cc.reject(self.ctx.selected_candidate_id)
-            self.ctx.log("info", "Rejected")
+            self.ctx.log("info", "Semilla rechazada")
             self.refresh()

@@ -7,7 +7,6 @@ from urllib.parse import urlsplit, urlunsplit
 from packages.application.candidate_service import CandidateService
 from packages.application.orchestrator_service import OrchestratorService
 from packages.application.source_service import SourceService
-from packages.domain.ai_models import AIMode
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
 
@@ -83,7 +82,7 @@ class AIController:
 
     def test_provider(self):
         _apptrace(f"CTRL AIController.test_provider"[:120])
-        return self.orchestrator.invoke(AIMode.GENERATE_ENTITY, prompt_hint="desktop ui provider test")
+        return self.orchestrator.invoke("generate_entity", prompt_hint="desktop ui provider test")
 
     def chat(self, system_prompt: str, user_message: str):
         """Send a chat message with custom system prompt. Returns (text, error_string)."""
@@ -94,8 +93,8 @@ class AIController:
 
     def generate_entity_candidates(self, prompt_hint):
         _apptrace(f"CTRL AIController.generate_entity_candidates hint={prompt_hint!r}"[:120])
-        return self.orchestrator.generate_candidates(AIMode.GENERATE_ENTITY, prompt_hint=prompt_hint)
+        return self.orchestrator.generate_candidates("generate_entity", prompt_hint=prompt_hint)
 
     def rewrite_entity(self, entity_id, prompt_hint=""):
         _apptrace(f"CTRL AIController.rewrite_entity entity_id={entity_id!r}"[:120])
-        return self.orchestrator.generate_candidates(AIMode.REWRITE_DESCRIPTION, entity_id=entity_id, prompt_hint=prompt_hint)
+        return self.orchestrator.generate_candidates("rewrite_description", entity_id=entity_id, prompt_hint=prompt_hint)

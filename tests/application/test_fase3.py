@@ -77,7 +77,7 @@ def test_model_message_includes_seeded_causal_context():
     causal = order_context_by_causality(**_ctx())
     plan = build_job_plan(intent, "crea algo", {"contexto_causal": causal})
     msg = json.loads(build_model_user_message(plan))
-    assert msg["contexto_causal"]["orden"] == ["anillos", "ramas", "hojas"]
+    assert msg["posicion_causal"]["orden"] == ["anillos", "ramas", "hojas"]
 
 
 # --- F3.3 model-param overrides (radial tuners) ----------------------------

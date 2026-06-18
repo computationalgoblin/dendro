@@ -62,8 +62,4 @@ class ExportService:
     def export_all(self, audience="gm"):
         entities = self._filter_entities(audience)
         data = {"total_entities": len(entities), "entities": [{"id": e.id, "name": e.name, "type": e.entity_type.value} for e in entities], "total_relations": len(self._proj().relations)}
-        if audience in ("gm", "player"):
-            data["total_secrets"] = len(self._proj().secrets)
-            data["total_clues"] = len(self._proj().clues)
-            data["total_sessions"] = len(self._proj().sessions)
         return Ok(data)

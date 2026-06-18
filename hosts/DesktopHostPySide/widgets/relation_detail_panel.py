@@ -33,7 +33,7 @@ from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, VisibilityState
-from packages.domain.relation import IntensityLevel, RelationType
+from packages.domain.relation import RelationType
 from packages.domain.result import Error
 
 # ---------------------------------------------------------------------------
@@ -96,6 +96,15 @@ def _split_lines(text: str) -> list[str]:
 
 def _default_color_for_type(relation_type_str: str) -> str:
     return _EDGE_COLORS.get((relation_type_str or "").lower(), "#A4AEC0")
+
+
+def _custom_relation_label(relation) -> str:
+    meta = dict(getattr(relation, "custom_metadata", {}) or {})
+    return str(meta.get("custom_relation_label") or "").strip()
+
+
+def _slug_relation_label(label: str) -> str:
+    return "_".join((label or "").strip().lower().split())
 
 
 def _safe_ai_error(message: str) -> str:
@@ -318,6 +327,12 @@ class RelationDetailPanel(QWidget):
         type_row.setSpacing(8)
         self.type_combo = QComboBox()
         self.type_combo.setEditable(True)
+        self.type_combo.lineEdit().setPlaceholderText("Tipo personalizado de relación")
+        self.type_combo.addItem("Relación personalizada", "")
+        project = self._project()
+        for custom in list(getattr(project, "custom_relation_types", []) or []) if project is not None else []:
+            if getattr(custom, "is_active", True):
+                self.type_combo.addItem(str(getattr(custom, "name", "")), f"custom:{getattr(custom, 'id', '')}")
         for item in RelationType:
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
@@ -408,35 +423,13 @@ class RelationDetailPanel(QWidget):
         # -- Advanced fields (hidden in normal mode) --
         self._advanced_widgets: list[QWidget] = []
 
-        adv_int_label = QLabel("Intensidad:")
-        adv_int_label.setStyleSheet(_label_ss)
-        self.intensity_combo = QComboBox()
-        for item in IntensityLevel:
-            self.intensity_combo.addItem(enum_human(item.value), item.value)
-        form.addRow(adv_int_label, self.intensity_combo)
-        self._advanced_widgets += [adv_int_label, self.intensity_combo]
+        # R7: Intensidad / Temporalidad / Causalidad removed from the panel.
 
-        adv_temp_label = QLabel("Temporalidad:")
-        adv_temp_label.setStyleSheet(_label_ss)
-        self.temporality_edit = QTextEdit()
-        self.temporality_edit.setMaximumHeight(60)
-        form.addRow(adv_temp_label, self.temporality_edit)
-        self._advanced_widgets += [adv_temp_label, self.temporality_edit]
-
-        adv_caus_label = QLabel("Causalidad:")
-        adv_caus_label.setStyleSheet(_label_ss)
-        self.causality_edit = QTextEdit()
-        self.causality_edit.setMaximumHeight(60)
-        form.addRow(adv_caus_label, self.causality_edit)
-        self._advanced_widgets += [adv_caus_label, self.causality_edit]
-
-        adv_vis_label = QLabel("Visibilidad:")
-        adv_vis_label.setStyleSheet(_label_ss)
         self.visibility_combo = QComboBox()
         for item in VisibilityState:
             self.visibility_combo.addItem(enum_human(item.value), item.value)
-        form.addRow(adv_vis_label, self.visibility_combo)
-        self._advanced_widgets += [adv_vis_label, self.visibility_combo]
+        # BETA1-H07: visibilidad deja de ser control de producto. El combo se
+        # conserva sin montar para preservar carga/guardado hasta migración.
 
         # -- AI suggestion section --
         ai_card = QFrame()
@@ -705,11 +698,8 @@ class RelationDetailPanel(QWidget):
         self.description_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.body_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
-        self.intensity_combo.currentIndexChanged.connect(self._schedule_autosave)
-        self.visibility_combo.currentIndexChanged.connect(self._schedule_autosave)
+
         self.notes_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.temporality_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.causality_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.birth_year_edit.textChanged.connect(self._schedule_autosave)
         self.death_year_edit.textChanged.connect(self._schedule_autosave)
 
@@ -971,31 +961,31 @@ class RelationDetailPanel(QWidget):
                 return
             relation = result.value
             self._relation = relation
-            kind = _enum_value(getattr(relation, "relation_type", None), "relación")
+            custom_label = _custom_relation_label(relation)
+            kind = custom_label or _enum_value(getattr(relation, "relation_type", None), "relación")
             direction = _enum_value(getattr(relation, "direction", None), "unidireccional")
             dir_icon = _DIRECTION_ICONS.get(direction, "→")
-            self.title.setText(enum_human(kind))
-            self.type_badge.setText(enum_human(kind))
+            self.title.setText(kind if custom_label else enum_human(kind))
+            self.type_badge.setText(kind if custom_label else enum_human(kind))
             source_ref = self._human_entity_ref(getattr(relation, "source_id", ""))
             target_ref = self._human_entity_ref(getattr(relation, "target_id", ""))
             self.summary.setText(f"{source_ref} {dir_icon} {target_ref}")
             self.source_label.setText(f"Origen: {source_ref}")
             self.target_label.setText(f"Destino: {target_ref}")
-            self._set_combo_value(self.type_combo, kind)
+            if custom_label:
+                self.type_combo.setEditText(custom_label)
+            else:
+                self._set_combo_value(self.type_combo, kind)
             if direction == "bidireccional":
                 self._set_combo_value(self.direction_combo, "bidireccional")
             else:
                 self._set_combo_value(self.direction_combo, "source_to_target")
-            self._set_combo_value(self.intensity_combo, _enum_value(getattr(relation, "intensity", None), ""))
             self.description_edit.setPlainText(getattr(relation, "description", "") or "")
-            # Body: store in custom_metadata._body or temporality field as proxy
             meta = dict(getattr(relation, "custom_metadata", {}) or {})
             body_text = meta.get("_body", "")
             notes_text = meta.get("_notes", "")
             self.body_edit.setPlainText(body_text)
             self.notes_edit.setPlainText(notes_text)
-            self.temporality_edit.setPlainText(getattr(relation, "temporality", "") or "")
-            self.causality_edit.setPlainText(getattr(relation, "causality", "") or "")
             # BETA1-G06: temporal interval
             by = getattr(relation, "birth_year", None)
             dy = getattr(relation, "death_year", None)
@@ -1062,13 +1052,33 @@ class RelationDetailPanel(QWidget):
             return
         type_data = self.type_combo.currentData()
         type_text = self.type_combo.currentText().strip()
-        relation_type_value = type_data if type_data else (type_text.lower() if type_text else "esta_relacionado_con")
+        if type_text == "Relación personalizada":
+            type_text = ""
+        custom_relation_type_id = None
+        custom_label = ""
+        if isinstance(type_data, str) and type_data.startswith("custom:"):
+            custom_relation_type_id = type_data.split(":", 1)[1]
+            custom_label = type_text
+            relation_type_value = "esta_relacionado_con"
+        elif type_data:
+            relation_type_value = type_data
+        else:
+            slug = _slug_relation_label(type_text)
+            if slug and slug not in {item.value for item in RelationType}:
+                custom_label = type_text
+                relation_type_value = "esta_relacionado_con"
+            else:
+                relation_type_value = slug or "esta_relacionado_con"
 
         canon_data = self.canon_combo.currentData()
         canon_value = canon_data if canon_data else "borrador"
 
         # Build metadata with color, body, notes
         meta = dict(getattr(self._relation, "custom_metadata", {}) or {})
+        if custom_label:
+            meta["custom_relation_label"] = custom_label
+        else:
+            meta.pop("custom_relation_label", None)
         if self._current_color:
             meta["_edge_color"] = self._current_color
         default_color = _default_color_for_type(relation_type_value)
@@ -1111,10 +1121,7 @@ class RelationDetailPanel(QWidget):
             "target_id": target_id,
             "relation_type": relation_type_value,
             "direction": direction_value,
-            "intensity": self.intensity_combo.currentData(),
             "description": self.description_edit.toPlainText().strip(),
-            "temporality": self.temporality_edit.toPlainText().strip(),
-            "causality": self.causality_edit.toPlainText().strip(),
             "birth_year": _parse_year(self.birth_year_edit.text()),
             "death_year": _parse_year(self.death_year_edit.text()),
             "validity_conditions": [],
@@ -1122,6 +1129,7 @@ class RelationDetailPanel(QWidget):
             "canon_state": canon_value,
             "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
             "custom_metadata": meta,
+            "custom_relation_type_id": custom_relation_type_id,
         }
         result = self.relation_controller.update(self.relation_id, payload)
         if isinstance(result, Error):

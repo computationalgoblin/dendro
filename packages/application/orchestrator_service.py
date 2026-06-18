@@ -1,25 +1,99 @@
-"""OrchestratorService — build context, invoke AI, create candidates (B15-T03)."""
+"""OrchestratorService — build context, run AI, create candidates (B15-T03).
+
+BETA1-AI02: migrated off the legacy ``provider.invoke()`` / ``AIMode`` /
+``AIResponse`` path. Real providers now go through ``AIRequestGateway`` →
+``provider.chat``; the simulated provider uses a deterministic, mode-keyed
+generator (``_simulated_modes``). Modes are plain strings (the old AIMode
+values) so the public API stays source-compatible for callers.
+"""
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from packages.domain.ai_models import AIMode, AIOperation, AIResponse, AuthorizedContext
+from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest
+from packages.domain.ai_models import AuthorizedContext
 from packages.domain.result import Error, Ok, Result
-from packages.infrastructure.ai_provider import AIProvider, create_provider
+from packages.infrastructure.ai_provider import create_provider
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+@dataclass
+class OrchestratorResult:
+    """Lightweight result for legacy orchestrator calls (replaces AIResponse)."""
+    id: str
+    mode: str
+    raw_text: str = ""
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    observations: list[str] = field(default_factory=list)
+    error: str | None = None
+    provider: str = "simulated"
+    context: AuthorizedContext = field(default_factory=AuthorizedContext)
+
+
+def _simulated_modes(mode: str, max_candidates: int = 3) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Deterministic simulated output by mode (moved from SimulatedAIProvider).
+
+    Returns ``(raw_text, candidates, observations)``. Text-only modes return an
+    empty candidate list. Unknown modes return a generic empty result.
+    """
+    if mode == "generate_entity":
+        return "Simulated entity generation", [
+            {"name": "Simulated Entity", "entity_type": "personaje"},
+            {"name": "Simulated Location", "entity_type": "localizacion"},
+        ][:max_candidates], []
+    if mode == "generate_relation":
+        return "Simulated relation generation", [
+            {"source_id": "", "target_id": "", "relation_type": "es_aliado_de"},
+        ][:max_candidates], []
+    if mode == "expand_entity":
+        return "Simulated expansion: this entity could have additional details...", [
+            {"name": "Expanded detail", "entity_type": "objeto"},
+        ], []
+    if mode == "summarize":
+        return "Simulated summary of the entity.", [], []
+    if mode == "rewrite_description":
+        return (
+            "Sugerencia de reescritura simulada. Revisa y acepta solo si encaja con el canon.",
+            [{"description": "Texto de reescritura simulado"}], [],
+        )
+    if mode == "suggest_tags":
+        return "Suggested tags: magia, anciano, torre", [{"tags": ["magia", "anciano", "torre"]}], []
+    if mode == "suggest_relations":
+        return "Simulated relation suggestions", [
+            {"source_id": "", "target_id": "", "relation_type": "es_aliado_de"},
+        ], []
+    if mode == "critical_analysis":
+        return "Simulated critical analysis", [
+            {"type": "invalid_entity_type", "description": "Entity may lack description", "severity": "MEDIA"},
+            {"title": "Add description to entity", "proposed_data": {"brief_description": "Suggested brief"}},
+        ], ["Entity has limited faction interactions"]
+    if mode == "causal_analysis":
+        return "Simulated causal analysis", [
+            {"name": "Consequence X", "entity_type": "evento"},
+            {"source_id": "", "target_id": "", "relation_type": "causo"},
+        ], ["Event has no documented cause"]
+    if mode == "consistency_analysis":
+        return "Simulated consistency analysis", [
+            {"type": "narrative", "description": "Character motivation contradicts earlier behavior"},
+            {"type": "causal_gap", "description": "Missing cause for major event"},
+        ], []
+    if mode == "continuity_question":
+        return "Simulated answer to continuity question.", [], ["Consider checking historical timeline for consistency."]
+    return "", [], []
+
+
 class OrchestratorService:
     """Legacy orchestrator — do not use in new features (B42+).
 
-    New code should use AIRequestGateway + AIContextActions instead.
-    This service uses provider.invoke() with trivially basic prompts
-    that lose all B40 creative context.
+    New code should use AIRequestGateway + AIContextActionService instead.
+    Kept for the desktop AI settings/test path, the CLI, and analysis.
     """
     def __init__(
         self,
@@ -45,7 +119,7 @@ class OrchestratorService:
 
     def build_context(
         self,
-        mode: AIMode = AIMode.GENERATE_ENTITY,
+        mode: str = "generate_entity",
         entity_id: str | None = None,
         filters: dict | None = None,
     ) -> Result[AuthorizedContext, str]:
@@ -122,36 +196,81 @@ class OrchestratorService:
 
         return Ok(ctx)
 
-    # ── Invoke ────────────────────────────────────────────────────────
+    # ── Run ───────────────────────────────────────────────────────────
+
+    def _run_model(self, mode: str, ctx: AuthorizedContext, prompt_hint: str, max_candidates: int = 3):
+        """Return (raw_text, candidates, observations) for *mode*."""
+        provider_name = str(getattr(self._provider, "provider_name", ""))
+        if provider_name == "simulated":
+            return _simulated_modes(mode, max_candidates)
+        # Real provider: go through the gateway (sanitize → params → chat).
+        gateway = AIRequestGateway(provider=self._provider)
+        request = GatewayRequest(
+            intent=mode,
+            user_prompt=prompt_hint or f"Tarea IA: {mode}",
+            context=ctx.to_dict(),
+            json_mode=True,
+            validate=False,
+        )
+        response = gateway.execute(request)
+        if response.error:
+            raise RuntimeError(response.error)
+        text = response.text or ""
+        candidates: list[dict[str, Any]] = []
+        parsed = response.parsed_json
+        if isinstance(parsed, dict):
+            for key in ("candidates", "entities", "relations"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    candidates.extend([c for c in value if isinstance(c, dict)])
+        return text, candidates, []
 
     def invoke(
-        self, mode: AIMode, entity_id: str | None = None,
+        self, mode: str, entity_id: str | None = None,
         prompt_hint: str = "", filters: dict | None = None,
-    ) -> Result[AIResponse, str]:
+    ) -> Result[OrchestratorResult, str]:
+        if self._provider is None:
+            return Error("Provider error: no AI provider configured")
         rctx = self.build_context(mode, entity_id, filters)
         if isinstance(rctx, Error):
             return rctx
-        op = AIOperation(mode=mode, context=rctx.value, prompt_hint=prompt_hint,
-                         entity_id=entity_id)
+        ctx = rctx.value
         try:
-            resp = self._provider.invoke(op)
-            return Ok(resp)
+            raw_text, candidates, observations = self._run_model(mode, ctx, prompt_hint)
         except Exception as exc:
-            self._log_error(f"Provider invoke failed: {exc}")
+            self._log_error(f"Provider call failed: {exc}")
             return Error(f"Provider error: {exc}")
+        return Ok(OrchestratorResult(
+            id=str(uuid.uuid4()),
+            mode=mode,
+            raw_text=raw_text,
+            candidates=candidates,
+            observations=observations,
+            error=None,
+            provider=str(getattr(self._provider, "provider_name", "")) or "simulated",
+            context=ctx,
+        ))
 
     def improvise(self, context: str) -> dict | None:
         """Generate improvisation output for LiveModeService (B27)."""
+        if self._provider is None:
+            return None
         try:
-            from packages.domain.ai_models import AIOperation, AIMode
-            op = AIOperation(mode=AIMode.GENERATE_ENTITY, context=context, prompt_hint="improvise", max_candidates=3)
-            resp = self._provider.invoke(op)
-            lines = [l.strip("- *") for l in resp.raw_text.split("\n") if len(l.strip()) > 3]
+            provider_name = str(getattr(self._provider, "provider_name", ""))
+            if provider_name == "simulated":
+                raw_text, _, _ = _simulated_modes("generate_entity", 3)
+            else:
+                text, err = self._provider.chat(
+                    "Eres un asistente de improvisación narrativa. Responde en líneas breves.",
+                    f"Improvisa elementos a partir de: {context}",
+                )
+                raw_text = text or ""
+            lines = [line.strip("- *") for line in raw_text.split("\n") if len(line.strip()) > 3]
             return {
                 "name": lines[0] if len(lines) > 0 else "Improvised element",
                 "description": lines[1] if len(lines) > 1 else "Quick improvisation",
                 "complication": lines[2] if len(lines) > 2 else "Raise the stakes",
-                "consequence": lines[3] if len(lines) > 3 else "Unexpected outcome"
+                "consequence": lines[3] if len(lines) > 3 else "Unexpected outcome",
             }
         except Exception:
             return None
@@ -159,7 +278,7 @@ class OrchestratorService:
     # ── Generate candidates ───────────────────────────────────────────
 
     def generate_candidates(
-        self, mode: AIMode, entity_id: str | None = None,
+        self, mode: str, entity_id: str | None = None,
         prompt_hint: str = "", filters: dict | None = None,
     ) -> Result[list[Any], str]:
         rresp = self.invoke(mode, entity_id, prompt_hint, filters)
@@ -172,13 +291,13 @@ class OrchestratorService:
         if self._ss:
             try:
                 src = self._ss.add_source({
-                    "name": f"AI {mode.value}",
+                    "name": f"AI {mode}",
                     "source_type": "GENERACION_IA",
                     "notes": resp.raw_text[:500],
                     "metadata": {
                         "provider": resp.provider,
-                        "mode": mode.value,
-                        "audience": resp.operation.context.audience,
+                        "mode": mode,
+                        "audience": resp.context.audience,
                         "prompt_hint": prompt_hint,
                         "filters": filters,
                     },
@@ -193,10 +312,16 @@ class OrchestratorService:
         for data in resp.candidates:
             if not self._cs:
                 break
-            ctype = "entidad" if mode in (AIMode.GENERATE_ENTITY, AIMode.EXPAND_ENTITY) else                     "relacion" if mode in (AIMode.GENERATE_RELATION, AIMode.SUGGEST_RELATIONS) else                     "correccion" if mode == AIMode.REWRITE_DESCRIPTION else                     "cambio" if mode == AIMode.SUGGEST_TAGS else "sugerencia_ia"
+            ctype = (
+                "entidad" if mode in ("generate_entity", "expand_entity")
+                else "relacion" if mode in ("generate_relation", "suggest_relations")
+                else "correccion" if mode == "rewrite_description"
+                else "cambio" if mode == "suggest_tags"
+                else "sugerencia_ia"
+            )
             try:
                 r = self._cs.create_candidate({
-                    "title": data.get("name", mode.value),
+                    "title": data.get("name", mode),
                     "candidate_type": ctype,
                     "proposed_data": data,
                     "source": "ia",
@@ -213,7 +338,7 @@ class OrchestratorService:
             try:
                 self._hs.add_entry({
                     "event_type": "candidato_generado_ia",
-                    "description": f"AI {mode.value} generated {len(candidates)} candidates",
+                    "description": f"AI {mode} generated {len(candidates)} candidates",
                     "metadata": {"ai_response_id": resp.id},
                 })
             except Exception:
@@ -232,4 +357,4 @@ class OrchestratorService:
                 pass
 
 
-__all__ = ["OrchestratorService"]
+__all__ = ["OrchestratorService", "OrchestratorResult"]

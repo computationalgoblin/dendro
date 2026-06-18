@@ -1,6 +1,14 @@
+"""AIContextActionService — BETA1-AI02.
+
+The context menu / detail panel are shortcuts into the SAME command-bar job
+pipeline (gateway → provider.chat). Output policy by intent family:
+  - generative intents  → staged candidates persisted for review
+  - analytical intents   → report surfaced as a preview (no candidate)
+  - text intents         → inline text (no candidate)
+No path mutates canon automatically.
+"""
 from packages.application.ai_context_actions import AIContextActionService
 from packages.application.candidate_service import CandidateService
-from packages.domain.ai_models import AIResponse
 from packages.domain.candidate_issue import CandidateType
 from packages.domain.entity import CanonState, EntityType, NarrativeEntity, VisibilityState
 from packages.domain.project import Project
@@ -14,25 +22,17 @@ class FakeProjectService:
 
 
 class FakeProvider:
+    """Stand-in real provider: returns a fixed chat response, records calls."""
     provider_name = "fake"
+    model = "fake-model"
 
-    def __init__(self, candidates=None, raw_text="fake raw", observations=None):
-        self.candidates = candidates if candidates is not None else [{"name": "Propuesta IA", "entity_type": "personaje"}]
-        self.raw_text = raw_text
-        self.observations = observations or []
-        self.last_operation = None
+    def __init__(self, response: str = "{}"):
+        self.response = response
+        self.calls: list[dict] = []
 
-    def invoke(self, operation):
-        self.last_operation = operation
-        return AIResponse(
-            id="fake_response",
-            operation=operation,
-            raw_text=self.raw_text,
-            candidates=list(self.candidates),
-            observations=list(self.observations),
-            provider="fake",
-            latency_ms=1.0,
-        )
+    def chat(self, system_prompt, user_message, timeout=None, *, temperature=None, max_tokens=None, json_mode=False):
+        self.calls.append({"json_mode": json_mode, "user": user_message})
+        return self.response, None
 
 
 def _project():
@@ -68,49 +68,48 @@ def _service(project, provider):
     return AIContextActionService(ps, CandidateService(ps), provider=provider)
 
 
-def test_node_action_uses_narrative_context_and_creates_non_canon_candidate():
+def test_node_action_creates_non_canon_entity_candidate_through_pipeline():
     project = _project()
-    provider = FakeProvider(candidates=[{"description": "Texto mejorado", "confidence": 0.8}])
+    provider = FakeProvider(response='{"hojas": [{"name": "Aliada propuesta", "entity_type": "personaje"}]}')
     service = _service(project, provider)
 
-    result = service.run_node_action("ent_1", "improve_text", prompt_hint="más poético")
+    result = service.run_node_action("ent_1", "create_candidate", prompt_hint="una aliada")
 
     assert isinstance(result, Ok)
-    created = result.value.candidates[0]
-    assert len(project.entities) == 2
+    assert len(project.entities) == 2  # canon untouched
     assert len(project.candidates) == 1
+    created = result.value.candidates[0]
     assert created.source == "ia"
-    assert created.candidate_type == CandidateType.CAMBIO
-    assert created.metadata["action_type"] == "improve_text"
+    assert created.candidate_type == CandidateType.ENTIDAD
+    assert created.metadata["action_type"] == "create_candidate"
     assert created.metadata["target_type"] == "node"
     assert created.metadata["target_id"] == "ent_1"
     assert created.metadata["context_hash"] == result.value.context_hash
     assert created.proposed_data["canonical_status"] == "candidate_non_canon"
-    assert provider.last_operation is not None
-    assert provider.last_operation.context.selected_entity_ids == ["ent_1"]
-    assert provider.last_operation.context.project_config_snapshot["constraints"]["ai_may_mutate_canon"] is False
+    # The call went through the gateway/provider with json_mode (structured).
+    assert provider.calls and provider.calls[-1]["json_mode"] is True
 
 
 def test_relation_action_creates_relation_candidate_without_mutating_relations():
     project = _project()
-    provider = FakeProvider(candidates=[{"source_id": "ent_1", "target_id": "ent_2", "relation_type": "es_aliado_de"}])
+    provider = FakeProvider(
+        response='{"relations": [{"source_id": "ent_1", "target_id": "ent_2", "relation_type": "es_aliado_de"}]}'
+    )
     service = _service(project, provider)
 
     result = service.run_relation_action("rel_1", "create_candidate")
 
     assert isinstance(result, Ok)
-    assert len(project.relations) == 1
+    assert len(project.relations) == 1  # canon untouched
     created = result.value.candidates[0]
     assert created.candidate_type == CandidateType.RELACION
     assert created.affected_relation_ids == ["rel_1"]
     assert created.metadata["target_type"] == "relation"
-    assert provider.last_operation is not None
-    assert provider.last_operation.context.selected_relation_ids == ["rel_1"]
 
 
 def test_detect_action_returns_preview_not_candidate():
     project = _project()
-    provider = FakeProvider(candidates=[{"type": "narrative", "description": "Posible contradicción"}], raw_text="Análisis")
+    provider = FakeProvider(response='{"report": "Posible contradicción detectada", "issues": []}')
     service = _service(project, provider)
 
     result = service.run_node_action("ent_1", "detect_contradictions")
@@ -120,6 +119,22 @@ def test_detect_action_returns_preview_not_candidate():
     assert len(project.candidates) == 0
     assert result.value.previews[0]["canonical_status"] == "preview_non_canon"
     assert result.value.previews[0]["context_hash"] == result.value.context_hash
+    assert "contradicción" in result.value.raw_text
+
+
+def test_node_text_suggestion_returns_inline_text_no_candidate():
+    project = _project()
+    provider = FakeProvider(response="Ariadna camina entre ruinas con paso firme y mirada inquieta.")
+    service = _service(project, provider)
+
+    result = service.run_node_text_suggestion("ent_1", prompt_hint="más poético")
+
+    assert isinstance(result, Ok)
+    assert result.value.candidates == []
+    assert len(project.candidates) == 0
+    assert "Ariadna" in result.value.raw_text
+    # Text intents do not request JSON mode.
+    assert provider.calls and provider.calls[-1]["json_mode"] is False
 
 
 def test_player_audience_redacted_target_does_not_call_provider():
@@ -128,8 +143,8 @@ def test_player_audience_redacted_target_does_not_call_provider():
     provider = FakeProvider()
     service = _service(project, provider)
 
-    result = service.run_node_action("ent_1", "improve_text", audience="player")
+    result = service.run_node_action("ent_1", "create_candidate", audience="player")
 
     assert isinstance(result, Error)
-    assert provider.last_operation is None
+    assert provider.calls == []
     assert len(project.candidates) == 0

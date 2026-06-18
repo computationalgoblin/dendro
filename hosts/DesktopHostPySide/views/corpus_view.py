@@ -66,7 +66,7 @@ class CorpusView(QWidget):
         self.filter_text.textChanged.connect(self.refresh)
         flt.addWidget(self.filter_text)
         self.filter_type = QComboBox()
-        self.filter_type.addItems(["Todos", "personaje", "localizacion", "faccion", "objeto", "evento", "secreto", "pista", "sesion", "nota"])
+        self.filter_type.addItems(["Todos", "personaje", "objeto", "nota"])
         self.filter_type.currentTextChanged.connect(self.refresh)
         flt.addWidget(self.filter_type)
         self.filter_canon = QComboBox()
@@ -190,7 +190,6 @@ class CorpusView(QWidget):
             f"Nombre: {entity.name}",
             f"Tipo: {entity.entity_type.value}",
             f"Canon: {entity.canon_state.value}",
-            f"Visibilidad: {entity.visibility_state.value}",
             f"Descripción: {entity.brief_description or '—'}",
             f"Descripción extendida: {getattr(entity, 'extended_description', None) or '—'}",
             f"Dominio: {getattr(entity, 'domain', None) or '—'}",
@@ -321,7 +320,7 @@ class CorpusView(QWidget):
                 self._refresh = refresh_cb
                 self.name_edit = QLineEdit()
                 self.type_cb = QComboBox()
-                self.type_cb.addItems(["personaje", "localizacion", "faccion", "objeto", "evento", "nota"])
+                self.type_cb.addItems(["personaje", "objeto", "nota"])
                 self.form_layout.addRow("Nombre:", self.name_edit)
                 self.form_layout.addRow("Tipo:", self.type_cb)
 

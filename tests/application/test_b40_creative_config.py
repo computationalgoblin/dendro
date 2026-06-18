@@ -421,15 +421,20 @@ class TestCreativeContextForAI:
         )
         message = json.loads(build_model_user_message(plan))
 
-        profile = message["perfil_creativo_b40"]
-        assert profile["role"] == "worldbuilder"
-        assert profile["strategy"] == "descender_causalmente"
-        assert profile["default_num_options"] == 5
-        assert profile["hard_rules"] == ["La magia exige coste"]
-        assert profile["avoid"]["avoid_solutions"] == ["deus ex machina"]
-        assert profile["taste_memory"]["rejected_patterns"] == ["final explicado por sueño"]
-        assert profile["selected_effective_configs"] == [{"name": "Rama religiosa"}]
-        assert profile["selected_branch_overrides"] == [{"name": "Culto del Peso"}]
+        # Cono de autoridad: canon duro y negative_space viajan en cerco_canon.
+        cerco = message["cerco_canon"]
+        assert cerco["hard_rules"] == ["La magia exige coste"]
+        assert cerco["negative_space"]["avoid_solutions"] == ["deus ex machina"]
+        # La atmósfera viaja en parametros_permanentes.
+        assert "parametros_permanentes" in message
+        # M2: creative_brief/creative_context/branch_creative_context no se
+        # duplican en contexto_autorizado.
+        auth = message["contexto_autorizado"]
+        assert "creative_brief" not in auth
+        assert "creative_context" not in auth
+        assert "branch_creative_context" not in auth
+        # M2: el perfil legacy ya no viaja en el mensaje.
+        assert "perfil_creativo_b40" not in message
 
     def test_branch_override_inheritance_uses_parent_rama_for_child_hoja(self):
         from packages.application.creative_context import selected_entity_creative_context

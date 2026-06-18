@@ -265,8 +265,7 @@ class WritingService:
             return r
         if not self.orchestrator:
             return Ok(f"[Simulated] Summary of '{r.value.name}': {r.value.content[:200]}...")
-        from packages.domain.ai_models import AIMode
-        resp_r = self.orchestrator.invoke(AIMode.SUMMARIZE, unit_id, "")
+        resp_r = self.orchestrator.invoke("summarize", unit_id, "")
         if isinstance(resp_r, Error):
             return resp_r
         return Ok(resp_r.value.raw_text)
@@ -302,13 +301,12 @@ class WritingService:
             return Ok(cand)
 
         # Real: use orchestrator
-        from packages.domain.ai_models import AIMode
         modes = {
-            "writing_expand": AIMode.EXPAND_ENTITY,
-            "writing_critique": AIMode.CRITICAL_ANALYSIS,
-            "writing_rewrite": AIMode.REWRITE_DESCRIPTION,
+            "writing_expand": "expand_entity",
+            "writing_critique": "critical_analysis",
+            "writing_rewrite": "rewrite_description",
         }
-        aim = modes.get(ai_mode, AIMode.EXPAND_ENTITY)
+        aim = modes.get(ai_mode, "expand_entity")
         filters = {"audience": "author"}
         resp_r = self.orchestrator.invoke(aim, unit_id, hint, filters)
         if isinstance(resp_r, Error):

@@ -12,8 +12,7 @@ def test_b27_5_shell_keeps_three_product_spaces_without_dashboard():
     # BETA1: legacy test name, new contract is Home + Creation only (A04).
     # Pre-BETA1 this test asserted a three-space shell (Creación/Galería/
     # Sesión). BETA 1 reduces the runtime shell to Home + Creación; Gallery
-    # and Session code remains in workspaces.py but must not be instantiated
-    # nor reachable from the shell.
+    # and Session code was physically removed from Desktop in BETA1-H02.
     main = MAIN_WINDOW.read_text(encoding="utf-8")
     home = HOME.read_text(encoding="utf-8")
     # Creation remains reachable from the shell
@@ -62,8 +61,9 @@ def test_b27_5_design_system_components_exist():
 
 def test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy():
     text = WORKSPACES.read_text(encoding="utf-8")
-    for symbol in ["class CreationWorkspace", "class GalleryWorkspace", "class SessionWorkspace"]:
-        assert symbol in text
+    assert "class CreationWorkspace" in text
+    for legacy_symbol in ["class GalleryWorkspace", "class SessionWorkspace", "class SessionPreparationWorkspace", "class SessionOverview"]:
+        assert legacy_symbol not in text
     assert "Taller narrativo" in text
     assert "Crear hoja" in text
     assert "Ir al grafo" in text
@@ -71,4 +71,4 @@ def test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy():
     assert "Corpus técnico" not in text
     assert "Relaciones técnicas" not in text
     assert "Candidatos técnicos" not in text
-    assert "Campaña" in text and "Preparación" in text and "En vivo/Post" in text
+    assert "Campaña" not in text and "Preparación" not in text and "En vivo/Post" not in text

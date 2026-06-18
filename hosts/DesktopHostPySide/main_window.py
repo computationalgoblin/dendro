@@ -11,7 +11,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
@@ -33,26 +32,22 @@ from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
-from hosts.DesktopHostPySide.controllers.framework_controller import FrameworkController
 from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
 from hosts.DesktopHostPySide.controllers.project_controller import ProjectController
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
-from hosts.DesktopHostPySide.controllers.session_controller import SessionController
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
-from hosts.DesktopHostPySide.controllers.timeline_controller import TimelineController
-from hosts.DesktopHostPySide.controllers.writing_controller import WritingController
+
 from packages.application.export_service import ExportService
 from packages.domain.result import Ok
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
-from hosts.DesktopHostPySide.views.framework_view import FrameworkView
 from hosts.DesktopHostPySide.views.home_view import HomeView
 from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
 from hosts.DesktopHostPySide.views.layer_view import LayerView
 from hosts.DesktopHostPySide.views.relation_view import RelationView
 from hosts.DesktopHostPySide.views.source_view import SourceView
-from hosts.DesktopHostPySide.views.timeline_view import TimelineView
-from hosts.DesktopHostPySide.views.writing_view import WritingView
+
+
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import (
     APP_STYLESHEET,
@@ -67,7 +62,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
-from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, AppConfigPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
+from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
 from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
 
 
@@ -118,37 +113,25 @@ class MainWindow(QMainWindow):
         self.ec = EntityController(project_service=ps)
         self.rc = RelationController(project_service=ps)
         self.cc = CandidateController(project_service=ps)
-        # BETA1-A03: SessionController kept as shared dependency of
-        # ExportService (used by ImportExportView inside Creation).
-        self.sc = SessionController(project_service=ps)
-        # BETA1-A03: orphan controllers disconnected (issuec, lmc, psc, ic,
-        # ccamp, secretsc, factionc). Their only consumers were the Session
-        # space views removed in A01/A02. ImportExportView builds its own
-        # ImportController. See docs/architecture/A03_legacy_classification.md.
+        # BETA1-H13: SessionController removed from Desktop runtime. Export UI
+        # no longer exposes session/campaign export; ImportExportView builds
+        # its own ImportController. See docs/architecture/A03_legacy_classification.md.
         self.export_service = ExportService(
             project_service=ps,
             entity_service=self.ec.es,
-            session_service=self.sc.ss,
         )
-        self.wc = WritingController(project_service=ps)
-        self.tlc = TimelineController(project_service=ps)
-        self.fwc = FrameworkController(project_service=ps)
         self.src = SourceController(project_service=ps)
         self.lc = LayerController(project_service=ps)
 
     # ── Views ────────────────────────────────────────────────────────────────
 
     def _build_views(self):
-        # BETA1-A02: only views consumed by Home/Creation are instantiated.
-        # Session-space views (issues, campaign, secrets, faction, session,
-        # live_post) are no longer built; their code remains for future phases.
+        # BETA1-H02: only views consumed by Home/Creation are present in the
+        # Desktop runtime. Legacy session/campaign/gallery views were removed.
         self.corpus_view = CorpusView(self.ctx, self.ec)
         self.relation_view = RelationView(self.ctx, self.rc)
         self.candidate_view = CandidateView(self.ctx, self.cc)
         self.import_export_view = self._make_import_export_view()
-        self.writing_view = WritingView(self.ctx, self.wc)
-        self.timeline_view = TimelineView(self.ctx, self.tlc)
-        self.framework_view = FrameworkView(self.ctx, self.fwc)
         self.source_view = SourceView(self.ctx, self.src)
         self.layer_view = LayerView(self.ctx, self.lc)
 
@@ -164,7 +147,7 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("close_project", self._close_project)
         self.home_view.register_callback("ai_settings", self._open_ai_settings)
         self.home_view.register_callback("open_last_project", self._open_last_project)
-        # T05: toggle_advanced and toggle_diagnostic removed from UI callbacks
+        # T05/H03: technical toggles are not exposed from Home.
 
         # Workspaces (preserve existing views inside them)
         self.creation_workspace = CreationWorkspace(
@@ -173,15 +156,11 @@ class MainWindow(QMainWindow):
             relation_view=self.relation_view,
             candidate_view=self.candidate_view,
             import_export_view=self.import_export_view,
-            writing_view=self.writing_view,
-            timeline_view=self.timeline_view,
-            framework_view=self.framework_view,
             source_view=self.source_view,
             layer_view=self.layer_view,
         )
-        # BETA1-A01: GalleryWorkspace / SessionWorkspace (and its
-        # SessionPreparationWorkspace) are no longer instantiated.
-        # Their code remains in views/workspaces.py for future phases.
+        # BETA1-H02: legacy gallery/session workspace classes were physically
+        # removed from views/workspaces.py.
 
     def _make_import_export_view(self):
         view = ImportExportView(self.ctx, self.controller, self.export_service)
@@ -443,12 +422,6 @@ class MainWindow(QMainWindow):
         # Apply as a secondary stylesheet on top of APP_STYLESHEET
         self.setStyleSheet(APP_STYLESHEET + override)
 
-        # Fullscreen (if we decide to implement)
-        if ctx.fullscreen:
-            self.showFullScreen()
-        else:
-            self.showNormal()
-
         self.log_msg(f"Preferencias aplicadas: fuente {family} {base_size}")
 
     # ── Project actions ──────────────────────────────────────────────────────
@@ -541,13 +514,6 @@ class MainWindow(QMainWindow):
             self.ctx.drawer.close()
         panel = ConfigPanel(
             ctx=self.ctx,
-            advanced_enabled=self.ctx.advanced_mode,
-            diagnostic_visible=hasattr(self, "log") and self.log.isVisible(),
-            callbacks={
-                "toggle_advanced": self._toggle_advanced,
-                "toggle_diagnostic": self._toggle_diagnostic,
-                "ai_settings": self._open_ai_settings,
-            },
             ai_controller=self.ai,
             on_status=self._handle_ai_status,
             on_apply=self._apply_live_preferences,
@@ -717,7 +683,6 @@ class MainWindow(QMainWindow):
         for widget in [
             self.creation_workspace, self.import_export_view,
             self.corpus_view, self.relation_view, self.candidate_view,
-            self.writing_view, self.timeline_view, self.framework_view,
             self.source_view, self.layer_view, self.home_view,
         ]:
             if not _qt_widget_alive(widget):
@@ -744,12 +709,6 @@ class MainWindow(QMainWindow):
 
     def _get_active_project(self):
         return self.controller.ps.active_project
-
-    def _toggle_diagnostic(self):
-        visible = not self.log.isVisible()
-        self.log.setVisible(visible and self.ctx.advanced_mode)
-        if visible and not self.ctx.advanced_mode:
-            self.log_msg("Activa Modo avanzado para ver el registro técnico")
 
     # ── Refresh ──────────────────────────────────────────────────────────────
 

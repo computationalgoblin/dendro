@@ -54,7 +54,4 @@ class ProjectController:
         if p is None: return {}
         return {"name": p.name, "schema": getattr(p, 'schema_version', '?'),
                 "entities": len(getattr(p, 'entities', [])), "relations": len(getattr(p, 'relations', [])),
-                "candidates": len(getattr(p, 'candidates', [])), "sessions": len(getattr(p, 'sessions', [])),
-                "campaigns": len(getattr(p, 'campaigns', [])), "secrets": len(getattr(p, 'secrets', [])),
-                "factions": len(getattr(p, 'factions', [])), "clues": len(getattr(p, 'clues', [])),
-                "fronts": len(getattr(p, 'fronts', [])), "clocks": len(getattr(p, 'campaign_clocks', []))}
+                "candidates": len(getattr(p, 'candidates', []))}

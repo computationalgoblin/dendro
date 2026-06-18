@@ -5,10 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
-from packages.application.orchestrator_service import OrchestratorService
+from packages.application.orchestrator_service import OrchestratorResult, OrchestratorService
 
 from packages.application.analysis_service import AnalysisService
-from packages.domain.ai_models import AIMode, AIOperation, AIResponse, AuthorizedContext
+from packages.domain.ai_models import AuthorizedContext
 from packages.domain.analysis_models import (
     CausalAnalysisResult,
     ConsistencyAnalysisResult,
@@ -56,16 +56,14 @@ class FakeSourceService:
         return Ok(SimpleNamespace(id=f"src-{len(self.sources)}"))
 
 
-def _response(mode: AIMode, *, candidates=None, observations=None, raw_text="raw") -> AIResponse:
-    return AIResponse(
+def _response(mode: str, *, candidates=None, observations=None, raw_text="raw") -> OrchestratorResult:
+    return OrchestratorResult(
         id="resp-1",
-        operation=AIOperation(
-            mode=mode,
-            context=AuthorizedContext(
-                audience="author",
-                allowed_canon_states=["canon"],
-                allowed_visibility_states=["publico"],
-            ),
+        mode=mode,
+        context=AuthorizedContext(
+            audience="author",
+            allowed_canon_states=["canon"],
+            allowed_visibility_states=["publico"],
         ),
         raw_text=raw_text,
         candidates=list(candidates or []),
@@ -82,12 +80,12 @@ def test_analyze_entity_propagates_orchestrator_errors() -> None:
 
     assert isinstance(result, Error)
     assert result.error == "provider down"
-    assert orch.calls == [(AIMode.CRITICAL_ANALYSIS, "ent-1", "", {"audience": "author"})]
+    assert orch.calls == [("critical_analysis", "ent-1", "", {"audience": "author"})]
 
 
 def test_analyze_entity_splits_issues_and_correction_proposals_and_traces_source() -> None:
     resp = _response(
-        AIMode.CRITICAL_ANALYSIS,
+        "critical_analysis",
         observations=["El arco funciona"],
         candidates=[
             {"type": "contradiction", "description": "Motivación incompatible"},
@@ -134,7 +132,7 @@ def test_analyze_entity_splits_issues_and_correction_proposals_and_traces_source
 
 def test_analyze_causal_classifies_relation_and_entity_candidates() -> None:
     resp = _response(
-        AIMode.CAUSAL_ANALYSIS,
+        "causal_analysis",
         candidates=[
             {"source_id": "a", "target_id": "b", "relation_type": "causa"},
             {"name": "Consecuencia", "entity_type": "evento"},
@@ -158,7 +156,7 @@ def test_analyze_causal_classifies_relation_and_entity_candidates() -> None:
 
 def test_analyze_consistency_groups_causal_gaps_and_records_issues() -> None:
     resp = _response(
-        AIMode.CONSISTENCY_ANALYSIS,
+        "consistency_analysis",
         candidates=[
             {"type": "narrative", "description": "Contradicción de tono"},
             {"type": "causal_gap", "description": "Falta causa"},

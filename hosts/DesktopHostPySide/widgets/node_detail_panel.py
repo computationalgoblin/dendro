@@ -427,7 +427,7 @@ class NodeDetailPanel(QWidget):
         for item in VisibilityState:
             self.visibility_combo.addItem(enum_human(item.value), item.value)
 
-        # BETA1-F05: notas privadas/exportables y visibilidad DESAPARECEN de
+        # BETA1-H07: notas privadas/exportables y visibilidad no forman parte de
         # la UI. Los widgets existen sin montar: la carga/guardado los sigue
         # leyendo y ningún dato se pierde.
 
@@ -714,7 +714,6 @@ class NodeDetailPanel(QWidget):
         self.private_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.exportable_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
-        self.visibility_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
         # BETA1-G03: años de vida
@@ -1234,7 +1233,7 @@ class NodeDetailPanel(QWidget):
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
             "canon_state": canon_value,
-            "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
+            "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
             # BETA1-G03: fila temporal (vacío en Nace → conserva el valor;

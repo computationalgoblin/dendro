@@ -12,16 +12,19 @@ from hosts.DesktopHostPySide.app_trace import _apptrace
 class AIContextController:
     """Thin UI controller: delegates all AI/candidate logic to application service."""
 
-    def __init__(self, project_service):
+    def __init__(self, project_service, ai_job_service=None):
         if project_service is None:
             raise ValueError("AIContextController requires project_service")
         self.ps = project_service
         self.candidate_service = CandidateService(project_service=self.ps)
         provider_name = os.environ.get("NARRATIVE_AI_PROVIDER", "simulated") or "simulated"
+        # Share the host's command-bar AIJobService when given, so contextual
+        # jobs are tracked in the same registry / jobs tray.
         self.service = AIContextActionService(
             project_service=self.ps,
             candidate_service=self.candidate_service,
             provider_name=provider_name,
+            ai_job_service=ai_job_service,
         )
 
     def node_action(self, entity_id: str, action_type: str, prompt_hint: str = ""):

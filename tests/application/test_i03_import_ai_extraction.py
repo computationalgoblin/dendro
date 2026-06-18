@@ -5,7 +5,6 @@ from pathlib import Path
 
 from packages.application.import_ai_extraction_service import ImportAIExtractionService
 from packages.application.import_service import ImportService
-from packages.domain.ai_models import AIResponse
 from packages.domain.import_models import DocumentSegment, ImportBasket, ImportReviewState
 from packages.domain.project import Project
 from packages.domain.result import Error, is_ok, unwrap
@@ -79,9 +78,6 @@ class I03Provider(AIProvider):
                 "confidence": 0.9,
             }]
         }, ensure_ascii=False), None
-
-    def invoke(self, operation):  # pragma: no cover - I03 must use chat
-        return AIResponse(id="i03", operation=operation, raw_text="", provider=self.provider_name)
 
 
 class FakeProjectService:

@@ -8,7 +8,6 @@ import pytest
 from packages.application.ai_context_actions import AIContextActionService
 from packages.application.ai_jobs import AIJobService, AIJobStatus, AIJobType
 from packages.application.ai_observability import AIObservabilityLog
-from packages.domain.ai_models import AIResponse
 from packages.domain.result import Error, Ok
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider
 
@@ -28,16 +27,6 @@ class D05Provider(AIProvider):
                 }
             ],
         }, ensure_ascii=False), None
-
-    def invoke(self, operation):  # pragma: no cover - command jobs use chat
-        return AIResponse(
-            id="d05",
-            operation=operation,
-            raw_text="",
-            candidates=[],
-            observations=[],
-            provider=self.provider_name,
-        )
 
 
 @pytest.mark.application

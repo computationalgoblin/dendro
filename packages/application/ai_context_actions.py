@@ -7,47 +7,28 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
+from packages.application.ai_jobs import AIJobService, AIJobType, job_type_for_action
 from packages.application.narrative_context_builder import NarrativeContextBuilder
-from packages.domain.ai_models import AIMode, AIOperation, AuthorizedContext
 from packages.domain.candidate_issue import Candidate, CandidateType
 from packages.domain.result import Error, Ok, Result
 from packages.infrastructure.ai_provider import AIProvider, create_provider
 from packages.application.prompt_registry import get_prompt
 
 
-_NODE_ACTIONS: dict[str, AIMode] = {
-    "generate_text": AIMode.EXPAND_ENTITY,
-    "improve_text": AIMode.REWRITE_DESCRIPTION,
-    "suggest_relations": AIMode.SUGGEST_RELATIONS,
-    "suggest_conflict": AIMode.CRITICAL_ANALYSIS,
-    "suggest_secrets": AIMode.CONTINUITY_QUESTION,
-    "suggest_clues": AIMode.CONTINUITY_QUESTION,
-    "detect_contradictions": AIMode.CONSISTENCY_ANALYSIS,
-    "summarize": AIMode.SUMMARIZE,
-    "create_candidate": AIMode.GENERATE_ENTITY,
-    "expand_causal_down": AIMode.GENERATE_ENTITY,
-    "explain_from_causes": AIMode.CRITICAL_ANALYSIS,
+# BETA1-AI02: the context menu / detail panel are shortcuts into the SAME
+# command-bar job pipeline. action_type → AIJobType lives in ai_jobs
+# (ACTION_TO_JOB_TYPE / job_type_for_action). Output policy by intent family:
+#   - text job types  → inline text (no candidate)
+#   - analytical types → report surfaced as a preview (no persisted candidate)
+#   - everything else (generative) → staged candidates persisted for review
+_TEXT_JOB_TYPES = {AIJobType.IMPROVE_TEXT, AIJobType.GENERATE_TEXT}
+_ANALYTICAL_JOB_TYPES = {
+    AIJobType.ANALYZE_COHERENCE,
+    AIJobType.REVIEW_GRAPH,
+    AIJobType.EXPLAIN_FROM_CAUSES,
 }
-_RELATION_ACTIONS: dict[str, AIMode] = {
-    "deepen": AIMode.EXPAND_ENTITY,
-    "suggest_evolution": AIMode.CONTINUITY_QUESTION,
-    "suggest_scene": AIMode.GENERATE_ENTITY,
-    "detect_contradiction": AIMode.CONSISTENCY_ANALYSIS,
-    "suggest_secret_clue": AIMode.CONTINUITY_QUESTION,
-    "create_candidate": AIMode.GENERATE_RELATION,
-}
-_GRAPH_ACTIONS: dict[str, AIMode] = {
-    "suggest_missing_nodes": AIMode.GENERATE_ENTITY,
-    "suggest_missing_relations": AIMode.SUGGEST_RELATIONS,
-    "detect_isolated_zones": AIMode.CRITICAL_ANALYSIS,
-    "detect_inconsistencies": AIMode.CONSISTENCY_ANALYSIS,
-    "suggest_emergent_plots": AIMode.CONTINUITY_QUESTION,
-    "describe_tree": AIMode.SUMMARIZE,
-}
-_PREVIEW_ACTIONS = {"summarize", "detect_contradictions", "detect_contradiction", "detect_isolated_zones", "detect_inconsistencies"}
 
 
 def _json_dumps(data: Any) -> str:
@@ -92,46 +73,6 @@ def _compact_context_summary(context: dict[str, Any]) -> dict[str, Any]:
         "visible_secret_count": len(knowledge.get("secrets") or []),
         "visible_clue_count": len(knowledge.get("clues") or []),
     }
-
-
-def _authorized_context(context: dict[str, Any]) -> AuthorizedContext:
-    project = context.get("project") or {}
-    target_type = context.get("target_type")
-    target_id = context.get("target_id")
-    selected_entities = [target_id] if target_type == "entity" and target_id else []
-    selected_relations = [target_id] if target_type == "relation" and target_id else []
-    neighborhood = context.get("neighborhood") or {}
-    entities = []
-    target = context.get("target")
-    if isinstance(target, dict) and target.get("id") and target_type == "entity":
-        entities.append(target)
-    entities.extend(neighborhood.get("entities") or [])
-    relations = []
-    if isinstance(target, dict) and target.get("id") and target_type == "relation":
-        relations.append(target)
-    relations.extend(neighborhood.get("relations") or [])
-    return AuthorizedContext(
-        project_name=project.get("name", ""),
-        selected_entity_ids=selected_entities,
-        selected_relation_ids=selected_relations,
-        audience=context.get("audience", "gm"),
-        project_config_snapshot={
-            "tone": project.get("tone", {}),
-            "genre": project.get("genre", {}),
-            "realism": project.get("realism", {}),
-            "creative_config": project.get("creative_config", {}),
-            "creative_brief": project.get("creative_brief", {}),
-            "ai": project.get("ai", {}),
-            "creative_context": context.get("creative_context", []),
-            "causal_context": context.get("causal_context", {}),
-            "constraints": context.get("constraints", {}),
-            "context_hash": _context_hash(context),
-        },
-        context_entities=entities,
-        context_relations=relations,
-        context_history=context.get("history") or [],
-        context_issues=context.get("issues") or [],
-    )
 
 
 @dataclass
@@ -375,12 +316,27 @@ class AIContextActionService:
         provider: AIProvider | None = None,
         provider_name: str = "simulated",
         allow_simulated: bool = False,
+        ai_job_service: AIJobService | None = None,
     ):
         self.project_service = project_service
         self.candidate_service = candidate_service
         self.context_builder = NarrativeContextBuilder(project_service)
-        self.provider = provider or create_provider(provider_name)
-        self.allow_simulated = allow_simulated
+        # Every contextual action is a focused job through the shared command-bar
+        # pipeline (gateway → provider.chat). When the host injects its command-bar
+        # AIJobService, context-menu/panel jobs land in the SAME registry and show
+        # up in the unified jobs tray; otherwise we own a private service.
+        if ai_job_service is not None:
+            self._jobs = ai_job_service
+            self.provider = ai_job_service.provider
+            self.allow_simulated = ai_job_service.allow_simulated
+        else:
+            self.provider = provider or create_provider(provider_name)
+            self.allow_simulated = allow_simulated
+            self._jobs = AIJobService(
+                provider=self.provider,
+                allow_simulated=allow_simulated,
+                project_provider=lambda: getattr(self.project_service, "active_project", None),
+            )
 
     def _provider_unconfigured_error(self) -> Error | None:
         provider_name = str(getattr(self.provider, "provider_name", "ai"))
@@ -388,15 +344,15 @@ class AIContextActionService:
             return Error("IA no configurada: configura un proveedor real para usar acciones IA.")
         return None
 
-    def run_node_action(self, entity_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm") -> Result[AIContextActionResult, str]:
-        mode = _NODE_ACTIONS.get(action_type)
-        if mode is None:
+    def run_node_action(self, entity_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm", language: str = "es") -> Result[AIContextActionResult, str]:
+        job_type = job_type_for_action(action_type)
+        if job_type == AIJobType.UNKNOWN:
             return Error(f"Unknown node AI action: {action_type}")
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
         context = self.context_builder.build_for_entity(entity_id, audience=audience)
-        return self._run("node", entity_id, action_type, mode, context, prompt_hint)
+        return self._run_focused(
+            action_type=action_type, target_type="node", target_id=entity_id,
+            job_type=job_type, context=context, prompt_hint=prompt_hint, language=language,
+        )
 
     def run_node_text_suggestion(
         self,
@@ -408,41 +364,19 @@ class AIContextActionService:
     ) -> Result[AIContextActionResult, str]:
         """Return a text-only inline suggestion for an entity.
 
-        This path is deliberately NOT routed through generate_candidates() and
-        never calls CandidateService. It is for the entity detail panel only:
-        the suggestion remains local UI text until the user accepts it and then
-        saves the entity through EntityService.
+        Runs an IMPROVE_TEXT focused job: it returns free text, never stages a
+        candidate. The suggestion stays local UI text until the user accepts it
+        and saves the entity through EntityService.
         """
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
         context = self.context_builder.build_for_entity(entity_id, audience=audience)
-        if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
-            return Error("Target not visible for requested audience")
-        context_hash = _context_hash(context)
         lang = "en" if str(language).lower().startswith("en") else "es"
-        system_prompt = _ENTITY_TEXT_SYSTEM_PROMPT_EN if lang == "en" else _ENTITY_TEXT_SYSTEM_PROMPT_ES
-        user_prompt = _entity_text_user_prompt(context, prompt_hint, lang)
-        try:
-            text, error = self.provider.chat(system_prompt, user_prompt)
-        except Exception as exc:
-            return Error(f"Provider error: {exc}")
-        if error:
-            return Error(str(error))
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return Error("La IA no devolvió una sugerencia de texto.")
-        return Ok(AIContextActionResult(
-            action_type="improve_text",
-            target_type="node",
-            target_id=entity_id,
-            context_hash=context_hash,
-            raw_text=cleaned,
-            candidates=[],
-            previews=[self._preview_payload("improve_text", "node", entity_id, {}, cleaned, context_hash)],
-            observations=[],
-            provider=getattr(self.provider, "provider_name", "ai"),
-        ))
+        prompt = _entity_text_user_prompt(context, prompt_hint, lang)
+        return self._run_focused(
+            action_type="improve_text", target_type="node", target_id=entity_id,
+            job_type=AIJobType.IMPROVE_TEXT, context=context, prompt_hint=prompt,
+            language=lang, raw_prompt=True,
+            empty_error="La IA no devolvió una sugerencia de texto.",
+        )
 
     def run_relation_text_suggestion(
         self,
@@ -452,37 +386,16 @@ class AIContextActionService:
         audience: str = "gm",
         language: str = "es",
     ) -> Result[AIContextActionResult, str]:
-        """Return a text-only inline suggestion for a relation."""
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
+        """Text-only inline suggestion for a relation (IMPROVE_TEXT focused job)."""
         context = self.context_builder.build_for_relation(relation_id, audience=audience)
-        if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
-            return Error("Target not visible for requested audience")
-        context_hash = _context_hash(context)
         lang = "en" if str(language).lower().startswith("en") else "es"
-        system_prompt = _RELATION_TEXT_SYSTEM_PROMPT_EN if lang == "en" else _RELATION_TEXT_SYSTEM_PROMPT_ES
-        user_prompt = _relation_text_user_prompt(context, prompt_hint, lang)
-        try:
-            text, error = self.provider.chat(system_prompt, user_prompt)
-        except Exception as exc:
-            return Error(f"Provider error: {exc}")
-        if error:
-            return Error(str(error))
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return Error("La IA no devolvió una sugerencia de texto.")
-        return Ok(AIContextActionResult(
-            action_type="improve_relation_text",
-            target_type="relation",
-            target_id=relation_id,
-            context_hash=context_hash,
-            raw_text=cleaned,
-            candidates=[],
-            previews=[self._preview_payload("improve_relation_text", "relation", relation_id, {}, cleaned, context_hash)],
-            observations=[],
-            provider=getattr(self.provider, "provider_name", "ai"),
-        ))
+        prompt = _relation_text_user_prompt(context, prompt_hint, lang)
+        return self._run_focused(
+            action_type="improve_relation_text", target_type="relation", target_id=relation_id,
+            job_type=AIJobType.IMPROVE_TEXT, context=context, prompt_hint=prompt,
+            language=lang, raw_prompt=True,
+            empty_error="La IA no devolvió una sugerencia de texto.",
+        )
 
     def run_selection_coherence_analysis(
         self,
@@ -496,41 +409,18 @@ class AIContextActionService:
         """Analyze joint coherence for a selected subgraph without mutating canon."""
         if not (entity_ids or relation_ids):
             return Error("Selecciona al menos un nodo o una relación para analizar coherencia.")
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
         selection = context.get("selection") or {}
         if not (selection.get("entities") or selection.get("relations")):
             return Error("La selección no contiene elementos visibles para analizar.")
-        context_hash = _context_hash(context)
         lang = "en" if str(language).lower().startswith("en") else "es"
-        system_prompt = _COHERENCE_SYSTEM_PROMPT_EN if lang == "en" else _COHERENCE_SYSTEM_PROMPT_ES
-        user_prompt = _selection_coherence_user_prompt(context, prompt_hint, lang)
-        try:
-            text, error = self.provider.chat(system_prompt, user_prompt)
-        except Exception as exc:
-            return Error(f"Provider error: {exc}")
-        if error:
-            return Error(str(error))
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return Error("La IA no devolvió un informe de coherencia.")
-        return Ok(AIContextActionResult(
-            action_type="analyze_coherence",
-            target_type="graph_selection",
-            target_id=None,
-            context_hash=context_hash,
-            raw_text=cleaned,
-            candidates=[],
-            previews=[self._preview_payload("analyze_coherence", "graph_selection", None, {
-                "selected_entity_ids": list(entity_ids or []),
-                "selected_relation_ids": list(relation_ids or []),
-                "selection_summary": _compact_context_summary(context),
-            }, cleaned, context_hash)],
-            observations=[],
-            provider=getattr(self.provider, "provider_name", "ai"),
-        ))
+        prompt = _selection_coherence_user_prompt(context, prompt_hint, lang)
+        return self._run_focused(
+            action_type="analyze_coherence", target_type="graph_selection", target_id=None,
+            job_type=AIJobType.GENERATE_TEXT, context=context, prompt_hint=prompt, language=lang,
+            raw_prompt=True, entity_ids=entity_ids, relation_ids=relation_ids,
+            empty_error="La IA no devolvió un informe de coherencia.",
+        )
 
     def run_selection_coherence_repair(
         self,
@@ -546,47 +436,25 @@ class AIContextActionService:
         if not (entity_ids or relation_ids):
             return Error("Selecciona elementos antes de generar una reparación.")
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
-        context_hash = _context_hash(context)
         lang = "en" if str(language).lower().startswith("en") else "es"
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
-        system_prompt = _COHERENCE_REPAIR_SYSTEM_PROMPT_EN if lang == "en" else _COHERENCE_REPAIR_SYSTEM_PROMPT_ES
-        user_prompt = _selection_repair_user_prompt(context, proposal, prompt_hint, lang)
-        try:
-            text, error = self.provider.chat(system_prompt, user_prompt)
-        except Exception as exc:
-            return Error(f"Provider error: {exc}")
-        if error:
-            return Error(str(error))
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return Error("La IA no devolvió una reparación.")
-        return Ok(AIContextActionResult(
-            action_type="repair_coherence",
-            target_type="graph_selection",
-            target_id=None,
-            context_hash=context_hash,
-            raw_text=cleaned,
-            candidates=[],
-            previews=[self._preview_payload("repair_coherence", "graph_selection", None, {
-                "selected_entity_ids": list(entity_ids or []),
-                "selected_relation_ids": list(relation_ids or []),
-                "proposal": proposal,
-            }, cleaned, context_hash)],
-            observations=[],
-            provider=getattr(self.provider, "provider_name", "ai"),
-        ))
+        prompt = _selection_repair_user_prompt(context, proposal, prompt_hint, lang)
+        return self._run_focused(
+            action_type="repair_coherence", target_type="graph_selection", target_id=None,
+            job_type=AIJobType.GENERATE_TEXT, context=context, prompt_hint=prompt, language=lang,
+            raw_prompt=True, entity_ids=entity_ids, relation_ids=relation_ids,
+            empty_error="La IA no devolvió una reparación.",
+        )
 
-    def run_relation_action(self, relation_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm") -> Result[AIContextActionResult, str]:
-        mode = _RELATION_ACTIONS.get(action_type)
-        if mode is None:
+    def run_relation_action(self, relation_id: str, action_type: str, *, prompt_hint: str = "", audience: str = "gm", language: str = "es") -> Result[AIContextActionResult, str]:
+        # On a relation, "create_candidate" means propose a relation, not an entity.
+        job_type = AIJobType.SUGGEST_RELATIONS if action_type == "create_candidate" else job_type_for_action(action_type)
+        if job_type == AIJobType.UNKNOWN:
             return Error(f"Unknown relation AI action: {action_type}")
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
         context = self.context_builder.build_for_relation(relation_id, audience=audience)
-        return self._run("relation", relation_id, action_type, mode, context, prompt_hint)
+        return self._run_focused(
+            action_type=action_type, target_type="relation", target_id=relation_id,
+            job_type=job_type, context=context, prompt_hint=prompt_hint, language=language,
+        )
 
     def run_graph_action(
         self,
@@ -598,100 +466,140 @@ class AIContextActionService:
         audience: str = "gm",
         language: str = "es",
     ) -> Result[AIContextActionResult, str]:
-        mode = _GRAPH_ACTIONS.get(action_type)
-        if mode is None:
+        job_type = job_type_for_action(action_type)
+        if job_type == AIJobType.UNKNOWN:
             return Error(f"Unknown graph AI action: {action_type}")
         context = self.context_builder.build_for_graph_selection(entity_ids=entity_ids or [], relation_ids=relation_ids or [], audience=audience)
-        unavailable = self._provider_unconfigured_error()
-        if unavailable:
-            return unavailable
-        return self._run("graph", None, action_type, mode, context, prompt_hint, language=language)
+        return self._run_focused(
+            action_type=action_type, target_type="graph", target_id=None,
+            job_type=job_type, context=context, prompt_hint=prompt_hint, language=language,
+            entity_ids=entity_ids, relation_ids=relation_ids,
+        )
 
-    def _run(
+    def _seed_context_scope(self, context: dict[str, Any], *, target_type: str, target_id: str | None, language: str, entity_ids=None, relation_ids=None) -> dict[str, Any]:
+        """Build the focused context_scope the command-bar pipeline consumes."""
+        selected_entities = list(entity_ids or ([target_id] if target_type == "node" and target_id else []))
+        selected_relations = list(relation_ids or ([target_id] if target_type == "relation" and target_id else []))
+        return {
+            "authorized_context": context,
+            "selected_entity_ids": selected_entities,
+            "selected_relation_ids": selected_relations,
+            "focus_entity_id": target_id if target_type == "node" else None,
+            "focus_relation_id": target_id if target_type == "relation" else None,
+            "audience": context.get("audience", "gm"),
+            "language": language,
+            "context_summary": _compact_context_summary(context),
+        }
+
+    def _run_focused(
         self,
+        *,
+        action_type: str,
         target_type: str,
         target_id: str | None,
-        action_type: str,
-        mode: AIMode,
+        job_type: AIJobType,
         context: dict[str, Any],
         prompt_hint: str,
         language: str = "es",
+        raw_prompt: bool = False,
+        entity_ids: list[str] | None = None,
+        relation_ids: list[str] | None = None,
+        empty_error: str = "La IA no devolvió contenido.",
     ) -> Result[AIContextActionResult, str]:
+        """Run a focused job through the shared command-bar pipeline.
+
+        Output policy: text intents → inline text; analytical intents → report
+        surfaced as a preview; generative intents → staged candidates persisted
+        via CandidateService (preserving the menu's immediate-review behaviour).
+        """
         unavailable = self._provider_unconfigured_error()
         if unavailable:
             return unavailable
         if context.get("target") == {"redacted": True, "reason": "not_visible_for_audience"}:
             return Error("Target not visible for requested audience")
         context_hash = _context_hash(context)
-        operation = AIOperation(
-            mode=mode,
-            context=_authorized_context(context),
-            prompt_hint=self._prompt(action_type, prompt_hint, context, language=language),
-            entity_id=target_id if target_type == "node" else None,
-            entity_ids=[target_id] if target_type == "node" and target_id else [],
-            max_candidates=3,
+        scope = self._seed_context_scope(
+            context, target_type=target_type, target_id=target_id, language=language,
+            entity_ids=entity_ids, relation_ids=relation_ids,
         )
-        try:
-            response = self.provider.invoke(operation)
-        except Exception as exc:
-            return Error(f"Provider error: {exc}")
-        if response.error:
-            return Error(response.error)
+        if raw_prompt:
+            prompt = prompt_hint
+            # M6: en jobs raw_prompt (menú/panel) el target ya viaja embebido en
+            # el prompt; reducir authorized_context a un resumen compacto evita
+            # duplicar la entidad completa en el mensaje.
+            scope["authorized_context"] = _compact_context_summary(context)
+        else:
+            prompt = (prompt_hint or "").strip() or (
+                f"Acción '{action_type}' sobre la selección. Genera resultados "
+                "revisables usando el contexto autorizado."
+            )
+        result = self._jobs.run_focused_job(job_type, prompt, context_scope=scope)
+        if isinstance(result, Error):
+            return result
+        res = result.value.result or {}
+        provider = str(res.get("provider") or getattr(self.provider, "provider_name", "ai"))
+        open_questions = list(res.get("open_questions") or [])
+        selection_payload = {
+            "selected_entity_ids": list(scope.get("selected_entity_ids") or []),
+            "selected_relation_ids": list(scope.get("selected_relation_ids") or []),
+        }
 
+        if job_type in _TEXT_JOB_TYPES:
+            body = (res.get("text") or "").strip()
+            if not body:
+                return Error(empty_error)
+            return Ok(AIContextActionResult(
+                action_type=action_type, target_type=target_type, target_id=target_id,
+                context_hash=context_hash, raw_text=body, candidates=[],
+                previews=[self._preview_payload(action_type, target_type, target_id, selection_payload, body, context_hash)],
+                observations=[], provider=provider,
+            ))
+
+        if job_type in _ANALYTICAL_JOB_TYPES:
+            body = (res.get("report") or res.get("summary") or "").strip()
+            return Ok(AIContextActionResult(
+                action_type=action_type, target_type=target_type, target_id=target_id,
+                context_hash=context_hash, raw_text=body, candidates=[],
+                previews=[self._preview_payload(action_type, target_type, target_id, selection_payload, body, context_hash)],
+                observations=open_questions, provider=provider,
+            ))
+
+        # Generative intents: persist staged candidates for review.
         candidates: list[Candidate] = []
-        previews: list[dict[str, Any]] = []
-        for index, payload in enumerate(response.candidates or []):
-            payload = dict(payload)
-            payload.setdefault("canonical_status", "candidate_non_canon")
-            payload.setdefault("facts_status", "proposal_only_not_confirmed")
-            if action_type in _PREVIEW_ACTIONS:
-                previews.append(self._preview_payload(action_type, target_type, target_id, payload, response.raw_text, context_hash))
+        for staged in res.get("candidates") or []:
+            if not isinstance(staged, dict):
                 continue
-            created = self._create_candidate(
-                action_type=action_type,
-                target_type=target_type,
-                target_id=target_id,
-                context=context,
-                context_hash=context_hash,
-                payload=payload,
-                raw_text=response.raw_text,
-                provider=response.provider,
-                index=index,
+            created = self._persist_candidate(
+                staged, action_type=action_type, target_type=target_type,
+                target_id=target_id, context=context, context_hash=context_hash, provider=provider,
             )
             if isinstance(created, Error):
-                return Error(created.error)
+                return created
             candidates.append(created.value)
-
-        if not candidates and not previews and (response.raw_text or response.observations):
-            previews.append(self._preview_payload(action_type, target_type, target_id, {}, response.raw_text, context_hash))
-
+        report = str(res.get("report") or "")
+        previews: list[dict[str, Any]] = []
+        if not candidates and (report or open_questions):
+            previews.append(self._preview_payload(action_type, target_type, target_id, selection_payload, report, context_hash))
         return Ok(AIContextActionResult(
-            action_type=action_type,
-            target_type=target_type,
-            target_id=target_id,
-            context_hash=context_hash,
-            raw_text=response.raw_text,
-            candidates=candidates,
-            previews=previews,
-            observations=list(response.observations or []),
-            provider=response.provider,
+            action_type=action_type, target_type=target_type, target_id=target_id,
+            context_hash=context_hash, raw_text=report, candidates=candidates,
+            previews=previews, observations=open_questions, provider=provider,
         ))
 
-    def _create_candidate(
+    def _persist_candidate(
         self,
+        staged: dict[str, Any],
         *,
         action_type: str,
         target_type: str,
         target_id: str | None,
         context: dict[str, Any],
         context_hash: str,
-        payload: dict[str, Any],
-        raw_text: str,
         provider: str,
-        index: int,
     ) -> Result[Candidate, str]:
-        title = payload.get("name") or payload.get("title") or f"IA {action_type} #{index + 1}"
-        metadata = {
+        data = dict(staged)
+        metadata = dict(data.get("metadata") or {})
+        metadata.update({
             "origin": "AIContextActionService",
             "action_type": action_type,
             "target_type": target_type,
@@ -699,23 +607,16 @@ class AIContextActionService:
             "context_hash": context_hash,
             "context_summary": _compact_context_summary(context),
             "provider": provider,
-            "raw_text_preview": raw_text[:500],
             "canonical_status": "candidate_non_canon",
-        }
-        data = {
-            "title": title,
-            "candidate_type": _candidate_type_for(action_type, payload),
-            "proposed_data": payload,
-            "affected_entity_ids": [target_id] if target_type == "node" and target_id else [],
-            "affected_relation_ids": [target_id] if target_type == "relation" and target_id else [],
-            "source": "ia",
-            "source_id": None,
-            "confidence": float(payload.get("confidence", 0.5) or 0.5),
-            "justification": payload.get("justification") or raw_text[:500],
-            "expected_impact": payload.get("expected_impact", "Sugerencia revisable; no canon hasta aceptación explícita."),
-            "possible_contradictions": payload.get("possible_contradictions", []),
-            "metadata": metadata,
-        }
+        })
+        data["metadata"] = metadata
+        proposed = dict(data.get("proposed_data") or {})
+        proposed.setdefault("canonical_status", "candidate_non_canon")
+        proposed.setdefault("facts_status", "proposal_only_not_confirmed")
+        data["proposed_data"] = proposed
+        data["source"] = "ia"
+        data.setdefault("affected_entity_ids", [target_id] if target_type == "node" and target_id else [])
+        data.setdefault("affected_relation_ids", [target_id] if target_type == "relation" and target_id else [])
         return self.candidate_service.create_candidate(data)
 
     def _preview_payload(self, action_type: str, target_type: str, target_id: str | None, payload: dict[str, Any], raw_text: str, context_hash: str) -> dict[str, Any]:
@@ -728,18 +629,6 @@ class AIContextActionService:
             "payload": payload,
             "canonical_status": "preview_non_canon",
         }
-
-    def _prompt(self, action_type: str, prompt_hint: str, context: dict[str, Any], language: str = "es") -> str:
-        lang_note = f"\nIdioma de respuesta: {language}." if language else ""
-        return (
-            "Acción IA contextual: " + action_type + "\n"
-            "Restricciones: no modificar canon; producir candidatos/previews revisables; "
-            "no tratar candidatos no canonizados como hechos.\n"
-            f"Context hash: {_context_hash(context)}\n"
-            f"Resumen: {_json_dumps(_compact_context_summary(context))}\n"
-            f"Instrucción adicional: {prompt_hint or '—'}"
-            f"{lang_note}"
-        )
 
 
 __all__ = ["AIContextActionResult", "AIContextActionService"]

@@ -40,6 +40,16 @@ def _list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+# Tipos que el modelo de dominio considera "Rama" (contenedoras); el resto son "Hoja".
+_BRANCH_DISPLAY_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
+
+
+def _neighborhood_display_type(entity_type: str) -> str:
+    """Etiqueta UI: 'rama' para tipos contenedores, 'hoja' para individuales."""
+    return "rama" if str(entity_type or "").lower() in _BRANCH_DISPLAY_TYPES else "hoja"
+
+
+
 def _safe_obj(obj: Any, *, exclude: set[str] | None = None) -> dict[str, Any]:
     """Small deterministic serializer for config/domain objects used in context."""
     exclude = exclude or set()
@@ -154,6 +164,110 @@ class NarrativeContextBuilder:
         context["causal_context"] = self._causal_context(selected_entities, audience)
         context["creative_context"] = selected_entity_creative_context(self.project, expanded_entity_ids)
         return context
+
+    def build_neighborhood_pack(
+        self,
+        entity_ids: list[str],
+        *,
+        audience: str = "gm",
+        max_hops: int = 2,
+        max_items_per_hop: int = 8,
+    ) -> dict:
+        """BFS desde la selección respetando visibilidad.
+
+        Devuelve NeighborhoodPack.to_dict(). Las entidades semilla (hop 0) NO
+        entran en items (ya viajan en la selección); solo sus vecinos. Las
+        relaciones que tocan semillas cuentan como hop 1.
+        """
+        from packages.application.neighborhood import (
+            NeighborhoodItem,
+            NeighborhoodPack,
+            NeighborhoodRelation,
+            decay_weight,
+        )
+
+        seeds = [
+            str(getattr(e, "id", ""))
+            for e in self._entities_by_ids([str(x) for x in (entity_ids or []) if x])
+            if self._can_include_entity(e, audience)
+        ]
+        seeds = [s for s in seeds if s]
+        if not seeds:
+            return NeighborhoodPack(items=[], relations=[], max_hops=max_hops, warnings=["no_selection"]).to_dict()
+
+        project_relations = _list(getattr(self.project, "relations", [])) if self.project is not None else []
+
+        visited: set[str] = set(seeds)
+        items: list[NeighborhoodItem] = []
+        relations: list[NeighborhoodRelation] = []
+        seen_relations: set[str] = set()
+        warnings: list[str] = []
+
+        frontier = set(seeds)
+        hop = 1
+        while hop <= max_hops and frontier:
+            next_frontier: set[str] = set()
+            hop_items = 0
+            for relation in project_relations:
+                if not self._can_include_relation(relation, audience):
+                    continue
+                src = str(getattr(relation, "source_id", "") or "")
+                tgt = str(getattr(relation, "target_id", "") or "")
+                if not src or not tgt:
+                    continue
+                # ¿Toca la frontera actual?
+                touches_src = src in frontier
+                touches_tgt = tgt in frontier
+                if not (touches_src or touches_tgt):
+                    continue
+                rid = str(getattr(relation, "id", "") or "")
+                if rid and rid not in seen_relations:
+                    seen_relations.add(rid)
+                    relations.append(NeighborhoodRelation(
+                        relation_id=rid,
+                        source_id=src,
+                        target_id=tgt,
+                        relation_type=_string_value(getattr(relation, "relation_type", "")),
+                        hop=hop,
+                        weight=decay_weight(hop),
+                    ))
+                # El extremo NO visitado es el nuevo vecino.
+                for near, other in ((src, tgt), (tgt, src)):
+                    if near in frontier and other not in visited:
+                        entity = self._entity_by_id(other)
+                        if entity is None or not self._can_include_entity(entity, audience):
+                            continue
+                        if hop_items >= max_items_per_hop:
+                            if "hop_capped" not in warnings:
+                                warnings.append("hop_capped")
+                            continue
+                        visited.add(other)
+                        next_frontier.add(other)
+                        hop_items += 1
+                        items.append(self._neighborhood_item(entity, hop, decay_weight(hop)))
+            frontier = next_frontier
+            hop += 1
+
+        return NeighborhoodPack(
+            items=items,
+            relations=relations,
+            max_hops=max_hops,
+            warnings=warnings,
+        ).to_dict()
+
+    def _neighborhood_item(self, entity, hop: int, weight: float):
+        from packages.application.neighborhood import NeighborhoodItem
+
+        entity_type = _string_value(getattr(entity, "entity_type", ""))
+        return NeighborhoodItem(
+            entity_id=str(getattr(entity, "id", "")),
+            name=_string_value(getattr(entity, "name", "")),
+            entity_type=entity_type,
+            display_type=_neighborhood_display_type(entity_type),
+            hop=hop,
+            weight=weight,
+            layer_ids=[str(x) for x in (getattr(entity, "layer_ids", []) or [])],
+        )
 
     def build_context(self, target_type: str, target_id: str | None = None, *, audience: str = "gm") -> dict[str, Any]:
         context = self._base_context(target_type, target_id, audience)

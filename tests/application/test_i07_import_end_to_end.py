@@ -11,7 +11,6 @@ from packages.application.query_service import QueryService
 from packages.application.rag_service import RAGService
 from packages.application.relation_service import RelationService
 from packages.application.source_service import SourceService
-from packages.domain.ai_models import AIResponse
 from packages.domain.import_models import ImportFormat, ImportReviewState
 from packages.domain.result import Error, Ok
 from packages.application.narrative_rag_contract import CorpusItemKind
@@ -99,9 +98,6 @@ class I07Provider(AIProvider):
                 "confidence": 0.4,
             })
         return json.dumps({"candidates": candidates}, ensure_ascii=False), None
-
-    def invoke(self, operation):  # pragma: no cover - I07 must use chat
-        return AIResponse(id="i07", operation=operation, raw_text="", provider=self.provider_name)
 
 
 def _candidate_by_name(basket, name: str):

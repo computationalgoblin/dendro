@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from packages.application.orchestrator_service import OrchestratorService
-from packages.domain.ai_models import AIMode, AIResponse
+from packages.application.orchestrator_service import OrchestratorResult, OrchestratorService
 from packages.domain.analysis_models import (
     CausalAnalysisResult, ConsistencyAnalysisResult, CriticalAnalysisResult,
     CriticalAnalysisTarget,
@@ -20,7 +19,7 @@ class AnalysisService:
         self._is = issue_service
         self._ss = source_service
 
-    def _create_source_ia(self, mode: str, resp: AIResponse) -> str | None:
+    def _create_source_ia(self, mode: str, resp: OrchestratorResult) -> str | None:
         if not self._ss:
             return None
         try:
@@ -31,10 +30,10 @@ class AnalysisService:
                 "metadata": {
                     "provider": resp.provider,
                     "ai_mode": mode,
-                    "audience": resp.operation.context.audience,
+                    "audience": resp.context.audience,
                     "filters": {
-                        "canon": resp.operation.context.allowed_canon_states,
-                        "visibility": resp.operation.context.allowed_visibility_states,
+                        "canon": resp.context.allowed_canon_states,
+                        "visibility": resp.context.allowed_visibility_states,
                     },
                 },
             })
@@ -43,7 +42,7 @@ class AnalysisService:
             return None
 
     def analyze_entity(self, entity_id: str, filters=None) -> Result[CriticalAnalysisResult, str]:
-        rresp = self._orch.invoke(AIMode.CRITICAL_ANALYSIS, entity_id, "", filters)
+        rresp = self._orch.invoke("critical_analysis", entity_id, "", filters)
         if isinstance(rresp, Error):
             return rresp
         resp = rresp.value
@@ -65,7 +64,7 @@ class AnalysisService:
         return Ok(result)
 
     def analyze_causal(self, entity_id: str, filters=None) -> Result[CausalAnalysisResult, str]:
-        rresp = self._orch.invoke(AIMode.CAUSAL_ANALYSIS, entity_id, "", filters)
+        rresp = self._orch.invoke("causal_analysis", entity_id, "", filters)
         if isinstance(rresp, Error):
             return rresp
         resp = rresp.value
@@ -82,7 +81,7 @@ class AnalysisService:
         return Ok(result)
 
     def analyze_consistency(self, scope_id=None, filters=None) -> Result[ConsistencyAnalysisResult, str]:
-        rresp = self._orch.invoke(AIMode.CONSISTENCY_ANALYSIS, scope_id, "", filters)
+        rresp = self._orch.invoke("consistency_analysis", scope_id, "", filters)
         if isinstance(rresp, Error):
             return rresp
         resp = rresp.value

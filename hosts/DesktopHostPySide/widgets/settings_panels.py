@@ -470,31 +470,6 @@ class ProjectPanel(QWidget):
             self.status_label.setText(f"Error guardando: {exc}")
 
 
-class AppConfigPanel(_PanelBase):
-    """Backward-compatible wrapper that delegates to ConfigPanel."""
-
-    def __init__(
-        self,
-        *,
-        advanced_enabled: bool,
-        diagnostic_visible: bool,
-        callbacks: dict[str, Callable],
-        parent: QWidget | None = None,
-    ):
-        super().__init__("Configuración", "", parent)
-        # Embed the real ConfigPanel inside this wrapper
-        from hosts.DesktopHostPySide.app_context import AppContext
-        self._inner = QWidget(self)
-        inner_layout = QVBoxLayout(self._inner)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
-        note = QLabel("Usa ConfigPanel directamente para la nueva interfaz con pestañas.")
-        note.setObjectName("mutedLabel")
-        note.setWordWrap(True)
-        inner_layout.addWidget(note)
-        inner_layout.addStretch(1)
-        self.layout.addWidget(self._inner)
-
-
 class AISettingsPanel(_PanelBase):
     """OpenAI-compatible/simulated provider settings and test surface."""
 
@@ -659,28 +634,6 @@ def _build_appearance_tab(ctx, on_apply=None, parent: QWidget | None = None) -> 
     font_family_combo.setCurrentIndex(fam_idx if fam_idx >= 0 else 0)
     form.addRow("Familia tipográfica", font_family_combo)
 
-    # Fullscreen (hidden — not yet functional)
-    fullscreen_check = QCheckBox("Pantalla completa al iniciar")
-    fullscreen_check.setChecked(ctx.fullscreen)
-    fullscreen_check.setVisible(False)
-    form.addRow("", fullscreen_check)
-    fs_note = QLabel("La pantalla completa se configurará en futuras versiones.")
-    fs_note.setObjectName("mutedLabel")
-    fs_note.setWordWrap(True)
-    fs_note.setVisible(False)
-    form.addRow("", fs_note)
-
-    # Dark mode (hidden — not yet functional)
-    dark_check = QCheckBox("Modo oscuro")
-    dark_check.setChecked(ctx.dark_mode)
-    dark_check.setVisible(False)
-    form.addRow("", dark_check)
-    dm_note = QLabel("El modo oscuro estará disponible próximamente.")
-    dm_note.setObjectName("mutedLabel")
-    dm_note.setWordWrap(True)
-    dm_note.setVisible(False)
-    form.addRow("", dm_note)
-
     # Animation intensity
     anim_combo = QComboBox()
     anim_combo.addItems(list(_ANIM_MAP.keys()))
@@ -702,8 +655,6 @@ def _build_appearance_tab(ctx, on_apply=None, parent: QWidget | None = None) -> 
     def _save_appearance():
         ctx.font_size = _FONT_SIZE_MAP.get(font_size_combo.currentText(), "medium")
         ctx.font_family = _FONT_FAMILY_MAP.get(font_family_combo.currentText(), "Georgia")
-        ctx.fullscreen = fullscreen_check.isChecked()
-        ctx.dark_mode = dark_check.isChecked()
         ctx.animation_intensity = _ANIM_MAP.get(anim_combo.currentText(), "normal")
         ctx.language = 'es' if lang_combo.currentText() == "Español" else 'en'
         ctx.save_preferences()
@@ -942,41 +893,13 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
     return tab
 
 
-def _build_advanced_tab(ctx, advanced_enabled: bool, diagnostic_visible: bool, callbacks: dict[str, Callable], parent: QWidget | None = None) -> QWidget:
-    """Build the Avanzado tab content."""
-    tab = QWidget(parent)
-    lay = QVBoxLayout(tab)
-    lay.setContentsMargins(12, 12, 12, 12)
-    lay.setSpacing(10)
-
-    mode_card = Card("Modo de trabajo", "Normal para creación; avanzado para tablas, IDs, JSON y diagnóstico.")
-    advanced_check = QCheckBox("Modo avanzado")
-    advanced_check.setChecked(bool(advanced_enabled))
-    advanced_check.toggled.connect(lambda _: callbacks.get("toggle_advanced", lambda: None)())
-    mode_card.layout.addWidget(advanced_check)
-    lay.addWidget(mode_card)
-
-    # Diagnostic toggle is intentionally hidden until it works correctly.
-    # Muted note about advanced mode
-    note = QLabel("El modo avanzado muestra IDs, tablas técnicas y opciones de depuración.")
-    note.setObjectName("mutedLabel")
-    note.setWordWrap(True)
-    lay.addWidget(note)
-
-    lay.addStretch(1)
-    return tab
-
-
 class ConfigPanel(QWidget):
-    """Tabbed configuration panel with Apariencia, IA, and Avanzado tabs."""
+    """Tabbed configuration panel with Apariencia and IA tabs."""
 
     def __init__(
         self,
         *,
         ctx,
-        advanced_enabled: bool,
-        diagnostic_visible: bool,
-        callbacks: dict[str, Callable],
         ai_controller=None,
         on_status=None,
         on_apply=None,
@@ -984,7 +907,6 @@ class ConfigPanel(QWidget):
     ):
         super().__init__(parent)
         self.ctx = ctx
-        self.callbacks = callbacks
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1006,9 +928,5 @@ class ConfigPanel(QWidget):
         # Tab 2: IA
         ia = _build_ia_tab(ctx, ai_controller, on_status, self)
         self.tabs.addTab(ia, "IA")
-
-        # Tab 3: Avanzado — HIDDEN from UI (T05): keep code, just don't add the tab
-        # advanced = _build_advanced_tab(ctx, advanced_enabled, diagnostic_visible, callbacks, self)
-        # self.tabs.addTab(advanced, "Avanzado")
 
         root.addWidget(self.tabs, stretch=1)

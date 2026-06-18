@@ -4,7 +4,7 @@ Expanded panel for semantic tree containers.  Sections:
   1. Identidad  (name, tree_type, color, brief, extended_description)
   2. Función narrativa (narrative_role, importance, development)
   3. Contenido  (members, sub-trees, internal/external relations)
-  4. Worldbuilding + Canon (layers, canon/visibility/certainty, rules, questions)
+  4. Worldbuilding + Canon (layers, canon/certainty, rules, questions)
   5. IA         (suggestion frame with editable preview)
 
 Uses TreeMeta (B32-T01) for tree-specific custom_metadata keys.
@@ -421,7 +421,7 @@ class TreeDetailPanel(QWidget):
         self.canon_combo = _styled_combo([e.value for e in CanonState], "")
         wc_form.addRow("Estado canon", self.canon_combo)
 
-        # BETA1-F04: la visibilidad sale del modo normal del producto.
+        # BETA1-H07: la visibilidad sale del producto visible.
         # El combo existe (la carga/guardado lo siguen usando) pero no se
         # monta en la UI.
         self.visibility_combo = _styled_combo([e.value for e in VisibilityState], "")
@@ -505,12 +505,8 @@ class TreeDetailPanel(QWidget):
         self.more_section.body_layout.addWidget(self.create_ring_btn)
 
         # ═══ 5. IA ═══
+        # R8: _section_card already renders the "IA" header — no second title.
         ai_card, ai_layout = _section_card("IA")
-        ai_title = QLabel("IA")  # BETA1-F05: título uniforme con hoja/relación
-        ai_title.setStyleSheet(
-            f"color: {_LABEL_COLOR}; font-weight: 600; font-size: 12px; background: transparent;"
-        )
-        ai_layout.addWidget(ai_title)
 
         # Action buttons row
         ai_btn_row = QHBoxLayout()
@@ -918,7 +914,7 @@ class TreeDetailPanel(QWidget):
             "narrative_importance": self._current_combo_text(self.importance_combo) or entity.narrative_importance.value,
             "development_level": self._current_combo_text(self.development_combo) or entity.development_level.value,
             "canon_state": self._current_combo_text(self.canon_combo) or entity.canon_state.value,
-            "visibility_state": self._current_combo_text(self.visibility_combo) or entity.visibility_state.value,
+            "visibility_state": _enum_value(getattr(entity, "visibility_state", None), "visible_usuario"),
             "certainty_level": self._current_combo_text(self.certainty_combo) or entity.certainty_level.value,
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(entity, "layer_ids", []) or []),
             "private_notes": self.private_notes_edit.toPlainText().strip(),

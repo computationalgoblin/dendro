@@ -28,6 +28,7 @@ from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
+from packages.application.prompt_budget import DEFAULT_PROMPT_BUDGET_TOKENS, enforce_budget
 
 
 def _now_iso() -> str:
@@ -963,8 +964,91 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
 
 
 def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
-    # Keep only serializable, non-secret data. Context summaries should not expose JSON in normal UI.
-    return dict(context or {})
+    """Devuelve el context_scope SIN las claves que ya tienen su sección propia.
+
+    No es whitelist por intent (M1, quitado): es exclusión global de las claves
+    que YA viajan procesadas en otras secciones del mensaje, para evitar
+    duplicación.
+    """
+    return {
+        k: v for k, v in (context or {}).items()
+        if k not in _DUPLICATED_CONTEXT_KEYS
+    }
+
+
+# Claves que ya viajan procesadas en otras secciones del mensaje.
+# Se excluyen SIEMPRE de contexto_autorizado para evitar duplicación (M2).
+_DUPLICATED_CONTEXT_KEYS = frozenset({
+    "creative_brief",           # → cerco_canon + parametros_permanentes
+    "creative_context",         # → parametros_permanentes
+    "branch_creative_context",  # → parametros_permanentes
+    "contexto_causal",          # → posicion_causal
+    "vecindario",               # → vecindario
+})
+
+
+def _cerco_canon(context: dict[str, Any]) -> dict[str, Any]:
+    """RESTRINGE. Canon duro + negative_space. Peso ALTO."""
+    brief = context.get("creative_brief") or {}
+    if not isinstance(brief, dict):
+        brief = {}
+    canon = brief.get("canon") or {}
+    if not isinstance(canon, dict):
+        canon = {}
+    negative = brief.get("negative_space") or {}
+    return {
+        "hard_rules": canon.get("hard_rules", []),
+        "continuity_strictness": canon.get("continuity_strictness", 5),
+        "negative_space": negative if isinstance(negative, dict) else {},
+        "instruccion": (
+            "Canon duro: no lo contradigas. Si la petición choca, "
+            "devuélvelo como issue/proposal, no lo corrijas."
+        ),
+    }
+
+
+def _parametros_permanentes(context: dict[str, Any]) -> dict[str, Any]:
+    """ATMÓSFERA. Género/tono/realismo/estilo/idioma. Peso medio."""
+    brief = context.get("creative_brief") or {}
+    if not isinstance(brief, dict):
+        brief = {}
+    identity = brief.get("identity") or {}
+    if not isinstance(identity, dict):
+        identity = {}
+    return {
+        "idioma": brief.get("primary_language", "es"),
+        "genero": brief.get("genre") or {},
+        "tono": brief.get("tone") or {},
+        "realismo": brief.get("realism") or {},
+        "estilo_narrativo": identity.get("narrative_style") or "",
+    }
+
+
+def _mentions_block(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Menciones con mini-ficha si el host la enriqueció (CONO)."""
+    mentions = context.get("mentions")
+    if not isinstance(mentions, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for ref in (mentions.get("refs") or []):
+        if not isinstance(ref, dict):
+            continue
+        entry: dict[str, Any] = {"name": ref.get("name"), "ref_type": ref.get("ref_type")}
+        brief = ref.get("brief")
+        if isinstance(brief, dict):
+            entry.update(brief)
+        result.append(entry)
+    return result
+
+
+def _selection_block(context: dict[str, Any]) -> dict[str, Any]:
+    """INFORMA. Entidad objetivo y anillo activo (CONO)."""
+    return {
+        "entity_ids": list(context.get("selected_entity_ids") or []),
+        "relation_ids": list(context.get("selected_relation_ids") or []),
+        "anillo_activo": context.get("active_ring_id") or context.get("focused_ring_id") or "",
+        "focus_label": context.get("focus_label") or "",
+    }
 
 
 def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
@@ -1106,38 +1190,38 @@ def _fase2_directives(context: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def build_model_user_message(plan: AIJobPlan) -> str:
-    # BETA1-AI01: leaner message. The context lived TWICE (full `plan` dump +
-    # `contexto_autorizado`); now the plan carries only its shape and the
-    # context appears once. Chronology spec attached on demand.
+    # BETA1: cono de autoridad (DIRIGE>RESTRINGE>INFORMA>ATMÓSFERA) + presupuesto
+    # configurable. El prompt del usuario es sagrado: jamás se trunca.
+    budget = int(plan.context.get("prompt_budget_tokens") or DEFAULT_PROMPT_BUDGET_TOKENS)
     message: dict[str, Any] = {
-        "prompt_exacto_usuario": plan.prompt,
-        "intent": plan.intent.to_dict(),
-        "plan": {
-            "title": plan.title,
-            "steps": list(plan.steps),
-            "target_scope": plan.target_scope,
-            "expected_result": plan.expected_result,
-            "creates": list(plan.creates),
-        },
+        # --- DIRIGE ---
+        "prompt_exacto_usuario": plan.prompt,       # sagrado
+        # --- RESTRINGE ---
+        "cerco_canon": _cerco_canon(plan.context),
+        # --- INFORMA ---
+        "seleccion": _selection_block(plan.context),
+        # --- ATMÓSFERA ---
+        "parametros_permanentes": _parametros_permanentes(plan.context),
+        # --- RESIDUAL sin duplicados (M2) ---
         "contexto_autorizado": _context_for_prompt(plan.context),
-        "perfil_creativo_b40": _b40_prompt_profile(plan.context),
-        "restricciones": {
-            "no_canon_automatico": True,
-            "solo_candidatos_revisables": True,
-            "no_ids_inventados": True,
-            "usar_prompt_exacto_como_instruccion_principal": True,
-        },
     }
+    # Opcionales (solo si existen y no están vacíos):
     directives = _fase2_directives(plan.context)
     if directives:
         message["directivas"] = directives
-    # F3.2: causal-deductive ordering of the context (Anillos→Ramas→Hojas),
-    # seeded by the host via order_context_by_causality.
+    mentions = _mentions_block(plan.context)
+    if mentions:
+        message["menciones"] = mentions
     causal = plan.context.get("contexto_causal") if isinstance(plan.context, dict) else None
     if isinstance(causal, dict) and causal:
-        message["contexto_causal"] = causal
+        message["posicion_causal"] = causal
+    vecindario = plan.context.get("vecindario") if isinstance(plan.context, dict) else None
+    if isinstance(vecindario, dict) and vecindario.get("items"):
+        message["vecindario"] = vecindario
     if _wants_chronology_formats(plan):
         message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
+    # Presupuesto + truncado (M7). El prompt del usuario queda intacto.
+    message = enforce_budget(message, budget)
     return json.dumps(message, ensure_ascii=False, indent=2)
 
 

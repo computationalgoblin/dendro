@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from packages.application.orchestrator_service import OrchestratorService
-from packages.domain.ai_models import AIMode
 from packages.domain.result import Error
 from packages.ui.cli import _bootstrap_services, require_project_path
 
@@ -108,7 +107,7 @@ def handle_ai_command(args, session):
     filters = _get_filters(args)
 
     if cmd == "generate-entity":
-        r = orch.generate_candidates(AIMode.GENERATE_ENTITY, prompt_hint=getattr(args, "prompt", ""), filters=filters)
+        r = orch.generate_candidates("generate_entity", prompt_hint=getattr(args, "prompt", ""), filters=filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         print(f"AI (simulated) generated {len(r.value)} entity candidates")
@@ -116,43 +115,43 @@ def handle_ai_command(args, session):
             print(f"  [{c.id[:8]}] {c.title}")
 
     elif cmd == "generate-relation":
-        r = orch.generate_candidates(AIMode.GENERATE_RELATION, prompt_hint=getattr(args, "prompt", ""), filters=filters)
+        r = orch.generate_candidates("generate_relation", prompt_hint=getattr(args, "prompt", ""), filters=filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         print(f"AI generated {len(r.value)} relation candidates")
 
     elif cmd == "expand":
-        r = orch.invoke(AIMode.EXPAND_ENTITY, args.entity_id, getattr(args, "prompt", ""), filters)
+        r = orch.invoke("expand_entity", args.entity_id, getattr(args, "prompt", ""), filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         print(r.value.raw_text)
 
     elif cmd == "summarize":
-        r = orch.invoke(AIMode.SUMMARIZE, args.entity_id, "", filters)
+        r = orch.invoke("summarize", args.entity_id, "", filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         print(r.value.raw_text)
 
     elif cmd == "rewrite":
-        r = orch.generate_candidates(AIMode.REWRITE_DESCRIPTION, args.entity_id, "", filters)
+        r = orch.generate_candidates("rewrite_description", args.entity_id, "", filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         print(r.value[0].raw_text if hasattr(r.value[0], 'raw_text') else "Rewritten")
 
     elif cmd == "suggest-tags":
-        r = orch.generate_candidates(AIMode.SUGGEST_TAGS, args.entity_id, "", filters)
+        r = orch.generate_candidates("suggest_tags", args.entity_id, "", filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         for c in r.value:
             print(f"  Suggested tags for entity: {c.title}")
 
     elif cmd == "suggest-relations":
-        r = orch.generate_candidates(AIMode.SUGGEST_RELATIONS, args.entity_id, getattr(args, "prompt", ""), filters)
+        r = orch.generate_candidates("suggest_relations", args.entity_id, getattr(args, "prompt", ""), filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         ps.save(Path(project_path))
         print(f"AI generated {len(r.value)} relation suggestions")
 
     elif cmd == "continuity":
-        r = orch.invoke(AIMode.CONTINUITY_QUESTION, prompt_hint=args.question, filters=filters)
+        r = orch.invoke("continuity_question", prompt_hint=args.question, filters=filters)
         if isinstance(r, Error): print(f"error: {r.error}", file=sys.stderr); sys.exit(1)
         print(r.value.raw_text)
 

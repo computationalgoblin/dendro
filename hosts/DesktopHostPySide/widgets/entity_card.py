@@ -16,27 +16,18 @@ from hosts.DesktopHostPySide.widgets.design_system import Badge
 
 _KIND_TONES = {
     "personaje": "info",
-    "localizacion": "success",
-    "lugar": "success",
-    "faccion": "warning",
-    "campaña": "info",
-    "sesión": "info",
-    "secreto": "danger",
-    "pista": "success",
+    "objeto": "info",
+    "nota": "info",
+    "rama": "warning",
+    "anillo": "success",
 }
 
 _KIND_COLORS = {
     "personaje": "#7C9BFF",
-    "localizacion": "#7EC8A5",
-    "lugar": "#7EC8A5",
-    "organizacion": "#DCA35F",
-    "faccion": "#D9908F",
     "objeto": "#C9A5FF",
-    "evento": "#E0C46C",
-    "campaña": "#8EA4C8",
-    "sesión": "#9BB4C7",
-    "secreto": "#D46A6A",
-    "pista": "#78B891",
+    "nota": "#8EA4C8",
+    "rama": "#DCA35F",
+    "anillo": "#7EC8A5",
 }
 
 
