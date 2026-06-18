@@ -1,3 +1,8 @@
+> ⚠️ **SUPERSEDED** — Este documento describe el producto pre-BETA1 (suite amplia con
+> RPG/sesión/campaña/galería/escritura). El producto actual está definido en
+> `docs/architecture/BETA1_legacy_cleanup_audit.md` (SSOT vigente).
+> Los principios de arquitectura limpia (sección 2) siguen siendo válidos.
+
 # Contrato de Arquitectura de Aplicación
 
 # Plataforma de Creación Narrativa, Worldbuilding y Dirección de Partidas Asistida por IA
