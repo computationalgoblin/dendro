@@ -75,8 +75,12 @@ def truncate_to_chars(text: str, max_chars: int) -> str:
     return cut.rstrip(".,;:") + "…"
 
 
-def enforce_budget(message: dict, total_budget_tokens: int) -> dict:
-    """Aplica SECTION_PERCENTAGES al total y trunca cada sección.
+def enforce_budget(
+    message: dict,
+    total_budget_tokens: int,
+    section_percentages: dict[str, float] | None = None,
+) -> dict:
+    """Aplica un reparto porcentual al total y trunca cada sección.
 
     1. Calcula chars disponibles por sección = tokens_to_chars(total * percentage).
     2. Las secciones en SACRED_SECTIONS se dejan intactas.
@@ -85,10 +89,18 @@ def enforce_budget(message: dict, total_budget_tokens: int) -> dict:
        (si el JSON truncado no parsea, se queda como string truncado).
     5. Las secciones None/vacías → se omiten del resultado.
     6. No muta la entrada; devuelve una copia.
+
+    ``section_percentages`` permite un reparto por intent (perfil por tier). Si
+    es None se usa :data:`SECTION_PERCENTAGES` global y las secciones sin
+    porcentaje pasan intactas (compatibilidad hacia atrás). Si se pasa un perfil
+    explícito, es un WHITELIST: las secciones presentes en el mensaje pero
+    ausentes del perfil se OMITEN (no son relevantes para ese tipo de tarea).
     """
     if not isinstance(message, dict):
         return message
     total = int(total_budget_tokens or DEFAULT_PROMPT_BUDGET_TOKENS)
+    percentages = SECTION_PERCENTAGES if section_percentages is None else section_percentages
+    explicit_profile = section_percentages is not None
     result: dict[str, Any] = {}
     for key, value in message.items():
         # Sagrado: copia intacta.
@@ -100,9 +112,12 @@ def enforce_budget(message: dict, total_budget_tokens: int) -> dict:
             continue
         if isinstance(value, (str, list, dict, tuple)) and len(value) == 0:
             continue
-        # Sin porcentaje asignado: se deja intacto (no controlado por budget).
-        pct = SECTION_PERCENTAGES.get(key)
+        pct = percentages.get(key)
         if pct is None:
+            # Perfil explícito = whitelist: lo no listado se omite. Con el
+            # reparto global por defecto, se deja intacto (no controlado).
+            if explicit_profile:
+                continue
             result[key] = copy.deepcopy(value)
             continue
         max_chars = tokens_to_chars(int(total * pct))

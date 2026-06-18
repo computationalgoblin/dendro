@@ -91,8 +91,13 @@ class AIPromptDebugTraceStore:
         if not self.enabled:
             return
         payload = _json_object(model_user_message)
-        context = payload.get("contexto_autorizado", {}) if isinstance(payload, dict) else {}
-        context_pack = context.get("rag_context_pack", {}) if isinstance(context, dict) else {}
+        # El ContextPack RAG se trazaba desde contexto_autorizado.rag_context_pack
+        # del mensaje, pero ahora el pack se reparte en secciones por autoridad.
+        # Se lee del plan (que conserva el pack crudo) y, si no, del mensaje legacy.
+        context_pack = _context_pack_from_plan(plan)
+        if not context_pack:
+            context = payload.get("contexto_autorizado", {}) if isinstance(payload, dict) else {}
+            context_pack = context.get("rag_context_pack", {}) if isinstance(context, dict) else {}
         now = _now_iso()
         entry = AIPromptDebugEntry(
             job_id=str(job_id),
@@ -228,6 +233,17 @@ def _pretty_text(text: str) -> str:
 
 def _pretty(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+
+
+def _context_pack_from_plan(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Extrae el rag_context_pack crudo del plan (plan.context.rag_context_pack)."""
+    if not isinstance(plan, dict):
+        return {}
+    context = plan.get("context")
+    if not isinstance(context, dict):
+        return {}
+    pack = context.get("rag_context_pack")
+    return dict(pack) if isinstance(pack, dict) else {}
 
 
 def _json_object(text: str) -> dict[str, Any]:

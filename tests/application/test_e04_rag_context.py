@@ -26,6 +26,26 @@ class E04Provider(AIProvider):
         raise AssertionError("Command-bar jobs use chat")
 
 
+_AUTHORITY_SECTIONS = (
+    "canon_confirmado",
+    "candidates_pendientes",
+    "importaciones_sin_revisar",
+    "rag_auxiliar",
+)
+
+
+def _authority_refs(sent: dict) -> set[tuple[str, str]]:
+    """Recolecta (kind, ref_id) de todas las secciones de autoridad del mensaje."""
+    refs: set[tuple[str, str]] = set()
+    for key in _AUTHORITY_SECTIONS:
+        section = sent.get(key)
+        if isinstance(section, dict):
+            for item in section.get("items", []):
+                if isinstance(item, dict):
+                    refs.add((item.get("kind"), item.get("ref_id")))
+    return refs
+
+
 def _coherence_plan():
     intent = CommandBarIntent(
         AIJobType.ANALYZE_COHERENCE,
@@ -121,11 +141,15 @@ def test_e04_ai_job_service_sends_context_pack_to_provider():
 
     assert isinstance(result, Ok)
     sent = json.loads(provider.calls[0][1])
-    pack = sent["contexto_autorizado"]["rag_context_pack"]
-    refs = {(item["kind"], item["ref_id"]) for item in pack["items"]}
-    assert pack["schema"] == "context_pack/v1"
+    # El pack RAG ya no viaja crudo en contexto_autorizado: se reparte en
+    # secciones etiquetadas por autoridad (canon / candidates / imports / RAG).
+    assert "rag_context_pack" not in json.dumps(sent.get("contexto_autorizado", {}))
+    refs = _authority_refs(sent)
     assert ("entity", "leaf-1") in refs
     assert ("relation", "rel-conflict") in refs
+    # Entidades/relaciones del corpus son canon confirmado, con etiqueta visible.
+    assert "CANON CONFIRMADO" in sent["canon_confirmado"]["autoridad"]
+    # El pack crudo sigue disponible en el plan (para traza/observabilidad).
     assert result.value.plan["context"]["rag_context_pack"]["schema"] == "context_pack/v1"
 
 
@@ -142,6 +166,8 @@ def test_e04_missing_project_degrades_with_structured_warning_only():
 
     assert isinstance(result, Ok)
     sent = json.loads(provider.calls[0][1])
-    pack = sent["contexto_autorizado"]["rag_context_pack"]
-    assert pack["items"] == []
-    assert pack["warnings"] == ["rag_project_unavailable"]
+    # Sin proyecto: pack vacío con warning estructurado → surface en rag_auxiliar.
+    assert _authority_refs(sent) == set()
+    assert sent["rag_auxiliar"]["warnings"] == ["rag_project_unavailable"]
+    assert "canon_confirmado" not in sent
+    assert result.value.plan["context"]["rag_context_pack"]["warnings"] == ["rag_project_unavailable"]

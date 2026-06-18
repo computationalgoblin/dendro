@@ -28,7 +28,8 @@ from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
-from packages.application.prompt_budget import DEFAULT_PROMPT_BUDGET_TOKENS, enforce_budget
+from packages.application.context_budget import ContextBudgetManager
+from packages.application.prompt_assembler import build_model_user_message
 
 
 def _now_iso() -> str:
@@ -963,94 +964,6 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     }
 
 
-def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
-    """Devuelve el context_scope SIN las claves que ya tienen su sección propia.
-
-    No es whitelist por intent (M1, quitado): es exclusión global de las claves
-    que YA viajan procesadas en otras secciones del mensaje, para evitar
-    duplicación.
-    """
-    return {
-        k: v for k, v in (context or {}).items()
-        if k not in _DUPLICATED_CONTEXT_KEYS
-    }
-
-
-# Claves que ya viajan procesadas en otras secciones del mensaje.
-# Se excluyen SIEMPRE de contexto_autorizado para evitar duplicación (M2).
-_DUPLICATED_CONTEXT_KEYS = frozenset({
-    "creative_brief",           # → cerco_canon + parametros_permanentes
-    "creative_context",         # → parametros_permanentes
-    "branch_creative_context",  # → parametros_permanentes
-    "contexto_causal",          # → posicion_causal
-    "vecindario",               # → vecindario
-})
-
-
-def _cerco_canon(context: dict[str, Any]) -> dict[str, Any]:
-    """RESTRINGE. Canon duro + negative_space. Peso ALTO."""
-    brief = context.get("creative_brief") or {}
-    if not isinstance(brief, dict):
-        brief = {}
-    canon = brief.get("canon") or {}
-    if not isinstance(canon, dict):
-        canon = {}
-    negative = brief.get("negative_space") or {}
-    return {
-        "hard_rules": canon.get("hard_rules", []),
-        "continuity_strictness": canon.get("continuity_strictness", 5),
-        "negative_space": negative if isinstance(negative, dict) else {},
-        "instruccion": (
-            "Canon duro: no lo contradigas. Si la petición choca, "
-            "devuélvelo como issue/proposal, no lo corrijas."
-        ),
-    }
-
-
-def _parametros_permanentes(context: dict[str, Any]) -> dict[str, Any]:
-    """ATMÓSFERA. Género/tono/realismo/estilo/idioma. Peso medio."""
-    brief = context.get("creative_brief") or {}
-    if not isinstance(brief, dict):
-        brief = {}
-    identity = brief.get("identity") or {}
-    if not isinstance(identity, dict):
-        identity = {}
-    return {
-        "idioma": brief.get("primary_language", "es"),
-        "genero": brief.get("genre") or {},
-        "tono": brief.get("tone") or {},
-        "realismo": brief.get("realism") or {},
-        "estilo_narrativo": identity.get("narrative_style") or "",
-    }
-
-
-def _mentions_block(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """Menciones con mini-ficha si el host la enriqueció (CONO)."""
-    mentions = context.get("mentions")
-    if not isinstance(mentions, dict):
-        return []
-    result: list[dict[str, Any]] = []
-    for ref in (mentions.get("refs") or []):
-        if not isinstance(ref, dict):
-            continue
-        entry: dict[str, Any] = {"name": ref.get("name"), "ref_type": ref.get("ref_type")}
-        brief = ref.get("brief")
-        if isinstance(brief, dict):
-            entry.update(brief)
-        result.append(entry)
-    return result
-
-
-def _selection_block(context: dict[str, Any]) -> dict[str, Any]:
-    """INFORMA. Entidad objetivo y anillo activo (CONO)."""
-    return {
-        "entity_ids": list(context.get("selected_entity_ids") or []),
-        "relation_ids": list(context.get("selected_relation_ids") or []),
-        "anillo_activo": context.get("active_ring_id") or context.get("focused_ring_id") or "",
-        "focus_label": context.get("focus_label") or "",
-    }
-
-
 def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
     """Derive model-facing behaviour instructions from B40 creative config."""
     ctx = dict(context or {})
@@ -1090,141 +1003,6 @@ def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# BETA1-AI01: the chronology/milestone output spec, attached ONLY to time-
-# related jobs (before it rode along on every message — pure noise + tokens).
-_CHRONOLOGY_OUTPUT_FORMATS: dict[str, Any] = {
-    "project_chronology_suggestion": {
-        "kind": "project_chronology_suggestion",
-        "title": "string",
-        "mode": "none | vague_periods | full_calendar",
-        "summary": "string",
-        "periods": ["Antiguedad", "Historia reciente", "Actualidad"],
-        "eras": ["string"],
-        "era_lengths": {"Era Antigua": "integer years"},
-        "months": ["string"],
-        "month_lengths": {"Enero": "integer days"},
-        "weekdays": ["string"],
-        "current_date": {"era": "string", "year": "integer", "month": "string", "day": "integer"},
-        "units": ["string"],
-        "display_format": "string",
-        "supports_exact_dates": "boolean",
-        "date_resolution": "string",
-        "rationale": "string",
-        "risks": ["string"],
-        "questions_for_user": ["string"],
-    },
-    "milestones": [{
-        "title": "string",
-        "summary": "string",
-        "body": "string",
-        "chronology_position": "string",
-        "sort_index": "integer",
-        "rationale": "string",
-        "confidence": "low | medium | high",
-    }],
-}
-
-_CHRONOLOGY_HINT_TOKENS = ("hito", "cronolog", "calendar", "era", "milestone", "linea temporal", "línea temporal")
-
-
-def _wants_chronology_formats(plan: AIJobPlan) -> bool:
-    if getattr(plan.intent, "intent_type", None) == AIJobType.PROPOSE_MILESTONES:
-        return True
-    text = f"{getattr(plan.intent.intent_type, 'value', '')} {plan.prompt}".lower()
-    return any(token in text for token in _CHRONOLOGY_HINT_TOKENS)
-
-
-def _fase2_directives(context: dict[str, Any]) -> dict[str, Any] | None:
-    """Surface the deterministic per-cell behaviours as explicit model directives.
-
-    The host seeds these into context_scope via plan_command_jobs (suggestion
-    count, @references, Explicar branching, ring template, relation fan-out pair)
-    so the model honours them instead of guessing from prose."""
-    ctx = dict(context or {})
-    params: dict[str, Any] = {}
-    instructions: list[str] = []
-
-    count = ctx.get("suggestion_count")
-    if count:
-        params["numero_sugerencias"] = int(count)
-        instructions.append(f"Devuelve exactamente {int(count)} sugerencia(s), ni más ni menos.")
-
-    mentions = ctx.get("mentions") if isinstance(ctx.get("mentions"), dict) else {}
-    refs = mentions.get("refs") or []
-    if refs:
-        params["referencias_at"] = refs
-        names = ", ".join(str(r.get("name", "")) for r in refs if isinstance(r, dict))
-        instructions.append(f"Usa como referencia SOLO las entidades/hitos mencionados con @: {names}.")
-
-    explain_target = ctx.get("explain_target")
-    if explain_target == "modify_refs":
-        params["modo_explicar"] = "modificar_referencias"
-        instructions.append(
-            "Explicar con @referencias: modifica el TEXTO de las entidades/relaciones referenciadas "
-            "para que expliquen la selección (claves 'entity_edits'/'relation_edits'); no crees entidades nuevas."
-        )
-    elif explain_target == "create_in_active_ring":
-        params["modo_explicar"] = "crear_en_anillo_activo"
-        ring = ctx.get("active_ring_id") or "el activo"
-        instructions.append(
-            f"Explicar sin referencias: crea hitos/entidades (máx {ctx.get('max_creations', 3)}) "
-            f"en el anillo activo ({ring}) que expliquen la selección."
-        )
-
-    if ctx.get("ring_template"):
-        params["plantilla_anillo"] = {"previous_ring_id": ctx.get("previous_ring_id") or ""}
-        instructions.append(
-            "Crear Anillo: genera UNA plantilla de anillos como estructura causal de dominios, derivando "
-            "del anillo anterior y la configuración creativa. Clave 'rings' (name, domain, description, order, "
-            "derived_from). Ignora cualquier selección."
-        )
-
-    pair = ctx.get("fanout_pair")
-    if pair:
-        params["par_relacion"] = list(pair)
-        instructions.append("Propón UNA relación entre exactamente este par de entidades (clave 'relations').")
-
-    if not params and not instructions:
-        return None
-    return {"parametros": params, "instrucciones": instructions}
-
-
-def build_model_user_message(plan: AIJobPlan) -> str:
-    # BETA1: cono de autoridad (DIRIGE>RESTRINGE>INFORMA>ATMÓSFERA) + presupuesto
-    # configurable. El prompt del usuario es sagrado: jamás se trunca.
-    budget = int(plan.context.get("prompt_budget_tokens") or DEFAULT_PROMPT_BUDGET_TOKENS)
-    message: dict[str, Any] = {
-        # --- DIRIGE ---
-        "prompt_exacto_usuario": plan.prompt,       # sagrado
-        # --- RESTRINGE ---
-        "cerco_canon": _cerco_canon(plan.context),
-        # --- INFORMA ---
-        "seleccion": _selection_block(plan.context),
-        # --- ATMÓSFERA ---
-        "parametros_permanentes": _parametros_permanentes(plan.context),
-        # --- RESIDUAL sin duplicados (M2) ---
-        "contexto_autorizado": _context_for_prompt(plan.context),
-    }
-    # Opcionales (solo si existen y no están vacíos):
-    directives = _fase2_directives(plan.context)
-    if directives:
-        message["directivas"] = directives
-    mentions = _mentions_block(plan.context)
-    if mentions:
-        message["menciones"] = mentions
-    causal = plan.context.get("contexto_causal") if isinstance(plan.context, dict) else None
-    if isinstance(causal, dict) and causal:
-        message["posicion_causal"] = causal
-    vecindario = plan.context.get("vecindario") if isinstance(plan.context, dict) else None
-    if isinstance(vecindario, dict) and vecindario.get("items"):
-        message["vecindario"] = vecindario
-    if _wants_chronology_formats(plan):
-        message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
-    # Presupuesto + truncado (M7). El prompt del usuario queda intacto.
-    message = enforce_budget(message, budget)
-    return json.dumps(message, ensure_ascii=False, indent=2)
-
-
 # Backward-compatible helper kept only for tests that inject explicit mock jobs.
 def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow_simulated: bool = False) -> dict[str, Any]:
     service = AIJobService(provider=provider or SimulatedAIProvider(), allow_simulated=allow_simulated)
@@ -1261,6 +1039,8 @@ class AIJobService:
         self._rag_service = rag_service
         self._project_provider = project_provider
         self._prompt_trace_store = prompt_trace_store
+        # Presupuesto de contexto por tier (entrada/salida) según el intent.
+        self._budget = ContextBudgetManager()
 
     @property
     def provider(self) -> AIProvider:
@@ -1534,6 +1314,7 @@ class AIJobService:
                 system_prompt_override=system_prompt,
                 json_mode=True,
                 validate=False,
+                max_tokens=self._budget.output_budget(plan.intent.intent_type),
             ))
             text, error = gw.text, gw.error
         except Exception as exc:
@@ -1637,6 +1418,8 @@ class AIJobService:
         # F3: UI radial tuners may override the intent's recommended params.
         temp_override = _opt_float(job.context_scope.get("model_temperature"))
         tokens_override = _opt_int(job.context_scope.get("model_max_tokens"))
+        # Output budget por tier del intent; el override del tuner de UI gana.
+        max_tokens = tokens_override or self._budget.output_budget(plan.intent.intent_type)
         try:
             gw = self._gateway.execute(GatewayRequest(
                 intent=plan.intent.intent_type.value,
@@ -1646,7 +1429,7 @@ class AIJobService:
                 json_mode=not is_text,
                 validate=False,
                 temperature=temp_override,
-                max_tokens=tokens_override,
+                max_tokens=max_tokens,
             ))
             text, error = gw.text, gw.error
         except Exception as exc:
