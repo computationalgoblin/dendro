@@ -91,13 +91,33 @@ def test_e04_context_pack_prioritizes_selection_and_related_context():
     assert ("relation", "rel-conflict") in items
     assert ("milestone", "hito-1") in items
     assert ("issue", "issue-1") in items
-    # PA02: creative_config ya NO se recupera por RAG (viaja determinista en el
-    # prompt vía cerco_canon/parametros_permanentes), aunque se pida como need.
+    # PA02/PA03: creative_config ya NO se recupera por RAG (viaja determinista en
+    # el prompt vía configuracion_creativa), aunque se pida como need.
     assert ("creative_config", "creative_config") not in items
     assert items[("entity", "leaf-1")].priority is ContextPriority.REQUIRED
     assert items[("relation", "rel-conflict")].priority is ContextPriority.REQUIRED
     assert "Nota privada" not in json.dumps(pack.to_dict(), ensure_ascii=False)
     assert pack.tokens_estimated <= pack.tokens_budget
+
+
+def test_e04_excludes_chronology_from_retrieval():
+    # PA03: el calendario/cronología es config de proyecto; nunca se recupera por
+    # RAG (viaja determinista en la sección `cronologia` del prompt).
+    project = _make_project()
+    service = RAGService()
+    index = service.index_project(project).value
+    plan = RetrievalPlan(
+        intent_type="propose_milestones",
+        query="calendario cronologia era año hierro",
+        include_kinds=[
+            CorpusItemKind.CHRONOLOGY,
+            CorpusItemKind.MILESTONE,
+            CorpusItemKind.ENTITY,
+        ],
+        token_budget=5000,
+    )
+    pack = RAGContextBuilder(service).retrieve(index, plan)
+    assert all(item.kind.value != "chronology" for item in pack.items)
 
 
 def test_e04_context_pack_respects_budget_and_marks_truncation():

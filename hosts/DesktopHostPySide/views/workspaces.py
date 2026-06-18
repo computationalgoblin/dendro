@@ -2212,7 +2212,7 @@ class CreationWorkspace(QWidget):
         layout.addWidget(self._scope_selector)
         layout.addWidget(self._count_spin)
         layout.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
-        layout.addWidget(self._captioned_tuner(self._tokens_tuner, "Salida"))
+        layout.addWidget(self._captioned_tuner(self._tokens_tuner, "Longitud respuesta"))
         layout.addWidget(self._captioned_tuner(self._budget_tuner, "Contexto"))
 
         self._command_input = QLineEdit()
@@ -2326,16 +2326,20 @@ class CreationWorkspace(QWidget):
         )
         tokens_tuner = RadialTuner(minimum=256, maximum=24000, value=2000, is_integer=True, auto=True)
         tokens_tuner.setToolTip(
-            "SALIDA — longitud máxima de la RESPUESTA (tokens que genera la IA).\n"
+            "LONGITUD DE RESPUESTA — cuántos tokens puede generar la IA (el largo "
+            "de su respuesta).\n"
             "Auto = el máximo por defecto de esta tarea (número mostrado).\n"
-            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto."
+            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto.\n"
+            "Más alto = respuestas más largas; más bajo = más cortas y rápidas."
         )
         budget_tuner = RadialTuner(minimum=2000, maximum=600000, value=24000, is_integer=True, auto=True)
         budget_tuner.setToolTip(
-            "ENTRADA — presupuesto de CONTEXTO que recibe la IA (tokens del prompt).\n"
+            "CONTEXTO — presupuesto TOTAL de contexto del prompt (tokens).\n"
+            "Se reserva primero lo fijo (config creativa, canon, tu petición) y el "
+            "resto se reparte por secciones según la tarea; a más presupuesto, se "
+            "recupera e incluye MÁS contexto del proyecto.\n"
             "Auto = el presupuesto por defecto de esta tarea (número mostrado).\n"
-            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto.\n"
-            "Más alto = más contexto (más coste/latencia); más bajo = más rápido."
+            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto."
         )
 
         self._action_selector = action

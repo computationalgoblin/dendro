@@ -31,11 +31,12 @@ logger = logging.getLogger("narrative.prompt_assembler")
 # añade aquí porque ahora se reparte en secciones etiquetadas por autoridad.
 _DUPLICATED_CONTEXT_KEYS = frozenset(
     {
-        "creative_brief",  # → cerco_canon + parametros_permanentes
-        "creative_context",  # → parametros_permanentes
-        "branch_creative_context",  # → parametros_permanentes
+        "creative_brief",  # → configuracion_creativa (completa)
+        "creative_context",  # → configuracion_creativa
+        "branch_creative_context",  # → configuracion_creativa
         "contexto_causal",  # → posicion_causal
         "vecindario",  # → vecindario
+        "cronologia",  # → cronologia (sección determinista compacta)
         "rag_context_pack",  # → canon_confirmado / candidates_pendientes / imports / rag_auxiliar
     }
 )
@@ -59,41 +60,50 @@ def _context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in (context or {}).items() if k not in _DUPLICATED_CONTEXT_KEYS}
 
 
-def _cerco_canon(context: dict[str, Any]) -> dict[str, Any]:
-    """RESTRINGE. Canon duro + negative_space. Peso ALTO."""
+def _prune_empty(value: Any) -> Any:
+    """Elimina recursivamente strings vacíos, listas/dicts vacíos y None.
+
+    Conserva 0, False y demás valores legítimos (continuity_strictness=0,
+    worldbuilding_active=False). Devuelve None cuando el valor queda vacío para
+    que el contenedor lo descarte. Quita el ruido del payload (campos en blanco).
+    """
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, val in value.items():
+            pruned = _prune_empty(val)
+            if pruned is not None:
+                out[key] = pruned
+        return out or None
+    if isinstance(value, (list, tuple)):
+        out_list = [p for p in (_prune_empty(v) for v in value) if p is not None]
+        return out_list or None
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value if value.strip() else None
+    return value
+
+
+def _configuracion_creativa(context: dict[str, Any]) -> dict[str, Any]:
+    """RESTRINGE + ATMÓSFERA. Config creativa COMPLETA y determinista.
+
+    Único hogar de la configuración creativa en el payload (antes repartida entre
+    cerco_canon + parametros_permanentes, que la duplicaban). Lleva el brief
+    entero —canon, negative_space, taste_memory, género/tono/realismo, poética,
+    intención, motor narrativo, preferencias IA— y luego se poda de vacíos.
+    """
     brief = context.get("creative_brief") or {}
-    if not isinstance(brief, dict):
-        brief = {}
-    canon = brief.get("canon") or {}
-    if not isinstance(canon, dict):
-        canon = {}
-    negative = brief.get("negative_space") or {}
-    return {
-        "hard_rules": canon.get("hard_rules", []),
-        "continuity_strictness": canon.get("continuity_strictness", 5),
-        "negative_space": negative if isinstance(negative, dict) else {},
+    if not isinstance(brief, dict) or not brief:
+        return {}
+    section: dict[str, Any] = {
         "instruccion": (
-            "Canon duro: no lo contradigas. Si la petición choca, "
-            "devuélvelo como issue/proposal, no lo corrijas."
+            "Configuración creativa COMPLETA del proyecto. canon.hard_rules = canon duro "
+            "(no lo contradigas; si la petición choca, devuélvelo como issue/proposal). "
+            "negative_space = lo que debes evitar. taste_memory = gustos del usuario."
         ),
     }
-
-
-def _parametros_permanentes(context: dict[str, Any]) -> dict[str, Any]:
-    """ATMÓSFERA. Género/tono/realismo/estilo/idioma. Peso medio."""
-    brief = context.get("creative_brief") or {}
-    if not isinstance(brief, dict):
-        brief = {}
-    identity = brief.get("identity") or {}
-    if not isinstance(identity, dict):
-        identity = {}
-    return {
-        "idioma": brief.get("primary_language", "es"),
-        "genero": brief.get("genre") or {},
-        "tono": brief.get("tone") or {},
-        "realismo": brief.get("realism") or {},
-        "estilo_narrativo": identity.get("narrative_style") or "",
-    }
+    section.update(brief)
+    return section
 
 
 def _mentions_block(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -346,8 +356,14 @@ class PromptAssembler:
         if mentions:
             message["menciones"] = mentions
 
-        # --- RESTRINGE ---
-        message["cerco_canon"] = _cerco_canon(context)
+        # --- RESTRINGE + ATMÓSFERA (config creativa completa y determinista) ---
+        config_creativa = _configuracion_creativa(context)
+        if config_creativa:
+            message["configuracion_creativa"] = config_creativa
+
+        cronologia = context.get("cronologia") if isinstance(context, dict) else None
+        if isinstance(cronologia, dict) and cronologia:
+            message["cronologia"] = cronologia
 
         # Secciones por autoridad derivadas del rag_context_pack.
         rag_sections = _rag_authority_sections(context)
@@ -370,15 +386,19 @@ class PromptAssembler:
         if "rag_auxiliar" in rag_sections:
             message["rag_auxiliar"] = rag_sections["rag_auxiliar"]
 
-        # --- ATMÓSFERA ---
-        message["parametros_permanentes"] = _parametros_permanentes(context)
-
         # --- RESIDUAL (sin duplicados) ---
         message["contexto_autorizado"] = _context_for_prompt(context)
 
         if _wants_chronology_formats(plan):
             message["formatos_h05"] = _CHRONOLOGY_OUTPUT_FORMATS
-        return message
+
+        # Poda recursiva de vacíos: quita el ruido (campos en blanco) antes de
+        # presupuestar. formatos_h05 es un esquema-plantilla: no se poda.
+        formatos = message.pop("formatos_h05", None)
+        pruned = _prune_empty(message) or {}
+        if formatos is not None:
+            pruned["formatos_h05"] = formatos
+        return pruned
 
     # -- observabilidad -----------------------------------------------------
 

@@ -21,6 +21,16 @@ def mgr():
     return ContextBudgetManager()
 
 
+def test_rag_retrieval_share_is_positive_and_matches_profile(mgr):
+    # PA03: la cuota RAG = suma de % de las secciones nutridas por retrieval.
+    from packages.application.context_budget import _RAG_RETRIEVAL_SECTIONS
+
+    profile = mgr.section_percentages("create_ring_template")
+    expected = sum(v for k, v in profile.items() if k in _RAG_RETRIEVAL_SECTIONS)
+    assert mgr.rag_retrieval_share("create_ring_template") == pytest.approx(expected)
+    assert 0.0 < mgr.rag_retrieval_share("create_ring_template") < 1.0
+
+
 @pytest.mark.parametrize(
     "intent,expected",
     [

@@ -28,9 +28,14 @@ def test_message_drops_intent_and_plan():
 
 
 def test_message_has_cone_sections():
-    msg = json.loads(build_model_user_message(_plan()))
-    assert "cerco_canon" in msg
-    assert "parametros_permanentes" in msg
+    msg = json.loads(build_model_user_message(_plan(context={
+        "creative_brief": {"canon": {"hard_rules": ["regla"]}, "primary_language": "es"},
+        "selected_entity_ids": ["e1"],
+    })))
+    # PA03: la config creativa viaja completa en una única sección determinista.
+    assert "configuracion_creativa" in msg
+    assert "cerco_canon" not in msg
+    assert "parametros_permanentes" not in msg
     assert "seleccion" in msg
 
 
@@ -90,12 +95,25 @@ def test_vecindario_present_only_with_items():
 
 
 def test_budget_shrinks_message():
-    big_brief = {"canon": {"hard_rules": ["regla muy larga " * 200]}}
+    # PA03: la config creativa es FIJA (siempre completa); lo que el presupuesto
+    # reparte/recorta es el contenido FLEXIBLE (p. ej. canon recuperado por RAG).
+    pack = {
+        "schema": "context_pack/v1",
+        "items": [
+            {"kind": "entity", "ref_id": f"e{i}", "rendered_text": "palabra " * 60,
+             "priority": "normal", "reason": "text_overlap"}
+            for i in range(30)
+        ],
+        "warnings": [],
+        "tokens_budget": 2400,
+        "tokens_estimated": 100,
+        "truncated": False,
+    }
     small = json.loads(build_model_user_message(_plan(context={
-        "creative_brief": big_brief, "prompt_budget_tokens": 1000,
+        "rag_context_pack": pack, "prompt_budget_tokens": 1000,
     })))
     large = json.loads(build_model_user_message(_plan(context={
-        "creative_brief": big_brief, "prompt_budget_tokens": 8000,
+        "rag_context_pack": pack, "prompt_budget_tokens": 20000,
     })))
     assert len(json.dumps(small)) < len(json.dumps(large))
 

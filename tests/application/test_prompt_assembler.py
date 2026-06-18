@@ -37,11 +37,16 @@ def _msg(plan):
 
 
 def test_assemble_returns_cone_sections():
-    msg = _msg(_plan())
+    msg = _msg(_plan(context={
+        "creative_brief": {"canon": {"hard_rules": ["r"]}, "primary_language": "es"},
+        "selected_entity_ids": ["e1"],
+    }))
     assert "prompt_exacto_usuario" in msg
-    assert "cerco_canon" in msg
+    # PA03: config creativa completa en una sola sección; sin cerco_canon/parametros.
+    assert "configuracion_creativa" in msg
+    assert "cerco_canon" not in msg
+    assert "parametros_permanentes" not in msg
     assert "seleccion" in msg
-    assert "parametros_permanentes" in msg
 
 
 def test_user_prompt_is_sacred():
@@ -145,11 +150,43 @@ def test_empty_pack_emits_no_authority_sections():
         assert key not in msg
 
 
-def test_budget_override_shrinks_message():
-    big_brief = {"canon": {"hard_rules": ["regla muy larga " * 300]}}
-    small = _msg(_plan(context={"creative_brief": big_brief, "prompt_budget_tokens": 1000}))
-    large = _msg(_plan(context={"creative_brief": big_brief, "prompt_budget_tokens": 20000}))
+def test_budget_override_shrinks_flexible_content():
+    # PA03: la config creativa es fija; el presupuesto recorta lo FLEXIBLE (canon
+    # recuperado). Más presupuesto ⇒ caben más items.
+    pack = _pack([
+        {"kind": "entity", "ref_id": f"e{i}", "rendered_text": "palabra " * 60,
+         "priority": "normal", "reason": "text_overlap"}
+        for i in range(30)
+    ])
+    small = _msg(_plan(context={"rag_context_pack": pack, "prompt_budget_tokens": 1000}))
+    large = _msg(_plan(context={"rag_context_pack": pack, "prompt_budget_tokens": 20000}))
     assert len(json.dumps(small)) < len(json.dumps(large))
+
+
+def test_configuracion_creativa_complete_and_pruned():
+    brief = {
+        "primary_language": "es",
+        "genre": {
+            "primary_genre": "Histórico",
+            "secondary_genres": [],
+            "subgenres": ["Folk Horror"],
+        },
+        "tone": {"narrative_tone": "Sombrío", "dark_level": "", "formality_level": ""},
+        "realism": {"realism_level": "medium", "fantasy_level": "", "science_level": ""},
+        "taste_memory": {"likes": ["tragedia"]},
+        "canon": {"hard_rules": ["La caída es inevitable"], "continuity_strictness": 9},
+        "negative_space": {},
+    }
+    msg = _msg(_plan(context={"creative_brief": brief}))
+    cfg = msg["configuracion_creativa"]
+    # Completa: taste_memory viaja (antes se descartaba).
+    assert cfg["taste_memory"] == {"likes": ["tragedia"]}
+    assert cfg["canon"]["hard_rules"] == ["La caída es inevitable"]
+    # Sin ruido: campos vacíos podados.
+    assert "dark_level" not in cfg["tone"]
+    assert "fantasy_level" not in cfg["realism"]
+    assert "secondary_genres" not in cfg["genre"]
+    assert "negative_space" not in cfg
 
 
 def test_chronology_formats_only_for_milestones():

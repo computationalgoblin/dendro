@@ -29,8 +29,9 @@ class TestCommandBarUsesRegistry:
         assert "REGLAS DE CLASIFICACIÓN" in prompt or "clasificación" in prompt.lower()
 
     def test_command_bar_prompt_has_creative_brief(self):
+        # PA03: la config creativa viaja en una única sección configuracion_creativa.
         prompt = get_prompt("command_bar", lang="es")
-        assert "creative_brief" in prompt
+        assert "configuracion_creativa" in prompt
 
     def test_command_bar_prompt_has_json_schema(self):
         prompt = get_prompt("command_bar", lang="es")

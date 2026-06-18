@@ -552,6 +552,46 @@ def _selected_relation_ids(context_scope: dict[str, Any]) -> list[str]:
     return [str(item) for item in value if str(item)] if isinstance(value, (list, tuple)) else []
 
 
+def _compact_chronology(project: Any) -> dict[str, Any]:
+    """Resumen compacto y determinista del calendario del proyecto (PA03).
+
+    El calendario es config de proyecto: viaja determinista en el prompt, NO por
+    RAG. Se incluye solo lo útil (nombre, descripción, era y fecha presente) sin
+    el volcado masivo de meses/semanas/longitudes de era que era puro ruido.
+    """
+    chrono = getattr(project, "project_chronology", None) if project is not None else None
+    if chrono is None:
+        return {}
+    out: dict[str, Any] = {}
+    name = str(getattr(chrono, "calendar_name", "") or "").strip()
+    if name:
+        out["nombre"] = name
+    desc = str(getattr(chrono, "description", "") or "").strip()
+    if desc:
+        out["descripcion"] = desc
+    present_year = getattr(chrono, "present_year", 0) or 0
+    try:
+        era = chrono.era_for_year(present_year) if present_year else None
+        if era is None and getattr(chrono, "eras", None):
+            era = chrono.sorted_eras()[-1]
+    except Exception:  # pragma: no cover - defensive
+        era = None
+    era_name = str(getattr(era, "name", "") or "").strip() if era is not None else ""
+    if era_name:
+        out["era_actual"] = era_name
+    if present_year:
+        out["anyo_presente"] = int(present_year)
+    meta = getattr(chrono, "metadata", {}) or {}
+    if isinstance(meta, dict):
+        resolution = meta.get("date_resolution")
+        if resolution:
+            out["resolucion"] = resolution
+        current = meta.get("current_date")
+        if isinstance(current, dict) and current:
+            out["fecha_actual"] = current
+    return out
+
+
 def _candidate(
     *,
     title: str,
@@ -1211,7 +1251,22 @@ class AIJobService:
                 }
                 return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
 
-        built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, plan)
+        # PA03: presupuesto de recuperación derivado del pool flexible (más
+        # contexto declarado ⇒ recupera más), en vez de una constante fija.
+        intent_type = plan.intent.intent_type
+        total = self._budget.input_budget(
+            intent_type, override_tokens=context.get("prompt_budget_tokens")
+        )
+        share = self._budget.rag_retrieval_share(intent_type)
+        context.setdefault("rag_token_budget", max(800, int(total * share * 1.5)))
+
+        # PA03: cronología compacta determinista (el calendario ya NO viaja por RAG).
+        cronologia = _compact_chronology(project)
+        if cronologia:
+            context["cronologia"] = cronologia
+
+        retrieval_plan = build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
+        built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, retrieval_plan)
         if isinstance(built, Error):
             context["rag_context_pack"] = {
                 "schema": "context_pack/v1",

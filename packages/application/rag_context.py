@@ -300,9 +300,10 @@ def _score_record(
     query_tokens: set[str],
     idf: dict[str, float] | None = None,
 ) -> _ScoredRecord | None:
-    # PA02: creative_config NUNCA se recupera por RAG. Ya viaja determinista en el
-    # prompt (cerco_canon/parametros_permanentes); recuperarlo lo triplicaba.
-    if record.kind == CorpusItemKind.CREATIVE_CONFIG:
+    # PA02/PA03: la configuración y la cronología/calendario NUNCA se recuperan
+    # por RAG. Son config de proyecto que viaja determinista en el prompt
+    # (configuracion_creativa / cronologia); recuperarlas las duplicaba.
+    if record.kind in (CorpusItemKind.CREATIVE_CONFIG, CorpusItemKind.CHRONOLOGY):
         return None
 
     reasons: list[str] = []
@@ -397,18 +398,23 @@ def _strategy_for(intent_type: str, retrieval_needs: list[str], prompt: str) -> 
 
 
 def _token_budget_for(strategy: RetrievalStrategy, context: dict[str, Any]) -> int:
+    # PA03: si la app derivó un presupuesto explícito desde el pool flexible
+    # (más contexto ⇒ recupera más), se honra hasta el tope del tier; si no, se
+    # usa el default por estrategia acotado a un rango conservador.
     raw = context.get("rag_token_budget")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        value = {
-            RetrievalStrategy.PRECISION: 1800,
-            RetrievalStrategy.BALANCED: 2400,
-            RetrievalStrategy.BREADTH: 3200,
-            RetrievalStrategy.CAUSAL: 2800,
-            RetrievalStrategy.CHRONOLOGICAL: 2800,
-        }.get(strategy, 2400)
-    return max(300, min(6000, value))
+    if raw is not None:
+        try:
+            return max(300, min(600_000, int(raw)))
+        except (TypeError, ValueError):
+            pass
+    default = {
+        RetrievalStrategy.PRECISION: 1800,
+        RetrievalStrategy.BALANCED: 2400,
+        RetrievalStrategy.BREADTH: 3200,
+        RetrievalStrategy.CAUSAL: 2800,
+        RetrievalStrategy.CHRONOLOGICAL: 2800,
+    }.get(strategy, 2400)
+    return max(300, min(6000, default))
 
 
 def _query_text(prompt: str, retrieval_needs: list[str], context: dict[str, Any]) -> str:

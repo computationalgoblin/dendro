@@ -16,7 +16,7 @@ tested without a QApplication.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from hosts.DesktopHostPySide.widgets.design_system import GOLD, INK_MUTED, INK_SOFT, LINE, SURFACE
@@ -26,6 +26,15 @@ from hosts.DesktopHostPySide.widgets.design_system import GOLD, INK_MUTED, INK_S
 
 def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+
+def abbreviate_int(value: int) -> str:
+    """Compacta enteros grandes para que quepan en el círculo: 24000→'24k'."""
+    value = int(value)
+    if abs(value) >= 1000:
+        k = value / 1000.0
+        return f"{k:.0f}k" if k == int(k) else f"{k:.1f}k"
+    return str(value)
 
 
 def drag_to_fraction(start_fraction: float, dy_pixels: float, span_pixels: float) -> float:
@@ -71,7 +80,7 @@ class RadialTuner(QWidget):
         is_integer: bool = False,
         auto: bool = False,
         accent: str = GOLD,
-        diameter: int = 38,
+        diameter: int = 46,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -193,11 +202,21 @@ class RadialTuner(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(rect)
 
-        # Centered text: "auto" en modo Auto, el valor en modo manual.
+        # Centered text: "auto" en modo Auto, el valor (compactado) en manual.
         if self._auto:
             painter.setPen(QPen(QColor(INK_MUTED)))
-            painter.drawText(rect, Qt.AlignCenter, "auto")
+            text = "auto"
         else:
             painter.setPen(QPen(QColor(INK_SOFT)))
-            text = str(int(self.value())) if self._is_integer else f"{self.value():.2f}"
-            painter.drawText(rect, Qt.AlignCenter, text)
+            text = abbreviate_int(self.value()) if self._is_integer else f"{self.value():.2f}"
+
+        # Escala la fuente para que el texto NUNCA desborde el círculo.
+        font = painter.font()
+        inner = max(8, self._diameter - 8)
+        size = 11
+        font.setPointSize(size)
+        while size > 6 and QFontMetrics(font).horizontalAdvance(text) > inner:
+            size -= 1
+            font.setPointSize(size)
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignCenter, text)

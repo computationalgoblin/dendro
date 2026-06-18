@@ -1,6 +1,7 @@
-"""Tests para packages.application.prompt_budget (M7)."""
+"""Tests para packages.application.prompt_budget (presupuesto adaptativo PA03)."""
 
 from packages.application.prompt_budget import (
+    _estimate_tokens,
     enforce_budget,
     tokens_to_chars,
     truncate_to_chars,
@@ -19,38 +20,66 @@ def test_truncate_short_unchanged():
     assert truncate_to_chars("corto", 100) == "corto"
 
 
-def test_enforce_budget_section_limits():
-    big = "palabra " * 2000  # ~16000 chars
-    message = {
-        "directivas": big,        # 4% → 560 chars máx
-        "cerco_canon": big,       # 14% → 1960 chars máx
-        "vecindario": big,        # 20% → 2800 chars máx
-    }
-    out = enforce_budget(message, 4000)
-    assert len(out["directivas"]) <= 560 + 2
-    assert len(out["cerco_canon"]) <= 1960 + 2
-    assert len(out["vecindario"]) <= 2800 + 2
-
-
-def test_enforce_budget_keeps_user_prompt_intact():
+def test_fixed_sections_reserved_intact():
+    # El contenido fijo/determinista se reserva entero aunque el budget sea ínfimo.
     huge = "x" * 100000
-    message = {"prompt_exacto_usuario": huge, "cerco_canon": huge}
-    out = enforce_budget(message, 1000)
-    assert out["prompt_exacto_usuario"] == huge  # sagrado: nunca se trunca
-    assert len(out["cerco_canon"]) < len(huge)   # sí se trunca
+    message = {
+        "prompt_exacto_usuario": huge,
+        "configuracion_creativa": {"canon": {"hard_rules": [huge]}},
+        "contexto_autorizado": {"project_id": "p", "dato": huge},
+    }
+    out = enforce_budget(message, 100, {"vecindario": 1.0})
+    assert out["prompt_exacto_usuario"] == huge
+    assert out["configuracion_creativa"]["canon"]["hard_rules"] == [huge]
+    assert out["contexto_autorizado"]["dato"] == huge
+
+
+def test_flexible_section_trimmed_dropping_whole_items():
+    items = [{"ref_id": f"e{i}", "rendered_text": "palabra " * 40} for i in range(20)]
+    message = {"canon_confirmado": {"autoridad": "CANON", "items": items}}
+    out = enforce_budget(message, 200, {"canon_confirmado": 1.0})
+    kept = out["canon_confirmado"]["items"]
+    assert 0 < len(kept) < 20
+    # Items enteros: cada uno conserva su texto completo (no se parte a la mitad).
+    assert all(it["rendered_text"] == "palabra " * 40 for it in kept)
+    assert out["canon_confirmado"]["truncado"] is True
+
+
+def test_waterfilling_redistributes_surplus_by_priority():
+    # canon (alta prioridad) excede su 50%, pero imports (baja prioridad) casi no
+    # usa el suyo: el sobrante fluye a canon y cabe entero (sin water-filling se
+    # habría truncado).
+    canon = {
+        "autoridad": "CANON",
+        "items": [{"ref_id": f"e{i}", "t": "palabra " * 12} for i in range(10)],
+    }
+    imports = {"autoridad": "IMPORT", "items": [{"ref_id": "d1", "t": "x"}]}
+    message = {"canon_confirmado": canon, "importaciones_sin_revisar": imports}
+
+    canon_demand = _estimate_tokens(canon)
+    imports_demand = _estimate_tokens(imports)
+    total = canon_demand + imports_demand + 5  # pool justo para todo el contenido
+    pct = {"canon_confirmado": 0.5, "importaciones_sin_revisar": 0.5}
+
+    out = enforce_budget(message, total, pct)
+    assert "truncado" not in out["canon_confirmado"]
+    assert len(out["canon_confirmado"]["items"]) == 10
 
 
 def test_enforce_budget_does_not_mutate_input():
     big = "palabra " * 2000
-    message = {"vecindario": big}
-    before = message["vecindario"]
-    enforce_budget(message, 1000)
-    assert message["vecindario"] == before
+    message = {"vecindario": {"items": [{"t": big}]}}
+    before = message["vecindario"]["items"][0]["t"]
+    enforce_budget(message, 1000, {"vecindario": 1.0})
+    assert message["vecindario"]["items"][0]["t"] == before
 
 
 def test_enforce_budget_missing_sections_ok():
-    # No explota si faltan secciones y omite las vacías/None.
-    out = enforce_budget({"directivas": None, "cerco_canon": {}, "seleccion": "x"}, 4000)
+    out = enforce_budget(
+        {"directivas": None, "canon_confirmado": {}, "seleccion": "x"},
+        4000,
+        {"seleccion": 1.0},
+    )
     assert "directivas" not in out
-    assert "cerco_canon" not in out
+    assert "canon_confirmado" not in out
     assert out["seleccion"] == "x"

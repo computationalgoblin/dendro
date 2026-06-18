@@ -421,15 +421,18 @@ class TestCreativeContextForAI:
         )
         message = json.loads(build_model_user_message(plan))
 
-        # Cono de autoridad: canon duro y negative_space viajan en cerco_canon.
-        cerco = message["cerco_canon"]
-        assert cerco["hard_rules"] == ["La magia exige coste"]
-        assert cerco["negative_space"]["avoid_solutions"] == ["deus ex machina"]
-        # La atmósfera viaja en parametros_permanentes.
-        assert "parametros_permanentes" in message
+        # PA03: config creativa COMPLETA en una única sección determinista
+        # (canon duro, negative_space y taste_memory incluidos).
+        cfg = message["configuracion_creativa"]
+        assert cfg["canon"]["hard_rules"] == ["La magia exige coste"]
+        assert cfg["negative_space"]["avoid_solutions"] == ["deus ex machina"]
+        assert cfg["taste_memory"]["rejected_patterns"] == ["final explicado por sueño"]
+        # PA03: ya no hay secciones duplicadas cerco_canon/parametros_permanentes.
+        assert "cerco_canon" not in message
+        assert "parametros_permanentes" not in message
         # M2: creative_brief/creative_context/branch_creative_context no se
-        # duplican en contexto_autorizado.
-        auth = message["contexto_autorizado"]
+        # duplican en contexto_autorizado (que, vacío, se poda del todo en PA03).
+        auth = message.get("contexto_autorizado", {})
         assert "creative_brief" not in auth
         assert "creative_context" not in auth
         assert "branch_creative_context" not in auth

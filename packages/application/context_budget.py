@@ -53,6 +53,52 @@ TIER_OUTPUT_TOKENS: dict[ContextTier, int] = {
 
 DEFAULT_TIER = ContextTier.BALANCED
 
+# ---------------------------------------------------------------------------
+# Presupuesto adaptativo (PA03): reserva fija + water-filling.
+#
+# El contenido FIJO/determinista del mensaje se reserva entero y NUNCA se trunca;
+# el presupuesto solo reparte lo FLEXIBLE. Los porcentajes por tier aplican sobre
+# el pool flexible (pool = total − reserva_fija), renormalizados a las secciones
+# flexibles presentes. El sobrante de una sección que no llena su porción se
+# reasigna a la sección hambrienta de MAYOR prioridad (orden de abajo).
+# ---------------------------------------------------------------------------
+
+# Secciones de contenido fijo/determinista (reservadas enteras, sagradas).
+FIXED_SECTIONS: frozenset[str] = frozenset(
+    {
+        "prompt_exacto_usuario",
+        "directivas",
+        "menciones",
+        "configuracion_creativa",
+        "cronologia",
+        "contexto_autorizado",
+        "formatos_h05",
+    }
+)
+
+# Secciones flexibles ordenadas por prioridad (mayor → menor) para el
+# water-filling: Selección > Canon recuperado > Candidates > Aux > Imports.
+FLEXIBLE_PRIORITY_ORDER: tuple[str, ...] = (
+    "seleccion",
+    "canon_confirmado",
+    "posicion_causal",
+    "vecindario",
+    "candidates_pendientes",
+    "rag_auxiliar",
+    "importaciones_sin_revisar",
+)
+
+# Subconjunto flexible nutrido por la recuperación RAG (para derivar desde el
+# pool el presupuesto de retrieval: "más contexto ⇒ recupera más").
+_RAG_RETRIEVAL_SECTIONS: frozenset[str] = frozenset(
+    {
+        "canon_confirmado",
+        "candidates_pendientes",
+        "rag_auxiliar",
+        "importaciones_sin_revisar",
+    }
+)
+
 # intent value (AIJobType.value) → tier. Asignación inicial acordada.
 INTENT_TO_TIER: dict[str, ContextTier] = {
     "improve_text": ContextTier.FAST_LOCAL,
@@ -222,6 +268,16 @@ class ContextBudgetManager:
             profile = PROFILE_BY_TIER[DEFAULT_TIER]
         return dict(profile)
 
+    def rag_retrieval_share(self, intent: Any) -> float:
+        """Fracción del presupuesto que corresponde a secciones nutridas por RAG.
+
+        Se usa para derivar el presupuesto de recuperación desde el total: a más
+        contexto declarado, más recupera el RAG (en vez de una constante fija).
+        """
+        profile = self.section_percentages(intent)
+        share = sum(v for k, v in profile.items() if k in _RAG_RETRIEVAL_SECTIONS)
+        return max(0.0, float(share))
+
 
 __all__ = [
     "ContextTier",
@@ -231,5 +287,7 @@ __all__ = [
     "INTENT_TO_TIER",
     "PROFILE_BY_TIER",
     "INTENT_SECTION_PERCENTAGES",
+    "FIXED_SECTIONS",
+    "FLEXIBLE_PRIORITY_ORDER",
     "ContextBudgetManager",
 ]

@@ -1,72 +1,60 @@
-"""Presupuesto de tokens configurable para el prompt de la command bar.
+"""Presupuesto de contexto adaptativo para el prompt de la command bar (PA03).
 
-El usuario fija un total de tokens de contexto (vía el tuner de la UI o el
-default del proyecto). El sistema lo reparte porcentualmente entre las secciones
-del "cono de autoridad" y trunca lo que exceda. El prompt del usuario es sagrado:
-jamás se trunca.
+El usuario fija un total de tokens de contexto (vía el tuner de la UI o el tier
+del intent). El reparto NO es un recorte rígido por porcentajes: es adaptativo.
 
-Reparto porcentual de referencia (sobre el total disponible; el prompt del
-usuario queda fuera del budget):
+1. **Reserva fija primero.** El contenido determinista que SIEMPRE va
+   (``prompt_exacto_usuario``, ``directivas``, ``configuracion_creativa``,
+   ``cronologia``, ``contexto_autorizado``…) se reserva entero y nunca se trunca.
+   El presupuesto solo reparte lo que sobra: ``pool = total − reserva_fija``.
+2. **Reparto inicial por %.** El ``pool`` se reparte entre las secciones
+   FLEXIBLES presentes según el perfil del intent (renormalizado).
+3. **Water-filling por prioridad.** Lo que le sobra a una sección que no llena su
+   porción se reasigna a la sección hambrienta de MAYOR prioridad
+   (:data:`FLEXIBLE_PRIORITY_ORDER`), iterando en ese orden.
+4. **Recorte eliminando items enteros.** Cuando una sección flexible no cabe en
+   su asignación, se descartan sus items de menor prioridad (ya vienen ordenados
+   por el retrieval); nunca se parte el texto de un item a la mitad.
 
-                      % del budget    qué es
-    ──────────────────────────────────────────────────────
-    directivas              4%        count, @refs, modo (DIRIGE)
-    menciones               4%        mini-fichas @ (DIRIGE)
-    cerco_canon            14%        hard_rules, negative_space (RESTRINGE)
-    posicion_causal        13%        anillos→ramas→hojas (RESTRINGE)
-    seleccion              15%        entidad objetivo (INFORMA)
-    vecindario             20%        vecinos con decaimiento (INFORMA)
-    parametros_permanentes 10%        género/tono/estilo (ATMÓSFERA)
-    contexto_autorizado    20%        resto del scope sin duplicados (RESIDUAL)
-    ──────────────────────────────────────────────────────
-    TOTAL                 100%        (prompt del usuario = sagrado, fuera del budget)
-
-El presupuesto controla SOLO el contexto construido por la app. El RAG mantiene
-su propio token_budget independiente (1800-3200 por estrategia).
+Si la reserva fija ya supera el total, se incluye igual (lo fijo es sagrado) y el
+pool flexible queda en 0.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 from typing import Any
+
+from packages.application.context_budget import FLEXIBLE_PRIORITY_ORDER
 
 # Default si ni el tuner ni el proyecto lo fijan.
 DEFAULT_PROMPT_BUDGET_TOKENS = 4000
 
-# Reparto porcentual del cono de autoridad.
-# Sobre el total disponible (excluye el prompt del usuario, que es sagrado).
-SECTION_PERCENTAGES: dict[str, float] = {
-    # --- DIRIGE (8%) ---
-    "directivas": 0.04,
-    "menciones": 0.04,
-    # --- RESTRINGE (27%) ---
-    "cerco_canon": 0.14,
-    "posicion_causal": 0.13,
-    # --- INFORMA (35%) ---
-    "seleccion": 0.15,
-    "vecindario": 0.20,
-    # --- ATMÓSFERA (10%) ---
-    "parametros_permanentes": 0.10,
-    # --- RESIDUAL (20%) ---
-    "contexto_autorizado": 0.20,
-}
-# Suma = 1.00
+# 1 token ≈ 3.5 chars en español.
+_CHARS_PER_TOKEN = 3.5
 
-# Secciones cuyo contenido es sagrado (nunca se trunca).
+# Compatibilidad: secciones cuyo contenido es sagrado (subconjunto de las fijas).
 SACRED_SECTIONS = frozenset({"prompt_exacto_usuario", "formatos_h05"})
 
 
 def tokens_to_chars(tokens: int) -> int:
     """Aproximación: 1 token ≈ 3.5 chars en español."""
-    return int(tokens * 3.5)
+    return int(tokens * _CHARS_PER_TOKEN)
+
+
+def _estimate_tokens(value: Any) -> int:
+    """Tokens estimados de una sección (string o estructura serializada)."""
+    if isinstance(value, str):
+        chars = len(value)
+    else:
+        chars = len(json.dumps(value, ensure_ascii=False))
+    return max(1, math.ceil(chars / _CHARS_PER_TOKEN))
 
 
 def truncate_to_chars(text: str, max_chars: int) -> str:
-    """Trunca respetando límite de palabra. Añade '…' si cortó.
-
-    Simple (sin M8): busca el último espacio antes del límite.
-    """
+    """Trunca respetando límite de palabra. Añade '…' si cortó."""
     if max_chars <= 0:
         return ""
     if len(text) <= max_chars:
@@ -75,64 +63,130 @@ def truncate_to_chars(text: str, max_chars: int) -> str:
     return cut.rstrip(".,;:") + "…"
 
 
+def _trim_items_dict(section: dict, max_chars: int) -> dict:
+    """Recorta una sección con lista ``items`` eliminando items enteros del final.
+
+    Los items vienen ordenados por prioridad/score del retrieval, así que los del
+    final son los menos relevantes. La etiqueta ``autoridad`` y demás claves base
+    se conservan siempre.
+    """
+    base = {k: v for k, v in section.items() if k != "items"}
+    items = section.get("items") or []
+    kept: list[Any] = []
+    for item in items:
+        trial = dict(base)
+        trial["items"] = kept + [item]
+        if len(json.dumps(trial, ensure_ascii=False)) <= max_chars:
+            kept.append(item)
+        else:
+            break
+    out = dict(base)
+    if kept:
+        out["items"] = kept
+    if len(kept) < len(items):
+        out["truncado"] = True
+    return out
+
+
+def _trim_section(value: Any, max_tokens: int) -> Any:
+    """Reduce una sección flexible a ``max_tokens`` sin partir items."""
+    max_chars = tokens_to_chars(max(0, max_tokens))
+    if isinstance(value, str):
+        return truncate_to_chars(value, max_chars)
+    if isinstance(value, dict) and isinstance(value.get("items"), list):
+        return _trim_items_dict(value, max_chars)
+    # Fallback para estructuras sin lista de items: serializar y truncar.
+    serialized = json.dumps(value, ensure_ascii=False)
+    if len(serialized) <= max_chars:
+        return value
+    truncated = truncate_to_chars(serialized, max_chars)
+    try:
+        return json.loads(truncated)
+    except (ValueError, TypeError):
+        return truncated
+
+
+def _is_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    return isinstance(value, (str, list, dict, tuple)) and len(value) == 0
+
+
 def enforce_budget(
     message: dict,
     total_budget_tokens: int,
     section_percentages: dict[str, float] | None = None,
 ) -> dict:
-    """Aplica un reparto porcentual al total y trunca cada sección.
+    """Aplica el presupuesto adaptativo (reserva fija + water-filling).
 
-    1. Calcula chars disponibles por sección = tokens_to_chars(total * percentage).
-    2. Las secciones en SACRED_SECTIONS se dejan intactas.
-    3. Las secciones string → truncate_to_chars.
-    4. Las secciones list/dict → json.dumps + truncate_to_chars + json.loads
-       (si el JSON truncado no parsea, se queda como string truncado).
-    5. Las secciones None/vacías → se omiten del resultado.
-    6. No muta la entrada; devuelve una copia.
-
-    ``section_percentages`` permite un reparto por intent (perfil por tier). Si
-    es None se usa :data:`SECTION_PERCENTAGES` global y las secciones sin
-    porcentaje pasan intactas (compatibilidad hacia atrás). Si se pasa un perfil
-    explícito, es un WHITELIST: las secciones presentes en el mensaje pero
-    ausentes del perfil se OMITEN (no son relevantes para ese tipo de tarea).
+    ``section_percentages`` es el perfil por intent (porcentajes por sección). Se
+    usa solo para el reparto inicial del pool entre las secciones flexibles; las
+    secciones fijas se reservan enteras al margen del perfil. No muta la entrada.
     """
     if not isinstance(message, dict):
         return message
     total = int(total_budget_tokens or DEFAULT_PROMPT_BUDGET_TOKENS)
-    percentages = SECTION_PERCENTAGES if section_percentages is None else section_percentages
-    explicit_profile = section_percentages is not None
-    result: dict[str, Any] = {}
+    percentages = section_percentages or {}
+
+    # 1. Clasificar secciones (omitiendo vacías/None).
+    fixed: dict[str, Any] = {}
+    flexible: dict[str, Any] = {}
+    order: list[str] = []
     for key, value in message.items():
-        # Sagrado: copia intacta.
-        if key in SACRED_SECTIONS:
-            result[key] = copy.deepcopy(value)
+        if _is_empty(value):
             continue
-        # None / vacíos: se omiten.
-        if value is None:
-            continue
-        if isinstance(value, (str, list, dict, tuple)) and len(value) == 0:
-            continue
-        pct = percentages.get(key)
-        if pct is None:
-            # Perfil explícito = whitelist: lo no listado se omite. Con el
-            # reparto global por defecto, se deja intacto (no controlado).
-            if explicit_profile:
-                continue
-            result[key] = copy.deepcopy(value)
-            continue
-        max_chars = tokens_to_chars(int(total * pct))
-        if isinstance(value, str):
-            result[key] = truncate_to_chars(value, max_chars)
-            continue
-        # list / dict / tuple: serializar, truncar, reparsear.
-        serialized = json.dumps(value, ensure_ascii=False)
-        if len(serialized) <= max_chars:
-            result[key] = copy.deepcopy(value)
-            continue
-        truncated = truncate_to_chars(serialized, max_chars)
-        try:
-            result[key] = json.loads(truncated)
-        except (ValueError, TypeError):
-            # JSON truncado no parsea → se queda como string truncado.
-            result[key] = truncated
+        order.append(key)
+        if key in FLEXIBLE_PRIORITY_ORDER:
+            flexible[key] = value
+        else:
+            # Fija, sagrada o desconocida → reservada entera (nunca se trunca).
+            fixed[key] = value
+
+    # 2. Reserva fija → pool flexible.
+    fixed_tokens = sum(_estimate_tokens(v) for v in fixed.values())
+    pool = max(0, total - fixed_tokens)
+
+    # 3. Reparto inicial por % (renormalizado sobre las flexibles presentes).
+    present = [k for k in FLEXIBLE_PRIORITY_ORDER if k in flexible]
+    weights = {k: max(0.0, float(percentages.get(k, 0.0))) for k in present}
+    weight_sum = sum(weights.values())
+    if weight_sum <= 0:
+        weights = {k: 1.0 for k in present}
+        weight_sum = float(len(present)) or 1.0
+    slices = {k: pool * weights[k] / weight_sum for k in present}
+
+    # 4. Demanda real y asignación inicial.
+    demand = {k: _estimate_tokens(flexible[k]) for k in present}
+    assigned = {k: min(float(demand[k]), slices[k]) for k in present}
+    surplus = pool - sum(assigned.values())
+
+    # 5. Water-filling por prioridad (present ya está en orden de prioridad).
+    for key in present:
+        if surplus <= 0:
+            break
+        need = demand[key] - assigned[key]
+        if need > 0:
+            give = min(need, surplus)
+            assigned[key] += give
+            surplus -= give
+
+    # 6. Recortar las flexibles que no caben (eliminando items enteros).
+    for key in present:
+        if demand[key] > assigned[key]:
+            flexible[key] = _trim_section(flexible[key], int(assigned[key]))
+
+    # 7. Reensamblar en el orden original (sin mutar la entrada).
+    result: dict[str, Any] = {}
+    for key in order:
+        source = flexible[key] if key in flexible else fixed[key]
+        result[key] = copy.deepcopy(source)
     return result
+
+
+__all__ = [
+    "DEFAULT_PROMPT_BUDGET_TOKENS",
+    "SACRED_SECTIONS",
+    "tokens_to_chars",
+    "truncate_to_chars",
+    "enforce_budget",
+]
