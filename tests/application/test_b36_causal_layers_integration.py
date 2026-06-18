@@ -98,7 +98,9 @@ def test_context_builder_adds_upper_causes_when_worldbuilding_is_on() -> None:
 
 
 @pytest.mark.application
-def test_context_builder_hides_causal_context_when_worldbuilding_is_off() -> None:
+def test_context_builder_keeps_causal_context_enabled_always() -> None:
+    # PA02: worldbuilding es siempre activo; el contexto causal no se deshabilita
+    # aunque el flag heredado venga en False.
     project = _project()
     project.worldbuilding_active = False
     effect = _entity("effect", "La gravedad es inestable", "layer_fisica")
@@ -106,8 +108,7 @@ def test_context_builder_hides_causal_context_when_worldbuilding_is_off() -> Non
 
     context = NarrativeContextBuilder(ProjectServiceStub(project)).build_context("entity", effect.id)
 
-    assert context["project"]["worldbuilding_active"] is False
-    assert context["causal_context"] == {"enabled": False}
+    assert context["causal_context"]["enabled"] is True
 
 
 @pytest.mark.application

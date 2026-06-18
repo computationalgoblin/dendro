@@ -91,7 +91,9 @@ def test_e04_context_pack_prioritizes_selection_and_related_context():
     assert ("relation", "rel-conflict") in items
     assert ("milestone", "hito-1") in items
     assert ("issue", "issue-1") in items
-    assert ("creative_config", "creative_config") in items
+    # PA02: creative_config ya NO se recupera por RAG (viaja determinista en el
+    # prompt vía cerco_canon/parametros_permanentes), aunque se pida como need.
+    assert ("creative_config", "creative_config") not in items
     assert items[("entity", "leaf-1")].priority is ContextPriority.REQUIRED
     assert items[("relation", "rel-conflict")].priority is ContextPriority.REQUIRED
     assert "Nota privada" not in json.dumps(pack.to_dict(), ensure_ascii=False)

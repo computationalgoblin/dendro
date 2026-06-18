@@ -273,7 +273,9 @@ class Project:
 
     # ── Project type & creative config (B31-T03) ──
     project_type: str = "otro"  # campana, novela, otro
-    worldbuilding_active: bool = False
+    # PA02: worldbuilding deja de ser opcional — siempre activo. Se conserva el
+    # campo (persistencia/compat) pero se fuerza a True al crear y al cargar.
+    worldbuilding_active: bool = True
     creative_config: CreativeProjectConfig = field(default_factory=CreativeProjectConfig)
     novela_config: NovelaConfig | None = None
 
@@ -608,7 +610,8 @@ class Project:
             ),
             # ── Project type & creative config (B31-T03) ──
             project_type=data.get("project_type", "otro"),
-            worldbuilding_active=data.get("worldbuilding_active", False),
+            # PA02: worldbuilding siempre activo (incluido al cargar proyectos viejos).
+            worldbuilding_active=True,
             creative_config=CreativeProjectConfig.from_dict(data.get("creative_config", {})),
             novela_config=NovelaConfig.from_dict(data["novela_config"]) if data.get("novela_config") else None,
         )

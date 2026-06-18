@@ -666,7 +666,8 @@ class NarrativeContextBuilder:
 
     def _causal_context(self, selected_entities: Iterable[Any], audience: str) -> dict[str, Any]:
         project = self.project
-        if project is None or not bool(getattr(project, "worldbuilding_active", False)):
+        # PA02: worldbuilding siempre activo; el contexto causal nunca se deshabilita.
+        if project is None:
             return {"enabled": False}
         selected = [e for e in selected_entities if e is not None]
         selected_ids = {str(getattr(e, "id", "")) for e in selected}

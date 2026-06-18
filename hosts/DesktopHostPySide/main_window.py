@@ -24,11 +24,11 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
-    QWizard,
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
+from hosts.DesktopHostPySide.widgets.modal_overlay import ModalOverlay
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
@@ -103,7 +103,9 @@ class MainWindow(QMainWindow):
         self._build_shell()
         self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
-        self._refresh_recent_project_option()
+        # PA02: auto-carga el último proyecto al arrancar (queda cargado pero el
+        # usuario sigue en Home; entra a Creación desde la tarjeta cuando quiera).
+        self._open_last_project()
 
     # ── Controllers ──────────────────────────────────────────────────────────
 
@@ -146,7 +148,6 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("save_project", self._save)
         self.home_view.register_callback("close_project", self._close_project)
         self.home_view.register_callback("ai_settings", self._open_ai_settings)
-        self.home_view.register_callback("open_last_project", self._open_last_project)
         # T05/H03: technical toggles are not exposed from Home.
 
         # Workspaces (preserve existing views inside them)
@@ -211,6 +212,11 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(140)
         self.log.setVisible(False)
         root.addWidget(self.log)
+
+        # PA02: overlay modal centrado dentro de la app (wizard, etc.). Hijo del
+        # widget central para cubrirlo entero; no es una ventana del SO.
+        self.modal_overlay = ModalOverlay(cw)
+        self.ctx.modal_overlay = self.modal_overlay
 
         # BETA1-G08: la elevación del cajón la pinta el propio RightDrawer en su
         # borde izquierdo (paintEvent) — NADA de QGraphicsDropShadowEffect, que
@@ -427,13 +433,12 @@ class MainWindow(QMainWindow):
     # ── Project actions ──────────────────────────────────────────────────────
 
     def _refresh_recent_project_option(self):
+        # PA02: el botón "Continuar con X" se eliminó (el último proyecto se
+        # auto-carga al arrancar). Este método ahora solo limpia recientes si la
+        # ruta guardada ya no existe.
         path = self.ctx.last_project_path
-        if path and Path(path).exists():
-            self.home_view.set_last_project_option(Path(path).stem)
-        else:
-            if path:
-                self.ctx.forget_missing_project(path)
-            self.home_view.set_last_project_option(None)
+        if path and not Path(path).exists():
+            self.ctx.forget_missing_project(path)
 
     def _open_last_project(self):
         _apptrace(f"UI open_last_project path={self.ctx.last_project_path!r}")
@@ -536,23 +541,25 @@ class MainWindow(QMainWindow):
             self.creation_workspace.refresh_ai_controller()
 
     def _new_project(self):
-        """Nuevo proyecto — abre el wizard de creación."""
+        """Nuevo proyecto — abre el wizard como overlay modal centrado (PA02)."""
         _apptrace("UI new_project")
         from hosts.DesktopHostPySide.widgets.project_wizard import ProjectWizard
 
-        wizard = ProjectWizard(self)
-        if wizard.exec() != QWizard.DialogCode.Accepted:
-            return
+        wizard = ProjectWizard(self.modal_overlay)
+        wizard.cancelled.connect(self.modal_overlay.dismiss)
+        wizard.accepted.connect(lambda: self._create_project_from_wizard(wizard))
+        self.modal_overlay.open_widget(wizard)
 
+    def _create_project_from_wizard(self, wizard):
+        """Crea y guarda el proyecto a partir del wizard ya aceptado."""
         cfg = wizard.collect_config()
-        name = cfg.get("name", "Sin nombre").strip()
-        if not name:
-            name = "Sin nombre"
+        name = cfg.get("name", "Sin nombre").strip() or "Sin nombre"
 
         path, _ = QFileDialog.getSaveFileName(
             self, "Guardar proyecto", f"{name}.json", "JSON (*.json)"
         )
         if not path:
+            # El usuario canceló el guardado: el wizard sigue abierto para reintentar.
             return
         try:
             result = self.controller.create(name, path)
@@ -571,6 +578,7 @@ class MainWindow(QMainWindow):
             self._refresh_recent_project_option()
             self.log_msg(f"Proyecto creado: {Path(path).name}")
             self._refresh_all_views()
+            self.modal_overlay.dismiss()
             if self.ctx.drawer:
                 self.ctx.drawer.close()
         except Exception as exc:

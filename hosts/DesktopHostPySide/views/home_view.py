@@ -623,10 +623,8 @@ class HomeView(QWidget):
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(f"font-size: 12px; color: {INK_MUTED}; background: transparent; border: none;")
         title_box.addWidget(self._status_label)
-        self._continue_btn = QuietIconButton("↳", "Continuar", icon_only=False)
-        self._continue_btn.setVisible(False)
-        self._continue_btn.clicked.connect(lambda: self._action("open_last_project"))
-        title_box.addWidget(self._continue_btn)
+        # PA02: el botón "Continuar con X" se eliminó — el último proyecto se
+        # auto-carga al arrancar, así que es redundante.
         layout.addLayout(title_box)
 
         # Advanced indicator (kept from original, hidden by default)
@@ -747,14 +745,6 @@ class HomeView(QWidget):
 
     def register_callback(self, name: str, callback: Callable):
         self._callbacks[name] = callback
-
-    def set_last_project_option(self, project_name: str | None):
-        """Show a quiet Home action to continue the last valid project."""
-        if project_name:
-            self._continue_btn.setText(f"↳ Continuar con {project_name}")
-            self._continue_btn.setVisible(True)
-        else:
-            self._continue_btn.setVisible(False)
 
     def set_advanced_mode(self, enabled: bool):
         # T05: Always hidden from UI — advanced mode kept internal only

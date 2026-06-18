@@ -7,20 +7,19 @@ suave entre pasos y botones de oro. Cubre TODO el contenido de la configuración
 del proyecto (paridad con CreativeConfigPanel), guiando al usuario en vez de
 abrumarle: casi todo es opcional y editable después.
 
-API pública preservada para `main_window._new_project`:
-- ``exec()`` (QDialog) → Accepted/Rejected
+API pública para `main_window._new_project` (PA02: ya no es QDialog del SO, sino
+un QFrame embebible que se muestra en un ModalOverlay centrado dentro de la app):
+- señales ``accepted`` / ``cancelled`` (sustituyen a ``exec()`` Accepted/Rejected)
 - ``collect_config()`` → dict de overrides
 - ``apply_to_project(project)`` → vuelca al proyecto recién creado
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -164,8 +163,11 @@ class _RailItem(QPushButton):
 # ── wizard ──────────────────────────────────────────────────────────────────
 
 
-class ProjectWizard(QDialog):
-    """Asistente de creación de proyecto (custom, BETA1-G09)."""
+class ProjectWizard(QFrame):
+    """Asistente de creación de proyecto (custom, BETA1-G09; embebible PA02)."""
+
+    accepted = Signal()
+    cancelled = Signal()
 
     # (clave, título, micro-ayuda)
     STEPS = [
@@ -181,10 +183,15 @@ class ProjectWizard(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Nuevo proyecto")
-        self.setMinimumSize(960, 660)
-        self.resize(1020, 700)
-        self.setStyleSheet(f"QDialog {{ background: {PAPER}; }}")
+        # PA02: tarjeta centrada en un overlay, no ventana del SO. Tamaño acotado
+        # para que se vea como panel modal dentro de la app.
+        self.setObjectName("projectWizard")
+        self.setMinimumSize(960, 640)
+        self.setMaximumSize(1040, 720)
+        self.setStyleSheet(
+            f"QFrame#projectWizard {{ background: {PAPER}; border: 1px solid {LINE}; "
+            f"border-radius: 12px; }}"
+        )
 
         self._steps: list[QWidget] = []
         self._rail_items: list[_RailItem] = []
@@ -328,7 +335,7 @@ class ProjectWizard(QDialog):
 
         self._cancel_btn = QPushButton("Cancelar")
         self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._cancel_btn.clicked.connect(self.reject)
+        self._cancel_btn.clicked.connect(self.cancelled.emit)
         row.addWidget(self._cancel_btn)
 
         self._back_btn = QPushButton("← Atrás")
@@ -403,7 +410,7 @@ class ProjectWizard(QDialog):
             self._go_to(0)
             self.name_edit.setFocus()
             return
-        self.accept()
+        self.accepted.emit()
 
     # ── pasos ────────────────────────────────────────────────────────────
 
@@ -447,15 +454,8 @@ class ProjectWizard(QDialog):
         self.language_edit = QLineEdit("es")
         self.language_edit.setPlaceholderText("es, en, fr…")
         box.addWidget(_field_block("Idioma principal", self.language_edit))
-        self.wb_check = QCheckBox("Activar worldbuilding por capas causales")
-        box.addWidget(self.wb_check)
-        wb_info = QLabel(
-            "Si lo activas, podrás organizar el mundo en anillos concéntricos:\n"
-            "Metafísica → Leyes → Materia → Geografía → Vida → Cultura → …"
-        )
-        wb_info.setWordWrap(True)
-        wb_info.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;")
-        box.addWidget(wb_info)
+        # PA02: el worldbuilding por capas causales está siempre activo; ya no se
+        # ofrece como opción en el wizard.
         box.addStretch(1)
         return page
 
@@ -796,7 +796,7 @@ class ProjectWizard(QDialog):
                 "context_depth": self.ai_depth.currentData() or "balanced",
             },
             "primary_language": self._t(self.language_edit) or "es",
-            "worldbuilding_active": self.wb_check.isChecked(),
+            "worldbuilding_active": True,  # PA02: siempre activo
             "project_chronology": chronology,
         }
 

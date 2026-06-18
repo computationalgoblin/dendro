@@ -4,6 +4,7 @@ This module turns an AI job plan into a structured ContextPack. It only reads
 the in-memory corpus index; it never calls AI providers, persists data or
 mutates canon.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +12,11 @@ from typing import Any, Iterable
 import math
 import re
 
-from packages.application.corpus_indexer import CorpusIndexRecord, IndexingOptions, NarrativeCorpusIndex
+from packages.application.corpus_indexer import (
+    CorpusIndexRecord,
+    IndexingOptions,
+    NarrativeCorpusIndex,
+)
 from packages.application.narrative_rag_contract import (
     ContextPack,
     ContextPriority,
@@ -23,40 +28,42 @@ from packages.application.rag_service import RAGService
 from packages.domain.result import Error, Ok, Result
 
 
-_STOPWORDS: frozenset[str] = frozenset({
-    "a",
-    "al",
-    "algo",
-    "con",
-    "de",
-    "del",
-    "desde",
-    "el",
-    "en",
-    "entre",
-    "es",
-    "esta",
-    "este",
-    "esto",
-    "la",
-    "las",
-    "lo",
-    "los",
-    "para",
-    "por",
-    "que",
-    "se",
-    "si",
-    "sin",
-    "sobre",
-    "su",
-    "sus",
-    "un",
-    "una",
-    "unas",
-    "unos",
-    "y",
-})
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "al",
+        "algo",
+        "con",
+        "de",
+        "del",
+        "desde",
+        "el",
+        "en",
+        "entre",
+        "es",
+        "esta",
+        "este",
+        "esto",
+        "la",
+        "las",
+        "lo",
+        "los",
+        "para",
+        "por",
+        "que",
+        "se",
+        "si",
+        "sin",
+        "sobre",
+        "su",
+        "sus",
+        "un",
+        "una",
+        "unas",
+        "unos",
+        "y",
+    }
+)
 
 
 _KIND_BY_NEED: dict[str, tuple[CorpusItemKind, ...]] = {
@@ -64,25 +71,65 @@ _KIND_BY_NEED: dict[str, tuple[CorpusItemKind, ...]] = {
     "relations": (CorpusItemKind.RELATION, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH),
     "chronology": (CorpusItemKind.CHRONOLOGY, CorpusItemKind.MILESTONE),
     "milestones": (CorpusItemKind.MILESTONE, CorpusItemKind.CHRONOLOGY, CorpusItemKind.RELATION),
-    "issues": (CorpusItemKind.ISSUE, CorpusItemKind.RELATION, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH),
-    "creative_config": (CorpusItemKind.CREATIVE_CONFIG,),
+    "issues": (
+        CorpusItemKind.ISSUE,
+        CorpusItemKind.RELATION,
+        CorpusItemKind.ENTITY,
+        CorpusItemKind.BRANCH,
+    ),
+    # PA02: creative_config NO se recupera por RAG; ya viaja determinista en
+    # cerco_canon + parametros_permanentes (evita triplicar la config en el prompt).
+    "creative_config": (),
     "world_layers": (CorpusItemKind.WORLD_LAYER, CorpusItemKind.BRANCH, CorpusItemKind.ENTITY),
     "branches": (CorpusItemKind.BRANCH,),
     "entities": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH),
 }
 
 
+# PA02: CREATIVE_CONFIG ya NO se incluye por intent — la config creativa viaja
+# determinista en cerco_canon/parametros_permanentes, no por RAG.
 _KIND_BY_INTENT: dict[str, tuple[CorpusItemKind, ...]] = {
-    "generate_entities": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.WORLD_LAYER, CorpusItemKind.CREATIVE_CONFIG),
-    "generate_tree": (CorpusItemKind.BRANCH, CorpusItemKind.ENTITY, CorpusItemKind.WORLD_LAYER, CorpusItemKind.CREATIVE_CONFIG),
-    "suggest_relations": (CorpusItemKind.RELATION, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.MILESTONE),
-    "analyze_coherence": (CorpusItemKind.ISSUE, CorpusItemKind.RELATION, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.MILESTONE),
-    "expand_worldbuilding": (CorpusItemKind.WORLD_LAYER, CorpusItemKind.BRANCH, CorpusItemKind.ENTITY, CorpusItemKind.CREATIVE_CONFIG),
-    "explain_from_causes": (CorpusItemKind.MILESTONE, CorpusItemKind.CHRONOLOGY, CorpusItemKind.RELATION, CorpusItemKind.WORLD_LAYER),
-    "review_graph": (CorpusItemKind.ISSUE, CorpusItemKind.RELATION, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.CREATIVE_CONFIG),
-    "freeform_planning": (CorpusItemKind.CREATIVE_CONFIG, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.RELATION),
-    "edit_entities": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.CREATIVE_CONFIG),
-    "propose_milestones": (CorpusItemKind.MILESTONE, CorpusItemKind.CHRONOLOGY, CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.RELATION),
+    "generate_entities": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.WORLD_LAYER),
+    "generate_tree": (CorpusItemKind.BRANCH, CorpusItemKind.ENTITY, CorpusItemKind.WORLD_LAYER),
+    "suggest_relations": (
+        CorpusItemKind.RELATION,
+        CorpusItemKind.ENTITY,
+        CorpusItemKind.BRANCH,
+        CorpusItemKind.MILESTONE,
+    ),
+    "analyze_coherence": (
+        CorpusItemKind.ISSUE,
+        CorpusItemKind.RELATION,
+        CorpusItemKind.ENTITY,
+        CorpusItemKind.BRANCH,
+        CorpusItemKind.MILESTONE,
+    ),
+    "expand_worldbuilding": (
+        CorpusItemKind.WORLD_LAYER,
+        CorpusItemKind.BRANCH,
+        CorpusItemKind.ENTITY,
+    ),
+    "explain_from_causes": (
+        CorpusItemKind.MILESTONE,
+        CorpusItemKind.CHRONOLOGY,
+        CorpusItemKind.RELATION,
+        CorpusItemKind.WORLD_LAYER,
+    ),
+    "review_graph": (
+        CorpusItemKind.ISSUE,
+        CorpusItemKind.RELATION,
+        CorpusItemKind.ENTITY,
+        CorpusItemKind.BRANCH,
+    ),
+    "freeform_planning": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH, CorpusItemKind.RELATION),
+    "edit_entities": (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH),
+    "propose_milestones": (
+        CorpusItemKind.MILESTONE,
+        CorpusItemKind.CHRONOLOGY,
+        CorpusItemKind.ENTITY,
+        CorpusItemKind.BRANCH,
+        CorpusItemKind.RELATION,
+    ),
 }
 
 
@@ -125,11 +172,13 @@ class RAGContextBuilder:
 
     def build_context_pack(self, project: Any, plan: RetrievalPlan) -> Result:
         if project is None:
-            return Ok(ContextPack(
-                plan=plan,
-                warnings=["rag_project_unavailable"],
-                tokens_budget=plan.token_budget,
-            ))
+            return Ok(
+                ContextPack(
+                    plan=plan,
+                    warnings=["rag_project_unavailable"],
+                    tokens_budget=plan.token_budget,
+                )
+            )
 
         options = IndexingOptions(
             include_pending_candidates=plan.include_pending_candidates,
@@ -143,11 +192,13 @@ class RAGContextBuilder:
         )
         indexed = self.rag_service.index_project(project, options=options)
         if isinstance(indexed, Error):
-            return Ok(ContextPack(
-                plan=plan,
-                warnings=[f"rag_index_unavailable: {indexed.error}"],
-                tokens_budget=plan.token_budget,
-            ))
+            return Ok(
+                ContextPack(
+                    plan=plan,
+                    warnings=[f"rag_index_unavailable: {indexed.error}"],
+                    tokens_budget=plan.token_budget,
+                )
+            )
         return Ok(self.retrieve(indexed.value, plan))
 
     def build_retrieval_plan(
@@ -163,7 +214,9 @@ class RAGContextBuilder:
         if not retrieval_needs and isinstance(ctx.get("command_bar_plan"), dict):
             retrieval_needs = _string_list(ctx["command_bar_plan"].get("retrieval_needs"))
         include_kinds = _include_kinds_for(intent_type, retrieval_needs, prompt)
-        if bool(ctx.get("include_unaccepted_imports", False)) or bool(ctx.get("include_import_documents", False)):
+        if bool(ctx.get("include_unaccepted_imports", False)) or bool(
+            ctx.get("include_import_documents", False)
+        ):
             include_kinds = _dedupe_kinds([*include_kinds, CorpusItemKind.IMPORT_DOCUMENT])
         active_layer_ids = _dedupe(
             _string_list(ctx.get("active_layer_ids"))
@@ -241,7 +294,17 @@ class RAGContextBuilder:
         )
 
 
-def _score_record(record: CorpusIndexRecord, plan: RetrievalPlan, query_tokens: set[str], idf: dict[str, float] | None = None) -> _ScoredRecord | None:
+def _score_record(
+    record: CorpusIndexRecord,
+    plan: RetrievalPlan,
+    query_tokens: set[str],
+    idf: dict[str, float] | None = None,
+) -> _ScoredRecord | None:
+    # PA02: creative_config NUNCA se recupera por RAG. Ya viaja determinista en el
+    # prompt (cerco_canon/parametros_permanentes); recuperarlo lo triplicaba.
+    if record.kind == CorpusItemKind.CREATIVE_CONFIG:
+        return None
+
     reasons: list[str] = []
     score = 0.0
     priority = ContextPriority.LOW
@@ -276,11 +339,6 @@ def _score_record(record: CorpusIndexRecord, plan: RetrievalPlan, query_tokens: 
         score += 5.0
         reasons.append("structural_relation")
 
-    if record.kind == CorpusItemKind.CREATIVE_CONFIG and plan.strategy != RetrievalStrategy.PRECISION:
-        score += 8.0
-        priority = _max_priority(priority, ContextPriority.NORMAL)
-        reasons.append("creative_baseline")
-
     if score <= 0:
         return None
     return _ScoredRecord(record=record, score=score, priority=priority, reasons=reasons)
@@ -291,8 +349,12 @@ def _intent_type(intent: Any) -> str:
     return str(getattr(value, "value", value) or "unknown")
 
 
-def _include_kinds_for(intent_type: str, retrieval_needs: list[str], prompt: str) -> list[CorpusItemKind]:
-    kinds: list[CorpusItemKind] = list(_KIND_BY_INTENT.get(intent_type, (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH)))
+def _include_kinds_for(
+    intent_type: str, retrieval_needs: list[str], prompt: str
+) -> list[CorpusItemKind]:
+    kinds: list[CorpusItemKind] = list(
+        _KIND_BY_INTENT.get(intent_type, (CorpusItemKind.ENTITY, CorpusItemKind.BRANCH))
+    )
     for need in retrieval_needs:
         kinds.extend(_KIND_BY_NEED.get(str(need).strip().lower(), ()))
 
@@ -305,10 +367,19 @@ def _include_kinds_for(intent_type: str, retrieval_needs: list[str], prompt: str
         kinds.extend((CorpusItemKind.ISSUE, CorpusItemKind.RELATION))
     if prompt_tokens & {"anillo", "anillos", "capa", "capas", "worldbuilding"}:
         kinds.extend((CorpusItemKind.WORLD_LAYER, CorpusItemKind.BRANCH))
-    if prompt_tokens & {"documento", "documentos", "importacion", "importaciones", "importado", "importados", "chunk", "chunks"}:
+    if prompt_tokens & {
+        "documento",
+        "documentos",
+        "importacion",
+        "importaciones",
+        "importado",
+        "importados",
+        "chunk",
+        "chunks",
+    }:
         kinds.append(CorpusItemKind.IMPORT_DOCUMENT)
 
-    kinds.append(CorpusItemKind.CREATIVE_CONFIG)
+    # PA02: NO se añade CREATIVE_CONFIG — ya viaja determinista en el prompt.
     return _dedupe_kinds(kinds)
 
 
@@ -365,8 +436,16 @@ def _references_selection(record: CorpusIndexRecord, plan: RetrievalPlan) -> boo
         value = metadata.get(key)
         if value and f"entity:{value}" in selected_refs:
             return True
-    for key in ("affected_entity_ids", "affected_branch_ids", "child_entity_ids", "parent_branch_ids"):
-        if any(f"entity:{item}" in selected_refs or f"branch:{item}" in selected_refs for item in _string_list(metadata.get(key))):
+    for key in (
+        "affected_entity_ids",
+        "affected_branch_ids",
+        "child_entity_ids",
+        "parent_branch_ids",
+    ):
+        if any(
+            f"entity:{item}" in selected_refs or f"branch:{item}" in selected_refs
+            for item in _string_list(metadata.get(key))
+        ):
             return True
     for key in ("affected_relation_ids", "caused_relation_ids"):
         if any(f"relation:{item}" in selected_refs for item in _string_list(metadata.get(key))):
@@ -380,7 +459,9 @@ def _matches_active_layer(record: CorpusIndexRecord, plan: RetrievalPlan) -> boo
         return False
     if record.kind == CorpusItemKind.WORLD_LAYER and record.ref_id in active:
         return True
-    if {ref.split(":", 1)[1] for ref in record.references if ref.startswith("world_layer:")}.intersection(active):
+    if {
+        ref.split(":", 1)[1] for ref in record.references if ref.startswith("world_layer:")
+    }.intersection(active):
         return True
     return bool(set(_string_list((record.metadata or {}).get("layer_ids"))).intersection(active))
 
@@ -408,7 +489,9 @@ def _idf_map(index: NarrativeCorpusIndex, query_tokens: set[str]) -> dict[str, f
     return {token: math.log(1.0 + total / (1.0 + count)) for token, count in df.items()}
 
 
-def _text_overlap_score(record: CorpusIndexRecord, query_tokens: set[str], idf: dict[str, float]) -> float:
+def _text_overlap_score(
+    record: CorpusIndexRecord, query_tokens: set[str], idf: dict[str, float]
+) -> float:
     """IDF-weighted overlap between the query and a record (BETA1-AI01)."""
     if not query_tokens:
         return 0.0
@@ -426,7 +509,9 @@ def _selection_ref_tokens(plan: RetrievalPlan) -> set[str]:
 
 
 def _is_structural_relation(record: CorpusIndexRecord) -> bool:
-    return record.kind == CorpusItemKind.RELATION and bool((record.metadata or {}).get("structural", False))
+    return record.kind == CorpusItemKind.RELATION and bool(
+        (record.metadata or {}).get("structural", False)
+    )
 
 
 def _max_priority(current: ContextPriority, candidate: ContextPriority) -> ContextPriority:

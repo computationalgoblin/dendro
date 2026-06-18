@@ -132,7 +132,8 @@ def test_b38_ai_job_service_rejects_empty_prompt():
     "prompt,worldbuilding,expected",
     [
         ("Créame tres personajes", False, AIJobType.GENERATE_ENTITIES),
-        ("Crea un sistema metafísico", False, AIJobType.GENERATE_TREE),
+        # PA02: worldbuilding siempre activo → "metafísico" siempre EXPAND_WORLDBUILDING.
+        ("Crea un sistema metafísico", False, AIJobType.EXPAND_WORLDBUILDING),
         ("Crea un sistema metafísico", True, AIJobType.EXPAND_WORLDBUILDING),
         ("Propón relaciones para Devian", False, AIJobType.SUGGEST_RELATIONS),
         ("Busca incoherencias", False, AIJobType.ANALYZE_COHERENCE),

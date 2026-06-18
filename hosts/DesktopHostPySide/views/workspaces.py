@@ -80,6 +80,12 @@ from packages.application.ai_jobs import (
 from packages.application.command_expansion import order_context_by_causality, plan_command_jobs
 from packages.infrastructure.openai_compatible_provider import get_provider
 from packages.application.ai_request_gateway import ModelParams
+from packages.application.context_budget import (
+    DEFAULT_TIER,
+    INTENT_TO_TIER,
+    TIER_INPUT_TOKENS,
+    TIER_OUTPUT_TOKENS,
+)
 from hosts.DesktopHostPySide.widgets.radial_tuner import RadialTuner
 from packages.application.ai_prompt_debug import AIPromptDebugTraceStore
 from packages.application.rag_service import RAGService
@@ -2205,9 +2211,9 @@ class CreationWorkspace(QWidget):
         layout.addWidget(self._action_selector)
         layout.addWidget(self._scope_selector)
         layout.addWidget(self._count_spin)
-        layout.addWidget(self._temp_tuner)
-        layout.addWidget(self._tokens_tuner)
-        layout.addWidget(self._budget_tuner)
+        layout.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
+        layout.addWidget(self._captioned_tuner(self._tokens_tuner, "Salida"))
+        layout.addWidget(self._captioned_tuner(self._budget_tuner, "Contexto"))
 
         self._command_input = QLineEdit()
         self._command_input.setObjectName("aiCommandInput")
@@ -2307,27 +2313,29 @@ class CreationWorkspace(QWidget):
             f"QSpinBox:hover {{ border-color: {GOLD_SOFT}; }}"
         )
 
-        # F3.5: two radial tuners — temperature (Lógica↔Creatividad) and
-        # max_tokens (Extensión). Defaults follow the current function's
-        # recommendation; the user can drag to override.
-        temp_tuner = RadialTuner(minimum=0.0, maximum=1.0, value=0.7, is_integer=False)
+        # PA02: tres tuners en modo AUTO por defecto. En Auto muestran el valor
+        # por defecto de la tarea (hint) y NO envían override: manda el tier/intent.
+        # Al arrastrar pasan a manual; doble clic vuelve a Auto. Topes = máximos de
+        # tier (entrada hasta 600k, salida hasta 24k) para tareas que soportan más.
+        temp_tuner = RadialTuner(minimum=0.0, maximum=1.0, value=0.7, is_integer=False, auto=True)
         temp_tuner.setToolTip(
-            "Lógica ↔ Creatividad (temperatura).\n"
-            "Vacío/abajo = respuestas consistentes y precisas; lleno/arriba = más creativas y variadas.\n"
-            "Mantén pulsado y arrastra ↑/↓. Parte de la recomendación de cada función."
+            "CREATIVIDAD (temperatura del modelo).\n"
+            "Auto = usa la recomendada para esta tarea (número mostrado).\n"
+            "Arrastra ↑/↓ para forzar un valor; doble clic = volver a Auto.\n"
+            "Abajo = preciso y consistente; arriba = más creativo y variado."
         )
-        tokens_tuner = RadialTuner(minimum=256, maximum=6000, value=2000, is_integer=True)
+        tokens_tuner = RadialTuner(minimum=256, maximum=24000, value=2000, is_integer=True, auto=True)
         tokens_tuner.setToolTip(
-            "Extensión de la respuesta (tokens).\n"
-            "Vacío/abajo = respuestas breves; lleno/arriba = más largas y detalladas.\n"
-            "Mantén pulsado y arrastra ↑/↓."
+            "SALIDA — longitud máxima de la RESPUESTA (tokens que genera la IA).\n"
+            "Auto = el máximo por defecto de esta tarea (número mostrado).\n"
+            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto."
         )
-        budget_tuner = RadialTuner(minimum=1000, maximum=12000, value=4000, is_integer=True)
+        budget_tuner = RadialTuner(minimum=2000, maximum=600000, value=24000, is_integer=True, auto=True)
         budget_tuner.setToolTip(
-            "Tokens de contexto para esta tarea.\n"
-            "Se reparten automáticamente: canon/causal 27%, selección 15%, "
-            "vecindario 20%, atmósfera 10%, directivas 8%, resto 20%.\n"
-            "Más alto = la IA recibe más información; más bajo = respuestas más rápidas."
+            "ENTRADA — presupuesto de CONTEXTO que recibe la IA (tokens del prompt).\n"
+            "Auto = el presupuesto por defecto de esta tarea (número mostrado).\n"
+            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto.\n"
+            "Más alto = más contexto (más coste/latencia); más bajo = más rápido."
         )
 
         self._action_selector = action
@@ -2363,17 +2371,39 @@ class CreationWorkspace(QWidget):
             if scope_driven else "Sobre qué actúa la IA"
         )
 
+    def _captioned_tuner(self, tuner, caption: str):
+        """Envuelve un tuner con una etiqueta visible debajo (qué controla)."""
+        box = QWidget(self)
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(1)
+        v.addWidget(tuner, alignment=Qt.AlignmentFlag.AlignHCenter)
+        label = QLabel(caption, box)
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet(
+            f"font-size: 9px; color: {INK_MUTED}; background: transparent; border: none;"
+        )
+        v.addWidget(label)
+        return box
+
     def _sync_tuner_recommendations(self) -> None:
-        """Reset both tuners to the current function's recommended ModelParams."""
+        """PA02: muestra el default por tarea como HINT y ajusta topes por tier.
+
+        No fuerza valores: los tuners siguen en Auto (sin override) salvo que el
+        usuario los haya tocado. Así el presupuesto real lo deciden los tiers.
+        """
         if getattr(self, "_temp_tuner", None) is None:
             return
         try:
             job_type = self._selected_command_job_type()
         except ValueError:
             return
-        params = ModelParams.from_intent(job_type.value)
-        self._temp_tuner.setValue(params.temperature)
-        self._tokens_tuner.setValue(params.max_tokens)
+        intent = job_type.value
+        params = ModelParams.from_intent(intent)
+        tier = INTENT_TO_TIER.get(intent, DEFAULT_TIER)
+        self._temp_tuner.set_hint(params.temperature)
+        self._tokens_tuner.set_hint(TIER_OUTPUT_TOKENS[tier])
+        self._budget_tuner.set_hint(TIER_INPUT_TOKENS[tier])
 
     def _refresh_scope_selector(self) -> None:
         """Repopulate the scope selector with the scopes valid for the action."""
@@ -2500,26 +2530,10 @@ class CreationWorkspace(QWidget):
         return getattr(project_controller, "ps", None)
 
     def _load_project_budget_default(self) -> None:
-        """Inicializa el budget tuner con el default del proyecto activo.
-
-        Solo aplica al cambiar de proyecto, para no pisar el override manual del
-        usuario en cada refresh.
-        """
-        if getattr(self, "_budget_tuner", None) is None:
-            return
-        project = self._get_active_project()
-        if project is None:
-            return
-        pid = str(getattr(project, "id", "") or "")
-        if pid and pid == getattr(self, "_budget_loaded_project_id", None):
-            return
-        self._budget_loaded_project_id = pid
-        ai = getattr(project, "ai", None)
-        default = getattr(ai, "prompt_budget_tokens", 4000) if ai else 4000
-        try:
-            self._budget_tuner.setValue(int(default))
-        except Exception:  # noqa: BLE001
-            pass
+        """PA02: el budget tuner arranca en Auto (presupuesto por tier de la
+        tarea), así que ya no se fuerza el default del proyecto al cambiar de
+        proyecto. Se conserva como hook no-op por compatibilidad de llamadas."""
+        return
 
     def _neighborhood_pack(self, scope: dict) -> dict:
         """Vecindario por saltos desde la selección (CONO). Vacío si no hay selección."""
@@ -2774,16 +2788,19 @@ class CreationWorkspace(QWidget):
         # the job(s) — no keyword classification. plan_command_jobs handles the
         # per-cell behaviour (fan-out, ring-template guard, batching, count, @).
         base_scope = self._current_context_scope()
-        # F3: radial tuner overrides + causal-deductive context ordering.
-        base_scope["model_temperature"] = self._temp_tuner.value()
-        base_scope["model_max_tokens"] = int(self._tokens_tuner.value())
+        # PA02: solo se envía override si el tuner NO está en Auto. En Auto manda
+        # el default por tarea (temperatura del intent; tokens/contexto del tier).
+        if not self._temp_tuner.is_auto:
+            base_scope["model_temperature"] = self._temp_tuner.value()
+        if not self._tokens_tuner.is_auto:
+            base_scope["model_max_tokens"] = int(self._tokens_tuner.value())
         causal = self._causal_context_pack(base_scope)
         if causal:
             base_scope["contexto_causal"] = causal
         vecindario = self._neighborhood_pack(base_scope)
         if vecindario:
             base_scope["vecindario"] = vecindario
-        if getattr(self, "_budget_tuner", None) is not None:
+        if getattr(self, "_budget_tuner", None) is not None and not self._budget_tuner.is_auto:
             base_scope["prompt_budget_tokens"] = int(self._budget_tuner.value())
         plan = plan_command_jobs(
             self._action_selector.currentData(),

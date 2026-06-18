@@ -10,7 +10,6 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -164,8 +163,7 @@ class ProjectPanel(QWidget):
         # ── Section B: Project Type ──
         self._build_project_type_section()
 
-        # ── Section C: Worldbuilding ──
-        self._build_worldbuilding_section()
+        # ── Section C: Cronología (PA02: worldbuilding ya no es opcional) ──
         self._build_chronology_section()
 
         # ── Section D-G: Creative Config (B40 tabbed panel) ──
@@ -252,18 +250,6 @@ class ProjectPanel(QWidget):
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
         form.addRow("Tipo", self.type_combo)
         card.layout.addLayout(form)
-        self.root_layout.addWidget(card)
-
-    def _build_worldbuilding_section(self):
-        card = self._make_card("Worldbuilding")
-        self.wb_check = QCheckBox("Activar worldbuilding")
-        self.wb_check.setChecked(bool(self._safe(self.project, "worldbuilding_active", False)))
-        self.wb_check.toggled.connect(self._on_wb_changed)
-        card.layout.addWidget(self.wb_check)
-        note = QLabel("Las capas aparecerán en Creación y el grafo cuando esté activo.")
-        note.setObjectName("mutedLabel")
-        note.setWordWrap(True)
-        card.layout.addWidget(note)
         self.root_layout.addWidget(card)
 
     def _build_chronology_section(self):
@@ -421,12 +407,7 @@ class ProjectPanel(QWidget):
         self._update_type_visibility()
         self._mark_pending()
         if self.on_preview:
-            self.on_preview(self._current_type_value(), self.wb_check.isChecked())
-
-    def _on_wb_changed(self, checked: bool):
-        self._mark_pending()
-        if self.on_preview:
-            self.on_preview(self._current_type_value(), checked)
+            self.on_preview(self._current_type_value(), True)
 
     def _mark_pending(self):
         """Show a pending changes indicator."""
@@ -455,8 +436,8 @@ class ProjectPanel(QWidget):
             # Project type
             p.project_type = self._current_type_value()
 
-            # Worldbuilding (from worldbuilding section, not tabs)
-            p.worldbuilding_active = self.wb_check.isChecked()
+            # PA02: worldbuilding siempre activo.
+            p.worldbuilding_active = True
 
             # Apply all creative config from tabbed panel (B40)
             self.creative_tabs.apply_to_project(p)

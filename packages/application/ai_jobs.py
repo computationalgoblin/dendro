@@ -403,7 +403,7 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
     fallback and legacy tests, pending removal."""
     context = dict(context or {})
     text = _norm(prompt)
-    worldbuilding = bool(context.get("worldbuilding_active", False))
+    # PA02: worldbuilding siempre activo; ya no condiciona el intent.
     scope = _scope_from_context(text, context)
 
     if not text:
@@ -416,8 +416,7 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
 
     # B39: detect "anillo" keyword for worldbuilding/causal strata
     if _has_any(text, ["anillo", "anillos", "estrato causal", "estratos causales", "capa metafísica"]):
-        intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
-        return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide anillo/estrato causal/worldbuilding")
+        return CommandBarIntent(AIJobType.EXPAND_WORLDBUILDING, 0.80, scope, "worldbuilding_candidates", False, "La petición pide anillo/estrato causal/worldbuilding")
 
     # B41: detect milestone/hito intent — must come before relations/generation
     if _has_any(text, ["hito", "hitos", "cadena historica", "cadena histórica", "status quo", "acontecimiento", "origen para"]):
@@ -436,8 +435,7 @@ def classify_intent(prompt: str, context: dict[str, Any] | None = None) -> Comma
         return CommandBarIntent(AIJobType.EXPLAIN_FROM_CAUSES, 0.75, scope, "explanation_report", False, "La petición pide explicación causal")
 
     if _has_any(text, ["metafís", "metafis", "worldbuilding", "capa", "causal", "agujero negro", "agujeros negros"]):
-        intent = AIJobType.EXPAND_WORLDBUILDING if worldbuilding else AIJobType.GENERATE_TREE
-        return CommandBarIntent(intent, 0.80, scope, "worldbuilding_candidates", False, "La petición pide sistema/worldbuilding")
+        return CommandBarIntent(AIJobType.EXPAND_WORLDBUILDING, 0.80, scope, "worldbuilding_candidates", False, "La petición pide sistema/worldbuilding")
 
     # B39: "rama" keyword and branch-type words → GENERATE_TREE (rama = tree internally)
     if _has_any(text, ["rama", "ramas", "facción", "faccion", "cultura", "religión", "religion", "institución", "institucion", "trama", "tramas", "organización", "organizacion", "país", "pais", "reino", "reinos", "sistema", "árbol", "arbol", "estructura"]):

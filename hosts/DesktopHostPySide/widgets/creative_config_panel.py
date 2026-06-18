@@ -391,9 +391,7 @@ class CreativeConfigPanel(QTabWidget):
         self._fields["language"] = QLineEdit(p.primary_language)
         form.addRow("Idioma principal", self._fields["language"])
 
-        self._fields["worldbuilding_active"] = QCheckBox("Worldbuilding activo")
-        self._fields["worldbuilding_active"].setChecked(p.worldbuilding_active)
-        form.addRow("", self._fields["worldbuilding_active"])
+        # PA02: el toggle de worldbuilding se eliminó — siempre está activo.
 
         self.addTab(self._scroll(form.parentWidget()), "Básico")
 
@@ -765,7 +763,6 @@ class CreativeConfigPanel(QTabWidget):
             "format": _val(f["format"]),
             "development_status": _val(f["development_status"]),
             "language": _text(f["language"]),
-            "worldbuilding_active": f["worldbuilding_active"].isChecked(),
             "creative_intent": {
                 "reader_promise": _text(f["reader_promise"]),
                 "central_question": _text(f["central_question"]),
@@ -848,7 +845,8 @@ class CreativeConfigPanel(QTabWidget):
 
         cc.target_audience = data["target_audience"]
         project.primary_language = data["language"]
-        project.worldbuilding_active = data["worldbuilding_active"]
+        # PA02: worldbuilding siempre activo (sin toggle en la config).
+        project.worldbuilding_active = True
 
         # Update sub-dicts (only non-empty)
         if any(data["creative_intent"].values()):
