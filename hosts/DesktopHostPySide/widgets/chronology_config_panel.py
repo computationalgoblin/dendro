@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
+from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from packages.domain.result import Error
 
 
@@ -141,12 +142,12 @@ class ChronologyConfigPanel(QGroupBox):
         self.weekdays_edit.setPlaceholderText("Lunes\nMartes\nMiercoles...")
         self._add_row(form, "Dias semana", self.weekdays_edit, mode="full_calendar")
 
-        self.days_per_month_spin = QSpinBox()
+        self.days_per_month_spin = BotanicalSpinBox()
         self.days_per_month_spin.setRange(1, 999)
         self.days_per_month_spin.setValue(30)
         self._add_row(form, "Dias por mes", self.days_per_month_spin, mode="full_calendar")
 
-        self.current_year_spin = QSpinBox()
+        self.current_year_spin = BotanicalSpinBox()
         self.current_year_spin.setRange(-999999, 999999)
         self.current_year_spin.setValue(1)
         self._add_row(form, "Ano actual", self.current_year_spin, mode="full_calendar")

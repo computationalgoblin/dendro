@@ -210,6 +210,75 @@ class ImportDeduplicationService:
             basket.updated_at = _now_iso()
         return Ok(suggestions)
 
+    def consolidate_basket(self, basket: ImportBasket) -> Result[list[ImportCandidate], str]:
+        """Fusiona duplicados internos del documento ANTES de presentar (I15).
+
+        A diferencia de ``analyze_basket`` (que solo SUGIERE merge_suggestions),
+        aquí se consolida in situ: cada grupo de candidatos equivalentes se
+        sustituye por UN candidato fusionado enriquecido; los originales quedan
+        ``FUSIONADO`` y el merged ``PENDIENTE``. Así la IA no ofrece el mismo
+        candidato N veces. Idempotente (candidatos ya FUSIONADO se ignoran).
+        """
+        candidates = [c for c in basket.import_candidates if self._is_mergeable(c)]
+        if len(candidates) < 2:
+            return Ok([])
+
+        parent = {c.id: c.id for c in candidates}
+
+        def find(node: str) -> str:
+            root = node
+            while parent[root] != root:
+                root = parent[root]
+            while parent[node] != root:
+                parent[node], node = root, parent[node]
+            return root
+
+        def union(a: str, b: str) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for index, left in enumerate(candidates):
+            for right in candidates[index + 1:]:
+                if _kind(left) == _kind(right) and self._equivalent(left, right):
+                    union(left.id, right.id)
+
+        groups: dict[str, list[ImportCandidate]] = {}
+        for candidate in candidates:
+            groups.setdefault(find(candidate.id), []).append(candidate)
+
+        order = {c.id: i for i, c in enumerate(basket.import_candidates)}
+        merged_list: list[ImportCandidate] = []
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            ordered = sorted(members, key=lambda c: order.get(c.id, 0))
+            suggestion = self._build_merge_suggestion(
+                ordered, reason="auto_consolidation", confidence=0.9
+            )
+            merged = self._merged_candidate(suggestion, ordered)
+            for source in ordered:
+                source.review_state = ImportReviewState.FUSIONADO
+            basket.import_candidates.append(merged)
+            merged_list.append(merged)
+        if merged_list:
+            basket.updated_at = _now_iso()
+        return Ok(merged_list)
+
+    def _equivalent(self, left: ImportCandidate, right: ImportCandidate) -> bool:
+        """Igualdad de candidatos sin efectos secundarios (para consolidar)."""
+        left_name = _candidate_name(left)
+        right_name = _candidate_name(right)
+        if not left_name or not right_name:
+            return False
+        if _norm(left_name) == _norm(right_name):
+            return True
+        left_aliases = {_norm(a) for a in _candidate_aliases(left)}
+        right_aliases = {_norm(a) for a in _candidate_aliases(right)}
+        if _norm(left_name) in right_aliases or _norm(right_name) in left_aliases:
+            return True
+        return _similarity(left_name, right_name) >= 0.84
+
     def create_merge_suggestion(
         self,
         basket: ImportBasket,

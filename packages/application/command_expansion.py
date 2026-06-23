@@ -346,6 +346,69 @@ def plan_command_jobs(
 
 
 # ---------------------------------------------------------------------------
+# Ejemplos por celda Acción×Ámbito (descubribilidad / onboarding del flujo IA)
+# ---------------------------------------------------------------------------
+
+# Ejemplo de orden por par para CREAR/EDITAR (el ámbito cambia el ejemplo).
+_EXAMPLES_BY_PAIR: dict[tuple["CommandAction", "CommandScope"], str] = {
+    (CommandAction.CREAR, CommandScope.HOJA):
+        "un herrero exiliado que oculta su pasado noble",
+    (CommandAction.CREAR, CommandScope.RAMA):
+        "una orden de monjes guerreros y su jerarquía interna",
+    (CommandAction.CREAR, CommandScope.RELACION):
+        "por qué estas dos facciones se traicionaron",
+    (CommandAction.CREAR, CommandScope.ANILLO):
+        "un nuevo estrato: la era de los primeros reinos",
+    (CommandAction.CREAR, CommandScope.HITO):
+        "la batalla que dividió el continente en dos",
+    (CommandAction.EDITAR, CommandScope.HOJA):
+        "hazlo más sombrío: dale una cicatriz y una deuda de sangre",
+    (CommandAction.EDITAR, CommandScope.RAMA):
+        "unifica el tono de esta cultura hacia lo melancólico",
+    (CommandAction.EDITAR, CommandScope.RELACION):
+        "convierte esta alianza en una rivalidad latente",
+    (CommandAction.EDITAR, CommandScope.ANILLO):
+        "reescribe este estrato con un clima más árido",
+    (CommandAction.EDITAR, CommandScope.HITO):
+        "adelanta este suceso un siglo y suaviza sus consecuencias",
+}
+
+# La trío analítica (ANALIZAR/EXPLICAR/EXPANDIR) oculta el ámbito en la UI, así que
+# su ejemplo depende solo de la acción.
+_EXAMPLES_BY_ACTION: dict["CommandAction", str] = {
+    CommandAction.ANALIZAR: "¿hay contradicciones entre @Facción y @Reino?",
+    CommandAction.EXPLICAR: "explica el origen de esta guerra a partir de sus causas",
+    CommandAction.EXPANDIR: "amplía la cultura y costumbres de este anillo",
+}
+
+_EXAMPLE_FALLBACK = "describe a Dendro qué quieres crear o cambiar"
+
+
+def example_for_command(
+    action: "CommandAction | str",
+    scope: "CommandScope | str",
+) -> str:
+    """Ejemplo de orden, en español, para una celda Acción×Ámbito.
+
+    Sirve como placeholder dinámico del input y de muestra en la ayuda; mantiene
+    los textos en una única fuente (pura, sin Qt). Para la trío analítica el ámbito
+    no influye (la UI lo oculta), así que se usa el ejemplo por acción. Tolera
+    valores str o enum y nunca lanza: devuelve un texto genérico si el par es raro.
+    """
+    try:
+        act = action if isinstance(action, CommandAction) else CommandAction(str(action))
+    except ValueError:
+        return _EXAMPLE_FALLBACK
+    if act in _EXAMPLES_BY_ACTION:
+        return _EXAMPLES_BY_ACTION[act]
+    try:
+        scp = scope if isinstance(scope, CommandScope) else CommandScope(str(scope))
+    except ValueError:
+        return _EXAMPLE_FALLBACK
+    return _EXAMPLES_BY_PAIR.get((act, scp), _EXAMPLE_FALLBACK)
+
+
+# ---------------------------------------------------------------------------
 # Causal-deductive context ordering (Anillos → Ramas → Hojas)
 # ---------------------------------------------------------------------------
 

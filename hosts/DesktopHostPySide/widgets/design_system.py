@@ -8,22 +8,31 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from PySide6.QtCore import Qt, QEasingCurve, QEvent, QObject, QParallelAnimationGroup, QPropertyAnimation
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QParallelAnimationGroup,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+)
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────
 # Dendro — paleta con identidad ("tinta, pergamino y oro botánico")
@@ -67,6 +76,69 @@ SAGE_DEEP   = "#546243"  # verde profundo (reservado; aún sin uso)
 SHADOW_RGB  = (52, 47, 28)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Cimientos del sistema (BETA1-UX01) — tokens transversales que dan
+# COHESIÓN y APLOMO. Principios:
+#   · Una sola voz de oro para la acción (nunca arcoíris).
+#   · Profundidad por capas cálidas, nunca gris neutro.
+#   · Movimiento "expresivo pero elegante": notable, pero al servicio de la calma.
+#   · Radios coherentes: pocas medidas, repetidas con disciplina.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Escala de radios (cohesión de formas)
+RADIUS_SM   = 9    # chips, celdas, controles pequeños
+RADIUS_MD   = 12   # botones, inputs, combos
+RADIUS_LG   = 16   # tarjetas, cajones
+RADIUS_PILL = 999  # botones-cápsula
+
+# Movimiento: tres niveles + curvas con carácter
+MOTION_FAST     = 150   # micro-feedback: hover, foco, press
+MOTION_BASE     = 220   # transición estándar: aparición de contenido/paneles
+MOTION_SLOW     = 360   # presencia: entradas/salidas con carácter
+EASING_STD      = QEasingCurve.Type.OutCubic        # asentamiento natural
+EASING_ENTER    = QEasingCurve.Type.OutQuint        # entrada con empuje y calma
+EASING_EMPHASIS = QEasingCurve.Type.InOutCubic      # énfasis simétrico
+
+# Elevación canvas-safe — sombra cálida PINTADA A MANO (QPainter), nunca
+# QGraphicsDropShadowEffect (cachea el render y deja zonas en blanco; lección G08).
+# nivel -> (radio_difuminado_px, desplazamiento_y_px, alpha_máximo)
+ELEVATION: dict[int, tuple[int, int, int]] = {
+    0: (0, 0, 0),
+    1: (16, 3, 34),
+    2: (26, 7, 46),
+    3: (42, 13, 58),
+}
+
+
+def paint_soft_shadow(painter, rect, *, radius: float = RADIUS_MD, level: int = 2) -> None:
+    """Pinta una sombra cálida y suave bajo *rect* (QRectF/QRect), sin efectos gráficos.
+
+    Apta para el canvas (QPainter directo): emula el difuminado con capas de
+    rectángulos redondeados de alpha decreciente. Presentation-only: falla en
+    silencio para que el pulido nunca rompa el render.
+    """
+    try:
+        blur, dy, alpha = ELEVATION.get(level, ELEVATION[2])
+        if alpha <= 0 or painter is None or rect is None:
+            return
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        base = QRectF(rect)
+        layers = 6
+        for i in range(layers, 0, -1):
+            t = i / layers
+            grow = blur * t
+            a = int(alpha * (1.0 - t) ** 1.6)
+            if a <= 0:
+                continue
+            painter.setBrush(QColor(SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], a))
+            r = base.adjusted(-grow, -grow + dy, grow, grow + dy)
+            painter.drawRoundedRect(r, radius + grow, radius + grow)
+        painter.restore()
+    except Exception:  # noqa: BLE001 - el pulido nunca rompe el render
+        pass
+
+
 def _qss() -> str:
     """Hoja de estilo global construida desde la paleta (una sola verdad)."""
     return f"""
@@ -84,31 +156,39 @@ QToolTip {{
     padding: 5px 8px;
 }}
 QPushButton {{
-    background: {SURFACE_HI};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE_HI}, stop:1 {SURFACE});
     border: 1px solid {LINE};
-    border-radius: 11px;
+    border-radius: {RADIUS_MD}px;
     padding: 8px 14px;
     color: {INK_SOFT};
     font-weight: 600;
 }}
-QPushButton:hover {{ background: {INPUT_BG}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}
+QPushButton:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {INPUT_BG}, stop:1 {SURFACE_HI});
+    border-color: {GOLD_SOFT};
+    color: {INK_STRONG};
+}}
 QPushButton:focus {{ border: 2px solid {GOLD}; padding: 7px 13px; }}
 QPushButton:pressed {{ background: {WELL}; padding-top: 9px; padding-bottom: 7px; }}
 QPushButton:disabled {{ background: {SURFACE}; color: {INK_MUTED}; border-color: {LINE_SOFT}; }}
 QPushButton#primaryButton {{
-    background: {GOLD};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {GOLD}, stop:1 {GOLD_DEEP});
     border: 1px solid {GOLD_DEEP};
+    border-radius: {RADIUS_MD}px;
     color: #FCF8EC;
     font-weight: 700;
     padding: 9px 16px;
 }}
-QPushButton#primaryButton:hover {{ background: {GOLD_DEEP}; border-color: {GOLD_DEEP}; }}
+QPushButton#primaryButton:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {GOLD_DEEP}, stop:1 #5E5427);
+    border-color: {GOLD_DEEP};
+}}
 QPushButton#primaryButton:pressed {{ background: #5E5427; }}
-QPushButton#primaryButton:disabled {{ background: {GOLD_SOFT}; color: {SURFACE}; border-color: {GOLD_SOFT}; }}
+QPushButton#primaryButton:disabled {{ background: #E3D8B8; color: {INK_SOFT}; border: 1px solid {LINE_STRONG}; }}
 QToolButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 9px;
+    border-radius: {RADIUS_SM}px;
     padding: 6px 8px;
     color: {INK_SOFT};
 }}
@@ -124,7 +204,7 @@ QLabel#sectionTitle {{
 QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget, QSpinBox, QDoubleSpinBox {{
     background: {INPUT_BG};
     border: 1px solid {LINE};
-    border-radius: 9px;
+    border-radius: {RADIUS_MD}px;
     color: {INK};
     padding: 8px 10px;
     min-height: 28px;
@@ -157,7 +237,7 @@ QComboBox::down-arrow {{
 QComboBox QAbstractItemView {{
     background: {INPUT_BG};
     border: 1px solid {LINE};
-    border-radius: 9px;
+    border-radius: {RADIUS_MD}px;
     color: {INK};
     selection-background-color: {GOLD_TINT};
     selection-color: {INK_STRONG};
@@ -168,7 +248,7 @@ QComboBox QAbstractItemView::item {{ padding: 7px 8px; min-height: 28px; color: 
 QComboBox QAbstractItemView::item:hover {{ background: {SURFACE}; }}
 QComboBox QAbstractItemView::item:selected {{ background: {GOLD_TINT}; color: {INK_STRONG}; }}
 QTextEdit, QPlainTextEdit {{ min-height: 60px; }}
-QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: 14px; background: {SURFACE}; }}
+QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: {RADIUS_LG}px; background: {SURFACE}; }}
 QTabBar::tab {{
     background: transparent;
     color: {INK_MUTED};
@@ -236,7 +316,7 @@ class _HoverLift(QObject):
         lift_blur: float,
         lift_y: float,
         lift_alpha: int,
-        duration: int = 160,
+        duration: int = MOTION_FAST,
     ):
         super().__init__(widget)
         self._w = widget
@@ -256,7 +336,7 @@ class _HoverLift(QObject):
                 anim = QPropertyAnimation(self._effect, prop)
                 anim.setDuration(self._duration)
                 anim.setEndValue(end)
-                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                anim.setEasingCurve(EASING_STD)
                 group.addAnimation(anim)
             color = QColor(SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], alpha)
             self._effect.setColor(color)
@@ -283,7 +363,7 @@ def install_hover_lift(
     lift_blur: float = 38.0,
     lift_y: float = 12.0,
     lift_alpha: int = 64,
-    duration: int = 160,
+    duration: int = MOTION_FAST,
 ) -> _HoverLift | None:
     """Instala una elevación-al-hover sobre *widget* y devuelve el filtro."""
     try:
@@ -339,7 +419,7 @@ class Card(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(
             f"QFrame#card {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
-            f"border-radius: 16px; }}"
+            f"border-radius: {RADIUS_LG}px; }}"
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.layout = QVBoxLayout(self)
@@ -395,7 +475,7 @@ class Badge(QLabel):
         }
         bg, fg = colors.get(tone, colors["neutral"])
         self.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 9px; "
+            f"background: {bg}; color: {fg}; border-radius: {RADIUS_SM}px; "
             "padding: 3px 9px; font-size: 12px; font-weight: 700;"
         )
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -406,9 +486,16 @@ class SectionHeader(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(5)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
         layout.addWidget(title_label)
+        # BETA1-UX07: regla dorada corta bajo el título — jerarquía editorial
+        # cálida, coherente con el acento de oro del sistema.
+        accent = QFrame()
+        accent.setFixedSize(30, 2)
+        accent.setStyleSheet(f"background: {GOLD_SOFT}; border: none; border-radius: 1px;")
+        layout.addWidget(accent)
         if subtitle:
             sub = QLabel(subtitle)
             sub.setObjectName("mutedLabel")
@@ -421,7 +508,7 @@ class EmptyState(Card):
         super().__init__(title, message, parent, elevated=False)
         self.setStyleSheet(
             f"QFrame#card {{ background: {SURFACE}; border: 1px dashed {LINE_STRONG}; "
-            f"border-radius: 14px; }}"
+            f"border-radius: {RADIUS_LG}px; }}"
         )
 
 
@@ -447,12 +534,31 @@ class AdvancedSection(QWidget):
         self.toggle.toggled.connect(self._on_toggled)
 
     def _on_toggled(self, checked: bool):
+        # BETA1-UX feedback: desplegar Y plegar con movimiento (antes el cierre
+        # era instantáneo). Anima la altura del cuerpo con los tokens comunes.
         self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
-        self.body.setVisible(checked)
-        fade_in(self.body, duration_ms=140 if checked else 90, start_opacity=0.70 if checked else 1.0)
+        body = self.body
+        anim = QPropertyAnimation(body, b"maximumHeight", self)
+        anim.setDuration(MOTION_BASE)
+        if checked:
+            body.setVisible(True)
+            body.setMaximumHeight(0)
+            target = max(body.sizeHint().height(), body.layout().sizeHint().height(), 1)
+            anim.setStartValue(0)
+            anim.setEndValue(target)
+            anim.setEasingCurve(EASING_ENTER)
+            anim.finished.connect(lambda: body.setMaximumHeight(16777215))
+            fade_in(body, duration_ms=MOTION_BASE, start_opacity=0.4)
+        else:
+            anim.setStartValue(max(body.height(), 1))
+            anim.setEndValue(0)
+            anim.setEasingCurve(EASING_STD)
+            anim.finished.connect(lambda: body.setVisible(False))
+        self._anim = anim
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
-def fade_in(widget: QWidget, *, duration_ms: int = 180, start_opacity: float = 0.0):
+def fade_in(widget: QWidget, *, duration_ms: int = MOTION_BASE, start_opacity: float = 0.0):
     """Subtle opacity transition for content that appears inside the shell.
 
     Presentation-only helper: no domain/persistence side effects. It intentionally
@@ -468,13 +574,13 @@ def fade_in(widget: QWidget, *, duration_ms: int = 180, start_opacity: float = 0
         animation.setDuration(duration_ms)
         animation.setStartValue(start_opacity)
         animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setEasingCurve(EASING_STD)
         animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
     except Exception:
         pass
 
 
-def pulse_feedback(widget: QWidget, *, duration_ms: int = 220):
+def pulse_feedback(widget: QWidget, *, duration_ms: int = MOTION_BASE):
     """Quick tactile feedback for successful/acknowledged actions."""
     try:
         effect = widget.graphicsEffect()
@@ -486,7 +592,7 @@ def pulse_feedback(widget: QWidget, *, duration_ms: int = 220):
         animation.setStartValue(0.62)
         animation.setKeyValueAt(0.45, 1.0)
         animation.setEndValue(0.92)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setEasingCurve(EASING_STD)
         animation.finished.connect(lambda: effect.setOpacity(1.0))
         animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
     except Exception:
@@ -499,6 +605,49 @@ def make_scroll_area(content: QWidget) -> QScrollArea:
     area.setFrameShape(QFrame.Shape.NoFrame)
     area.setWidget(content)
     return area
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Guard de rueda del ratón (BETA1-UX feedback): dentro de los cajones, la rueda
+# sobre un combo/spin/slider NO debe cambiar su valor (el usuario solo quiere
+# desplazar el menú). Redirige la rueda al QScrollArea ancestro y bloquea el
+# cambio salvo que el control tenga el foco explícito (click).
+# ─────────────────────────────────────────────────────────────────────────
+
+_WHEEL_GUARDED_TYPES = (QComboBox, QAbstractSpinBox, QSlider)
+
+
+class _WheelGuard(QObject):
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
+            # Buscar el QScrollArea ancestro y desplazarlo en su lugar.
+            node = obj.parent()
+            while node is not None and not isinstance(node, QScrollArea):
+                node = node.parent()
+            if isinstance(node, QScrollArea):
+                bar = node.verticalScrollBar()
+                try:
+                    bar.setValue(bar.value() - event.angleDelta().y())
+                except Exception:  # noqa: BLE001
+                    pass
+            return True  # consumir: el valor del control no cambia
+        return False
+
+
+# Filtro compartido (sin estado): un único objeto basta para todos los controles.
+_WHEEL_GUARD = _WheelGuard()
+
+
+def install_wheel_guard(container: QWidget) -> None:
+    """Protege todos los combos/spin/slider descendientes de *container* contra
+    cambios accidentales por rueda. Idempotente y tolerante a fallos."""
+    try:
+        for tipo in _WHEEL_GUARDED_TYPES:
+            for child in container.findChildren(tipo):
+                child.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # la rueda no enfoca
+                child.installEventFilter(_WHEEL_GUARD)
+    except Exception:  # noqa: BLE001 - el pulido nunca rompe la UI
+        pass
 
 
 def enum_human(value: Any) -> str:

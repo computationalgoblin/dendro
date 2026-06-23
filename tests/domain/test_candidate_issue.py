@@ -29,8 +29,9 @@ class TestIssueState:
 
 
 class TestCandidateType:
-    def test_has_10_values(self):
-        assert len(CandidateType) == 10
+    def test_has_11_values(self):
+        # I08: + ANILLO (extracción de anillos/WorldLayer en importación dirigida).
+        assert len(CandidateType) == 11
 
 
 class TestCandidateState:

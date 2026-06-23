@@ -15,9 +15,18 @@ tested without a QApplication.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QLocale, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QDoubleValidator,
+    QFontMetrics,
+    QIntValidator,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
+from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
 from hosts.DesktopHostPySide.widgets.design_system import GOLD, INK_MUTED, INK_SOFT, LINE, SURFACE
 
@@ -95,6 +104,14 @@ class RadialTuner(QWidget):
         self._fraction = fraction_from_value(value, self._min, self._max)
         self._drag_start_y: float | None = None
         self._drag_start_fraction = self._fraction
+        # BETA1-UX2B: distinguir CLIC (teclear nº exacto) de ARRASTRE (ajuste
+        # grueso) y de DOBLE CLIC (volver a Auto). El editor se abre tras el
+        # intervalo de doble clic, así un doble clic lo cancela y va a Auto.
+        self._moved = False
+        self._editor: QLineEdit | None = None
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._begin_edit)
         self.setFixedSize(self._diameter + 4, self._diameter + 4)
         self.setCursor(Qt.SizeVerCursor)
 
@@ -154,23 +171,89 @@ class RadialTuner(QWidget):
         if event.button() == Qt.LeftButton:
             self._drag_start_y = event.position().y()
             self._drag_start_fraction = self._fraction
+            self._moved = False
             event.accept()
 
     def mouseMoveEvent(self, event):
         if self._drag_start_y is None:
             return
         dy = self._drag_start_y - event.position().y()  # up = positive = fill
-        self._commit_fraction(drag_to_fraction(self._drag_start_fraction, dy, self._diameter))
+        if abs(dy) > 4:  # umbral: a partir de aquí es ARRASTRE, no clic
+            self._moved = True
+        if self._moved:
+            self._commit_fraction(drag_to_fraction(self._drag_start_fraction, dy, self._diameter))
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        was_drag = self._moved
         self._drag_start_y = None
+        self._moved = False
+        # Clic limpio (sin arrastre) → abrir el editor numérico, salvo que sea el
+        # primer clic de un doble clic (lo cancela el timer en mouseDoubleClick).
+        if not was_drag and self._editor is None:
+            self._click_timer.start(QApplication.doubleClickInterval())
         event.accept()
 
     def mouseDoubleClickEvent(self, event):
-        # Doble clic = volver a Auto (default por tarea).
+        # Doble clic = volver a Auto (default por tarea); cancela el editor pendiente.
+        self._click_timer.stop()
         self.set_auto(True)
         event.accept()
+
+    # edición numérica exacta ----------------------------------------------
+    def _begin_edit(self) -> None:
+        """Overlay un QLineEdit para teclear el valor exacto (clic)."""
+        if self._editor is not None:
+            return
+        editor = QLineEdit(self)
+        editor.setAlignment(Qt.AlignCenter)
+        # BETA1-UX2D: el texto mostrado usa PUNTO decimal (f"{:.2f}"), pero el
+        # validador heredaba el locale del sistema (es-ES → exige COMA), así que
+        # bloqueaba teclear el "." que se ve. Fijamos locale C (punto) en editor y
+        # validador para que lo tecleado coincida con lo mostrado.
+        editor.setLocale(QLocale.c())
+        height = 22
+        editor.setGeometry(2, (self.height() - height) // 2, self._diameter, height)
+        if self._is_integer:
+            editor.setValidator(QIntValidator(int(self._min), int(self._max), editor))
+            editor.setText(str(int(self.value())))
+        else:
+            validator = QDoubleValidator(self._min, self._max, 2, editor)
+            validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+            validator.setLocale(QLocale.c())
+            editor.setValidator(validator)
+            editor.setText(f"{self.value():.2f}")
+        editor.setStyleSheet(
+            f"QLineEdit {{ background: #FFFFFF; border: 1px solid {GOLD}; "
+            f"border-radius: 10px; font-size: 10px; color: {INK_SOFT}; padding: 0 2px; }}"
+        )
+        editor.returnPressed.connect(self._commit_edit)
+        editor.editingFinished.connect(self._commit_edit)
+        self._editor = editor
+        editor.show()
+        editor.selectAll()
+        editor.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def _commit_edit(self) -> None:
+        editor = self._editor
+        if editor is None:
+            return
+        self._editor = None  # guard reentrancy (returnPressed + editingFinished)
+        text = editor.text().strip().replace(",", ".")
+        editor.deleteLater()
+        try:
+            val = float(text)
+        except ValueError:
+            self.update()
+            return
+        val = max(self._min, min(self._max, val))
+        was_auto = self._auto
+        self._auto = False
+        self._fraction = fraction_from_value(val, self._min, self._max)
+        self.update()
+        if was_auto:
+            self.autoChanged.emit(False)
+        self.valueChanged.emit(self.value())
 
     # painting -------------------------------------------------------------
     def paintEvent(self, _event):

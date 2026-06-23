@@ -29,10 +29,10 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
     Badge,
     make_scroll_area,
-    ICON_GLYPHS,
     GOLD,
     GOLD_DEEP,
     GOLD_SOFT,
@@ -417,7 +417,7 @@ class _AtmosphereOverlay(QWidget):
 class HomeNode(QFrame):
     """Soft clickable node for a Dendro product space (BETA 1: Creación)."""
 
-    def __init__(self, title: str, subtitle: str, glyph: str, tone: str, ctx=None, parent: QWidget | None = None):
+    def __init__(self, title: str, subtitle: str, icon_name: str, tone: str, ctx=None, parent: QWidget | None = None):
         super().__init__(parent)
         self._ctx = ctx
         self.setObjectName("dendroNode")
@@ -435,11 +435,11 @@ class HomeNode(QFrame):
         layout.setSpacing(12)
         layout.addStretch(1)
 
-        self._icon = QLabel(glyph)
+        self._icon = QLabel()
         self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._icon.setStyleSheet(
-            f"font-size: 38px; color: {self._fg_default}; background: transparent; border: none;"
-        )
+        self._icon.setStyleSheet("background: transparent; border: none;")
+        icon_color = self._fg_default or GOLD
+        self._icon.setPixmap(icons.pixmap(icon_name, size=40, color=icon_color))
         layout.addWidget(self._icon)
 
         self._title_label = QLabel(title)
@@ -459,7 +459,7 @@ class HomeNode(QFrame):
         layout.addWidget(self._subtitle_label)
 
         # Worldbuilding indicator placeholder (hidden by default)
-        self._wb_label = QLabel(f"{ICON_GLYPHS['worldbuilding']} Capas")
+        self._wb_label = QLabel("Capas")
         self._wb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._wb_label.setStyleSheet(
             "font-size: 11px; color: #7A733D; background: transparent; border: none; "
@@ -542,12 +542,21 @@ class QuietIconButton(QPushButton):
     32x32 button with the glyph centred and no text label.
     """
 
-    def __init__(self, glyph: str, label: str = "", icon_only: bool = False, parent: QWidget | None = None):
+    def __init__(
+        self,
+        glyph: str = "",
+        label: str = "",
+        icon_only: bool = False,
+        parent: QWidget | None = None,
+        *,
+        icon_name: str | None = None,
+    ):
         if icon_only:
             super().__init__(glyph, parent)
         else:
             super().__init__(f"{glyph} {label}" if label else glyph, parent)
         self._icon_only = icon_only
+        self._icon_name = icon_name
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         if icon_only:
             self.setFixedSize(QSize(34, 34))
@@ -562,6 +571,8 @@ class QuietIconButton(QPushButton):
                 f"border-radius: 18px; padding: 8px 14px; color: {INK_SOFT}; font-size: 12px; font-weight: 600; }} "
                 f"QPushButton:hover {{ background: #FFFFFF; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
             )
+        if icon_name:
+            icons.set_button_icon(self, icon_name, color=INK_SOFT, size=18 if icon_only else 16)
 
 
 class _BranchLine(QFrame):
@@ -654,7 +665,7 @@ class HomeView(QWidget):
         self.creation_card = HomeNode(
             "Creación",
             "Grafo, entidades, relaciones y semillas narrativas.",
-            ICON_GLYPHS["creation"],
+            "creation",
             "creation",
             ctx=self.ctx,
         )
@@ -674,7 +685,7 @@ class HomeView(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
 
-        self._btn_config = QuietIconButton(ICON_GLYPHS["settings"], icon_only=True)
+        self._btn_config = QuietIconButton(icon_only=True, icon_name="settings")
         self._btn_config.clicked.connect(lambda: self._action("config_menu"))
         bottom_row.addWidget(self._btn_config)
 
@@ -682,14 +693,14 @@ class HomeView(QWidget):
         # control visible y discreto. Si QtMultimedia no está, no aparece.
         self._music = _AmbientMusic() if _HAS_AUDIO else None
         if self._music is not None:
-            self._btn_music = QuietIconButton("♪", icon_only=True)
+            self._btn_music = QuietIconButton(icon_only=True, icon_name="music")
             self._btn_music.setToolTip("Música ambiental (apagada)")
             self._btn_music.clicked.connect(self._toggle_music)
             bottom_row.addWidget(self._btn_music)
 
         bottom_row.addStretch(1)
 
-        self._btn_project = QuietIconButton(ICON_GLYPHS["project"], icon_only=True)
+        self._btn_project = QuietIconButton(icon_only=True, icon_name="project")
         self._btn_project.clicked.connect(lambda: self._action("project_menu"))
         bottom_row.addWidget(self._btn_project)
 
@@ -820,8 +831,10 @@ class HomeView(QWidget):
             "Música ambiental (sonando — click para apagar)" if playing
             else "Música ambiental (apagada)"
         )
-        # marca visual simple del estado
-        self._btn_music.setText("♫" if playing else "♪")
+        # marca visual del estado: el icono se tiñe de oro al sonar.
+        icons.set_button_icon(
+            self._btn_music, "music", color=GOLD if playing else INK_SOFT, size=18
+        )
 
     # ------------------------------------------------------------------
     # Refresh

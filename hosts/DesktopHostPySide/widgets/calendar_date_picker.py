@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import Qt
+
+from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -100,7 +102,7 @@ class CalendarDatePicker(QWidget):
         self.era_combo = QComboBox()
         self.era_combo.currentIndexChanged.connect(self._on_era_changed)
         top.addWidget(self.era_combo, 2)
-        self.year_spin = QSpinBox()
+        self.year_spin = BotanicalSpinBox()
         self.year_spin.setRange(1, 999999)
         self.year_spin.valueChanged.connect(self._emit_changed)
         top.addWidget(QLabel("Ano"))
@@ -108,6 +110,13 @@ class CalendarDatePicker(QWidget):
         self.month_combo = QComboBox()
         self.month_combo.currentIndexChanged.connect(self._rebuild_days)
         top.addWidget(self.month_combo, 2)
+        # BETA1-UX feedback: los combos de era/mes NO deben forzar su ancho al
+        # del item más largo ("Era del Reino Nazarí de Granada"…); eso inflaba el
+        # ancho mínimo del panel de configuración y recortaba el lado derecho.
+        # Se encogen y eliden; el texto completo sigue en el desplegable.
+        for combo in (self.era_combo, self.month_combo):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(6)
         root.addLayout(top)
 
         self.grid = QGridLayout()

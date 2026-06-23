@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton
     HAS_QT = True
 except Exception:  # pragma: no cover
@@ -189,6 +190,69 @@ def test_editing_title_summary_and_body_updates_model_through_controller(qapp):
     assert ctrl.hitos[0].title == "Nuevo titulo"
     assert ctrl.hitos[0].description == "Nuevo resumen"
     assert ctrl.hitos[0].metadata["body"] == "Nuevo cuerpo"
+
+
+def _check_participant(view, entity_id: str, checked: bool = True) -> None:
+    for row in range(view.participants_list.count()):
+        item = view.participants_list.item(row)
+        if str(item.data(Qt.ItemDataRole.UserRole)) == entity_id:
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+            return
+    raise AssertionError(f"participante {entity_id} no está en la lista")
+
+
+def _participant_checked(view, entity_id: str) -> bool:
+    for row in range(view.participants_list.count()):
+        item = view.participants_list.item(row)
+        if str(item.data(Qt.ItemDataRole.UserRole)) == entity_id:
+            return item.checkState() == Qt.CheckState.Checked
+    return False
+
+
+def test_participants_multiselect_premarks_affected_entities(qapp):
+    # BETA1-HITO-MULTI: la lista marca las entidades ya participantes.
+    hito = CausalMilestone(id="hito-1", title="Pacto", affected_entity_ids=["ent-a"])
+    view, _ = make_view(qapp, hitos=[hito])
+
+    view.select_milestone("hito-1")
+
+    assert _participant_checked(view, "ent-a")
+    assert not _participant_checked(view, "ent-b")
+
+
+def test_saving_multiselect_persists_all_participants_without_primary(qapp):
+    # BETA1-HITO-MULTI: guardar escribe el conjunto marcado y NO primary_entity_id.
+    hito = CausalMilestone(
+        id="hito-1",
+        title="Pacto",
+        affected_entity_ids=["ent-a"],
+        metadata={"primary_entity_id": "ent-a"},
+    )
+    view, ctrl = make_view(qapp, hitos=[hito])
+
+    view.select_milestone("hito-1")
+    _check_participant(view, "ent-b", checked=True)
+    view._save_detail()
+
+    saved = ctrl.hitos[0]
+    assert sorted(saved.affected_entity_ids) == ["ent-a", "ent-b"]
+    assert "primary_entity_id" not in saved.metadata
+
+
+def test_legacy_primary_entity_is_premarked_for_backcompat(qapp):
+    # BETA1-HITO-MULTI: proyectos antiguos con primary fuera de affected no pierden
+    # el vínculo: se pre-marca igualmente.
+    hito = CausalMilestone(
+        id="hito-1",
+        title="Antiguo",
+        affected_entity_ids=[],
+        metadata={"primary_entity_id": "ent-b"},
+    )
+    view, _ = make_view(qapp, hitos=[hito])
+
+    view.select_milestone("hito-1")
+
+    assert _participant_checked(view, "ent-b")
 
 
 def test_delete_milestone_removes_it_through_controller(qapp):

@@ -96,6 +96,71 @@ def test_step_never_produces_nan():
         assert math.isfinite(body.x) and math.isfinite(body.y)
 
 
+# ── SEM04: semilla viva orbitando su corona ─────────────────────────────────
+
+def test_orbiter_keeps_revolving_without_settling():
+    import math
+    engine = PhysicsEngine()
+    seed = Body(
+        "s", 200.0, 0.0, mass=0.6, radius=20.0,
+        target_radius=200.0, band_inner=160.0, band_outer=240.0, orbit_speed=3.0,
+    )
+    engine.set_world([seed], [])
+    a0 = math.atan2(seed.y, seed.x)
+    for _ in range(200):
+        engine.step()
+    a1 = math.atan2(seed.y, seed.x)
+    assert a1 != a0                         # ha girado (no estático)
+    assert not engine.is_settled()          # no se asienta: sigue orbitando
+    assert engine.has_live_orbiters()
+    r = math.hypot(seed.x, seed.y)
+    assert 160.0 <= r <= 240.0              # permanece en su banda
+
+
+def test_orbiter_does_not_block_normal_body_settling():
+    # El cuerpo orbitador no debe impedir que los nodos normales (lejanos)
+    # converjan: el auto-stop se gobierna en el bridge vía has_live_orbiters,
+    # is_settled() refleja la energía real (incluye al orbitador).
+    engine = PhysicsEngine(repulsion=0.0)
+    normal = Body("n", -300.0, 0.0)
+    engine.set_world([normal], [])
+    for _ in range(200):
+        engine.step()
+    assert engine.is_settled()
+    assert not engine.has_live_orbiters()
+
+
+def test_orbiter_never_produces_nan_at_center():
+    import math
+    engine = PhysicsEngine()
+    # Semilla justo en el origen (d≈0): debe reubicarse en target_radius sin NaN.
+    seed = Body("s", 0.0, 0.0, mass=0.6, target_radius=180.0, orbit_speed=3.0)
+    engine.set_world([seed], [])
+    for _ in range(50):
+        engine.step()
+        assert math.isfinite(seed.x) and math.isfinite(seed.y)
+
+
+def test_orbiter_axis_drift_makes_path_wander():
+    # Deriva del eje: el centro de la órbita migra → la distancia al origen NO
+    # es constante (recorrido irregular que no se repite), pero sigue en banda.
+    import math
+    engine = PhysicsEngine()
+    seed = Body(
+        "s", 200.0, 0.0, mass=0.6, radius=20.0,
+        target_radius=200.0, band_inner=140.0, band_outer=260.0,
+        orbit_speed=2.0, orbit_drift=16.0, orbit_drift_rate=0.05,
+    )
+    engine.set_world([seed], [])
+    rs = []
+    for _ in range(400):
+        engine.step()
+        rs.append(math.hypot(seed.x, seed.y))
+    assert max(rs) - min(rs) > 8.0          # el eje migra: r varía
+    assert all(139.0 <= r <= 261.0 for r in rs)  # nunca abandona la corona
+    assert seed.orbit_t != 0.0              # acumulador de deriva avanzó
+
+
 # ── Bridge del canvas ─────────────────────────────────────────────────────
 
 pytest_qt = pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")

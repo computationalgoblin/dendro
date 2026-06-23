@@ -22,7 +22,10 @@ class Era:
     order: int = 0
     description: str = ""
 
-    def contains(self, year: int) -> bool:
+    def contains(self, year: int | None) -> bool:
+        # BETA1-J04: un año None (entidad 'por datar') no pertenece a ninguna era.
+        if year is None:
+            return False
         if year < self.start_year:
             return False
         return self.end_year is None or year <= self.end_year

@@ -17,6 +17,7 @@ from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.project_chronology import ProjectChronology
+from packages.domain.chronology_walk import ChronologyWalkReport, ChronologyWalkSession
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
 from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
@@ -149,6 +150,49 @@ class NovelaConfig:
         )
 
 
+@dataclass
+class ProjectTaxonomy:
+    """Taxonomía de importación del proyecto (Modo Canon).
+
+    Dirige y valida la extracción IA: indica qué tipos de entidad, géneros de
+    rama y anillos son válidos en ESTE proyecto. Listas vacías = sin
+    restricción (comportamiento histórico). Vive en domain (stdlib-only) para
+    que los servicios de application puedan consumirla sin romper capas.
+
+    Campos:
+      - allowed_entity_types: subconjunto de EntityType.value; [] = todos.
+      - allowed_branch_types: géneros de rama (faccion/cultura/...); [] = todos.
+      - allowed_ring_ids: ids de WorldLayer (anillos) del proyecto; [] = todos.
+      - extraction_guidance: texto libre inyectado al prompt de extracción.
+      - strict: True → candidatos fuera de taxonomía se RECHAZAN; False → INCIDENCIA.
+    """
+    allowed_entity_types: list[str] = field(default_factory=list)
+    allowed_branch_types: list[str] = field(default_factory=list)
+    allowed_ring_ids: list[str] = field(default_factory=list)
+    extraction_guidance: str = ""
+    strict: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "allowed_entity_types": list(self.allowed_entity_types),
+            "allowed_branch_types": list(self.allowed_branch_types),
+            "allowed_ring_ids": list(self.allowed_ring_ids),
+            "extraction_guidance": self.extraction_guidance,
+            "strict": self.strict,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ProjectTaxonomy:
+        data = data if isinstance(data, dict) else {}
+        return cls(
+            allowed_entity_types=_parse_str_list(data.get("allowed_entity_types")),
+            allowed_branch_types=_parse_str_list(data.get("allowed_branch_types")),
+            allowed_ring_ids=_parse_str_list(data.get("allowed_ring_ids")),
+            extraction_guidance=str(data.get("extraction_guidance", "") or ""),
+            strict=bool(data.get("strict", False)),
+        )
+
+
 def _now_utc() -> datetime:
     """Return current UTC datetime."""
     return datetime.now(timezone.utc)
@@ -271,6 +315,10 @@ class Project:
     # Project chronology (H01-H02)
     project_chronology: ProjectChronology = field(default_factory=ProjectChronology)
 
+    # ── Modo Creación Cronológica (CRON) ──
+    chronology_walk_sessions: list[ChronologyWalkSession] = field(default_factory=list)
+    chronology_walk_reports: list[ChronologyWalkReport] = field(default_factory=list)
+
     # ── Project type & creative config (B31-T03) ──
     project_type: str = "otro"  # campana, novela, otro
     # PA02: worldbuilding deja de ser opcional — siempre activo. Se conserva el
@@ -278,6 +326,8 @@ class Project:
     worldbuilding_active: bool = True
     creative_config: CreativeProjectConfig = field(default_factory=CreativeProjectConfig)
     novela_config: NovelaConfig | None = None
+    # Taxonomía de importación (Modo Canon) — dirige/valida la extracción IA.
+    import_taxonomy: ProjectTaxonomy = field(default_factory=ProjectTaxonomy)
 
     def touch(self) -> None:
         """Mark the project as updated (bump updated_at)."""
@@ -384,11 +434,14 @@ class Project:
             # ── Causal milestones (Bloque 41) ──
             "causal_milestones": [h.to_dict() for h in self.causal_milestones],
             "project_chronology": self.project_chronology.to_dict(),
+            "chronology_walk_sessions": [s.to_dict() for s in self.chronology_walk_sessions],
+            "chronology_walk_reports": [r.to_dict() for r in self.chronology_walk_reports],
             # ── Project type & creative config (B31-T03) ──
             "project_type": self.project_type,
             "worldbuilding_active": self.worldbuilding_active,
             "creative_config": self.creative_config.to_dict(),
             "novela_config": self.novela_config.to_dict() if self.novela_config else None,
+            "import_taxonomy": self.import_taxonomy.to_dict(),
         }
 
     @classmethod
@@ -608,12 +661,30 @@ class Project:
                 )}
                 if "project_chronology" in data else {}
             ),
+            # ── Modo Creación Cronológica (CRON) ──
+            **(
+                {"chronology_walk_sessions": [
+                    ChronologyWalkSession.from_dict(s)
+                    for s in data.get("chronology_walk_sessions", [])
+                    if isinstance(s, dict)
+                ]}
+                if "chronology_walk_sessions" in data else {}
+            ),
+            **(
+                {"chronology_walk_reports": [
+                    ChronologyWalkReport.from_dict(r)
+                    for r in data.get("chronology_walk_reports", [])
+                    if isinstance(r, dict)
+                ]}
+                if "chronology_walk_reports" in data else {}
+            ),
             # ── Project type & creative config (B31-T03) ──
             project_type=data.get("project_type", "otro"),
             # PA02: worldbuilding siempre activo (incluido al cargar proyectos viejos).
             worldbuilding_active=True,
             creative_config=CreativeProjectConfig.from_dict(data.get("creative_config", {})),
             novela_config=NovelaConfig.from_dict(data["novela_config"]) if data.get("novela_config") else None,
+            import_taxonomy=ProjectTaxonomy.from_dict(data.get("import_taxonomy", {})),
         )
 
 # ── Helpers ──

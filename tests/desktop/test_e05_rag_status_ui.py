@@ -52,7 +52,6 @@ def test_e05_ai_jobs_panel_shows_rag_status_on_active_job(qapp):
 
     workspace = SimpleNamespace(
         ai_job_service=service,
-        _open_ai_job_result_by_id=lambda _jid: None,
         _sync_jobs_indicator=lambda: None,
         ctx=SimpleNamespace(log=lambda *_args, **_kwargs: None),
     )
@@ -78,7 +77,6 @@ def test_e05_ai_jobs_panel_shows_context_pack_summary(qapp):
 
     workspace = SimpleNamespace(
         ai_job_service=service,
-        _open_ai_job_result_by_id=lambda _jid: None,
         _sync_jobs_indicator=lambda: None,
         ctx=SimpleNamespace(log=lambda *_args, **_kwargs: None),
     )

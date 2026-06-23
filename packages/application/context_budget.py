@@ -114,6 +114,7 @@ INTENT_TO_TIER: dict[str, ContextTier] = {
     "explain_from_causes": ContextTier.CAUSAL,
     "propose_milestones": ContextTier.CAUSAL,
     "create_ring_template": ContextTier.CAUSAL,
+    "chronology_walk_step": ContextTier.CAUSAL,
     "expand_worldbuilding": ContextTier.SUBGRAPH,
     "freeform_planning": ContextTier.SUBGRAPH,
     "review_graph": ContextTier.GLOBAL,

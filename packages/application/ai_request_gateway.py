@@ -77,6 +77,7 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "consistency":         ModelParams(temperature=0.2, max_tokens=2000),
     "extract":             ModelParams(temperature=0.15, max_tokens=1500),
     "import_extraction":   ModelParams(temperature=0.15, max_tokens=3000),
+    "import_context_summary": ModelParams(temperature=0.2, max_tokens=2500),
     "classify":            ModelParams(temperature=0.15, max_tokens=1000),
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
     "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),
@@ -116,6 +117,9 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "edit_relation":       ModelParams(temperature=0.5, max_tokens=1800),
     "edit_ring":           ModelParams(temperature=0.5, max_tokens=2000),
     "edit_milestone":      ModelParams(temperature=0.5, max_tokens=1800),
+    # CRON: análisis editorial por hito. Analítico (temp baja por defecto); el
+    # servicio la sobreescribe según el Modo (Consistencia/Mixto/Creativo).
+    "chronology_walk_step": ModelParams(temperature=0.25, max_tokens=3000),
     # Text-only intents (BETA1-AI02 Fase 2): free text, no JSON staging.
     "improve_text":        ModelParams(temperature=0.6, max_tokens=1500),
     "generate_text":       ModelParams(temperature=0.7, max_tokens=1800),

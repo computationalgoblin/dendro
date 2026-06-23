@@ -63,7 +63,9 @@ class TestRelationCreation:
     def test_18_fields(self):
         r = NarrativeRelation(source_id="a", target_id="b")
         d = r.to_dict()
-        assert len(d) == 21, f"Expected 21, got {len(d)}: {list(d.keys())}"
+        # BETA1-J01: +life_span (lapso temporal rico). Guard reajustado al
+        # conteo real (drift previo G06 + life_span) → 24 campos.
+        assert len(d) == 24, f"Expected 24, got {len(d)}: {list(d.keys())}"
 
     def test_full_construction(self):
         now = datetime.now(timezone.utc)

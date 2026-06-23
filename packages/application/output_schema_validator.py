@@ -56,6 +56,11 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
         "container_key": "candidates",
         "required_item_fields": ["kind"],
     },
+    "import_context_summary": {
+        # Resumen no-canon del documento de referencia (modo contexto).
+        "container_key": "topic_cards",
+        "required_item_fields": [],
+    },
 }
 
 # Intents that are always valid (freeform text)

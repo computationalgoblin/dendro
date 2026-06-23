@@ -42,6 +42,7 @@ class IssueState(str, Enum):
 class CandidateType(str, Enum):
     ENTIDAD = "entidad"
     RELACION = "relacion"
+    ANILLO = "anillo"
     FUENTE = "fuente"
     CAMBIO = "cambio"
     FUSION = "fusion"

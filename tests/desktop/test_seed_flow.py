@@ -59,6 +59,8 @@ def _stub_workspace(qapp, controller):
         _zen_bell=bell,
         ctx=SimpleNamespace(log=lambda *a, **k: None),
         _on_suggestion_changed=lambda: None,
+        # SEM04: _auto_stage_and_notify divide la semilla del grafo / la marchita.
+        graph=SimpleNamespace(split_seed=lambda *a, **k: None, wither_seed=lambda *a, **k: None),
     )
     stub._host = host  # mantener vivo el padre
     return stub
@@ -115,3 +117,78 @@ def test_body_text_extraction():
     assert candidate_body_text({"extended_description": "largo"}) == "largo"
     assert candidate_body_text({"brief_description": "breve"}) == "breve"
     assert candidate_body_text({}) == ""
+
+
+# ── Semilla de análisis de coherencia: orbita en el anillo activo ─────────────
+
+
+def test_analysis_jobs_germinate_a_seed():
+    # Los análisis (coherencia/review) producen un candidato-informe → deben germinar
+    # una semilla; solo el texto inline y la reparación (panel propio) quedan excluidos.
+    import hosts.DesktopHostPySide.views.workspaces as ws
+    assert "analyze_coherence" not in ws._NO_SEED_JOB_TYPES
+    assert "review_graph" not in ws._NO_SEED_JOB_TYPES
+    assert "repair_coherence" in ws._NO_SEED_JOB_TYPES
+    assert {"improve_text", "generate_text"} <= ws._NO_SEED_JOB_TYPES
+
+
+class _FakeSignal:
+    def connect(self, *a, **k):
+        pass
+
+
+class _FakeWorker:
+    def __init__(self, *a, **k):
+        self.statusChanged = _FakeSignal()
+        self.finishedOk = _FakeSignal()
+        self.failed = _FakeSignal()
+        self.finished = _FakeSignal()
+
+    def start(self):
+        pass
+
+
+def test_coherence_job_plants_seed_in_active_ring(qapp, monkeypatch):
+    import hosts.DesktopHostPySide.views.workspaces as ws
+    monkeypatch.setattr(ws, "_AIJobWorker", _FakeWorker)
+    captured: dict = {}
+    job = SimpleNamespace(
+        type=SimpleNamespace(value="analyze_coherence"),
+        context_scope={"active_ring_id": "ring-meta"},
+    )
+    stub = SimpleNamespace(
+        ai_job_service=SimpleNamespace(get_job=lambda jid: Ok(job)),
+        _ai_workers={},
+        graph=SimpleNamespace(
+            plant_seed=lambda jid, rid: captured.__setitem__("seed", (jid, rid)),
+        ),
+        _on_ai_job_status=lambda *a: None,
+        _on_ai_job_finished=lambda *a: None,
+        _on_ai_job_failed=lambda *a: None,
+        _on_ai_worker_stopped=lambda *a: None,
+    )
+    CreationWorkspace._start_ai_job_worker(stub, "job-1")
+    assert captured["seed"] == ("job-1", "ring-meta")  # semilla en el anillo activo
+
+
+def test_inline_text_job_plants_no_seed(qapp, monkeypatch):
+    import hosts.DesktopHostPySide.views.workspaces as ws
+    monkeypatch.setattr(ws, "_AIJobWorker", _FakeWorker)
+    captured: dict = {}
+    job = SimpleNamespace(
+        type=SimpleNamespace(value="generate_text"),
+        context_scope={"active_ring_id": "ring-meta"},
+    )
+    stub = SimpleNamespace(
+        ai_job_service=SimpleNamespace(get_job=lambda jid: Ok(job)),
+        _ai_workers={},
+        graph=SimpleNamespace(
+            plant_seed=lambda jid, rid: captured.__setitem__("seed", (jid, rid)),
+        ),
+        _on_ai_job_status=lambda *a: None,
+        _on_ai_job_finished=lambda *a: None,
+        _on_ai_job_failed=lambda *a: None,
+        _on_ai_worker_stopped=lambda *a: None,
+    )
+    CreationWorkspace._start_ai_job_worker(stub, "job-2")
+    assert "seed" not in captured  # texto inline no germina

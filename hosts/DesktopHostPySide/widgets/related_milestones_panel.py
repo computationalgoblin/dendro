@@ -255,8 +255,8 @@ class RelatedMilestonesPanel(QGroupBox):
             ] if relation is not None else []
             payload["affected_entity_ids"] = [eid for eid in endpoints if eid]
         else:
+            # BETA1-HITO-MULTI: la entidad objetivo participa sin ser "principal".
             payload["affected_entity_ids"] = [self.target_id]
-            payload["metadata"]["primary_entity_id"] = self.target_id
             if self.target_kind == "branch":
                 payload["affected_branch_ids"] = [self.target_id]
         result = self.milestone_controller.create_manual(payload)

@@ -213,6 +213,71 @@ PromptRegistry: dict[str, dict] = {
             "Return recommendations in natural text, not JSON."
         ),
     },
+
+    "import_extraction": {
+        "version": 1,
+        "es": (
+            "Eres el extractor de importacion documental de Dendro.\n"
+            "Devuelve SOLO JSON valido. No incluyas Markdown ni explicaciones fuera del JSON.\n"
+            "No crees canon. No inventes IDs. Usa nombres cuando no exista un ID canonico.\n"
+            "\n"
+            "TERMINOLOGIA DE DENDRO:\n"
+            "- Hoja (entity): elemento individual (personaje, objeto, lugar, evento, concepto, ley, nota).\n"
+            "- Rama (branch): grupo/sistema/colectivo (faccion, cultura, religion, institucion, trama).\n"
+            "- Anillo (ring_suggestion): estrato causal de worldbuilding (capa metafisica o causal).\n"
+            "\n"
+            "Cuando el contexto incluya una TAXONOMIA DEL PROYECTO, extrae SOLO entity_type, "
+            "branch_type y anillos dentro de los valores permitidos; usa el canon existente para "
+            "desambiguar nombres y no duplicar elementos ya presentes.\n"
+            "\n"
+            "JSON esperado:\n"
+            "{\n"
+            '  "candidates": [\n'
+            "    {\n"
+            '      "kind": "entity | branch | relation | milestone | ring_suggestion | merge_suggestion | import_issue",\n'
+            '      "name": "string opcional",\n'
+            '      "title": "string opcional",\n'
+            '      "summary": "string opcional",\n'
+            '      "body": "string opcional",\n'
+            '      "confidence": 0.0,\n'
+            '      "confidence_reason": "string",\n'
+            '      "aliases": ["string"],\n'
+            '      "entity_type": "personaje | localizacion | objeto | evento | concepto | otro",\n'
+            '      "branch_type": "faccion | cultura | institucion | trama | contenedor | otro",\n'
+            '      "ring_name": "string para ring_suggestion",\n'
+            '      "ring_id": "string opcional para ring_suggestion",\n'
+            '      "source_name": "string para relaciones",\n'
+            '      "target_name": "string para relaciones",\n'
+            '      "relation_type": "string para relaciones",\n'
+            '      "date_label": "string para hitos",\n'
+            '      "structured_date": {},\n'
+            '      "evidence": "string",\n'
+            '      "message": "string para import_issue"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "\n"
+            "Si el chunk es ambiguo o insuficiente, devuelve un candidate con kind import_issue."
+        ),
+    },
+
+    "import_context_summary": {
+        "version": 1,
+        "es": (
+            "Eres el sintetizador de material de referencia de Dendro.\n"
+            "Resume el documento como FICHAS DE CONTEXTO no-canon para ayudar a la IA a "
+            "recuperar y entender el material. NO propongas candidatos de canon, NO crees "
+            "entidades, ramas, relaciones ni anillos, NO inventes IDs.\n"
+            "Devuelve SOLO JSON valido con esta forma:\n"
+            "{\n"
+            '  "summary": "resumen breve del documento (3-6 frases)",\n'
+            '  "topic_cards": [\n'
+            '    {"title": "tema o concepto", "text": "explicacion breve y util para contexto"}\n'
+            "  ]\n"
+            "}\n"
+            "Las fichas son material de referencia: informativas, nunca autoritativas sobre el canon."
+        ),
+    },
 }
 
 # Version tracking — maps prompt key to current version

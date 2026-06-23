@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from packages.application.import_service import ImportService
-from packages.domain.import_models import ImportFormat
+from packages.domain.import_models import ImportFormat, ImportMode
 from packages.domain.result import Error, is_ok, unwrap
 from packages.ui.cli import (
     _bootstrap_services,
@@ -56,6 +56,9 @@ def register_import_commands(sub: argparse._SubParsersAction) -> None:
     doc.add_argument("file", help="Path to the document file")
     doc.add_argument("--format", choices=["auto", "txt", "md", "markdown", "pdf"], default="auto",
                      help="Document format (auto by suffix, txt=text_plain, md=Markdown, pdf=PDF)")
+    doc.add_argument("--mode", choices=["canon", "contexto"], default="canon",
+                     help="Modo: canon (extrae candidatos para revisión) o contexto "
+                          "(material de referencia para la IA, no canon)")
 
     # import basket
     basket = imp_subs.add_parser("basket", help="Manage import baskets")
@@ -122,7 +125,8 @@ def _cmd_import_document(args: argparse.Namespace, session_ctx, project_path: Pa
     ps, es, rs, ss, hs, qs, ts = _bootstrap_services(project_path)
     svc = ImportService(project_service=ps, candidate_service=None, source_service=ss)
     fmt = _format_flag(args)
-    result = svc.import_document(args.file, fmt)
+    mode = ImportMode(getattr(args, "mode", "canon") or "canon")
+    result = svc.import_document(args.file, fmt, mode=mode)
     if isinstance(result, Error):
         return f"Import failed: {result.error}"
     basket = result.value
@@ -134,6 +138,7 @@ def _cmd_import_document(args: argparse.Namespace, session_ctx, project_path: Pa
         f"Document imported successfully.\n"
         f"  Basket ID: {basket.id}\n"
         f"  Source ID: {basket.source_id}\n"
+        f"  Mode: {basket.import_mode}\n"
         f"  Segments: {len(basket.segments)}\n"
         f"  Candidates: {len(basket.import_candidates)}\n"
         f"\n"

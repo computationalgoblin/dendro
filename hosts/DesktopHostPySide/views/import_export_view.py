@@ -5,7 +5,7 @@ import json
 from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -84,13 +85,36 @@ def _candidate_group(candidate) -> str:
     }.get(_candidate_kind(candidate), "Otros")
 
 
+# Tarjetas de candidatos en UNA columna: a media anchura (2 col) el contenido
+# (badges + 4 acciones + extracto) se perdía hacia la derecha. Full width cabe.
+_CARDS_COLUMNS = 1
+
+# Estados de revisión ya decididos: sus candidatos no se muestran en el menú de
+# tarjetas (aceptar/rechazar/fusionar los retira de la cola pendiente).
+_DECIDED_REVIEW_STATES = {"aceptado", "rechazado", "fusionado"}
+
+# Orden de campos donde la IA deja el contenido legible del candidato. Unificado
+# con candidate_review_panel para que la tarjeta muestre lo mismo que el panel.
+_EXCERPT_FIELDS = [
+    "summary", "body", "extended_description", "brief", "brief_description",
+    "description", "text", "content", "message", "evidence",
+]
+
+
+def _is_pending_candidate(candidate) -> bool:
+    """True si el candidato sigue pendiente de decisión (se muestra en tarjetas)."""
+    state = _enum_text(getattr(candidate, "review_state", "")).strip().lower()
+    return state not in _DECIDED_REVIEW_STATES
+
+
 def _source_excerpt(candidate) -> str:
     payload = getattr(candidate, "proposed_data", {}) or {}
-    for key in ["brief", "description", "text", "summary", "content"]:
+    for key in _EXCERPT_FIELDS:
         value = payload.get(key)
         if value:
             text = str(value).replace("\n", " ").strip()
-            return text[:220] + ("…" if len(text) > 220 else "")
+            if text:
+                return text[:220] + ("…" if len(text) > 220 else "")
     return "Sin extracto visible. Activa Modo avanzado para ver datos técnicos."
 
 
@@ -120,6 +144,44 @@ def _candidate_visible_text(candidate) -> str:
     return next((str(value).strip() for value in fields if str(value or "").strip()), "")
 
 
+class _ImportExtractionWorker(QThread):
+    """Ejecuta la extracción IA de candidatos en segundo plano (I17).
+
+    Emite ``progress(done, total, label)`` por segmento y ``finishedOk(list)`` /
+    ``failed(str)`` al terminar. ``cancel()`` corta entre segmentos.
+    """
+
+    progress = Signal(int, int, str)
+    finishedOk = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, controller, basket_id: str, parent=None):
+        super().__init__(parent)
+        self._controller = controller
+        self._basket_id = basket_id
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            result = self._controller.extract_ai_candidates(
+                self._basket_id,
+                progress_callback=lambda done, total, label: self.progress.emit(
+                    int(done), int(total), str(label)
+                ),
+                should_cancel=lambda: self._cancel,
+            )
+        except Exception as exc:  # noqa: BLE001 — frontera de hilo
+            self.failed.emit(str(exc))
+            return
+        if isinstance(result, Error):
+            self.failed.emit(str(result.error))
+        else:
+            self.finishedOk.emit(list(getattr(result, "value", None) or []))
+
+
 class ImportExportView(QWidget):
     def __init__(self, ctx: AppContext, controller, export_service: ExportService | None = None):
         super().__init__()
@@ -131,6 +193,8 @@ class ImportExportView(QWidget):
         self.selected_basket_id: str | None = None
         self.selected_candidate_id: str | None = None
         self.kind_filter: QComboBox | None = None
+        self.progress_row: QWidget | None = None
+        self._extraction_worker: _ImportExtractionWorker | None = None
         self._build()
 
     def _build(self):
@@ -143,6 +207,18 @@ class ImportExportView(QWidget):
         ))
 
         act = QHBoxLayout()
+        act.addWidget(QLabel("Modo:"))
+        self.mode_selector = QComboBox()
+        for label, value in [
+            ("Canon (extraer)", "canon"),
+            ("Contexto (referencia)", "contexto"),
+        ]:
+            self.mode_selector.addItem(label, value)
+        self.mode_selector.setToolTip(
+            "Canon: la IA extrae candidatos revisables para pasar a canon.\n"
+            "Contexto: el documento alimenta a la IA como material de referencia, sin volverse canon."
+        )
+        act.addWidget(self.mode_selector)
         for label, handler, primary in [
             ("Seleccionar TXT/MD/PDF", self._pick, True),
             ("Analizar duplicados", self._analyze_duplicates, False),
@@ -158,6 +234,24 @@ class ImportExportView(QWidget):
             act.addWidget(btn)
         act.addStretch()
         layout.addLayout(act)
+
+        # Fila de progreso de la extracción IA (oculta salvo durante el análisis).
+        self.progress_row = QWidget()
+        progress_layout = QHBoxLayout(self.progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("mutedLabel")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMaximumWidth(220)
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self._cancel_extraction)
+        progress_layout.addWidget(self.progress_label, stretch=1)
+        progress_layout.addWidget(self.progress_bar)
+        progress_layout.addWidget(cancel_btn)
+        self.progress_row.setVisible(False)
+        layout.addWidget(self.progress_row)
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Vista:"))
@@ -226,14 +320,97 @@ class ImportExportView(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Importar", "", "Documentos (*.txt *.md *.markdown *.pdf)")
         if not path:
             return
-        result = self.ic.import_document(path)
+        mode = self.mode_selector.currentData() if self.mode_selector is not None else "canon"
+        # Blindaje: una excepción dentro de este slot de Qt (import o refresco)
+        # cerraría toda la app. La contenemos y la mostramos como error visible.
+        try:
+            result = self.ic.import_document(path, mode=mode or "canon")
+        except Exception as exc:  # noqa: BLE001 — contención de slot Qt
+            self.ctx.log("error", f"Error importando documento: {exc!r}")
+            self.detail.setPlainText(f"No se pudo importar el documento: {exc}")
+            return
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
             self.detail.setPlainText(f"No se pudo importar el documento: {result.error}")
-        else:
-            self.ctx.log("info", f"Import basket created: {result.value.id} ({Path(path).suffix.lower()})")
-            self.detail.setPlainText("Documento importado. Revisa las tarjetas de candidatos detectados.")
+            return
+
+        basket = result.value
+        self.ctx.log("info", f"Import basket created: {basket.id} ({mode})")
+        n_segs = len(getattr(basket, "segments", []) or [])
+        try:
             self.refresh()
+        except Exception as exc:  # noqa: BLE001 — contención de slot Qt
+            self.ctx.log("error", f"Error refrescando la vista de importación: {exc!r}")
+
+        if mode == "contexto":
+            self.detail.setPlainText(
+                "Documento importado como MATERIAL DE REFERENCIA (modo contexto).\n"
+                f"Segmentos indexables: {n_segs}.\n"
+                "La IA podrá consultarlo como contexto; nunca se convierte en canon ni "
+                "genera tarjetas de candidatos. Aparece abajo como tarjeta de referencia."
+            )
+            return
+
+        # Canon: la extracción rica corre en IA, en segundo plano (no congela UI).
+        if n_segs == 0:
+            self.detail.setPlainText("El documento importado no tiene texto extraíble.")
+            return
+        self._start_extraction(basket.id)
+
+    # ── Extracción IA en segundo plano (I17) ─────────────────────────────
+
+    def _start_extraction(self, basket_id: str):
+        worker = getattr(self, "_extraction_worker", None)
+        if worker is not None and worker.isRunning():
+            self.detail.setPlainText("Ya hay un análisis IA en curso.")
+            return
+        self._set_extraction_busy(True)
+        self.detail.setPlainText("Analizando documento con IA…")
+        worker = _ImportExtractionWorker(self.ic, basket_id, self)
+        self._extraction_worker = worker
+        worker.progress.connect(self._on_extract_progress)
+        worker.finishedOk.connect(self._on_extract_done)
+        worker.failed.connect(self._on_extract_failed)
+        worker.start()
+
+    def _on_extract_progress(self, done: int, total: int, label: str):
+        self.progress_bar.setRange(0, max(1, total))
+        self.progress_bar.setValue(done)
+        shown = min(done + 1, total) if total else 0
+        self.progress_label.setText(f"Analizando {shown}/{total} · {label}")
+
+    def _on_extract_done(self, candidates: list):
+        self._set_extraction_busy(False)
+        self.detail.setPlainText(
+            f"Análisis IA completado: {len(candidates)} candidato(s) para revisar."
+        )
+        self._safe_refresh()
+
+    def _on_extract_failed(self, error: str):
+        self._set_extraction_busy(False)
+        self.ctx.log("error", f"Extracción IA: {error}")
+        self.detail.setPlainText(f"No se pudo analizar con IA: {error}")
+        self._safe_refresh()
+
+    def _cancel_extraction(self):
+        worker = getattr(self, "_extraction_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self.progress_label.setText("Cancelando…")
+
+    def _set_extraction_busy(self, busy: bool):
+        if self.progress_row is not None:
+            self.progress_row.setVisible(busy)
+        if not busy:
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(0)
+            self.progress_label.setText("")
+
+    def _safe_refresh(self):
+        try:
+            self.refresh()
+        except Exception as exc:  # noqa: BLE001 — contención de slot Qt
+            self.ctx.log("error", f"Error refrescando importación: {exc!r}")
 
     def _basket_candidates(self, basket):
         """Return real B17 import candidates; keep defensive empty fallback."""
@@ -256,6 +433,9 @@ class ImportExportView(QWidget):
         return rows
 
     def _filtered_rows(self, rows):
+        # Solo candidatos pendientes de decisión (los aceptados/rechazados/fusionados
+        # salen de la cola); se conservan las filas placeholder (c is None).
+        rows = [(b, c) for b, c in rows if c is None or _is_pending_candidate(c)]
         if self.kind_filter is None:
             return rows
         selected = self.kind_filter.currentData() or "all"
@@ -297,13 +477,40 @@ class ImportExportView(QWidget):
         grid_row = 0
         grid_col = 0
         last_group = ""
+        seen_config: set[str] = set()
         for basket, candidate in rows:
+            bid = getattr(basket, "id", "")
+            if bid not in seen_config and self._has_config_suggestion(basket):
+                seen_config.add(bid)
+                if grid_col:
+                    grid_col = 0
+                    grid_row += 1
+                self.cards_grid.addWidget(self._make_config_card(basket), grid_row, 0, 1, _CARDS_COLUMNS)
+                grid_row += 1
             if candidate is None:
-                card = Card("Documento importado", "No hay candidatos detectados todavía.")
-                card.add_text("La importación existe y se refresca usando el campo real de candidatos.", muted=True)
+                if str(getattr(basket, "import_mode", "canon")) == "contexto":
+                    n_segs = len(getattr(basket, "segments", []) or [])
+                    file_name = (getattr(basket, "metadata", {}) or {}).get("file_name", "documento")
+                    card = Card(
+                        f"📑 Referencia: {file_name}",
+                        f"Material de contexto para la IA · {n_segs} segmento(s).",
+                    )
+                    card.add_text(
+                        "No genera canon ni candidatos. Consultable por la IA como apoyo.",
+                        muted=True,
+                    )
+                    summary = (getattr(basket, "metadata", {}) or {}).get("context_summary")
+                    if isinstance(summary, dict) and summary.get("summary"):
+                        card.add_text(f"Resumen IA: {summary['summary']}", muted=True)
+                else:
+                    card = Card("Documento importado", "No hay candidatos detectados todavía.")
+                    card.add_text(
+                        "La importación existe; usa «Extraer con IA» para detectar candidatos.",
+                        muted=True,
+                    )
                 self.cards_grid.addWidget(card, grid_row, grid_col)
                 grid_col += 1
-                if grid_col >= 2:
+                if grid_col >= _CARDS_COLUMNS:
                     grid_col = 0
                     grid_row += 1
                 continue
@@ -320,10 +527,16 @@ class ImportExportView(QWidget):
             card = Card(_candidate_title(candidate), _source_excerpt(candidate))
             state_text = enum_human(getattr(candidate, "review_state", "pendiente"))
             confidence = float(getattr(candidate, "confidence", 0.0) or 0.0)
+            payload = getattr(candidate, "proposed_data", {}) or {}
             row = card.add_row()
             row.addWidget(Badge(group, "neutral"))
             row.addWidget(Badge(state_text, "info"))
             row.addWidget(Badge(f"Confianza {confidence:.0%}", "success" if confidence >= 0.7 else "warning"))
+            if payload.get("presentation_kind") == "enrich_existing":
+                target = self._enrich_target_name(payload)
+                if len(target) > 24:
+                    target = target[:23] + "…"
+                row.addWidget(Badge(f"Enriquece a {target}", "gold"))
             row.addStretch()
             source = _source_reference_text(candidate)
             if source:
@@ -331,7 +544,7 @@ class ImportExportView(QWidget):
             actions = card.add_row()
             btn_select = QPushButton("Ver")
             btn_select.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._select_card(b, c))
-            btn_edit = QPushButton("Editar")
+            btn_edit = QPushButton("Revisar")
             btn_edit.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._edit_ids(b, c))
             btn_accept = QPushButton("Aceptar")
             btn_accept.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._accept_ids(b, c))
@@ -342,7 +555,7 @@ class ImportExportView(QWidget):
             actions.addStretch()
             self.cards_grid.addWidget(card, grid_row, grid_col)
             grid_col += 1
-            if grid_col >= 2:
+            if grid_col >= _CARDS_COLUMNS:
                 grid_col = 0
                 grid_row += 1
 
@@ -514,9 +727,130 @@ class ImportExportView(QWidget):
             self.detail.setPlainText("No hay candidato seleccionable.")
             return
         if self.ctx.drawer is None:
-            self.detail.setPlainText("Edicion disponible desde el panel lateral.")
+            self.detail.setPlainText("Revisión disponible desde el panel lateral.")
             return
-        self._open_edit_form(basket_id, candidate_id, candidate)
+        self._open_review_panel(basket_id, candidate_id, candidate)
+
+    def _open_review_panel(self, basket_id: str, candidate_id: str, candidate):
+        """Abre la ficha de detalle editable del candidato (I18) en el drawer."""
+        from hosts.DesktopHostPySide.widgets.import_candidate_review_panel import (
+            ImportCandidateReviewPanel,
+        )
+
+        def _on_decision(_cid, _decision):
+            drawer = self.ctx.drawer
+            if drawer is not None and hasattr(drawer, "close"):
+                drawer.close()
+            self._safe_refresh()
+
+        panel = ImportCandidateReviewPanel(
+            candidate,
+            self.ic,
+            self._project(),
+            basket_id=basket_id,
+            on_decision=_on_decision,
+        )
+        self.ctx.drawer.set_content(panel, title="Revisar candidato")
+        self.ctx.drawer.open()
+
+    # ── I13: propuesta de configuración del proyecto ──────────────────────
+
+    @staticmethod
+    def _config_suggestion(basket):
+        proposal = (getattr(basket, "metadata", {}) or {}).get("project_config_suggestion")
+        return proposal if isinstance(proposal, dict) else None
+
+    def _has_config_suggestion(self, basket) -> bool:
+        proposal = self._config_suggestion(basket)
+        return bool(proposal) and not proposal.get("applied")
+
+    def _make_config_card(self, basket):
+        proposal = self._config_suggestion(basket) or {}
+        chron = proposal.get("chronology") or {}
+        n_eras = len([e for e in (chron.get("eras") or []) if isinstance(e, dict)])
+        n_ent = len([p for p in (proposal.get("entity_temporal") or []) if isinstance(p, dict)])
+        mode_label = {
+            "none": "sin calendario", "vague_periods": "periodos vagos",
+            "full_calendar": "calendario completo",
+        }.get(str(chron.get("mode") or ""), "calendario")
+        card = Card(
+            "⚙ Configuración propuesta del documento",
+            f"Calendario ({mode_label}) · {n_eras} era(s) · {n_ent} entidad(es) ubicada(s).",
+        )
+        card.add_text(
+            "La IA propone esta configuración a partir del documento. Revísala antes de aplicarla.",
+            muted=True,
+        )
+        actions = card.add_row()
+        bid = getattr(basket, "id", "")
+        review_btn = QPushButton("Revisar")
+        review_btn.clicked.connect(lambda _=False, b=bid: self._open_config_panel(b))
+        accept_btn = QPushButton("Aplicar")
+        accept_btn.clicked.connect(lambda _=False, b=bid: self._accept_config(b))
+        discard_btn = QPushButton("Descartar")
+        discard_btn.clicked.connect(lambda _=False, b=bid: self._discard_config(b))
+        for btn in (review_btn, accept_btn, discard_btn):
+            actions.addWidget(btn)
+        actions.addStretch()
+        return card
+
+    def _basket_by_id(self, basket_id: str):
+        baskets = self.ic.list_baskets()
+        if hasattr(baskets, "value"):
+            baskets = baskets.value
+        if isinstance(baskets, Error):
+            return None
+        return next((b for b in baskets or [] if getattr(b, "id", "") == basket_id), None)
+
+    def _open_config_panel(self, basket_id: str):
+        basket = self._basket_by_id(basket_id)
+        proposal = self._config_suggestion(basket) if basket else None
+        if proposal is None:
+            self.detail.setPlainText("No hay propuesta de configuración.")
+            return
+        if self.ctx.drawer is None:
+            self.detail.setPlainText("Revisión disponible desde el panel lateral.")
+            return
+        from hosts.DesktopHostPySide.widgets.import_project_config_panel import (
+            ImportProjectConfigPanel,
+        )
+
+        def _on_decision(_decision):
+            drawer = self.ctx.drawer
+            if drawer is not None and hasattr(drawer, "close"):
+                drawer.close()
+            self._safe_refresh()
+
+        panel = ImportProjectConfigPanel(
+            proposal, self.ic, basket_id=basket_id, on_decision=_on_decision
+        )
+        self.ctx.drawer.set_content(panel, title="Configuración propuesta")
+        self.ctx.drawer.open()
+
+    def _accept_config(self, basket_id: str):
+        result = self.ic.apply_project_config_suggestion(basket_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            self.detail.setPlainText(f"No se pudo aplicar la configuración: {result.error}")
+        else:
+            self.ctx.log("info", "Configuración de proyecto aplicada")
+            self.detail.setPlainText("Configuración aplicada al proyecto.")
+            self._safe_refresh()
+
+    def _discard_config(self, basket_id: str):
+        result = self.ic.discard_project_config_suggestion(basket_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+        else:
+            self.ctx.log("info", "Propuesta de configuración descartada")
+            self._safe_refresh()
+
+    def _enrich_target_name(self, payload: dict) -> str:
+        target_id = payload.get("enrich_target_id")
+        for entity in getattr(self._project(), "entities", []) or []:
+            if getattr(entity, "id", "") == target_id:
+                return str(getattr(entity, "name", "") or target_id)
+        return str(target_id or "?")
 
     def _save_candidate_edit(self, basket_id: str, candidate_id: str, data: dict):
         result = self.ic.edit(basket_id, candidate_id, data)

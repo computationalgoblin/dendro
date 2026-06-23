@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtGui import QColor, QIntValidator, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox,
     QColorDialog,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QPushButton,
     QSizePolicy,
     QTextEdit,
@@ -36,9 +35,9 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, enum_human
+from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
-from packages.application.tree_meta import NARRATIVE_ROLES, TREE_TYPES, TreeMeta
+from packages.application.tree_meta import NARRATIVE_ROLES, TreeMeta
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.entity import (
     CanonState,
@@ -48,7 +47,12 @@ from packages.domain.entity import (
     NarrativeImportance,
     VisibilityState,
 )
+from packages.domain.entity_taxonomy import BRANCH_ENTITY_TYPES
 from packages.domain.result import Error
+
+# BETA1-J08: la rama ofrece solo tipos de CONTENEDOR (facción, cultura,
+# localización…), distintos de los de la hoja.
+_RAMA_TYPE_VALUES = [t.value for t in BRANCH_ENTITY_TYPES]
 
 # ---------------------------------------------------------------------------
 # Warm palette (same as node_detail_panel)
@@ -260,7 +264,7 @@ class TreeDetailPanel(QWidget):
         first_row.setSpacing(8)
         self.name_edit = _styled_edit("Nombre de la rama...")
         first_row.addWidget(self.name_edit, 3)
-        self.tree_type_combo = _styled_combo(TREE_TYPES, "— Sin tipo —")
+        self.tree_type_combo = _styled_combo(_RAMA_TYPE_VALUES, "— Sin tipo —")
         first_row.addWidget(self.tree_type_combo, 2)
         self.layer_combo = _styled_combo([], "— Sin anillo —")
         # Legacy ref kept for older code paths; never shown as UI. If this
@@ -281,41 +285,17 @@ class TreeDetailPanel(QWidget):
         first_row.addWidget(self.color_btn)
         form.addRow(first_row)
 
-        # BETA1-G03: fila temporal DISCRETA — una rama también vive y cae.
-        time_row = QHBoxLayout()
-        time_row.setSpacing(6)
+        # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo
+        # en la Cronología; aquí solo se MUESTRA (solo lectura), derivado de
+        # birth/death y de las eras efectivas.
         _time_label_ss = f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
-        _year_ss = (
-            "QLineEdit { background: transparent; border: none; "
-            "border-bottom: 1px solid #D8D6C8; border-radius: 0; "
-            "font-size: 12px; color: #3F3D2E; padding: 1px 2px; } "
-            "QLineEdit:focus { border-bottom: 1px solid #C9C0A0; }"
+        self.lifespan_label = QLabel("")
+        self.lifespan_label.setWordWrap(True)
+        self.lifespan_label.setStyleSheet(_time_label_ss)
+        self.lifespan_label.setToolTip(
+            "Define el origen y el fin estirando el nodo en la vista Cronología."
         )
-        _year_validator = QIntValidator(-999999999, 999999999, self)
-        born_label = QLabel("Nace")
-        born_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(born_label)
-        self.birth_year_edit = QLineEdit()
-        self.birth_year_edit.setValidator(_year_validator)
-        self.birth_year_edit.setFixedWidth(64)
-        self.birth_year_edit.setStyleSheet(_year_ss)
-        self.birth_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        time_row.addWidget(self.birth_year_edit)
-        dies_label = QLabel("· Muere")
-        dies_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(dies_label)
-        self.death_year_edit = QLineEdit()
-        self.death_year_edit.setValidator(_year_validator)
-        self.death_year_edit.setFixedWidth(64)
-        self.death_year_edit.setPlaceholderText("—")
-        self.death_year_edit.setStyleSheet(_year_ss)
-        self.death_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        time_row.addWidget(self.death_year_edit)
-        self.era_label = QLabel("")
-        self.era_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(self.era_label, 1)
-        self.birth_year_edit.textEdited.connect(self._refresh_era_label)
-        form.addRow(time_row)
+        form.addRow(self.lifespan_label)
 
         # Descripción breve: se monta tras la imagen (orden F05)
         self.brief_edit = _styled_edit("Descripción breve...")
@@ -685,12 +665,8 @@ class TreeDetailPanel(QWidget):
         # Identidad
         self.name_edit.setText(entity.name)
 
-        # BETA1-G03: fila temporal
-        birth = getattr(entity, "birth_year", None)
-        death = getattr(entity, "death_year", None)
-        self.birth_year_edit.setText("" if birth is None else str(birth))
-        self.death_year_edit.setText("" if death is None else str(death))
-        self._refresh_era_label()
+        # BETA1-UX2C: lapso de vida solo-lectura (se edita en la cronología)
+        self._refresh_lifespan_label(entity)
 
         self.brief_edit.setText(entity.brief_description)
         self.extended_edit.setPlainText(entity.extended_description)
@@ -704,9 +680,14 @@ class TreeDetailPanel(QWidget):
         # TreeMeta
         self._tree_meta = TreeMeta.from_metadata(entity.custom_metadata)
 
+        # BETA1-J08: preserva un tree_type heredado fuera del set curado
+        # (p.ej. 'reino'/'familia' de proyectos antiguos) para no perder el dato.
+        legacy_type = (self._tree_meta.tree_type or "").strip()
+        if legacy_type and self.tree_type_combo.findText(legacy_type) < 0:
+            self.tree_type_combo.addItem(legacy_type)
         self.tree_type_combo.setCurrentIndex(0)
         for i in range(self.tree_type_combo.count()):
-            if self.tree_type_combo.itemText(i) == self._tree_meta.tree_type:
+            if self.tree_type_combo.itemText(i) == legacy_type:
                 self.tree_type_combo.setCurrentIndex(i)
                 break
 
@@ -919,9 +900,10 @@ class TreeDetailPanel(QWidget):
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(entity, "layer_ids", []) or []),
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
-            # BETA1-G03: fila temporal
-            "birth_year": self._parse_year_edit(self.birth_year_edit, getattr(entity, "birth_year", None)),
-            "death_year": self._parse_year_edit(self.death_year_edit, None),
+            # BETA1-UX2C: el lapso se edita en la cronología; pass-through al
+            # guardar para no borrarlo.
+            "birth_year": getattr(entity, "birth_year", None),
+            "death_year": getattr(entity, "death_year", None),
         }
 
         result = self.entity_controller.update(self.entity_id, data)
@@ -1202,34 +1184,44 @@ class TreeDetailPanel(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
-    # BETA1-G03: helpers temporales -----------------------------------
+    # BETA1-UX2C: lapso de vida (solo lectura) -------------------------
 
-    @staticmethod
-    def _parse_year_edit(edit, fallback):
-        text = edit.text().strip()
-        if not text or text == "-":
-            return fallback
-        try:
-            return int(text)
-        except ValueError:
-            return fallback
-
-    def _refresh_era_label(self, *_args):
-        """Era derivada del año de nacimiento — solo lectura (contrato G01)."""
-        year = self._parse_year_edit(self.birth_year_edit, None)
+    def _era_name_for_year(self, year) -> str:
         if year is None:
-            self.era_label.setText("")
-            return
+            return ""
         project = self._project()
-        chronology = getattr(project, "project_chronology", None) if project else None
-        era = None
-        if chronology is not None:
-            try:
-                chronology.ensure_default_era()
-                era = chronology.era_for_year(year)
-            except Exception:
-                era = None
-        self.era_label.setText(f"· {era.name}" if era is not None else "")
+        if project is None:
+            return ""
+        try:
+            from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras
+            for era in effective_eras(project):
+                start = getattr(era, "start_year", None)
+                end = getattr(era, "end_year", None)
+                if start is None or int(year) < int(start):
+                    continue
+                if end is None or int(year) < int(end):
+                    return str(getattr(era, "name", "") or "")
+        except Exception:
+            return ""
+        return ""
+
+    def _refresh_lifespan_label(self, entity) -> None:
+        birth = getattr(entity, "birth_year", None)
+        death = getattr(entity, "death_year", None)
+        if birth is None:
+            self.lifespan_label.setText("Lapso de vida: sin definir · estíralo en la Cronología")
+            return
+
+        def part(year: int) -> str:
+            era = self._era_name_for_year(year)
+            return f"año {int(year)}" + (f" · {era}" if era else "")
+
+        if death is None:
+            self.lifespan_label.setText(f"Lapso de vida:  origen {part(birth)}  →  presente")
+        else:
+            self.lifespan_label.setText(
+                f"Lapso de vida:  origen {part(birth)}  →  fin {part(death)}"
+            )
 
     def _entity_by_id(self, eid: str):
         proj = self._project()

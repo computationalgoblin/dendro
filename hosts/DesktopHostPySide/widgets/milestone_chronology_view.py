@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -36,6 +38,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 )
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
 from hosts.DesktopHostPySide.widgets.chronology_config_panel import ChronologyConfigPanel
+from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from packages.domain.result import Error
 
 
@@ -231,11 +234,14 @@ class MilestoneChronologyView(QWidget):
         self.exact_date_picker = CalendarDatePicker(compact=True)
         self.exact_date_picker.setObjectName("milestoneExactDatePicker")
         # BETA1-G03: año diegético del hito (G02) — tiempo canónico
-        self.year_edit = QSpinBox()
+        self.year_edit = BotanicalSpinBox()
         self.year_edit.setRange(-999999999, 999999999)
-        self.sort_edit = QSpinBox()
+        self.sort_edit = BotanicalSpinBox()
         self.sort_edit.setRange(-999999, 999999)
-        self.primary_entity_combo = QComboBox()
+        # BETA1-HITO-MULTI: lista multi-select de entidades participantes (sin
+        # "entidad principal"); todas participan en pie de igualdad.
+        self.participants_list = QListWidget()
+        self.participants_list.setMaximumHeight(140)
         self.status_combo = QComboBox()
         for raw, label in [
             ("candidate", "Semilla"),
@@ -252,7 +258,7 @@ class MilestoneChronologyView(QWidget):
         form.addRow("Fecha / posicion", self.temporal_edit)
         form.addRow("Fecha exacta", self.exact_date_picker)
         form.addRow("Orden relativo", self.sort_edit)
-        form.addRow("Entidad principal", self.primary_entity_combo)
+        form.addRow("Entidades participantes", self.participants_list)
         form.addRow("Estado", self.status_combo)
         detail.addLayout(form)
         self.linked_label = QLabel("")
@@ -492,16 +498,22 @@ class MilestoneChronologyView(QWidget):
         if not isinstance(year, int) or isinstance(year, bool):
             year = int(getattr(self.chronology(), "present_year", 0) or 0)
         self.year_edit.setValue(year)
-        self.primary_entity_combo.blockSignals(True)
-        self.primary_entity_combo.clear()
-        self.primary_entity_combo.addItem("Sin entidad principal", "")
+        # BETA1-HITO-MULTI: pre-marca las entidades participantes. Se lee también
+        # el legacy primary_entity_id para no perder vínculos de proyectos antiguos.
+        selected = {str(v) for v in (getattr(hito, "affected_entity_ids", []) or []) if str(v)}
+        legacy_primary = str(_metadata(hito).get("primary_entity_id", "") or "").strip()
+        if legacy_primary:
+            selected.add(legacy_primary)
+        self.participants_list.blockSignals(True)
+        self.participants_list.clear()
         for entity in sorted(self.entities(), key=lambda e: str(getattr(e, "name", ""))):
-            self.primary_entity_combo.addItem(str(getattr(entity, "name", "") or "Sin nombre"), str(getattr(entity, "id", "")))
-        primary_id = milestone_primary_entity_id(hito)
-        idx = self.primary_entity_combo.findData(primary_id)
-        if idx >= 0:
-            self.primary_entity_combo.setCurrentIndex(idx)
-        self.primary_entity_combo.blockSignals(False)
+            eid = str(getattr(entity, "id", ""))
+            item = QListWidgetItem(str(getattr(entity, "name", "") or "Sin nombre"))
+            item.setData(Qt.ItemDataRole.UserRole, eid)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if eid in selected else Qt.CheckState.Unchecked)
+            self.participants_list.addItem(item)
+        self.participants_list.blockSignals(False)
         status_raw = _raw_enum(getattr(hito, "status", "candidate"))
         status_idx = self.status_combo.findData(status_raw)
         self.status_combo.setCurrentIndex(status_idx if status_idx >= 0 else 0)
@@ -514,13 +526,14 @@ class MilestoneChronologyView(QWidget):
             return
         hito_id = str(getattr(hito, "id", ""))
         meta = _metadata(hito)
-        primary_id = str(self.primary_entity_combo.currentData() or "")
         meta.update({
             "sort_index": int(self.sort_edit.value()),
             "chronology_key": self.temporal_edit.text().strip(),
-            "primary_entity_id": primary_id,
             "body": self.body_edit.toPlainText().strip(),
         })
+        # BETA1-HITO-MULTI: ya no hay "entidad principal"; se retira la metadata
+        # legacy para no reintroducir el concepto.
+        meta.pop("primary_entity_id", None)
         calendar_meta = self.chronology_metadata()
         if str(calendar_meta.get("mode") or "") == "full_calendar":
             exact_date = self.exact_date_picker.date()
@@ -528,9 +541,14 @@ class MilestoneChronologyView(QWidget):
             meta["exact_date"] = exact_date
             if exact_label:
                 meta["chronology_key"] = exact_label
-        affected = [str(v) for v in (getattr(hito, "affected_entity_ids", []) or []) if str(v)]
-        if primary_id and primary_id not in affected:
-            affected.insert(0, primary_id)
+        # Entidades participantes = ítems marcados en la lista multi-select.
+        affected = []
+        for row in range(self.participants_list.count()):
+            item = self.participants_list.item(row)
+            if item.checkState() == Qt.CheckState.Checked:
+                eid = str(item.data(Qt.ItemDataRole.UserRole) or "")
+                if eid:
+                    affected.append(eid)
         payload = {
             "title": self.title_edit.text().strip() or "Hito sin titulo",
             "description": self.summary_edit.toPlainText().strip(),

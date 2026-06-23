@@ -36,6 +36,10 @@ from packages.persistence.schema import (
     _apply_migration_v23_to_v24,
     _apply_migration_v24_to_v25,
     _apply_migration_v25_to_v26,
+    _apply_migration_v26_to_v27,
+    _apply_migration_v27_to_v28,
+    _apply_migration_v28_to_v29,
+    _apply_migration_v29_to_v30,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -437,6 +441,26 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 25:
         data = _apply_migration_v25_to_v26(data)
+        data["schema_version"] = 26
+        version = 26
+
+    if version == 26:
+        data = _apply_migration_v26_to_v27(data)
+        data["schema_version"] = 27
+        version = 27
+
+    if version == 27:
+        data = _apply_migration_v27_to_v28(data)
+        data["schema_version"] = 28
+        version = 28
+
+    if version == 28:
+        data = _apply_migration_v28_to_v29(data)
+        data["schema_version"] = 29
+        version = 29
+
+    if version == 29:
+        data = _apply_migration_v29_to_v30(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation

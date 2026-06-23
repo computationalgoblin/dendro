@@ -90,7 +90,6 @@ def _make_workspace_stub(*, worldbuilding_active=True):
             self._project = project
             self.graph = SimpleNamespace(canvas=canvas)
             self.ai_job_service = AIJobService(provider=DesktopCommandBarProvider())
-            self.opened_job_ids = []
             self.logged = []
             self.ctx = SimpleNamespace(log=lambda level, msg: self.logged.append((level, msg)), drawer=None)
         def _get_active_project(self):
@@ -103,8 +102,6 @@ def _make_workspace_stub(*, worldbuilding_active=True):
             canvas.apply_visual_filter(VisualFilterState(layer_ids=(layer_id,)))
         def _clear_layer_filter(self):
             canvas.clear_visual_filters()
-        def _open_ai_job_result_by_id(self, job_id):
-            self.opened_job_ids.append(job_id)
         def _sync_jobs_indicator(self):
             pass
 
@@ -153,33 +150,6 @@ def test_b38_layer_drawer_chip_applies_visual_filter(qapp):
     assert canvas.cleared is True
 
 
-class _CandidateControllerStub:
-    def __init__(self):
-        self.created = []
-    def create(self, data):
-        self.created.append(dict(data))
-        return Ok(SimpleNamespace(id=f"cand-{len(self.created)}", **data))
-
-
-def test_b38_job_result_panel_sends_candidates_to_inbox(qapp):
-    from hosts.DesktopHostPySide.views.workspaces import AIJobResultPanel
-
-    service = AIJobService(provider=DesktopCommandBarProvider())
-    job = service.create_job(AIJobType.GENERATE_ENTITIES, "Créame tres personajes hermanos traidores tragicómicos").value
-    executed = service.execute_job(job.id)
-    assert isinstance(executed, Ok)
-    controller = _CandidateControllerStub()
-    changed = {"count": 0}
-    panel = AIJobResultPanel(executed.value, controller, on_candidates_created=lambda: changed.__setitem__("count", changed["count"] + 1))
-
-    panel._send_candidates()
-
-    assert len(controller.created) == 2
-    assert changed["count"] == 1
-    assert all(c["state"] == "pendiente" for c in controller.created)
-    assert all(c["metadata"]["canon_auto_mutation"] is False for c in controller.created)
-
-
 def test_b38_ai_job_worker_executes_without_touching_ui_thread_and_emits_phases(qapp):
     from hosts.DesktopHostPySide.views.workspaces import _AIJobWorker
 
@@ -189,7 +159,7 @@ def test_b38_ai_job_worker_executes_without_touching_ui_thread_and_emits_phases(
     phases = []
     finished = []
     failed = []
-    worker.statusChanged.connect(lambda status, message, progress: phases.append((status, message, progress)))
+    worker.statusChanged.connect(lambda job_id, status, message, progress: phases.append((status, message, progress)))
     worker.finishedOk.connect(lambda jid: finished.append(jid))
     worker.failed.connect(lambda jid, err: failed.append((jid, err)))
 
@@ -225,5 +195,7 @@ def test_b38_ai_jobs_panel_shows_active_and_ready_jobs_with_progress(qapp):
     assert len(progress_bars) >= 2
     assert any(bar.value() == 20 for bar in progress_bars)
     assert any(bar.value() == 100 for bar in progress_bars)
-    assert "Ver resultado" in texts
+    # SEM03: «Ver resultado» retirado (los candidatos germinan como semillas);
+    # solo queda «Cancelar».
+    assert "Ver resultado" not in texts
     assert "Cancelar" in texts

@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt
+
+from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -342,6 +344,7 @@ class CreativeConfigPanel(QTabWidget):
         self._build_tab_evitar()
         self._build_tab_memoria()
         self._build_tab_ramas()
+        self._build_tab_importacion()
 
     # ── Tab builders ──────────────────────────────────────────────
 
@@ -358,6 +361,13 @@ class CreativeConfigPanel(QTabWidget):
         form = QFormLayout(page)
         form.setSpacing(8)
         form.setContentsMargins(12, 12, 12, 12)
+        # BETA1-UX (config llena el ancho): los campos CRECEN hasta ocupar todo
+        # el ancho del menú (antes quedaban estrechos y pegados a la izquierda,
+        # dejando vacío el lado derecho) y las etiquetas largas envuelven sobre
+        # su campo en lugar de desbordar/recortarse a la derecha.
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         return page, form
 
     # ── Tab 1: Básico ─────────────────────────────────────────────
@@ -574,7 +584,7 @@ class CreativeConfigPanel(QTabWidget):
         row_ag.addWidget(lbl_ag)
         form.addRow("Agresividad (0=mínima, 10=radical)", row_ag)
 
-        self._fields["ai_num_options"] = QSpinBox()
+        self._fields["ai_num_options"] = BotanicalSpinBox()
         self._fields["ai_num_options"].setRange(1, 5)
         self._fields["ai_num_options"].setValue(ai.default_num_options)
         form.addRow("Propuestas por defecto", self._fields["ai_num_options"])
@@ -828,6 +838,43 @@ class CreativeConfigPanel(QTabWidget):
             # Branch config handled separately via _on_branch_selected
         }
 
+    # ── Tab: Importación (taxonomía dirigida) ─────────────────────
+
+    def _build_tab_importacion(self):
+        page, form = self._form_tab("Importación")
+        tax = getattr(self.project, "import_taxonomy", None)
+        entity_types = list(getattr(tax, "allowed_entity_types", []) or [])
+        branch_types = list(getattr(tax, "allowed_branch_types", []) or [])
+        ring_ids = list(getattr(tax, "allowed_ring_ids", []) or [])
+        guidance = str(getattr(tax, "extraction_guidance", "") or "")
+        strict = bool(getattr(tax, "strict", False))
+
+        info = QLabel(
+            "Taxonomía de importación (Modo Canon): acota qué entidades, ramas y "
+            "anillos extrae la IA de los documentos. Vacío = sin restricción."
+        )
+        info.setWordWrap(True)
+        form.addRow(info)
+
+        self._fields["tax_entity_types"] = ListEditor(entity_types)
+        form.addRow(QLabel("Tipos de entidad permitidos"), self._fields["tax_entity_types"])
+        self._fields["tax_branch_types"] = ListEditor(branch_types)
+        form.addRow(QLabel("Tipos de rama permitidos"), self._fields["tax_branch_types"])
+        self._fields["tax_ring_ids"] = ListEditor(ring_ids)
+        form.addRow(QLabel("Anillos permitidos (ring_id)"), self._fields["tax_ring_ids"])
+
+        self._fields["tax_guidance"] = QLineEdit(guidance)
+        self._fields["tax_guidance"].setPlaceholderText("Guía libre para la extracción IA…")
+        form.addRow(QLabel("Guía de extracción"), self._fields["tax_guidance"])
+
+        self._fields["tax_strict"] = QCheckBox(
+            "Estricto: rechazar candidatos fuera de la taxonomía (si no, se marcan como incidencia)"
+        )
+        self._fields["tax_strict"].setChecked(strict)
+        form.addRow(self._fields["tax_strict"])
+
+        self.addTab(self._scroll(page), "Importación")
+
     def apply_to_project(self, project):
         """Apply collected values to a project object."""
         data = self.collect()
@@ -907,3 +954,14 @@ class CreativeConfigPanel(QTabWidget):
                         "overrides": {},
                     })
                     break
+
+        # Import taxonomy (Modo Canon dirigido)
+        if "tax_entity_types" in self._fields:
+            from packages.domain.project import ProjectTaxonomy
+            project.import_taxonomy = ProjectTaxonomy(
+                allowed_entity_types=self._fields["tax_entity_types"].value(),
+                allowed_branch_types=self._fields["tax_branch_types"].value(),
+                allowed_ring_ids=self._fields["tax_ring_ids"].value(),
+                extraction_guidance=self._fields["tax_guidance"].text().strip(),
+                strict=self._fields["tax_strict"].isChecked(),
+            )

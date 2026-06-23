@@ -59,6 +59,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE,
     SURFACE_HI,
 )
+from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
@@ -303,14 +304,15 @@ class MainWindow(QMainWindow):
         nav_layout = QHBoxLayout(navbar)
         nav_layout.setContentsMargins(12, 5, 16, 5)
 
-        back_btn = QPushButton("←")
+        back_btn = QPushButton()
         back_btn.setToolTip("Volver a Dendro")
         back_btn.setFixedSize(34, 30)
         back_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {LINE}; "
-            f"border-radius: 15px; padding: 0px; color: {INK_SOFT}; font-size: 16px; }} "
-            f"QPushButton:hover {{ background: {SURFACE}; border-color: {GOLD}; color: {INK_STRONG}; }}"
+            f"border-radius: 15px; padding: 0px; }} "
+            f"QPushButton:hover {{ background: {SURFACE}; border-color: {GOLD}; }}"
         )
+        icons.set_button_icon(back_btn, "back", color=INK_SOFT, size=16)
         back_btn.clicked.connect(lambda: self._go_space(back_idx))
         nav_layout.addWidget(back_btn)
 

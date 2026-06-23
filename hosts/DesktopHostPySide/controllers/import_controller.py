@@ -1,7 +1,7 @@
 """ImportController — wraps ImportService for UI (B27.2-T01)."""
 from pathlib import Path
 from packages.application.import_service import ImportService
-from packages.domain.import_models import ImportFormat
+from packages.domain.import_models import ImportFormat, ImportMode
 from packages.domain.result import Error
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
@@ -10,8 +10,8 @@ class ImportController:
         self.ps = project_service
         self.svc = ImportService(project_service=self.ps)
 
-    def import_document(self, path):
-        _apptrace(f"CTRL ImportController.import_document path={path!r}"[:120])
+    def import_document(self, path, mode="canon"):
+        _apptrace(f"CTRL ImportController.import_document path={path!r} mode={mode!r}"[:120])
         suffix = Path(path).suffix.lower()
         if suffix == ".txt":
             fmt = ImportFormat.TEXT_PLAIN
@@ -21,7 +21,12 @@ class ImportController:
             fmt = ImportFormat.PDF
         else:
             return Error(f"Unsupported format: {suffix}. Use .txt, .md, .markdown or .pdf")
-        return self.svc.import_document(path, fmt)
+        import_mode = mode if isinstance(mode, ImportMode) else ImportMode(mode or "canon")
+        return self.svc.import_document(path, fmt, mode=import_mode)
+
+    def summarize_context(self, basket_id):
+        _apptrace(f"CTRL ImportController.summarize_context basket_id={basket_id!r}"[:120])
+        return self.svc.summarize_context_basket(basket_id)
 
     def list_baskets(self):
         _apptrace(f"CTRL ImportController.list_baskets"[:120])
@@ -55,9 +60,30 @@ class ImportController:
         _apptrace(f"CTRL ImportController.partial basket_id={basket_id!r}"[:120])
         return self.svc.partial_import(basket_id, filters or {})
 
-    def extract_ai_candidates(self, basket_id):
+    def extract_ai_candidates(self, basket_id, *, progress_callback=None, should_cancel=None):
         _apptrace(f"CTRL ImportController.extract_ai_candidates basket_id={basket_id!r}"[:120])
-        return self.svc.extract_ai_candidates(basket_id)
+        return self.svc.extract_ai_candidates(
+            basket_id,
+            replace_existing=True,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
+            generate_config=True,  # I13: propuesta de config/calendario al importar
+        )
+
+    def apply_project_config_suggestion(self, basket_id):
+        """I13: aplica la propuesta de config de proyecto tras aceptación del usuario."""
+        _apptrace(f"CTRL ImportController.apply_project_config_suggestion basket_id={basket_id!r}"[:120])
+        return self.svc.apply_project_config_suggestion(basket_id)
+
+    def update_project_config_suggestion(self, basket_id, edits):
+        """I13: guarda ediciones del calendario en la propuesta antes de aceptar."""
+        _apptrace(f"CTRL ImportController.update_project_config_suggestion basket_id={basket_id!r}"[:120])
+        return self.svc.update_project_config_suggestion(basket_id, edits)
+
+    def discard_project_config_suggestion(self, basket_id):
+        """I13: descarta la propuesta de config sin aplicarla."""
+        _apptrace(f"CTRL ImportController.discard_project_config_suggestion basket_id={basket_id!r}"[:120])
+        return self.svc.discard_project_config_suggestion(basket_id)
 
     def analyze_duplicates(self, basket_id):
         _apptrace(f"CTRL ImportController.analyze_duplicates basket_id={basket_id!r}"[:120])

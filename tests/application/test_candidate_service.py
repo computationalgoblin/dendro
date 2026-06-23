@@ -43,6 +43,46 @@ class TestCandidateService:
         assert len(ps.active_project.entities) == 1
         assert ps.active_project.entities[0].name == "Eldrin"
 
+    def test_accept_entity_stamps_created_entity_id(self):
+        # SEM02: accept_candidate expone el id de la entidad creada en metadata
+        # para que la UI pueda «germinar» (foco + glow) el nodo nuevo.
+        ps, svc, es, _ = _setup()
+        c = svc.create_candidate({
+            "title": "Eldrin", "candidate_type": "entidad",
+            "proposed_data": {"name": "Eldrin", "entity_type": "personaje"},
+        }).value
+        result = svc.accept_candidate(c.id)
+        assert not isinstance(result, Error)
+        created_id = ps.active_project.entities[0].id
+        assert c.metadata.get("created_entity_id") == created_id
+
+    def test_accept_relation_stamps_created_relation_id(self):
+        # SEM03: relaciones estampan created_relation_id (bloom de arista), no entity_id.
+        ps, svc, es, rs = _setup()
+        e1 = es.create_entity({"name": "A", "entity_type": "personaje"}).value
+        e2 = es.create_entity({"name": "B", "entity_type": "personaje"}).value
+        c = svc.create_candidate({
+            "title": "Link", "candidate_type": "relacion",
+            "proposed_data": {
+                "source_id": e1.id, "target_id": e2.id, "relation_type": "es_aliado_de",
+            },
+        }).value
+        svc.accept_candidate(c.id)
+        created_id = ps.active_project.relations[0].id
+        assert c.metadata.get("created_relation_id") == created_id
+        assert "created_entity_id" not in (c.metadata or {})
+
+    def test_accept_ring_template_stamps_created_ring_id(self):
+        # SEM03: anillos estampan created_ring_id (bloom de banda).
+        ps, svc, _, _ = _setup()
+        c = svc.create_candidate({
+            "title": "Anillo propuesto: Materia", "candidate_type": "sugerencia_ia",
+            "proposed_data": {"kind": "ring_template", "ring_name": "Materia", "order": 1},
+        }).value
+        svc.accept_candidate(c.id)
+        new_layer = ps.active_project.world_layers[-1]
+        assert c.metadata.get("created_ring_id") == new_layer.id
+
     def test_accept_relation_creates_real_relation(self):
         ps, svc, es, rs = _setup()
         e1 = es.create_entity({"name": "A", "entity_type": "personaje"}).value

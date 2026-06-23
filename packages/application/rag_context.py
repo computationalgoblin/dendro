@@ -180,6 +180,12 @@ class RAGContextBuilder:
                 )
             )
 
+        # Material de referencia (baskets en modo contexto) es consulta
+        # permanente: si existe, garantizamos que IMPORT_DOCUMENT entre en la
+        # recuperación aunque el plan no lo pidiera explícitamente.
+        if _project_has_context_basket(project) and CorpusItemKind.IMPORT_DOCUMENT not in plan.include_kinds:
+            plan.include_kinds.append(CorpusItemKind.IMPORT_DOCUMENT)
+
         options = IndexingOptions(
             include_pending_candidates=plan.include_pending_candidates,
             include_rejected_candidates=plan.include_rejected_candidates,
@@ -348,6 +354,18 @@ def _score_record(
 def _intent_type(intent: Any) -> str:
     value = getattr(intent, "intent_type", "unknown")
     return str(getattr(value, "value", value) or "unknown")
+
+
+def _project_has_context_basket(project: Any) -> bool:
+    """True si el proyecto tiene alguna cesta de importación en modo contexto."""
+    for basket in getattr(project, "import_baskets", []) or []:
+        mode = str(getattr(basket, "import_mode", "") or "").strip().lower()
+        if not mode:
+            meta = getattr(basket, "metadata", {}) or {}
+            mode = str(meta.get("import_mode", "") or "").strip().lower()
+        if mode == "contexto":
+            return True
+    return False
 
 
 def _include_kinds_for(

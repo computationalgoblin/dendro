@@ -31,11 +31,12 @@ def test_i02_txt_simple_extraction_preserves_text_and_chunk_metadata(tmp_path):
 
     assert is_ok(result)
     segments = unwrap(result)
-    assert len(segments) == 2
+    # I11: dos bloques cortos se fusionan en un chunk de tamaño objetivo.
+    assert len(segments) == 1
     assert "Primer bloque" in segments[0].raw_text
     assert "Linea narrativa completa." in segments[0].raw_text
-    assert "Segundo bloque" in segments[1].raw_text
-    assert [s.metadata["chunk_order"] for s in segments] == [1, 2]
+    assert "Segundo bloque" in segments[0].raw_text
+    assert [s.metadata["chunk_order"] for s in segments] == [1]
     assert all(s.id == s.metadata["chunk_id"] for s in segments)
     assert all(s.metadata["file_name"] == "notes.txt" for s in segments)
     assert all("page_start" in s.metadata for s in segments)

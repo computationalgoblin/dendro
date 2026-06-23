@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any
 
 from packages.domain.custom_types import CustomFieldValue
+from packages.domain.temporal_span import TemporalSpan
 
 # ═══════════════════════════════════════════════════════════════════════
 # Enums — §3.3, §3.4, §3.5
@@ -184,6 +185,12 @@ class NarrativeEntity:
     birth_year: int | None = None
     death_year: int | None = None
 
+    # --- Lapso temporal rico (BETA1-J01) ---
+    # life_span es la capa descriptiva (precisión, fecha-mundo, era, notas).
+    # birth_year/death_year son el ESPEJO ENTERO autoritativo de
+    # life_span.start_year/end_year — sincronizados vía set_life_span().
+    life_span: TemporalSpan | None = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -191,6 +198,26 @@ class NarrativeEntity:
     def touch(self) -> None:
         """Update ``updated_at`` to the current time."""
         self.updated_at = _now()
+
+    # ------------------------------------------------------------------
+    # Tiempo del mundo (BETA1-J01) — punto único de sincronización año↔span
+    # ------------------------------------------------------------------
+
+    def set_life_span(self, span: TemporalSpan) -> None:
+        """Fija el lapso rico y sincroniza el espejo entero birth/death."""
+        self.life_span = span
+        self.birth_year = span.start_year
+        self.death_year = span.end_year
+
+    def ensure_life_span(self) -> TemporalSpan:
+        """Devuelve el lapso, construyéndolo desde el espejo entero si falta."""
+        if self.life_span is None:
+            self.life_span = TemporalSpan.from_years(self.birth_year, self.death_year)
+        return self.life_span
+
+    def as_temporal_span(self) -> TemporalSpan:
+        """Accesor uniforme de lapso (hoja/rama/relación/hito)."""
+        return self.ensure_life_span()
 
     # ------------------------------------------------------------------
     # Serialisation (stdlib only — no dataclasses.asdict)
@@ -233,6 +260,7 @@ class NarrativeEntity:
             ],
             "birth_year": self.birth_year,
             "death_year": self.death_year,
+            "life_span": self.life_span.to_dict() if self.life_span is not None else None,
         }
 
     @classmethod
@@ -245,7 +273,9 @@ class NarrativeEntity:
             id=data.get("id") or str(uuid.uuid4()),
             name=data.get("name", ""),
             aliases=_parse_list(data.get("aliases")),
-            entity_type=_parse_enum(EntityType, data.get("entity_type"), EntityType.NOTA),
+            entity_type=_parse_enum(
+                EntityType, normalize_entity_type(data.get("entity_type")), EntityType.NOTA
+            ),
             brief_description=data.get("brief_description", ""),
             extended_description=data.get("extended_description", ""),
             canon_state=_parse_enum(CanonState, data.get("canon_state"), CanonState.BORRADOR),
@@ -279,6 +309,7 @@ class NarrativeEntity:
             ],
             birth_year=_parse_optional_year(data.get("birth_year")),
             death_year=_parse_optional_year(data.get("death_year")),
+            life_span=_parse_life_span(data.get("life_span")),
         )
 
 
@@ -336,6 +367,13 @@ def _parse_optional_year(value: Any) -> int | None:
         return None
 
 
+def _parse_life_span(value: Any) -> TemporalSpan | None:
+    """BETA1-J01: reconstruye el lapso si está presente; si no, ``None``."""
+    if isinstance(value, dict):
+        return TemporalSpan.from_dict(value)
+    return None
+
+
 def _parse_list(value: Any) -> list:
     """Coerce *value* to a ``list``, returning ``[]`` on failure."""
     if isinstance(value, list):
@@ -363,6 +401,54 @@ def _parse_enum(enum_cls: _EnumType, value: Any, default: Any) -> Any:
         except ValueError:
             pass
     return default
+
+
+# UX4 (C3): sinónimos frecuentes que el modelo IA usa fuera de la taxonomía
+# oficial. Se mapean a un EntityType válido para no degradar en silencio a NOTA.
+_ENTITY_TYPE_VALUES = frozenset(e.value for e in EntityType)
+_ENTITY_TYPE_SYNONYMS: dict[str, str] = {
+    "concepto": "regla_del_mundo",
+    "ley": "regla_del_mundo",
+    "regla": "regla_del_mundo",
+    "norma": "regla_del_mundo",
+    "lugar": "localizacion",
+    "ubicacion": "localizacion",
+    "ubicación": "localizacion",
+    "sitio": "localizacion",
+    "persona": "personaje",
+    "personaje_jugador": "personaje",
+    "organizacion": "institucion",
+    "organización": "institucion",
+    "orden": "institucion",
+    "gremio": "institucion",
+    "grupo": "faccion",
+    "deidad": "religion",
+    "dios": "religion",
+    "diosa": "religion",
+    "raza": "criatura",
+    "especie": "criatura",
+    "bestia": "criatura",
+    "animal": "criatura",
+    "magia": "sistema_magico",
+    "hechizo": "sistema_magico",
+    "lengua": "idioma",
+    "artefacto": "objeto",
+    "item": "objeto",
+}
+
+
+def normalize_entity_type(value: Any) -> Any:
+    """Mapea sinónimos comunes del modelo a un EntityType válido (UX4/C3).
+
+    Devuelve el valor tal cual si ya es válido o si es desconocido (en ese caso
+    lo gestiona ``_parse_enum``). Solo convierte sinónimos conocidos para evitar
+    el degradado silencioso a NOTA.
+    """
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key and key not in _ENTITY_TYPE_VALUES:
+            return _ENTITY_TYPE_SYNONYMS.get(key, value)
+    return value
 
 
 def _parse_datetime(value: Any) -> datetime:

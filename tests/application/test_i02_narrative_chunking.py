@@ -37,7 +37,11 @@ def test_i02_markdown_chunking_preserves_heading_hierarchy_lists_and_order(tmp_p
     assert [segment.start_offset for segment in segments] == sorted(segment.start_offset for segment in segments)
 
 
-def test_i02_plain_text_chunks_by_paragraph_not_character_count(tmp_path):
+def test_i02_plain_text_packs_by_target_size_and_splits_oversized(tmp_path):
+    # I11: el troceado agrupa por tamaño objetivo y parte los párrafos gigantes
+    # (> CHUNK_MAX_CHARS) por frontera, sin pérdida de texto.
+    from packages.infrastructure.text_extractor import CHUNK_MAX_CHARS
+
     path = tmp_path / "long.txt"
     long_paragraph = "A" * 3000
     path.write_text(
@@ -49,8 +53,12 @@ def test_i02_plain_text_chunks_by_paragraph_not_character_count(tmp_path):
 
     assert is_ok(result)
     segments = unwrap(result)
-    assert len(segments) == 2
-    assert long_paragraph in segments[0].raw_text
-    assert segments[0].metadata["chunk_order"] == 1
-    assert segments[1].metadata["chunk_order"] == 2
+    # El párrafo gigante se parte: más de un segmento, ninguno supera el tope.
+    assert len(segments) >= 2
+    assert all(len(s.raw_text) <= CHUNK_MAX_CHARS for s in segments)
+    # Sin pérdida: las 3000 'A' siguen estando (repartidas entre sub-chunks).
+    assert sum(s.raw_text.count("A") for s in segments) == 3000
+    # chunk_order secuencial e invariante id == chunk_id.
+    assert [s.metadata["chunk_order"] for s in segments] == list(range(1, len(segments) + 1))
+    assert all(s.id == s.metadata["chunk_id"] for s in segments)
 

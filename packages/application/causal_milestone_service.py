@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from packages.application.candidate_service import CandidateService
+from packages.application.temporal_dating import normalize_milestone_dating
 from packages.domain.candidate_issue import CandidateState
 from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneStatus
 from packages.domain.relation import NarrativeRelation, RelationType
@@ -61,21 +62,11 @@ class CausalMilestoneService:
             pass
 
     def _apply_default_year(self, hito: CausalMilestone) -> None:
-        """BETA1-G02: no-atemporalidad — hito sin año recibe el present_year.
-
-        El default vive en el servicio (una sola fuente); nunca bloquea.
+        """BETA1-J04: ya NO se asume present_year. Un hito sin año queda 'por
+        datar' (su ``temporality`` se marca pendiente); nunca un presente falso.
+        La obligatoriedad es del write path de producto (``enforce_dating``).
         """
-        if hito.year is not None:
-            return
-        proj = self._proj()
-        if isinstance(proj, Error):
-            hito.year = 0
-            return
-        chronology = getattr(proj.value, "project_chronology", None)
-        try:
-            hito.year = int(getattr(chronology, "present_year", 0) or 0)
-        except (TypeError, ValueError):
-            hito.year = 0
+        normalize_milestone_dating(hito)
 
     def create_hito_candidate(
         self,
@@ -95,13 +86,20 @@ class CausalMilestoneService:
             justification=hito.rationale,
         )
 
-    def create_hito_manual(self, data: dict[str, Any]) -> Result[CausalMilestone, str]:
+    def create_hito_manual(
+        self, data: dict[str, Any], *, enforce_dating: bool = False
+    ) -> Result[CausalMilestone, str]:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
         hito = CausalMilestone.from_dict(data)
         hito.status = CausalMilestoneStatus.CANON
         self._apply_default_year(hito)
+        if enforce_dating and not hito.as_temporal_span().is_dated():
+            return Error(
+                "El hito requiere un año antes de guardar "
+                "(un año concreto o una precisión explícita)."
+            )
         now = _now_iso()
         if not hito.created_at:
             hito.created_at = now

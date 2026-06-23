@@ -23,7 +23,9 @@ from packages.infrastructure.text_extractor import (
 
 
 class TestPlainTextExtractor:
-    def test_extract_segments_by_paragraphs(self):
+    def test_packs_short_paragraphs_into_target_sized_chunk(self):
+        # I11: párrafos cortos adyacentes se fusionan en un chunk de tamaño
+        # objetivo (mejor unidad de recuperación), sin pérdida de texto.
         extractor = PlainTextExtractor()
         content = (
             "Section One\n"
@@ -44,14 +46,18 @@ class TestPlainTextExtractor:
             result = extractor.extract(path, "src_test")
             assert is_ok(result)
             segments = unwrap(result)
-            assert len(segments) == 3
-            assert segments[0].section == "Section One"
-            assert segments[0].confidence == 1.0
-            assert segments[0].source_id == "src_test"
-            assert segments[0].metadata["format"] == "text_plain"
-            assert "first section" in segments[0].raw_text
-            assert segments[1].section == "Section Two"
-            assert segments[2].section == "Section Three"
+            # Los tres párrafos cortos caben bajo el objetivo → un solo chunk.
+            assert len(segments) == 1
+            merged = segments[0]
+            assert merged.confidence == 1.0
+            assert merged.source_id == "src_test"
+            assert merged.metadata["format"] == "text_plain"
+            assert merged.metadata["chunking_version"] == 2
+            assert merged.id == merged.metadata["chunk_id"]
+            # Sin pérdida: el contenido de las tres secciones está presente.
+            assert "first section" in merged.raw_text
+            assert "section two" in merged.raw_text
+            assert "Only one line here." in merged.raw_text
         finally:
             path.unlink(missing_ok=True)
 

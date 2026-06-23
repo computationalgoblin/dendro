@@ -10,13 +10,24 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QLineF,
+    QPointF,
+    QRectF,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QRadialGradient, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QStyle,
     QStyleOptionGraphicsItem,
+    QStyleOptionSlider,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -40,6 +51,9 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.canvas_atmosphere import CanvasAtmosphere
+from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras, effective_present_year
+from hosts.DesktopHostPySide.widgets.gpu_viewport import install_gpu_viewport
+from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
     EmptyState,
     enum_human,
@@ -86,49 +100,65 @@ def _b44trace(message: str):
     print(f"B44TRACE {message}", flush=True)
 
 
+# BETA1-UX04: paleta de tipos BOTÁNICA y CÁLIDA — vive como halo sutil de la
+# hoja (no como relleno). Antes eran azules/lavandas/mentas frías (#7C9BFF…)
+# que rompían el pergamino+oro; ahora son tonos de tierra, savia y arcilla que
+# armonizan con la identidad. Distintos entre sí, todos cálidos.
+# BETA1-UX06: movimiento de cámara "expresivo pero elegante". Las transiciones
+# explícitas (encajar, centrar, enfocar) se deslizan en vez de saltar. El gate
+# permite desactivarlo (tests/capturas) para llegar al encuadre final al
+# instante (las animaciones no terminan con processEvents sin tiempo real).
+MOTION_ENABLED = True
+_CAM_MS = 360  # ~MOTION_SLOW
+
 _NODE_COLORS = {
-    "personaje": "#7C9BFF",
-    "lugar": "#7EC8A5",
-    "organizacion": "#DCA35F",
-    "faccion": "#D9908F",
-    "objeto": "#C9A5FF",
-    "evento": "#E0C46C",
-    "concepto": "#9BB4C7",
-    "contenedor": "#D0D8E0",
+    "personaje": "#C07B53",    # terracota — calidez humana
+    "lugar": "#7E9568",        # salvia — tierra y lugar
+    "organizacion": "#B28A3C",  # oro-oliva — institución
+    "faccion": "#A65C54",      # granate-arcilla — conflicto
+    "objeto": "#937083",       # ciruela apagada — reliquia
+    "evento": "#C8A24C",       # miel — momento
+    "concepto": "#8E8A6A",     # oliva-piedra — idea
+    "contenedor": "#A89878",   # madera clara — rama
+    "nota": "#9A8E72",         # piedra cálida — nota
 }
 
+# BETA1-UX05: colores de relación en PALETA CÁLIDA (antes azules/púrpuras
+# fríos que rompían el pergamino). Familias por significado: vínculo (salvia),
+# conflicto (granate), contención/lugar (oliva), jerarquía (oro-oliva),
+# afecto/familia (terracota/rosa), causalidad (ciruela apagada).
 _EDGE_COLORS = {
-    "es_aliado_de": "#78B891",
-    "es_amigo_de": "#78B891",
-    "es_enemigo_de": "#D46A6A",
-    "es_rival_de": "#D46A6A",
-    "esta_en_conflicto_con": "#D46A6A",
-    "traiciono": "#D46A6A",
-    "pertenece_a": "#7C9BFF",
-    "contiene": "#7EC8A5",
-    "esta_ubicado_en": "#7EC8A5",
-    "esta_en": "#7EC8A5",
-    "esta_relacionado_con": "#A4AEC0",
-    "es_familiar_de": "#C9A5FF",
-    "ama_a": "#D9908F",
-    "es_mentor_de": "#7C9BFF",
-    "depende_de": "#DCA35F",
-    "busca": "#E0C46C",
-    "protege": "#78B891",
-    "oculta": "#9BB4C7",
-    "sospecha": "#DCA35F",
-    "gobierna": "#DCA35F",
-    "sirve_a": "#7EC8A5",
-    "conoce": "#9BB4C7",
-    "controla": "#DCA35F",
-    "posee": "#C9A5FF",
-    "simboliza": "#9BB4C7",
-    "deriva_de": "#8B5CF6",
-    "condiciona": "#7C3AED",
-    "explica": "#6D28D9",
-    "contradice": "#D46A6A",
-    "produce_consecuencia_en": "#A855F7",
-    "faccion": "#D9908F",
+    "es_aliado_de": "#7E9568",
+    "es_amigo_de": "#7E9568",
+    "protege": "#7E9568",
+    "es_enemigo_de": "#A65C54",
+    "es_rival_de": "#A65C54",
+    "esta_en_conflicto_con": "#A65C54",
+    "traiciono": "#A65C54",
+    "contradice": "#A65C54",
+    "pertenece_a": "#B28A3C",
+    "es_mentor_de": "#B28A3C",
+    "depende_de": "#B28A3C",
+    "sospecha": "#B28A3C",
+    "gobierna": "#B28A3C",
+    "controla": "#B28A3C",
+    "contiene": "#94A06F",
+    "esta_ubicado_en": "#94A06F",
+    "esta_en": "#94A06F",
+    "sirve_a": "#94A06F",
+    "es_familiar_de": "#C07B53",
+    "ama_a": "#BD7E73",
+    "posee": "#C07B53",
+    "busca": "#C8A24C",
+    "oculta": "#8E8A6A",
+    "conoce": "#8E8A6A",
+    "simboliza": "#8E8A6A",
+    "esta_relacionado_con": "#9A8E72",
+    "deriva_de": "#8A6B7C",
+    "condiciona": "#8A6B7C",
+    "explica": "#8A6B7C",
+    "produce_consecuencia_en": "#8A6B7C",
+    "faccion": "#A65C54",
 }
 
 _STATUS_COLORS = {
@@ -386,6 +416,50 @@ def _fit_text(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
 
 
+# Semillas (SEM02): margen extra del boundingRect para que el glow de germinación
+# se repinte sin dejar artefactos, y duración de la animación de bloom.
+_BLOOM_MARGIN = 30.0
+
+
+def _paint_bloom_rings(
+    painter: QPainter, cx: float, cy: float, base_r: float, phase: float
+) -> None:
+    """Anillos dorados que se expanden y se desvanecen: una semilla germinando."""
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for i in range(3):
+        t = phase - i * 0.16
+        if t <= 0.0 or t >= 1.0:
+            continue
+        rr = base_r + 4.0 + 26.0 * t
+        glow = QColor(GOLD)
+        glow.setAlpha(int(200 * (1.0 - t)))
+        painter.setPen(QPen(glow, 3.5 * (1.0 - t) + 1.0))
+        painter.drawEllipse(QPointF(cx, cy), rr, rr)
+
+
+# SEM · Acreción cósmica: la "semilla" germina como una ACRECIÓN — motas de
+# polvo orbitando que convergen y condensan en un núcleo luminoso. Ambiental
+# (sin etapas legibles tipo barra de progreso): todo se interpola de forma
+# continua sobre _phase (0..1) y el latido. No hay metáfora de planta.
+
+# Suavizado de la fase mostrada hacia el objetivo del job (lerp por frame del
+# timer de semilla a 40 ms): el avance entra de forma gradual, sin saltos.
+_SEED_PHASE_LERP = 0.15
+
+# Curva de easing (EASING_STD = OutCubic) para el crecimiento del núcleo.
+_GERM_EASE = QEasingCurve(QEasingCurve.Type.OutCubic)
+
+# Nº de motas de polvo que orbitan y caen hacia el núcleo al condensarse.
+_SEED_MOTES = 7
+
+# Velocidad tangencial (px/paso, ~60 Hz) de la semilla viva orbitando su corona.
+# ~½ de la inicial: deriva pausada. La irregularidad (deriva del eje) la añade
+# el motor vía Body.orbit_drift / orbit_drift_rate.
+_SEED_ORBIT_SPEED = 1.5
+_SEED_ORBIT_DRIFT = 16.0       # radio (px) de migración del centro de la órbita
+_SEED_ORBIT_DRIFT_RATE = 0.011  # rad/paso: el eje migra lento → no se repite
+
+
 class GraphNodeItem(QGraphicsEllipseItem):
     """Visual node item; stores full entity ID internally, never shows it.
 
@@ -398,6 +472,8 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.node = node
         self.radius = radius
         self._coherence_selected = False
+        self._hovered = False  # BETA1-UX05: feedback de hover
+        self._bloom_phase = 0.0  # SEM02: fase de germinación (0..1), 0 = inactiva
         self.setPos(x, y)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -410,12 +486,12 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
 
-        color = QColor(_NODE_COLORS.get(node.kind.lower(), "#8EA4C8"))
+        color = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
         self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0)
         if node.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 4.0)
-        self._selected_pen = QPen(QColor("#5B8DEF"), 5.0)
+        self._selected_pen = QPen(QColor("#8B7A36"), 5.0)  # oro (vestigial; selección real = halo interno)
         # BETA1-F05: hojas BLANCAS — el color del tipo vive como halo sutil
         # exterior (ver paint()), no como relleno.
         self._halo_color = QColor(color)
@@ -462,6 +538,31 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self._coherence_selected = bool(enabled)
         self.update()
 
+    def set_bloom_phase(self, phase: float):
+        # SEM02: avance de la animación de germinación; el canvas la pulsa.
+        phase = float(phase)
+        if (0.0 < phase < 1.0) != (0.0 < self._bloom_phase < 1.0):
+            self.prepareGeometryChange()  # el boundingRect cambia al (des)activarse
+        self._bloom_phase = phase
+        self.update()
+
+    def boundingRect(self):  # noqa: N802 (Qt signature)
+        # SEM02: ampliar solo durante el glow para cubrirlo sin artefactos.
+        base = super().boundingRect()
+        if 0.0 < self._bloom_phase < 1.0:
+            return base.adjusted(-_BLOOM_MARGIN, -_BLOOM_MARGIN, _BLOOM_MARGIN, _BLOOM_MARGIN)
+        return base
+
+    def hoverEnterEvent(self, event):  # noqa: N802 (Qt signature)
+        self._hovered = True
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):  # noqa: N802 (Qt signature)
+        self._hovered = False
+        self.update()
+        super().hoverLeaveEvent(event)
+
     def paint(self, painter: QPainter, option, widget=None):
         # BETA1-F05: pintura propia — SIN marquee negro de Qt (causa de las
         # "pestañas negras"), SIN contorno marcado, halo interno al
@@ -490,8 +591,18 @@ class GraphNodeItem(QGraphicsEllipseItem):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#EBCB8B"), 3.0))
             painter.drawPath(ellipse)
+        # BETA1-UX05: hover — aro de oro suave que invita a interactuar (no se
+        # pinta si ya está seleccionada, donde manda el halo interno).
+        if getattr(self, "_hovered", False) and not self._coherence_selected:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            hov = QColor("#BBAA66")
+            hov.setAlpha(150)
+            painter.setPen(QPen(hov, 2.2))
+            painter.drawPath(ellipse)
         if self._coherence_selected:
             _paint_inner_halo(painter, ellipse)
+        if 0.0 < self._bloom_phase < 1.0:
+            _paint_bloom_rings(painter, 0.0, 0.0, self.radius, self._bloom_phase)
 
     def itemChange(self, change, value):
         # BETA1-B03: keep relations attached while the node moves (own move
@@ -529,6 +640,7 @@ class GraphTreeItem(QGraphicsRectItem):
         self._width = width
         self._height = height
         self._coherence_selected = False
+        self._bloom_phase = 0.0  # SEM02: fase de germinación (0..1), 0 = inactiva
         self._collapsed = False
         self._expanded_rect: QRectF | None = None
         self.setPos(x - width / 2, y - height / 2)
@@ -557,7 +669,7 @@ class GraphTreeItem(QGraphicsRectItem):
         if node.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 3.5)
-        self._selected_pen = QPen(QColor("#5B8DEF"), 4.0)
+        self._selected_pen = QPen(QColor("#8B7A36"), 4.0)  # oro (vestigial; selección real = halo interno)
 
         # BETA1-F05 (estética): la rama no tiene color propio — ACLARA el
         # espacio que ocupa (velo blanco translúcido) con un trazo suave.
@@ -970,6 +1082,21 @@ class GraphTreeItem(QGraphicsRectItem):
         self._coherence_selected = bool(enabled)
         self.update()
 
+    def set_bloom_phase(self, phase: float):
+        # SEM02: avance de la animación de germinación; el canvas la pulsa.
+        phase = float(phase)
+        if (0.0 < phase < 1.0) != (0.0 < self._bloom_phase < 1.0):
+            self.prepareGeometryChange()  # el boundingRect cambia al (des)activarse
+        self._bloom_phase = phase
+        self.update()
+
+    def boundingRect(self):  # noqa: N802 (Qt signature)
+        # SEM02: ampliar solo durante el glow para cubrirlo sin artefactos.
+        base = super().boundingRect()
+        if 0.0 < self._bloom_phase < 1.0:
+            return base.adjusted(-_BLOOM_MARGIN, -_BLOOM_MARGIN, _BLOOM_MARGIN, _BLOOM_MARGIN)
+        return base
+
     def mouseDoubleClickEvent(self, event):
         local_pos = event.pos()
         header_bottom = self.rect().top() + _CONTAINER_HEADER_HEIGHT
@@ -1023,6 +1150,9 @@ class GraphTreeItem(QGraphicsRectItem):
             painter.drawPath(capsule)
         if self._coherence_selected:
             _paint_inner_halo(painter, capsule)
+        if 0.0 < self._bloom_phase < 1.0:
+            center = rect.center()
+            _paint_bloom_rings(painter, center.x(), center.y(), radius, self._bloom_phase)
 
     def itemChange(self, change, value):
         # Children are Qt children (parentItem=self) so they move automatically.
@@ -1061,15 +1191,17 @@ class GraphEdgeItem(QGraphicsPathItem):
                 registry.append(self)
         self._is_bidirectional = edge.direction == "bidireccional"
         self._coherence_selected = False
+        self._bloom_phase = 0.0  # SEM03: germinación de relación (glow en el punto medio)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         # BETA1-F05: zona de click generosa — el shape por defecto era el
         # grosor del trazo (~2px), por eso las relaciones "no se podían
         # seleccionar". Ver shape() más abajo.
         self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)  # BETA1-UX05: invita a clicar
         self.setZValue(100)  # Always above containers and nodes
 
         # Resolve colour: stored colour > type colour > default
-        base_color = edge.color or _EDGE_COLORS.get(edge.kind.lower(), "#A4AEC0")
+        base_color = edge.color or _EDGE_COLORS.get(edge.kind.lower(), "#9A8E72")
         color = QColor("#DCA35F" if edge.proposed else base_color)
 
         self._normal_pen = QPen(color, 2.6 if edge.proposed else 2.2)
@@ -1112,11 +1244,14 @@ class GraphEdgeItem(QGraphicsPathItem):
 
         self.update_path()
 
-    @staticmethod
-    def shape(self) -> QPainterPath:  # noqa: D102
-        # BETA1-F05: 14px de zona clickable alrededor de la línea
+    def shape(self) -> QPainterPath:  # noqa: N802 (Qt signature)
+        # BETA1-UX05: zona clickable generosa (~16px) alrededor de la línea.
+        # ANTES estaba decorada @staticmethod, lo que ROMPÍA el override virtual
+        # de Qt: el hit-test caía al shape base (grosor del trazo ~2px) y las
+        # relaciones eran casi imposibles de clicar. Como método de instancia,
+        # el ensanchado sí se aplica.
         stroker = QPainterPathStroker()
-        stroker.setWidth(14.0)
+        stroker.setWidth(16.0)
         return stroker.createStroke(self.path())
 
     @staticmethod
@@ -1207,6 +1342,44 @@ class GraphEdgeItem(QGraphicsPathItem):
         self._coherence_selected = bool(enabled)
         self.setPen(self._selected_pen if enabled else self._normal_pen)
 
+    def set_bloom_phase(self, phase: float):
+        # SEM03: germinación de la arista; el canvas la pulsa.
+        phase = float(phase)
+        if (0.0 < phase < 1.0) != (0.0 < self._bloom_phase < 1.0):
+            self.prepareGeometryChange()
+        self._bloom_phase = phase
+        self.update()
+
+    def boundingRect(self):  # noqa: N802 (Qt signature)
+        base = super().boundingRect()
+        if 0.0 < self._bloom_phase < 1.0:
+            m = 40.0  # cubre el glow en el punto medio de la arista
+            return base.adjusted(-m, -m, m, m)
+        return base
+
+    def paint(self, painter: QPainter, option, widget=None):
+        super().paint(painter, option, widget)
+        if 0.0 < self._bloom_phase < 1.0:
+            path = self.path()
+            if not path.isEmpty():
+                mid = path.pointAtPercent(0.5)
+                _paint_bloom_rings(painter, mid.x(), mid.y(), 8.0, self._bloom_phase)
+
+    def hoverEnterEvent(self, event):  # noqa: N802 (Qt signature)
+        # BETA1-UX05: realce sutil al pasar el ratón (no pisa la selección).
+        if not self._coherence_selected:
+            hover_pen = QPen(self._color.lighter(122), self._normal_pen.widthF() + 1.2)
+            hover_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            if self._normal_pen.style() != Qt.PenStyle.SolidLine:
+                hover_pen.setStyle(self._normal_pen.style())
+            self.setPen(hover_pen)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):  # noqa: N802 (Qt signature)
+        if not self._coherence_selected:
+            self.setPen(self._normal_pen)
+        super().hoverLeaveEvent(event)
+
     def mousePressEvent(self, event):
         self.setPen(self._selected_pen)
         super().mousePressEvent(event)
@@ -1223,6 +1396,7 @@ class GraphRingItem(QGraphicsPathItem):
         super().__init__(path)
         self.ring = ring
         self._base_pen: QPen | None = None
+        self._bloom_phase = 0.0  # SEM03: germinación de anillo (pulso dorado en la banda)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1236,6 +1410,28 @@ class GraphRingItem(QGraphicsPathItem):
         clean = QStyleOptionGraphicsItem(option)
         clean.state &= ~QStyle.StateFlag.State_Selected
         super().paint(painter, clean, widget)
+        if 0.0 < self._bloom_phase < 1.0:
+            t = self._bloom_phase
+            glow = QColor(GOLD)
+            glow.setAlpha(int(170 * (1.0 - abs(2.0 * t - 1.0))))  # entra y sale
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(glow, 2.0 + 7.0 * (1.0 - t)))
+            painter.drawPath(self.path())
+
+    def set_bloom_phase(self, phase: float):
+        # SEM03: germinación del anillo; el canvas la pulsa.
+        phase = float(phase)
+        if (0.0 < phase < 1.0) != (0.0 < self._bloom_phase < 1.0):
+            self.prepareGeometryChange()
+        self._bloom_phase = phase
+        self.update()
+
+    def boundingRect(self):  # noqa: N802 (Qt signature)
+        base = super().boundingRect()
+        if 0.0 < self._bloom_phase < 1.0:
+            m = 12.0  # cubre el trazo dorado más ancho durante el glow
+            return base.adjusted(-m, -m, m, m)
+        return base
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
@@ -1283,6 +1479,174 @@ class GraphRingItem(QGraphicsPathItem):
         event.accept()
 
 
+class GraphSeedItem(QGraphicsEllipseItem):
+    """SEM04: semilla germinante transitoria dibujada EN el grafo.
+
+    No es canon y no entra en la física (no se registra en ``_nodes``/``_trees``).
+    Modos: ``germinating`` (job en curso, crece con el progreso + latido),
+    ``candidate`` (en reposo, clickable → abre revisión), ``blooming``/``withering``
+    (animación de salida). El gestor del canvas la pulsa cada 40 ms.
+    """
+
+    _R = 15.0
+
+    def __init__(self, *, candidate_id: str = "", job_id: str = ""):
+        super().__init__(-self._R, -self._R, self._R * 2, self._R * 2)
+        self.candidate_id = candidate_id
+        self.job_id = job_id
+        self.mode = "germinating" if job_id else "candidate"
+        self._phase = 0.0          # germinación mostrada 0..1 (suavizada)
+        self._target_phase = 0.0   # objetivo según el progreso real del job
+        self._pulse = 0.0   # latido continuo
+        self._anim = 0.0    # avance de bloom/wither 0..1
+        self.setZValue(1500)
+        self.setBrush(QBrush(QColor(255, 255, 253, 235)))
+        self.setPen(QPen(QColor(GOLD), 2.0))
+        if candidate_id:
+            self.setAcceptHoverEvents(True)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Semilla pendiente — pulsa para revisar")
+
+    def set_phase(self, phase: float):
+        # Fija el objetivo; la fase mostrada lo persigue suavemente en tick().
+        self._target_phase = max(0.0, min(1.0, float(phase)))
+        self.update()
+
+    def restore_phase(self, phase: float):
+        # Tras un rebuild: restaura fase mostrada y objetivo sin re-animar.
+        self._phase = self._target_phase = max(0.0, min(1.0, float(phase)))
+        self.update()
+
+    def set_mode(self, mode: str):
+        self.mode = mode
+        self.update()
+
+    def tick(self, *, pulse: float, anim_step: float = 0.0) -> bool:
+        """Avanza la animación. True si terminó (procede retirarla)."""
+        self._pulse = pulse
+        if self.mode in ("blooming", "withering"):
+            was = 0.0 < self._anim < 1.0
+            self._anim = min(1.0, self._anim + anim_step)
+            if not was:
+                self.prepareGeometryChange()
+            self.update()
+            return self._anim >= 1.0
+        if self.mode == "germinating":
+            # Persigue suavemente el objetivo del job (sin pasarse): germinación
+            # paulatina aunque el progreso del job dé saltos.
+            diff = self._target_phase - self._phase
+            if abs(diff) > 1e-4:
+                self._phase += diff * _SEED_PHASE_LERP
+                if abs(self._target_phase - self._phase) < 1e-3:
+                    self._phase = self._target_phase
+        self.update()
+        return False
+
+    def boundingRect(self):  # noqa: N802 (Qt signature)
+        base = super().boundingRect()
+        if self.mode in ("germinating", "blooming"):
+            m = _BLOOM_MARGIN
+            return base.adjusted(-m, -m, m, m)
+        return base
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        latido = 0.5 + 0.5 * math.sin(self._pulse)
+        if self.mode == "withering":
+            t = self._anim
+            r = self._R * (1.0 - 0.6 * t)
+            col = QColor("#9A9486")
+            col.setAlpha(int(200 * (1.0 - t)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(col))
+            painter.drawEllipse(QPointF(0.0, 0.0), r, r)
+            return
+        if self.mode == "germinating":
+            # SEM: acreción cósmica ambiental (polvo → núcleo), no una planta.
+            self._paint_accretion(painter, latido)
+            return
+        # candidate / blooming: círculo pleno.
+        r = self._R
+        painter.setBrush(QBrush(QColor(255, 255, 253, 235)))
+        painter.setPen(QPen(QColor(GOLD), 2.0))
+        painter.drawEllipse(QPointF(0.0, 0.0), r, r)
+        # semilla interior
+        seed = QColor(GOLD)
+        seed.setAlpha(220)
+        painter.setBrush(QBrush(seed))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(0.0, 0.0), r * 0.3, r * 0.3)
+        # salida floreciente o latido continuo
+        if self.mode == "blooming":
+            _paint_bloom_rings(painter, 0.0, 0.0, r, self._anim)
+        else:
+            halo = QColor(GOLD)
+            halo.setAlpha(int(30 + 50 * latido))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(halo, 2.0 + 2.0 * latido))
+            rr = r + 5.0 + 4.0 * latido
+            painter.drawEllipse(QPointF(0.0, 0.0), rr, rr)
+
+    def _paint_accretion(self, painter: QPainter, latido: float) -> None:
+        """SEM: acreción cósmica — motas de polvo que orbitan y caen hacia un
+        núcleo que se condensa y enciende. Ambiental y CONTINUO (sin etapas
+        legibles): todo se interpola sobre ``_phase`` (0..1) y el latido. A
+        pincel (sin QGraphicsEffect [[qt-avoid-graphics-effects-on-dynamic-widgets]])."""
+        ease = _GERM_EASE.valueForProgress
+        p = ease(self._phase)
+        spin = self._pulse * 0.6  # giro lento del disco de polvo
+
+        # Halo difuso que respira y gana cuerpo conforme se condensa.
+        halo = QColor(GOLD)
+        halo.setAlpha(int(18 + 40 * p + 18 * latido))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(halo, 1.0 + 2.5 * p + 1.0 * latido))
+        halo_r = self._R * (0.7 + 0.9 * p) + 3.0 * latido
+        painter.drawEllipse(QPointF(0.0, 0.0), halo_r, halo_r)
+
+        # Disco de acreción: motas que orbitan y caen hacia el núcleo (su radio
+        # de órbita ↓ con p) y se desvanecen al fundirse. Reparto irregular por
+        # ángulo dorado y caída a distinto ritmo → textura orgánica.
+        painter.setPen(Qt.PenStyle.NoPen)
+        far = self._R * 1.7
+        for i in range(_SEED_MOTES):
+            ga = i * 2.39996
+            ang = spin + ga
+            fall = min(1.0, p * (0.7 + 0.5 * ((i % 3) / 2.0)))
+            wob = 1.0 + 0.12 * math.sin(self._pulse * 1.7 + ga)
+            dist = far * (1.0 - 0.82 * fall) * wob
+            mote = QColor(GOLD)
+            mote.setAlpha(int(180 * (1.0 - 0.6 * fall)))
+            painter.setBrush(QBrush(mote))
+            mr = 1.6 + 1.4 * (1.0 - fall)
+            painter.drawEllipse(QPointF(math.cos(ang) * dist, math.sin(ang) * dist), mr, mr)
+
+        # Núcleo luminoso que se condensa: crece y brilla con el progreso.
+        core_r = self._R * (0.26 + 0.5 * p)
+        glow = QColor(255, 252, 240, int(120 + 110 * p))
+        gr = core_r + 2.0 + 1.5 * latido
+        painter.setBrush(QBrush(glow))
+        painter.drawEllipse(QPointF(0.0, 0.0), gr, gr)
+        core = QColor(GOLD)
+        core.setAlpha(int(150 + 90 * p))
+        painter.setBrush(QBrush(core))
+        painter.drawEllipse(QPointF(0.0, 0.0), core_r, core_r)
+        # chispa central que palpita más fuerte al acercarse a estar lista.
+        spark = QColor(255, 255, 250, int(120 + 120 * latido * p))
+        painter.setBrush(QBrush(spark))
+        painter.drawEllipse(QPointF(0.0, 0.0), core_r * 0.4, core_r * 0.4)
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt signature)
+        if self.candidate_id and event.button() == Qt.MouseButton.LeftButton:
+            for view in (self.scene().views() if self.scene() else []):
+                if isinstance(view, GraphCanvasView):
+                    view._seed_clicked(self.candidate_id)
+                    break
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 _STRUCTURAL_RELATIONS = {"contiene", "pertenece_a"}
 _CAUSAL_RELATIONS = {"deriva_de", "condiciona", "explica", "contradice", "produce_consecuencia_en"}
 _COHERENCE_RELATIONS = {"incidencia", "contradiccion", "hueco", "reparacion"}
@@ -1309,6 +1673,7 @@ class GraphCanvasView(QGraphicsView):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)  # ring_id, display_name
     ringFocused = Signal(str, str)  # ring_id, display_name
+    seedClicked = Signal(str)  # SEM04: candidate_id de una semilla germinante pulsada
     # BETA1-B01: context-menu intents. The canvas only emits intent; the
     # CreationWorkspace wires them to its existing creation/deletion routes
     # so no persistence logic lives here.
@@ -1334,19 +1699,28 @@ class GraphCanvasView(QGraphicsView):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        self.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        # BETA1-UX2A: viewport GPU (OpenGL) para render fluido; no-op/fallback a
+        # raster bajo offscreen o sin GL. Antes del setScene para que el viewport
+        # ya esté listo cuando se pinte.
+        install_gpu_viewport(self)
         # BETA1-G07: lienzo con VIÑETA radial cálida centrada en el origen — el
         # "corazón" del mundo (centro de los anillos) recibe una luz suave que
         # se hunde hacia los bordes. Da profundidad e inmersión sin distraer;
         # las hojas blancas y los velos de rama siguen destacando.
         vignette = QRadialGradient(QPointF(0.0, 0.0), 1500.0)
-        vignette.setColorAt(0.0, QColor("#EFE8D7"))
-        vignette.setColorAt(0.55, QColor("#E6DFCD"))
-        vignette.setColorAt(1.0, QColor("#DBD2BB"))
+        vignette.setColorAt(0.0, QColor("#F3EDDD"))   # corazón del mundo: luz cálida
+        vignette.setColorAt(0.50, QColor("#E6DFCD"))
+        vignette.setColorAt(0.82, QColor("#DBD1B9"))
+        vignette.setColorAt(1.0, QColor("#CFC4A8"))   # los bordes se hunden
         self.setBackgroundBrush(QBrush(vignette))
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
@@ -1421,8 +1795,34 @@ class GraphCanvasView(QGraphicsView):
         # Motores locales intrarrama: tree_id → engine en coords del padre
         self._physics_local: dict[str, PhysicsEngine] = {}
         self._physics_timer = QTimer(self)
-        self._physics_timer.setInterval(33)  # ~30 Hz
+        self._physics_timer.setInterval(16)  # BETA1-UX2A: ~60 Hz (antes 33 ≈ 30 Hz)
         self._physics_timer.timeout.connect(self._physics_tick)
+        # SEM02: animación de germinación (bloom). Timer propio, independiente del
+        # físico (que se para por energía). 40 ms ≈ 25 fps.
+        self._bloom_items: dict[str, float] = {}  # entity_id -> fase 0..1
+        self._bloom_timer = QTimer(self)
+        self._bloom_timer.setInterval(40)  # glow breve; su FPS es imperceptible
+        self._bloom_timer.timeout.connect(self._bloom_tick)
+        # UX5: germinación CONTINUA sobre nodos existentes mientras corre un job de
+        # edición (latido que no se autoapaga, a diferencia del bloom). Las entidades
+        # seleccionadas «germinan» hasta que el job termina; al aceptar florecen.
+        self._germinating: set[str] = set()
+        self._germ_pulse = 0.0
+        self._germ_timer = QTimer(self)
+        self._germ_timer.setInterval(40)
+        self._germ_timer.timeout.connect(self._germ_tick)
+        # SEM04: semillas germinantes EN el grafo. Data-driven (sobreviven a
+        # clear_graph re-renderizándose). job_id -> {ring_id, angle, radius,
+        # anchor, phase}; cid -> {pos, mode}. _seed_items: clave
+        # 'job:<id>'/'cand:<cid>' -> item vivo. Las semillas-job vivas orbitan
+        # su corona como cuerpos del motor (ver _rebuild_physics_world).
+        self._job_seeds: dict[str, dict] = {}
+        self._candidate_seed_data: dict[str, dict] = {}
+        self._seed_items: dict[str, GraphSeedItem] = {}
+        self._seed_pulse = 0.0
+        self._seed_timer = QTimer(self)
+        self._seed_timer.setInterval(40)
+        self._seed_timer.timeout.connect(self._seed_tick)
         # BETA1-G08: atmósfera de fondo (hojas + brisa) MUY sutil, detrás de
         # todo. Se pinta en drawBackground (viewport coords) y se pausa cuando
         # el lienzo no está visible.
@@ -1520,6 +1920,20 @@ class GraphCanvasView(QGraphicsView):
             check = item
             while check is not None:
                 if isinstance(check, GraphEdgeItem):
+                    return check
+                check = check.parentItem()
+        return None
+
+    def _item_seed_at(self, view_pos) -> "GraphSeedItem | None":
+        """SEM04-fix: semilla germinante (con candidate_id) bajo *view_pos*.
+
+        El view resuelve los clics por hit-testing propio; sin esto, el clic en
+        una semilla nunca llegaba a su mousePressEvent ni abría la revisión.
+        """
+        for item in self.items(view_pos.toPoint()):
+            check = item
+            while check is not None:
+                if isinstance(check, GraphSeedItem) and getattr(check, "candidate_id", ""):
                     return check
                 check = check.parentItem()
         return None
@@ -1698,6 +2112,18 @@ class GraphCanvasView(QGraphicsView):
                 band_inner=band_inner,
                 band_outer=band_outer,
             ))
+        # SEM04: semillas-job vivas como cuerpos orbitadores (solo concéntrico).
+        # Mantienen velocidad tangencial (orbit_speed) → orbitan su corona y su
+        # repulsión empuja a los vecinos (grafo vivo) sin asentarse.
+        # SEM04: TODAS las semillas vivas (la germinante del job y las
+        # semillas-candidato en revisión) son cuerpos orbitadores idénticos: el
+        # candidato hereda el comportamiento de la semilla que lo engendró, no
+        # queda estático. Solo en concéntrico.
+        if concentric:
+            for body_id, ring_id, item in self._live_seed_bodies():
+                body = self._build_seed_body(body_id, ring_id, item, ring_bands)
+                if body is not None:
+                    bodies.append(body)
         springs: list[Spring] = []
         ring_targets = {rid: (b[0] + b[1]) / 2.0 for rid, b in ring_bands.items()}
         for edge_item in self._edges:
@@ -1838,12 +2264,20 @@ class GraphCanvasView(QGraphicsView):
             dy = body.y - current.y()
             if abs(dx) > 0.01 or abs(dy) > 0.01:
                 item.moveBy(dx, dy)
+        # SEM04: sincronizar TODAS las semillas vivas (job + candidatos) con su
+        # cuerpo orbitador (items top-level, no van por moveBy/_nodes).
+        self._sync_seed_items()
         # BETA1-C05: física intrarrama (coords locales; viaja con la rama)
         for tree_id, local_engine in self._physics_local.items():
             energy += self._apply_local_physics(tree_id, local_engine)
-        if energy < self._physics_engine.min_energy and moving is None:
+        # BETA1-UX feedback: los anillos se reajustan EN VIVO (fluido, como la
+        # física), no al soltar. Guardado por delta + sin rebuild de física.
+        if self._layout_mode_active == "concentric_rings":
+            self._maybe_live_refresh_spans()
+        if energy < self._physics_engine.min_energy and moving is None and not self._has_live_seed():
             # Auto-stop: converged (nunca durante un drag — el elemento en
-            # mano debe seguir provocando reacción). Reheat hooks restart.
+            # mano debe seguir provocando reacción; ni mientras haya semilla
+            # viva orbitando — job o candidato en revisión: el grafo respira).
             self._physics_timer.stop()
             # BETA1-C03: con el grafo en reposo, los anillos se re-ajustan
             # alrededor del contenido (throttled: solo al estabilizarse,
@@ -2196,6 +2630,12 @@ class GraphCanvasView(QGraphicsView):
                     self.relationCreateRejected.emit("No se puede crear una relación sobre el mismo elemento")
                 else:
                     self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
+                event.accept()
+                return
+            # SEM04-fix: una semilla germinante bajo el cursor abre su revisión.
+            seed = self._item_seed_at(event.position())
+            if seed is not None:
+                self._seed_clicked(seed.candidate_id)
                 event.accept()
                 return
             items = self.items(event.position().toPoint())
@@ -2734,7 +3174,347 @@ class GraphCanvasView(QGraphicsView):
         self._ring_items.clear()
         self._node_ring_ids.clear()
         self._selected_ring_id = ""
+        # SEM04: scene.clear() destruyó también los items de semilla; el modelo de
+        # datos persiste, así que se re-renderizan sobre el grafo reconstruido.
+        self._seed_items = {}
+        self._render_seeds()
         self._emit_selection_changed()
+
+    # ── SEM04: semillas germinantes en el grafo ──────────────────────────────
+
+    def _seed_ring_visual(self, ring_id: str = "") -> "_RingVisual | None":
+        """Resuelve el anillo de la semilla por precedencia: id explícito →
+        anillo enfocado → anillo seleccionado. None si ninguno está dibujado."""
+        for rid in (ring_id, self._focused_ring_id, self._selected_ring_id):
+            if not rid:
+                continue
+            visual = next((r for r in self._ring_visuals if r.ring_id == rid), None)
+            if visual is not None:
+                return visual
+        return None
+
+    def _seed_anchor(self, ring_id: str = "") -> QPointF:
+        # Punto en la BANDA del anillo (no su centro): mid-radius centrado en
+        # el origen, como los nodos. Centro/viewport solo como último recurso.
+        visual = self._seed_ring_visual(ring_id)
+        if visual is not None:
+            return self._position_for_ring_slot(visual, 0, 1)
+        rid = self._focused_ring_id or self._selected_ring_id
+        item = self._ring_items.get(rid) if rid else None
+        if item is not None:
+            return item.sceneBoundingRect().center()
+        return self.mapToScene(self.viewport().rect().center())
+
+    def _has_live_seed(self) -> bool:
+        """True si hay alguna semilla viva orbitando: la germinante del job o
+        cualquier semilla-candidato en revisión (modo 'candidate'). Las que
+        animan salida (bloom/wither) no cuentan."""
+        if self._job_seeds:
+            return True
+        return any(d.get("mode") == "candidate" for d in self._candidate_seed_data.values())
+
+    def _live_seed_bodies(self):
+        """Itera (body_id, ring_id, item) de todas las semillas vivas: la del
+        job y las candidatas en revisión. El candidato orbita igual que la
+        semilla que lo engendró (no queda estático)."""
+        for job_id, data in self._job_seeds.items():
+            yield f"__seed__{job_id}", data.get("ring_id", ""), self._seed_items.get(f"job:{job_id}")
+        for cid, data in self._candidate_seed_data.items():
+            if data.get("mode") != "candidate":
+                continue
+            yield f"__seed__cand__{cid}", data.get("ring_id", ""), self._seed_items.get(f"cand:{cid}")
+
+    def _build_seed_body(self, body_id, ring_id, item, ring_bands):
+        """Construye el cuerpo orbitador de una semilla en la banda de su anillo
+        (mismas constantes para job y candidato). None si no hay corona."""
+        band = ring_bands.get(ring_id)
+        if band is None and ring_bands:
+            outermost = max(outer for _, outer in ring_bands.values())
+            band = (outermost + 34.0, outermost + 34.0 + 240.0)
+        if band is None:
+            return None
+        inner, outer = band
+        target = (inner + outer) / 2.0
+        ext = GraphSeedItem._R + 6.0
+        s_inner = inner + min(ext, (outer - inner) / 2.0 - 1.0)
+        s_outer = max(s_inner, outer - min(ext, (outer - inner) / 2.0 - 1.0))
+        if item is not None:
+            c = item.sceneBoundingRect().center()
+            sx, sy = c.x(), c.y()
+        else:
+            sx, sy = 0.0, target
+        return Body(
+            body_id=body_id,
+            x=sx,
+            y=sy,
+            mass=0.6,
+            radius=ext + 12.0,
+            target_radius=target,
+            band_inner=s_inner,
+            band_outer=s_outer,
+            orbit_speed=_SEED_ORBIT_SPEED,
+            orbit_drift=_SEED_ORBIT_DRIFT,
+            orbit_drift_rate=_SEED_ORBIT_DRIFT_RATE,
+        )
+
+    def _sync_seed_items(self) -> None:
+        """Sincroniza cada item de semilla viva con su cuerpo orbitador y guarda
+        ángulo/radio/posición en el modelo (sobreviven a clear_graph)."""
+        for job_id, data in self._job_seeds.items():
+            self._sync_seed_one(f"__seed__{job_id}", f"job:{job_id}", data)
+        for cid, data in self._candidate_seed_data.items():
+            if data.get("mode") != "candidate":
+                continue
+            self._sync_seed_one(f"__seed__cand__{cid}", f"cand:{cid}", data)
+
+    def _sync_seed_one(self, body_id: str, item_key: str, data: dict) -> None:
+        body = self._physics_engine.bodies.get(body_id)
+        item = self._seed_items.get(item_key)
+        if body is None or item is None:
+            return
+        item.setPos(body.x, body.y)
+        data["angle"] = math.atan2(body.y, body.x)
+        data["radius"] = math.hypot(body.x, body.y)
+        data["pos"] = QPointF(body.x, body.y)
+
+    def _ensure_seed_physics(self) -> None:
+        """Reconstruye el mundo físico (incorpora/retira cuerpos de semilla) y
+        mantiene el timer activo mientras haya una semilla viva orbitando
+        (germinante o candidato en revisión)."""
+        if not self._physics_enabled:
+            return
+        self._rebuild_physics_world()
+        if self._has_live_seed() and not self._physics_timer.isActive():
+            self._physics_timer.start()
+
+    def _render_seeds(self) -> None:
+        # Recrea los items de semilla desde el modelo de datos (tras un rebuild).
+        for job_id, data in self._job_seeds.items():
+            it = GraphSeedItem(job_id=job_id)
+            # Re-posicionar en su banda (el anillo pudo redimensionarse).
+            visual = self._seed_ring_visual(data.get("ring_id", ""))
+            if visual is not None:
+                radius = (visual.inner_radius + visual.outer_radius) / 2.0
+                angle = data.get("angle", math.pi / 2.0)
+                it.setPos(math.cos(angle) * radius, math.sin(angle) * radius)
+            else:
+                it.setPos(data.get("anchor", QPointF(0.0, 0.0)))
+            it.restore_phase(data.get("phase", 0.0))
+            self.scene_obj.addItem(it)
+            self._seed_items[f"job:{job_id}"] = it
+        for cid, data in self._candidate_seed_data.items():
+            it = GraphSeedItem(candidate_id=cid)
+            # Re-posicionar en su banda (orbitan igual que la semilla del job).
+            visual = self._seed_ring_visual(data.get("ring_id", ""))
+            if visual is not None and "angle" in data:
+                radius = (visual.inner_radius + visual.outer_radius) / 2.0
+                angle = data.get("angle", math.pi / 2.0)
+                it.setPos(math.cos(angle) * radius, math.sin(angle) * radius)
+            else:
+                it.setPos(data.get("pos", QPointF(0.0, 0.0)))
+            it.set_mode(data.get("mode", "candidate"))
+            self.scene_obj.addItem(it)
+            self._seed_items[f"cand:{cid}"] = it
+        self._maybe_run_seed_timer()
+
+    def _maybe_run_seed_timer(self) -> None:
+        if self._seed_items and not self._seed_timer.isActive():
+            self._seed_timer.start()
+        elif not self._seed_items and self._seed_timer.isActive():
+            self._seed_timer.stop()
+
+    def _seed_tick(self) -> None:
+        self._seed_pulse += 0.18
+        done_keys: list[str] = []
+        for key, item in list(self._seed_items.items()):
+            finished = item.tick(pulse=self._seed_pulse, anim_step=0.06)
+            if finished:
+                done_keys.append(key)
+        for key in done_keys:
+            item = self._seed_items.pop(key, None)
+            if item is not None:
+                self.scene_obj.removeItem(item)
+            if key.startswith("cand:"):
+                self._candidate_seed_data.pop(key[5:], None)
+            elif key.startswith("job:"):
+                self._job_seeds.pop(key[4:], None)
+        if not self._seed_items:
+            self._seed_timer.stop()
+
+    def plant_seed(self, job_id: str, ring_id: str = "") -> None:
+        if not job_id or job_id in self._job_seeds:
+            return
+        visual = self._seed_ring_visual(ring_id)
+        if visual is not None:
+            radius = (visual.inner_radius + visual.outer_radius) / 2.0
+            angle = math.pi / 2.0
+            anchor = QPointF(math.cos(angle) * radius, math.sin(angle) * radius)
+            rid = visual.ring_id
+        else:
+            anchor = self._seed_anchor(ring_id)
+            radius = None
+            angle = (
+                math.atan2(anchor.y(), anchor.x())
+                if (anchor.x() or anchor.y())
+                else math.pi / 2.0
+            )
+            rid = ""
+        self._job_seeds[job_id] = {
+            "ring_id": rid,
+            "angle": angle,
+            "radius": radius,
+            "anchor": anchor,
+            "phase": 0.0,
+        }
+        it = GraphSeedItem(job_id=job_id)
+        it.setPos(anchor)
+        self.scene_obj.addItem(it)
+        self._seed_items[f"job:{job_id}"] = it
+        self._maybe_run_seed_timer()
+        # Registrar el cuerpo orbitador y (re)arrancar la física.
+        self._ensure_seed_physics()
+
+    def advance_seed(self, job_id: str, progress: float) -> None:
+        data = self._job_seeds.get(job_id)
+        if data is None:
+            return
+        data["phase"] = max(0.0, min(1.0, float(progress)))
+        it = self._seed_items.get(f"job:{job_id}")
+        if it is not None:
+            it.set_phase(data["phase"])
+
+    def split_seed(
+        self, job_id: str, candidate_ids: list[str], ring_ids: dict[str, str] | None = None
+    ) -> None:
+        # Retira la semilla germinante del job y la sustituye por N
+        # semillas-candidato que HEREDAN su órbita/física: el candidato releva a
+        # la semilla que lo engendró (no queda estático). Emergen del punto VIVO
+        # de la semilla y la física los reparte por la corona.
+        data = self._job_seeds.pop(job_id, None)
+        planted_ring = data.get("ring_id", "") if data else ""
+        job_body = self._physics_engine.bodies.get(f"__seed__{job_id}")
+        if job_body is not None:
+            handoff = QPointF(job_body.x, job_body.y)
+        elif data and data.get("anchor"):
+            handoff = data["anchor"]
+        else:
+            handoff = self._seed_anchor(planted_ring)
+        it = self._seed_items.pop(f"job:{job_id}", None)
+        if it is not None:
+            self.scene_obj.removeItem(it)
+        cids = [c for c in (candidate_ids or []) if c]
+        ring_map = ring_ids or {}
+        # Agrupar por anillo resuelto. El primer grupo releva desde el punto vivo
+        # de la semilla; el resto (anillos distintos) cae en su banda.
+        by_ring: dict[str, list[str]] = {}
+        for cid in cids:
+            by_ring.setdefault(ring_map.get(cid) or planted_ring, []).append(cid)
+        first = True
+        for rid, group in by_ring.items():
+            self._place_candidate_seeds(group, rid, handoff, origin=handoff if first else None)
+            first = False
+        self._maybe_run_seed_timer()
+        # Las semillas-candidato siguen vivas y orbitando: la física continúa.
+        self._ensure_seed_physics()
+
+    def _place_candidate_seeds(
+        self, cids: list[str], ring_id: str, fallback: QPointF, origin: QPointF | None = None
+    ) -> None:
+        """Crea semillas-candidato ORBITADORAS. Si se da ``origin`` (relevo de la
+        semilla-job), emergen de ese punto vivo y la física las reparte por la
+        corona; si no, se colocan en la banda de su anillo (o en abanico
+        alrededor de ``fallback`` si el anillo no está dibujado)."""
+        visual = self._seed_ring_visual(ring_id) if ring_id else None
+        n = len(cids)
+        for i, cid in enumerate(cids):
+            if cid in self._candidate_seed_data:
+                continue
+            if origin is not None:
+                # Relevo: nacen del punto de la semilla con un desfase mínimo
+                # determinista (no coincidentes); la repulsión + corona separa.
+                off = 0.0 if i == 0 else (7.0 + 4.0 * i)
+                a = i * 2.39996  # ángulo dorado
+                pos = QPointF(origin.x() + off * math.cos(a), origin.y() + off * math.sin(a))
+            elif visual is not None:
+                pos = self._position_for_ring_slot(visual, i, n)
+            else:
+                ang = (2.0 * math.pi * i / n) if n > 1 else 0.0
+                radius = 0.0 if n == 1 else 130.0
+                pos = QPointF(
+                    fallback.x() + radius * math.cos(ang),
+                    fallback.y() + radius * math.sin(ang),
+                )
+            angle = math.atan2(pos.y(), pos.x()) if (pos.x() or pos.y()) else math.pi / 2.0
+            self._candidate_seed_data[cid] = {
+                "pos": pos,
+                "mode": "candidate",
+                "ring_id": ring_id,
+                "angle": angle,
+            }
+            seed = GraphSeedItem(candidate_id=cid)
+            seed.setPos(pos)
+            self.scene_obj.addItem(seed)
+            self._seed_items[f"cand:{cid}"] = seed
+
+    def bloom_seed(self, candidate_id: str) -> None:
+        data = self._candidate_seed_data.get(candidate_id)
+        if data is None:
+            return
+        data["mode"] = "blooming"
+        it = self._seed_items.get(f"cand:{candidate_id}")
+        if it is not None:
+            it.set_mode("blooming")
+        self._maybe_run_seed_timer()
+        # Deja de orbitar: su cuerpo se retira y florece en el sitio.
+        self._ensure_seed_physics()
+
+    def wither_seed(self, key: str) -> None:
+        # key = job_id (germinante) o candidate_id (semilla-candidato).
+        if key in self._job_seeds:
+            self._job_seeds.pop(key, None)
+            it = self._seed_items.get(f"job:{key}")
+            if it is not None:
+                it.set_mode("withering")
+            # Retirar su cuerpo orbitador: la física puede volver a asentarse.
+            self._ensure_seed_physics()
+            return
+        data = self._candidate_seed_data.get(key)
+        if data is not None:
+            data["mode"] = "withering"
+            it = self._seed_items.get(f"cand:{key}")
+            if it is not None:
+                it.set_mode("withering")
+        self._maybe_run_seed_timer()
+        # Deja de orbitar: su cuerpo se retira y se marchita en el sitio.
+        self._ensure_seed_physics()
+
+    def rehydrate_candidate_seeds(
+        self, candidate_ids: list[str], ring_ids: dict[str, str] | None = None
+    ) -> None:
+        # Asegura una semilla-candidato por candidato pendiente (idempotente).
+        # No retira las que están animando salida (bloom/wither).
+        wanted = {c for c in (candidate_ids or []) if c}
+        for cid in list(self._candidate_seed_data):
+            data = self._candidate_seed_data[cid]
+            if cid not in wanted and data.get("mode") == "candidate":
+                self._candidate_seed_data.pop(cid, None)
+                it = self._seed_items.pop(f"cand:{cid}", None)
+                if it is not None:
+                    self.scene_obj.removeItem(it)
+        ring_map = ring_ids or {}
+        fallback = self._seed_anchor()
+        missing = [c for c in wanted if c not in self._candidate_seed_data]
+        by_ring: dict[str, list[str]] = {}
+        for cid in missing:
+            by_ring.setdefault(ring_map.get(cid, ""), []).append(cid)
+        for rid, group in by_ring.items():
+            self._place_candidate_seeds(group, rid, fallback)
+        self._maybe_run_seed_timer()
+        # Los candidatos rehidratados también orbitan: arrancar la física.
+        self._ensure_seed_physics()
+
+    def _seed_clicked(self, candidate_id: str) -> None:
+        self.seedClicked.emit(candidate_id)
 
     def _layer_for_node(self, node: _NodeView, layers_by_id: dict[str, Any]):
         return layers_by_id.get(node.layer_id or "")
@@ -3003,14 +3783,58 @@ class GraphCanvasView(QGraphicsView):
         self.scene_obj.addItem(item)
         self._ring_items[ring.ring_id] = item
 
-        label_text = f"{ring.display_name} · {ring.count_label} · doble click: entrar"
-        label = QGraphicsSimpleTextItem(_fit_text(label_text, 72), item)
+        # BETA1-UX03: profundidad por capas — un BISEL decorativo (hijo no
+        # interactivo) tiñe la corona con un gradiente radial: lip interior
+        # iluminado → centro neutro → reborde exterior en sombra cálida. Da
+        # sensación de hendidura/elevación sin contornos ni efectos gráficos
+        # (que cachean el render). El hijo se limpia con el anillo padre y no
+        # roba clics, así que la selección sólida del anillo sigue intacta.
+        if ring.outer_radius > 0:
+            inner_frac = max(0.05, min(0.95, ring.inner_radius / ring.outer_radius))
+            focused = ring.state == "focused"
+            bevel_grad = QRadialGradient(QPointF(0.0, 0.0), ring.outer_radius)
+            lip = QColor("#FCF8EE")
+            lip.setAlpha(64 if focused else 46)
+            fade = QColor("#FCF8EE")
+            fade.setAlpha(0)
+            rim = QColor(52, 47, 28)  # sombra cálida base (nunca gris neutro)
+            rim.setAlpha(86 if focused else 60)
+            bevel_grad.setColorAt(inner_frac, lip)
+            bevel_grad.setColorAt(inner_frac + (1.0 - inner_frac) * 0.45, fade)
+            bevel_grad.setColorAt(1.0, rim)
+            bevel = QGraphicsPathItem(path, item)
+            bevel.setBrush(QBrush(bevel_grad))
+            bevel.setPen(QPen(Qt.PenStyle.NoPen))
+            bevel.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            bevel.setAcceptHoverEvents(False)
+            bevel.setZValue(1)  # sobre la banda sólida, bajo la etiqueta (10)
+
+        # BETA1-UX04: etiqueta anclada al BORDE superior del anillo, sobre una
+        # píldora de pergamino para que sea legible aunque dos anillos queden
+        # cerca (antes los textos largos se solapaban y se volvían ilegibles).
+        # La instrucción "doble click" pasa al tooltip; la etiqueta solo nombra.
+        item.setToolTip(f"{ring.display_name} — doble click para entrar")
+        label_text = f"{ring.display_name} · {ring.count_label}"
+        label = QGraphicsSimpleTextItem(_fit_text(label_text, 48), item)
         label.setBrush(QBrush(QColor("#5F5A3D")))
         label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         font = QFont(); font.setBold(True); font.setPointSize(10)
         label.setFont(font)
-        rect = label.boundingRect()
-        label.setPos(-rect.width() / 2, -ring.outer_radius + 14)
+        lrect = label.boundingRect()
+        pad_x, pad_y = 11.0, 4.0
+        pill_w = lrect.width() + pad_x * 2
+        pill_h = lrect.height() + pad_y * 2
+        top_y = -ring.outer_radius + 6
+        pill_path = QPainterPath()
+        pill_path.addRoundedRect(QRectF(-pill_w / 2, top_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
+        pill = QGraphicsPathItem(pill_path, item)
+        pill_fill = QColor("#FBF8EF"); pill_fill.setAlpha(236)
+        pill.setBrush(QBrush(pill_fill))
+        pill.setPen(QPen(QColor("#D2CAB1"), 1.0))
+        pill.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        pill.setAcceptHoverEvents(False)
+        pill.setZValue(9)
+        label.setPos(-lrect.width() / 2, top_y + pad_y)
         label.setZValue(10)
 
     def _layout_concentric_rings(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]) -> bool:
@@ -3078,21 +3902,18 @@ class GraphCanvasView(QGraphicsView):
             # física reacciona (reheat completo, incluidos motores locales)
             self._physics_reheat()
 
-    def _refresh_ring_spans(self):
-        """BETA1-B03: resize ring bands around the CURRENT positions and
-        sizes of their top-level items, WITHOUT repositioning anything.
-
-        Used after manual moves: _relayout_concentric would snap items back
-        to their slots, undoing the user's placement; this only makes each
-        ring wide enough to wrap its content wherever it sits."""
+    def _compute_span_outers(self) -> list[float]:
+        """BETA1-B03: radio exterior requerido por cada anillo para envolver su
+        contenido en las posiciones ACTUALES (sin tocar nada). Fuente única de
+        la matemática de spans, usada por el reajuste (en vivo y al asentarse)."""
         if self._layout_mode_active != "concentric_rings" or not self._ring_visuals:
-            return
+            return []
         contained: set[str] = set()
         inputs = getattr(self, "_concentric_inputs", None)
         if inputs:
             _, edges, _ = inputs
             contained = {edge.target_id for edge in edges if edge.kind.lower() == "contiene"}
-        new_visuals: list[_RingVisual] = []
+        outers: list[float] = []
         previous_outer = 0.0
         gap = 34.0
         for index, ring in enumerate(self._ring_visuals):
@@ -3108,10 +3929,35 @@ class GraphCanvasView(QGraphicsView):
                 center_dist = math.hypot(rect.center().x(), rect.center().y())
                 extent = max(rect.width(), rect.height()) / 2.0
                 required = max(required, center_dist + extent + 60.0)
-            outer = required
+            outers.append(required)
+            previous_outer = required
+        return outers
+
+    def _refresh_ring_spans(self, *, rebuild_physics: bool = True):
+        """BETA1-B03: resize ring bands around the CURRENT positions and
+        sizes of their top-level items, WITHOUT repositioning anything.
+
+        Used after manual moves: _relayout_concentric would snap items back
+        to their slots, undoing the user's placement; this only makes each
+        ring wide enough to wrap its content wherever it sits.
+
+        BETA1-UX feedback: ``rebuild_physics=False`` permite reajustar las
+        bandas EN VIVO cada frame (desde el tick) sin reconstruir el mundo
+        físico — el rebuild solo es necesario al asentarse."""
+        if self._layout_mode_active != "concentric_rings" or not self._ring_visuals:
+            return
+        outers = self._compute_span_outers()
+        if not outers:
+            return
+        new_visuals: list[_RingVisual] = []
+        previous_outer = 0.0
+        gap = 34.0
+        for index, (ring, outer) in enumerate(zip(self._ring_visuals, outers)):
+            inner = 42.0 if index == 0 else previous_outer + gap
             new_visuals.append(replace(ring, inner_radius=inner, outer_radius=outer))
             previous_outer = outer
         self._ring_visuals = new_visuals
+        self._last_span_outers = list(outers)
         selected_ring = self._selected_ring_id
         for ring_item in self._ring_items.values():
             self.scene_obj.removeItem(ring_item)
@@ -3121,12 +3967,26 @@ class GraphCanvasView(QGraphicsView):
         if selected_ring and selected_ring in self._ring_items:
             self._ring_items[selected_ring].setSelected(True)
         self._expand_scene_rect_to_content()
-        # BETA1-C05: las bandas cambiaron → re-empaquetar el mundo SIN
-        # despertar la simulación. Importante: _refresh_ring_spans se llama
-        # desde el auto-stop del tick; un reheat aquí crearía un bucle
-        # stop→spans→reheat→stop infinito.
-        if self._physics_enabled:
+        # BETA1-C05: re-empaquetar el mundo SIN despertar la simulación (un
+        # reheat aquí crearía un bucle stop→spans→reheat→stop). Solo al
+        # asentarse (rebuild_physics=True); en vivo se omite.
+        if rebuild_physics and self._physics_enabled:
             self._rebuild_physics_world()
+
+    def _maybe_live_refresh_spans(self):
+        """BETA1-UX feedback: reajuste FLUIDO de los anillos en cada frame del
+        tick (no al soltar). Guarda por delta: solo redibuja si algún radio
+        cambió de forma perceptible, y nunca reconstruye la física (evita el
+        bucle del contrato C01 §riesgo-3)."""
+        if self._layout_mode_active != "concentric_rings" or not self._ring_visuals:
+            return
+        outers = self._compute_span_outers()
+        if not outers:
+            return
+        prev = getattr(self, "_last_span_outers", None)
+        if prev and len(prev) == len(outers) and all(abs(a - b) < 1.5 for a, b in zip(outers, prev)):
+            return  # estable: nada que redibujar
+        self._refresh_ring_spans(rebuild_physics=False)
 
     def _nest_contained_items(self, nodes: list[_NodeView], edges: list[_EdgeView]):
         """BETA1-B03: re-parent contained items into their tree containers.
@@ -3535,6 +4395,61 @@ class GraphCanvasView(QGraphicsView):
 
         self._finalize_view(140.0)
 
+    def _camera_fit_target(self, rect: QRectF) -> tuple[float, QPointF]:
+        """Calcula (escala, centro) que produciría fitInView(rect) SIN moverse:
+        encaja, lee el objetivo y restaura el encuadre actual."""
+        saved_s = self.transform().m11()
+        saved_c = self.mapToScene(self.viewport().rect().center())
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        tgt_s = self.transform().m11()
+        tgt_c = self.mapToScene(self.viewport().rect().center())
+        self.resetTransform()
+        self.scale(saved_s, saved_s)
+        self.centerOn(saved_c)
+        return tgt_s, tgt_c
+
+    def _apply_camera(self, scale: float, center: QPointF) -> None:
+        self.resetTransform()
+        self.scale(scale, scale)
+        self.centerOn(center)
+
+    def _animate_camera_fit(self, rect: QRectF) -> None:
+        """BETA1-UX06: desliza la cámara hasta encajar *rect* (en vez de saltar).
+
+        Se desactiva (instantáneo) si MOTION_ENABLED es False, si la vista no es
+        visible o si el viewport aún no tiene tamaño — así tests y capturas
+        llegan al encuadre final sin depender del bucle de eventos.
+        """
+        if not rect.isValid() or rect.isEmpty():
+            return
+        vp = self.viewport()
+        target_s, target_c = self._camera_fit_target(rect)
+        if not MOTION_ENABLED or not self.isVisible() or vp.width() < 8 or vp.height() < 8:
+            self._apply_camera(target_s, target_c)
+            return
+        start_s = self.transform().m11() or 0.0001
+        start_c = self.mapToScene(vp.rect().center())
+        anim = QVariantAnimation(self)
+        anim.setDuration(_CAM_MS)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+
+        def _step(value) -> None:
+            try:
+                t = float(value)
+                s = start_s * (target_s / start_s) ** t  # interpolación geométrica
+                cx = start_c.x() + (target_c.x() - start_c.x()) * t
+                cy = start_c.y() + (target_c.y() - start_c.y()) * t
+                self._apply_camera(s, QPointF(cx, cy))
+            except Exception:  # noqa: BLE001 - el pulido nunca rompe la navegación
+                pass
+
+        anim.valueChanged.connect(_step)
+        anim.finished.connect(lambda: self._apply_camera(target_s, target_c))
+        self._camera_anim = anim  # mantener referencia viva
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
     def _finalize_view(self, margin: float = 140.0):
         """BETA1-B02: common tail for every layout builder.
 
@@ -3551,7 +4466,7 @@ class GraphCanvasView(QGraphicsView):
         else:
             rect = self.scene_obj.itemsBoundingRect()
             if rect.isValid() and not rect.isEmpty():
-                self.fitInView(rect.adjusted(-margin, -margin, margin, margin), Qt.AspectRatioMode.KeepAspectRatio)
+                self._animate_camera_fit(rect.adjusted(-margin, -margin, margin, margin))
         # BETA1-C02/C05: any (re)build changes bodies/rings → re-pack the
         # engine and wake it. CRITICAL: this must run in BOTH camera paths —
         # the early-return of the restore branch silently skipped reheat on
@@ -3602,10 +4517,9 @@ class GraphCanvasView(QGraphicsView):
         return sum(1 for active in [vf.entity_types, vf.relation_types, vf.relation_families, vf.tree_id, vf.layer_ids, vf.focus_entity_ids, vf.canon_states, vf.visibility_states, not vf.show_relations] if active)
 
     def center_on_item(self, item: QGraphicsItem):
-        self.centerOn(item)
         rect = item.sceneBoundingRect().adjusted(-180, -160, 180, 160)
         if rect.isValid() and not rect.isEmpty():
-            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self._animate_camera_fit(rect)
 
     def focus_node(self, entity_id: str, *, expand_path: bool = True) -> bool:
         if expand_path:
@@ -3622,6 +4536,77 @@ class GraphCanvasView(QGraphicsView):
         self.center_on_item(item)
         self._emit_selection_changed()
         return True
+
+    def _bloom_target(self, key: str):
+        # SEM02/SEM03: resuelve por id el elemento germinable (nodo, árbol, anillo
+        # o arista). Se re-resuelve cada tick para sobrevivir a reconstrucciones.
+        item = self._nodes.get(key) or self._trees.get(key) or self._ring_items.get(key)
+        if item is not None:
+            return item
+        return next((e for e in self._edges if e.edge.relation_id == key), None)
+
+    def bloom_item(self, key: str) -> bool:
+        # SEM02/SEM03: arranca el glow de germinación sobre un elemento existente.
+        if self._bloom_target(key) is None:
+            return False
+        self._bloom_items[key] = 0.0
+        if not self._bloom_timer.isActive():
+            self._bloom_timer.start()
+        return True
+
+    def _bloom_tick(self) -> None:
+        for key in list(self._bloom_items):
+            phase = self._bloom_items[key] + 0.05  # ~0.8 s de germinación
+            item = self._bloom_target(key)
+            if item is None or phase >= 1.0:
+                self._bloom_items.pop(key, None)
+                if item is not None:
+                    item.set_bloom_phase(0.0)  # apagar el glow
+                continue
+            self._bloom_items[key] = phase
+            item.set_bloom_phase(phase)
+        if not self._bloom_items:
+            self._bloom_timer.stop()
+
+    # ── UX5: germinación continua sobre nodos existentes (job de edición) ──
+
+    def start_node_germination(self, keys) -> bool:
+        """Inicia el latido de germinación sobre los nodos indicados (continuo)."""
+        started = False
+        for key in keys or []:
+            k = str(key)
+            if self._bloom_target(k) is not None:
+                self._germinating.add(k)
+                started = True
+        if started and not self._germ_timer.isActive():
+            self._germ_timer.start()
+        return started
+
+    def stop_node_germination(self, keys=None) -> None:
+        """Detiene el latido (todos, o solo los indicados) y apaga su glow."""
+        targets = list(self._germinating) if keys is None else [str(k) for k in keys]
+        for key in targets:
+            self._germinating.discard(key)
+            item = self._bloom_target(key)
+            # No pisar un bloom one-shot en curso (tiene prioridad y se autoapaga).
+            if item is not None and key not in self._bloom_items:
+                item.set_bloom_phase(0.0)
+        if not self._germinating:
+            self._germ_timer.stop()
+
+    def _germ_tick(self) -> None:
+        self._germ_pulse += 0.18
+        latido = 0.25 + 0.30 * (0.5 + 0.5 * math.sin(self._germ_pulse))
+        for key in list(self._germinating):
+            item = self._bloom_target(key)
+            if item is None:
+                self._germinating.discard(key)
+                continue
+            if key in self._bloom_items:
+                continue  # un bloom one-shot manda mientras dure
+            item.set_bloom_phase(latido)
+        if not self._germinating:
+            self._germ_timer.stop()
 
     def focus_tree(self, tree_id: str) -> bool:
         return self.focus_node(tree_id, expand_path=True)
@@ -3810,7 +4795,7 @@ class GraphCanvasView(QGraphicsView):
     def fit_all(self):
         rect = self.scene_obj.itemsBoundingRect()
         if rect.isValid() and not rect.isEmpty():
-            self.fitInView(rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+            self._animate_camera_fit(rect.adjusted(-140, -140, 140, 140))
 
     def reset_view(self):
         self.resetTransform()
@@ -3826,11 +4811,74 @@ class GraphCanvasView(QGraphicsView):
         rect = selected_items[0].sceneBoundingRect()
         for item in selected_items[1:]:
             rect = rect.united(item.sceneBoundingRect())
-        self.fitInView(rect.adjusted(-180, -160, 180, 160), Qt.AspectRatioMode.KeepAspectRatio)
+        self._animate_camera_fit(rect.adjusted(-180, -160, 180, 160))
         return True
 
     def focus_entity(self, entity_id: str):
         self.focus_node(entity_id)
+
+
+class _EraTimeSlider(QSlider):
+    """BETA1-UX feedback: slider de tiempo que dibuja las ERAS proporcionalmente
+    a sus años (una franja cálida por era, sobre el groove, con separadores).
+
+    El rango del slider ya es lineal en años (min=primer año, max=último), así
+    que mapear start/end de cada era a x es proporcional por construcción.
+    """
+
+    _ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._era_segments: list[tuple[int, int]] = []
+        self.setMinimumHeight(34)
+
+    def set_eras(self, eras, lo: int, hi: int) -> None:
+        segs: list[tuple[int, int]] = []
+        for era in eras or []:
+            start = _parse_optional_year(getattr(era, "start_year", None))
+            if start is None:
+                continue
+            end = _parse_optional_year(getattr(era, "end_year", None))
+            segs.append((int(start), int(hi if end is None else end)))
+        self._era_segments = segs
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802 (Qt API)
+        super().paintEvent(event)
+        lo, hi = self.minimum(), self.maximum()
+        if not self._era_segments or hi <= lo:
+            return
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self
+        )
+        gx, gw = float(groove.x()), float(groove.width())
+        span = float(hi - lo)
+        # BETA1-UX feedback: ANTES era un filo de 5 px casi invisible. Ahora es
+        # una cinta de eras nítida (un tinte por era, proporcional a sus años)
+        # en la parte alta del slider, con separadores que bajan al groove.
+        ribbon_y = 3.0
+        ribbon_h = 9.0
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            for i, (start, end) in enumerate(self._era_segments):
+                x0 = gx + gw * (max(start, lo) - lo) / span
+                x1 = gx + gw * (min(end, hi) - lo) / span
+                width = max(x1 - x0, 2.0)
+                tint = QColor(self._ERA_TINTS[i % len(self._ERA_TINTS)])
+                tint.setAlpha(225)
+                painter.setPen(QPen(Qt.PenStyle.NoPen))
+                painter.setBrush(QBrush(tint))
+                painter.drawRoundedRect(QRectF(x0, ribbon_y, width, ribbon_h), 3.0, 3.0)
+                # Separador fino entre eras, prolongado hasta el groove.
+                painter.setPen(QPen(QColor(120, 112, 82, 150), 1.0))
+                painter.drawLine(QPointF(x0, ribbon_y), QPointF(x0, float(groove.bottom())))
+            painter.end()
+        except Exception:  # noqa: BLE001 - el pulido nunca rompe el slider
+            pass
 
 
 class GraphCanvasWidget(QWidget):
@@ -3844,6 +4892,7 @@ class GraphCanvasWidget(QWidget):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)
     ringFocused = Signal(str, str)
+    candidateClicked = Signal(str)  # SEM04: semilla germinante pulsada en el grafo
     # BETA1-B01: context-menu intents re-exposed from GraphCanvasView
     contextCreateEntityRequested = Signal()
     contextCreateTreeRequested = Signal()
@@ -3891,6 +4940,7 @@ class GraphCanvasWidget(QWidget):
         self.canvas.nodeAssignToTreeRequested.connect(self.nodeAssignToTreeRequested.emit)
         self.canvas.ringSelected.connect(self.ringSelected.emit)
         self.canvas.ringFocused.connect(self.ringFocused.emit)
+        self.canvas.seedClicked.connect(self.candidateClicked.emit)  # SEM04
         # BETA1-B01: context-menu intents
         self.canvas.contextCreateEntityRequested.connect(self.contextCreateEntityRequested.emit)
         self.canvas.contextCreateTreeRequested.connect(self.contextCreateTreeRequested.emit)
@@ -3930,21 +4980,21 @@ class GraphCanvasWidget(QWidget):
         row.setContentsMargins(12, 5, 10, 5)
         row.setSpacing(8)
 
-        self._time_toggle = QPushButton("◷")
+        self._time_toggle = QPushButton()
         self._time_toggle.setCheckable(True)
         self._time_toggle.setToolTip("Recorrer el tiempo: ver el grafo tal como estaba en un año")
         self._time_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._time_toggle.setFixedSize(30, 30)
         self._time_toggle.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; border-radius: 15px; "
-            f"color: {INK_SOFT}; font-size: 16px; }} "
+            f"QPushButton {{ background: transparent; border: none; border-radius: 15px; }} "
             f"QPushButton:hover {{ background: {GOLD_TINT}; }} "
-            f"QPushButton:checked {{ background: {GOLD}; color: #FCF8EC; }}"
+            f"QPushButton:checked {{ background: {GOLD}; }}"
         )
+        icons.set_button_icon(self._time_toggle, "chronology", color=INK_SOFT, size=16)
         self._time_toggle.toggled.connect(self._on_time_toggle)
         row.addWidget(self._time_toggle)
 
-        self._time_slider = QSlider(Qt.Orientation.Horizontal)
+        self._time_slider = _EraTimeSlider(Qt.Orientation.Horizontal)
         self._time_slider.setObjectName("timeSlider")
         self._time_slider.setEnabled(False)
         self._time_slider.setMinimumWidth(220)
@@ -3985,13 +5035,12 @@ class GraphCanvasWidget(QWidget):
 
     def _project_year_bounds(self, project) -> tuple[int, int, int]:
         """(min_year, max_year, present_year) a partir del calendario y las vidas."""
-        chronology = getattr(project, "project_chronology", None)
-        try:
-            present = int(getattr(chronology, "present_year", 0) or 0)
-        except (TypeError, ValueError):
-            present = 0
+        # BETA1-UX feedback: usar eras/presente EFECTIVOS (derivados del
+        # calendario completo si el dominio no las tiene), igual que la
+        # cronológica, para que el slider abarque el rango real del mundo.
+        present = effective_present_year(project)
         years: list[int] = [present]
-        for era in list(getattr(chronology, "eras", []) or []):
+        for era in effective_eras(project):
             start = _parse_optional_year(getattr(era, "start_year", None))
             if start is not None:
                 years.append(start)
@@ -4013,14 +5062,13 @@ class GraphCanvasWidget(QWidget):
         return lo, max(hi, present), present
 
     def _era_name_for_year(self, project, year: int) -> str:
-        chronology = getattr(project, "project_chronology", None)
-        for era in list(getattr(chronology, "eras", []) or []):
-            contains = getattr(era, "contains", None)
-            try:
-                if callable(contains) and contains(year):
-                    return str(getattr(era, "name", "") or "")
-            except Exception:  # noqa: BLE001
+        for era in effective_eras(project):
+            start = _parse_optional_year(getattr(era, "start_year", None))
+            if start is None or year < start:
                 continue
+            end = _parse_optional_year(getattr(era, "end_year", None))
+            if end is None or year < end:
+                return str(getattr(era, "name", "") or "")
         return ""
 
     def _sync_time_bar(self):
@@ -4035,6 +5083,9 @@ class GraphCanvasWidget(QWidget):
         block = self._time_slider.blockSignals(True)
         self._time_slider.setMinimum(lo)
         self._time_slider.setMaximum(max(hi, lo))
+        # BETA1-UX feedback: pinta las eras proporcionalmente en el slider.
+        if hasattr(self._time_slider, "set_eras"):
+            self._time_slider.set_eras(effective_eras(project), lo, max(hi, lo))
         current = self.canvas.view_year()
         if current is not None:
             self._time_slider.setValue(max(lo, min(hi, current)))
@@ -4136,6 +5187,14 @@ class GraphCanvasWidget(QWidget):
             self._entity_selected(entity_id)
         return ok
 
+    def bloom_node(self, entity_id: str) -> bool:
+        # SEM02: enfoca el nodo recién germinado y dispara el glow dorado.
+        ok = self.canvas.focus_node(entity_id)
+        if ok:
+            self._entity_selected(entity_id)
+            self.canvas.bloom_item(entity_id)
+        return ok
+
     def focus_tree(self, tree_id: str) -> bool:
         ok = self.canvas.focus_tree(tree_id)
         if ok:
@@ -4147,6 +5206,50 @@ class GraphCanvasWidget(QWidget):
         if ok:
             self._relation_selected(relation_id)
         return ok
+
+    def start_node_germination(self, entity_ids) -> bool:
+        # UX5: germina (latido continuo) las entidades en edición durante el job.
+        return self.canvas.start_node_germination(entity_ids)
+
+    def stop_node_germination(self, entity_ids=None) -> None:
+        # UX5: detiene el latido al terminar/fallar el job.
+        self.canvas.stop_node_germination(entity_ids)
+
+    def bloom_relation(self, relation_id: str) -> bool:
+        # SEM03: enfoca la relación recién germinada y dispara el glow de la arista.
+        ok = self.canvas.focus_relation(relation_id)
+        if ok:
+            self._relation_selected(relation_id)
+            self.canvas.bloom_item(relation_id)
+        return ok
+
+    def bloom_ring(self, ring_id: str) -> bool:
+        # SEM03: germina el anillo recién creado (pulso dorado en la banda).
+        return self.canvas.bloom_item(ring_id)
+
+    # ── SEM04: semillas germinantes en el grafo (delegan en GraphCanvasView) ──
+
+    def plant_seed(self, job_id: str, ring_id: str = "") -> None:
+        self.canvas.plant_seed(job_id, ring_id)
+
+    def advance_seed(self, job_id: str, progress: float) -> None:
+        self.canvas.advance_seed(job_id, progress)
+
+    def split_seed(
+        self, job_id: str, candidate_ids: list[str], ring_ids: dict[str, str] | None = None
+    ) -> None:
+        self.canvas.split_seed(job_id, candidate_ids, ring_ids)
+
+    def bloom_seed(self, candidate_id: str) -> None:
+        self.canvas.bloom_seed(candidate_id)
+
+    def wither_seed(self, key: str) -> None:
+        self.canvas.wither_seed(key)
+
+    def rehydrate_candidate_seeds(
+        self, candidate_ids: list[str], ring_ids: dict[str, str] | None = None
+    ) -> None:
+        self.canvas.rehydrate_candidate_seeds(candidate_ids, ring_ids)
 
     def center_on_item(self, item):
         self.canvas.center_on_item(item)

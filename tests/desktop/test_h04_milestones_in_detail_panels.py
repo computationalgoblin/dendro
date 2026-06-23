@@ -242,8 +242,9 @@ def test_create_linked_milestone_from_leaf_uses_safe_controller(qapp):
     button.click()
 
     assert ctrl.created
+    # BETA1-HITO-MULTI: la entidad objetivo participa sin "entidad principal".
     assert ctrl.created[0]["affected_entity_ids"] == ["ent-a"]
-    assert ctrl.created[0]["metadata"]["primary_entity_id"] == "ent-a"
+    assert "primary_entity_id" not in ctrl.created[0].get("metadata", {})
 
 
 def test_create_linked_milestone_from_relation_adds_relation_and_endpoints(qapp):

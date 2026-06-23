@@ -22,6 +22,7 @@ from packages.domain.import_models import (
     ImportBasket,
     ImportCandidate,
     ImportFormat,
+    ImportMode,
     ImportReviewState,
 )
 from packages.domain.result import Error, Ok, Result
@@ -169,16 +170,55 @@ class ImportService:
             return store.save(proj, ps._current_path)
         return Error("No project path to save to")
 
+    @staticmethod
+    def _taxonomy_dict(proj: Any) -> dict[str, Any]:
+        taxonomy = getattr(proj, "import_taxonomy", None)
+        if taxonomy is not None and hasattr(taxonomy, "to_dict"):
+            return taxonomy.to_dict()
+        return {}
+
+    @staticmethod
+    def _canon_digest(proj: Any, *, limit: int = 40) -> dict[str, Any]:
+        """Resumen compacto del canon (nombres) para desambiguar la extracción."""
+        entities: list[str] = []
+        branches: list[str] = []
+        for ent in getattr(proj, "entities", []) or []:
+            name = getattr(ent, "name", "")
+            if not name:
+                continue
+            etype = getattr(getattr(ent, "entity_type", None), "value", "")
+            if etype == "contenedor":
+                branches.append(name)
+            else:
+                entities.append(name)
+        rings = [
+            f"{getattr(wl, 'id', '')}|{getattr(wl, 'name', '')}"
+            for wl in getattr(proj, "world_layers", []) or []
+            if getattr(wl, "name", "")
+        ]
+        return {
+            "entities": entities[:limit],
+            "branches": branches[:limit],
+            "rings": rings[:limit],
+        }
+
     # ── Pipeline ────────────────────────────────────────────────────────
 
     def import_document(
-        self, file_path: str | Path, format: ImportFormat
+        self,
+        file_path: str | Path,
+        format: ImportFormat,
+        *,
+        mode: ImportMode = ImportMode.CANON,
     ) -> Result[ImportBasket, str]:
-        """Full import pipeline: source → extract → candidates → basket.
+        """Full import pipeline: source → extract → basket (bifurcado por modo).
 
         Args:
             file_path: Path to the document file.
-            format: ImportFormat (TEXT_PLAIN or PDF).
+            format: ImportFormat (TEXT_PLAIN, MARKDOWN or PDF).
+            mode: ImportMode. CANON extrae candidatos para revisión→canon;
+                CONTEXTO indexa el documento como material de referencia (sin
+                candidatos de canon).
 
         Returns:
             Ok(ImportBasket) with the review basket, or Err on failure.
@@ -207,27 +247,51 @@ class ImportService:
             return Error(extract_result.error)
 
         segments = extract_result.value
-        if not segments:
-            # Empty document — still create basket for review
-            pass
 
-        # ── Step 3: Generate import candidates ──
-        import_candidates = self.generate_import_candidates(segments)
-
-        # ── Step 4: Detect duplicates ──
-        import_candidates = self.detect_duplicates(import_candidates, proj)
-
-        # ── Step 5: Detect contradictions ──
-        import_candidates = self.detect_contradictions(import_candidates, proj)
-
-        # ── Step 6: Create basket ──
-        basket = self.create_review_basket(source_id, segments, import_candidates, path=str(path), format=format.value)
+        # ── Step 3: Build basket por modo ──
+        if mode == ImportMode.CONTEXTO:
+            basket = self._build_contexto_basket(source_id, segments, path, format)
+        else:
+            basket = self._build_canon_basket(source_id, segments, path, format)
 
         # ── COMMIT: only now add to project (no save — CLI handles that) ──
         proj.sources.append(source)
         proj.import_baskets.append(basket)
 
         return Ok(basket)
+
+    def _build_canon_basket(
+        self,
+        source_id: str,
+        segments: list[DocumentSegment],
+        path: Path,
+        format: ImportFormat,
+    ) -> ImportBasket:
+        """Modo Canon: el basket nace SIN candidatos.
+
+        La extracción es un paso explícito posterior por IA (``extract_ai_candidates``,
+        lanzado en un worker de fondo). La heurística de palabras queda retirada del
+        flujo canon (los métodos ``generate_import_candidates`` / ``detect_*`` se
+        conservan para uso programático y tests, pero ya no se invocan aquí)."""
+        return self.create_review_basket(
+            source_id, segments, [],
+            path=str(path), format=format.value, import_mode=ImportMode.CANON.value,
+        )
+
+    def _build_contexto_basket(
+        self,
+        source_id: str,
+        segments: list[DocumentSegment],
+        path: Path,
+        format: ImportFormat,
+    ) -> ImportBasket:
+        """Modo Contexto: sin candidatos de canon; los segmentos quedan como
+        material de referencia indexable en el RAG. El resumen IA se genera
+        bajo demanda (paso separado, como la extracción IA)."""
+        return self.create_review_basket(
+            source_id, segments, [],
+            path=str(path), format=format.value, import_mode=ImportMode.CONTEXTO.value,
+        )
 
     def extract_segments(
         self, file_path: str | Path, format: ImportFormat, source_id: str
@@ -347,6 +411,7 @@ class ImportService:
         candidates: list[ImportCandidate],
         path: str = "",
         format: str = "",
+        import_mode: str = "canon",
     ) -> ImportBasket:
         """Create an ImportBasket for review.
 
@@ -356,6 +421,8 @@ class ImportService:
             candidates: Generated import candidates.
             path: Original file path (for metadata).
             format: Import format string (for metadata).
+            import_mode: ImportMode.value ("canon"/"contexto"). Se espeja en
+                metadata para que corpus_indexer lo lea sin depender del modelo.
         """
         now = _now_iso()
         return ImportBasket(
@@ -364,6 +431,7 @@ class ImportService:
             segments=segments,
             import_candidates=candidates,
             review_state="pendiente",
+            import_mode=import_mode,
             created_at=now,
             updated_at=now,
             metadata={
@@ -373,6 +441,7 @@ class ImportService:
                 "file_path": path,
                 "format": format,
                 "import_format": format,
+                "import_mode": import_mode,
                 "created_at": now,
                 "imported_at": now,
                 "extraction_warnings": [],
@@ -554,11 +623,18 @@ class ImportService:
         allow_simulated: bool = False,
         replace_existing: bool = False,
         project_context: dict[str, Any] | None = None,
+        progress_callback: Any = None,
+        should_cancel: Any = None,
+        max_workers: int | None = None,
+        generate_config: bool = False,
     ) -> Result[list[ImportCandidate], str]:
         """Analyze imported chunks with AI and append reviewable candidates.
 
         This method mutates only the import review basket. It never creates
         entities, relations, milestones or other canon objects.
+
+        ``progress_callback(done, total, label)`` y ``should_cancel()`` permiten
+        feedback por segmento y cancelación (los usa el worker de la UI).
         """
         proj_r = self._proj()
         if isinstance(proj_r, Error):
@@ -572,19 +648,304 @@ class ImportService:
         if basket is None:
             return Error(f"Import basket '{basket_id[:8]}' not found")
 
-        from packages.application.import_ai_extraction_service import ImportAIExtractionService
+        from packages.application.import_ai_extraction_service import (
+            ImportAIExtractionService,
+            resolve_import_concurrency,
+        )
 
+        workers = max_workers if max_workers is not None else resolve_import_concurrency()
         context = dict(project_context or {})
         context.setdefault("project_name", getattr(proj, "name", ""))
+        # Modo Canon dirigido: la IA recibe la taxonomía del proyecto y un
+        # resumen del canon existente para extraer coherente y sin duplicar.
+        context.setdefault("import_taxonomy", self._taxonomy_dict(proj))
+        context.setdefault("canon_digest", self._canon_digest(proj))
         extractor = ImportAIExtractionService(
             provider=provider,
             allow_simulated=allow_simulated,
+            max_workers=workers,
         )
-        return extractor.extract_for_basket(
+        result = extractor.extract_for_basket(
             basket,
             project_context=context,
             replace_existing=replace_existing,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
         )
+        if isinstance(result, Error):
+            return result
+
+        # I15: consolidar duplicados internos del documento ANTES de presentar
+        # (la IA no debe ofrecer el mismo candidato N veces).
+        from packages.application.import_deduplication_service import ImportDeduplicationService
+        dedupe = ImportDeduplicationService(project=proj)
+        dedupe.consolidate_basket(basket)
+        # I16: marcar coincidencias con el canon existente (enrich_existing).
+        self._mark_enrich_targets(basket, dedupe)
+
+        # I13: propuesta de configuración de proyecto (calendario/temporal/config),
+        # automática al importar desde el host. Best-effort: no rompe la extracción.
+        if generate_config:
+            self._maybe_generate_project_config(
+                basket, context, provider=provider, allow_simulated=allow_simulated
+            )
+
+        presentable = [
+            c for c in basket.import_candidates
+            if c.review_state != ImportReviewState.FUSIONADO
+        ]
+        return Ok(presentable)
+
+    def _maybe_generate_project_config(
+        self, basket: ImportBasket, context: dict[str, Any], *, provider, allow_simulated: bool
+    ) -> None:
+        """Genera la propuesta de config (I13) sin romper la extracción si falla."""
+        try:
+            entity_names = [
+                str((c.proposed_data or {}).get("name") or "").strip()
+                for c in basket.import_candidates
+                if (c.proposed_data or {}).get("kind") == "entity"
+            ]
+            from packages.application.import_project_config_service import (
+                ImportProjectConfigService,
+            )
+
+            result = ImportProjectConfigService(
+                provider=provider, allow_simulated=allow_simulated
+            ).generate_for_basket(
+                basket, project_context=context, entity_names=[n for n in entity_names if n]
+            )
+            if isinstance(result, Error):
+                basket.metadata.setdefault("project_config_suggestion_error", result.error)
+        except Exception as exc:  # noqa: BLE001 — best-effort, no rompe la extracción
+            basket.metadata.setdefault("project_config_suggestion_error", str(exc))
+
+    def apply_project_config_suggestion(self, basket_id: str) -> Result[dict[str, Any], str]:
+        """Aplica la propuesta de config de proyecto (I13) tras aceptación explícita.
+
+        Acción explícita del usuario: aplica el calendario (vía
+        ``ProjectChronologyService.apply_candidate``), ubica las entidades en el
+        tiempo (mergea birth/death/nature en sus ImportCandidate, que siguen
+        revisables por entidad) y aplica la taxonomía. Devuelve un resumen de lo
+        aplicado. Tono/género quedan capturados en la propuesta (aplicación
+        profunda diferida).
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = next((b for b in proj.import_baskets if b.id == basket_id), None)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        proposal = (getattr(basket, "metadata", {}) or {}).get("project_config_suggestion")
+        if not isinstance(proposal, dict):
+            return Error("No hay propuesta de configuración para esta cesta")
+
+        applied: dict[str, Any] = {"chronology": False, "entities_placed": 0, "taxonomy": False}
+
+        chron = proposal.get("chronology") or {}
+        if chron.get("eras") or chron.get("mode") not in (None, "", "none"):
+            from packages.application.project_chronology_service import ProjectChronologyService
+
+            # El servicio almacena las eras como NOMBRES (+ era_lengths aparte); las
+            # eras ricas {name,start_year,end_year} se traducen aquí.
+            rich_eras = [e for e in (chron.get("eras") or []) if isinstance(e, dict)]
+            era_names = [str(e.get("name") or "").strip() for e in rich_eras if str(e.get("name") or "").strip()]
+            era_lengths: dict[str, int] = {}
+            for era in rich_eras:
+                name = str(era.get("name") or "").strip()
+                start, end = era.get("start_year"), era.get("end_year")
+                if name and isinstance(start, int) and isinstance(end, int) and end >= start:
+                    era_lengths[name] = end - start
+            chrono_proposal = {
+                "kind": "project_chronology_suggestion",
+                "mode": chron.get("mode") or "vague_periods",
+                "calendar_name": chron.get("calendar_name") or "",
+                "eras": era_names,
+                "era_lengths": era_lengths,
+                "supports_exact_dates": bool(chron.get("supports_exact_dates", False)),
+            }
+            if chron.get("present_year") is not None:
+                chrono_proposal["current_date"] = {"year": chron.get("present_year")}
+            res = ProjectChronologyService(project_service=self.project_service).apply_candidate(
+                chrono_proposal
+            )
+            if isinstance(res, Error):
+                return res
+            applied["chronology"] = True
+
+        applied["entities_placed"] = self._place_entities_in_time(
+            basket, proposal.get("entity_temporal") or []
+        )
+
+        taxonomy = (proposal.get("config") or {}).get("taxonomy") or {}
+        if any(taxonomy.get(k) for k in ("allowed_entity_types", "allowed_branch_types", "extraction_guidance")):
+            self._apply_taxonomy(proj, taxonomy)
+            applied["taxonomy"] = True
+
+        proposal["applied"] = True
+        basket.metadata["project_config_suggestion"] = proposal
+        return Ok(applied)
+
+    def _basket_with_proposal(self, basket_id: str) -> Result[tuple[Any, dict[str, Any]], str]:
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        basket = next((b for b in proj_r.value.import_baskets if b.id == basket_id), None)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        proposal = (getattr(basket, "metadata", {}) or {}).get("project_config_suggestion")
+        if not isinstance(proposal, dict):
+            return Error("No hay propuesta de configuración para esta cesta")
+        return Ok((basket, proposal))
+
+    def update_project_config_suggestion(
+        self, basket_id: str, edits: dict[str, Any]
+    ) -> Result[dict[str, Any], str]:
+        """Edita los campos núcleo del calendario en la propuesta (I13).
+
+        Solo muta la propuesta en ``basket.metadata`` (no canon, no config). Las
+        ediciones admitidas son ``mode``, ``calendar_name`` y ``present_year``.
+        """
+        found = self._basket_with_proposal(basket_id)
+        if isinstance(found, Error):
+            return found
+        basket, proposal = found.value
+        chron = dict(proposal.get("chronology") or {})
+        if "mode" in edits:
+            mode = str(edits.get("mode") or "").strip()
+            if mode in {"none", "vague_periods", "full_calendar"}:
+                chron["mode"] = mode
+        if "calendar_name" in edits:
+            chron["calendar_name"] = str(edits.get("calendar_name") or "").strip()
+        if "present_year" in edits:
+            value = edits.get("present_year")
+            try:
+                chron["present_year"] = int(value) if value not in (None, "") else None
+            except (TypeError, ValueError):
+                pass
+        proposal["chronology"] = chron
+        basket.metadata["project_config_suggestion"] = proposal
+        return Ok(proposal)
+
+    def discard_project_config_suggestion(self, basket_id: str) -> Result[bool, str]:
+        """Descarta la propuesta de config sin aplicarla (acción del usuario)."""
+        found = self._basket_with_proposal(basket_id)
+        if isinstance(found, Error):
+            return found
+        basket, _proposal = found.value
+        basket.metadata.pop("project_config_suggestion", None)
+        return Ok(True)
+
+    @staticmethod
+    def _place_entities_in_time(basket: ImportBasket, placements: list) -> int:
+        """Mergea birth/death/nature en los candidatos de entidad que casan por nombre."""
+        by_name: dict[str, Any] = {}
+        for cand in getattr(basket, "import_candidates", []) or []:
+            payload = cand.proposed_data or {}
+            if str(payload.get("kind") or "").lower() != "entity":
+                continue
+            name = str(payload.get("name") or "").strip().lower()
+            if name:
+                by_name.setdefault(name, cand)
+        placed = 0
+        for place in placements:
+            if not isinstance(place, dict):
+                continue
+            cand = by_name.get(str(place.get("name") or "").strip().lower())
+            if cand is None:
+                continue
+            payload = cand.proposed_data
+            if place.get("birth_year") is not None:
+                payload.setdefault("birth_year", place["birth_year"])
+            if place.get("death_year") is not None:
+                payload.setdefault("death_year", place["death_year"])
+            if place.get("nature"):
+                payload.setdefault("temporal_nature", place["nature"])
+            placed += 1
+        return placed
+
+    @staticmethod
+    def _apply_taxonomy(proj: Any, taxonomy: dict[str, Any]) -> None:
+        """Une los tipos propuestos a la taxonomía del proyecto (sin pisar lo existente)."""
+        tax_obj = getattr(proj, "import_taxonomy", None)
+        if tax_obj is None:
+            return
+        for attr, key in (
+            ("allowed_entity_types", "allowed_entity_types"),
+            ("allowed_branch_types", "allowed_branch_types"),
+        ):
+            if not hasattr(tax_obj, attr):
+                continue
+            existing = list(getattr(tax_obj, attr) or [])
+            merged = list(dict.fromkeys(existing + list(taxonomy.get(key) or [])))
+            setattr(tax_obj, attr, merged)
+        guidance = str(taxonomy.get("extraction_guidance") or "").strip()
+        if guidance and hasattr(tax_obj, "extraction_guidance") and not getattr(tax_obj, "extraction_guidance", ""):
+            tax_obj.extraction_guidance = guidance
+
+    @staticmethod
+    def _mark_enrich_targets(basket: ImportBasket, dedupe: Any) -> None:
+        """I16: marca candidatos que coinciden con el canon existente.
+
+        Detecta duplicados frente a ``project.entities`` (reusa la detección del
+        servicio de dedup) y, para los que coinciden, escribe en ``proposed_data``
+        ``enrich_target_id`` + ``presentation_kind="enrich_existing"`` para que al
+        aceptar se enriquezca la entidad existente en vez de crear un duplicado.
+        """
+        dedupe._mark_canon_duplicates(basket)
+        for cand in basket.import_candidates:
+            if cand.review_state == ImportReviewState.FUSIONADO:
+                continue
+            if not getattr(cand, "possible_duplicates", None):
+                continue
+            payload = cand.proposed_data if isinstance(cand.proposed_data, dict) else {}
+            target_id = cand.possible_duplicates[0]
+            if target_id:
+                payload["enrich_target_id"] = target_id
+                payload["presentation_kind"] = "enrich_existing"
+                cand.proposed_data = payload
+
+    # ── Context summary (I12, Modo Contexto) ─────────────────────────────
+
+    def summarize_context_basket(
+        self,
+        basket_id: str,
+        *,
+        provider=None,
+        allow_simulated: bool = False,
+        project_context: dict[str, Any] | None = None,
+    ) -> Result[dict[str, Any], str]:
+        """Genera un resumen IA no-canon para una cesta en modo contexto.
+
+        Solo muta ``basket.metadata['context_summary']``; nunca crea canon ni
+        candidatos. Restringido a cestas en modo contexto.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = None
+        for b in proj.import_baskets:
+            if b.id == basket_id:
+                basket = b
+                break
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        if getattr(basket, "import_mode", "canon") != ImportMode.CONTEXTO.value:
+            return Error("El resumen de contexto solo aplica a cestas en modo contexto")
+
+        from packages.application.import_context_summary_service import (
+            ImportContextSummaryService,
+        )
+
+        context = dict(project_context or {})
+        context.setdefault("project_name", getattr(proj, "name", ""))
+        service = ImportContextSummaryService(
+            provider=provider,
+            allow_simulated=allow_simulated,
+        )
+        return service.summarize_basket(basket, project_context=context)
 
     # ── Deduplication / aliases (I04) ────────────────────────────────────
 
@@ -677,7 +1038,17 @@ class ImportService:
             import_cand.review_state = ImportReviewState.ACEPTADO
             basket.updated_at = _now_iso()
             return result
-        if import_cand.candidate_type == CandidateType.RELACION.value or kind == "relation":
+        if import_cand.candidate_type == CandidateType.ANILLO.value or kind == "ring_suggestion":
+            result = self._apply_ring_candidate(basket, import_cand, payload)
+            if isinstance(result, Error):
+                return result
+            import_cand.review_state = ImportReviewState.ACEPTADO
+            basket.updated_at = _now_iso()
+            return result
+        if payload.get("enrich_target_id"):
+            # I16: el candidato coincide con una entidad existente → enriquecerla.
+            result = self._enrich_entity_candidate(proj, basket, import_cand, payload)
+        elif import_cand.candidate_type == CandidateType.RELACION.value or kind == "relation":
             result = self._apply_relation_candidate(proj, basket, import_cand, payload)
         else:
             result = self._apply_entity_candidate(basket, import_cand, payload)
@@ -686,6 +1057,50 @@ class ImportService:
         import_cand.review_state = ImportReviewState.ACEPTADO
         basket.updated_at = _now_iso()
         return result
+
+    def _enrich_entity_candidate(
+        self,
+        proj,
+        basket: ImportBasket,
+        import_cand: ImportCandidate,
+        payload: dict[str, Any],
+    ) -> Result[Any, str]:
+        """I16: enriquece una entidad de canon existente con la info del candidato.
+
+        Une aliases (sin duplicar ni añadir el propio nombre) y completa
+        descripción breve/cuerpo solo si están vacías. Si el objetivo ya no
+        existe, cae a crear la entidad nueva.
+        """
+        target_id = str(payload.get("enrich_target_id") or "").strip()
+        target = next(
+            (e for e in getattr(proj, "entities", []) or [] if getattr(e, "id", "") == target_id),
+            None,
+        )
+        if target is None:
+            return self._apply_entity_candidate(basket, import_cand, payload)
+
+        target_name_norm = str(getattr(target, "name", "")).strip().lower()
+        merged_aliases = list(getattr(target, "aliases", []) or [])
+        seen = {a.strip().lower() for a in merged_aliases}
+        incoming = [str(payload.get("name") or payload.get("title") or "")]
+        incoming.extend(str(a) for a in (payload.get("aliases") or []))
+        for alias in incoming:
+            al = alias.strip()
+            if al and al.lower() != target_name_norm and al.lower() not in seen:
+                merged_aliases.append(al)
+                seen.add(al.lower())
+
+        data: dict[str, Any] = {"aliases": merged_aliases}
+        new_brief = payload.get("brief_description") or payload.get("summary") or ""
+        new_body = payload.get("description") or payload.get("body") or ""
+        if new_brief and not str(getattr(target, "brief_description", "") or "").strip():
+            data["brief_description"] = new_brief
+        if new_body and not str(getattr(target, "extended_description", "") or "").strip():
+            data["extended_description"] = new_body
+
+        from packages.application.entity_service import EntityService
+        entity_service = self.entity_service or EntityService(self.project_service)
+        return entity_service.update_entity(target_id, data)
 
     def _apply_entity_candidate(
         self,
@@ -804,6 +1219,25 @@ class ImportService:
         if chronology is not None and hasattr(chronology, "link_milestone"):
             chronology.link_milestone(result.value.id)
         return result
+
+    def _apply_ring_candidate(
+        self,
+        basket: ImportBasket,
+        import_cand: ImportCandidate,
+        payload: dict[str, Any],
+    ) -> Result[Any, str]:
+        """Materializa un candidato de anillo como WorldLayer vía servicio."""
+        name = str(
+            payload.get("ring_name") or payload.get("name") or payload.get("title") or ""
+        ).strip()
+        if not name:
+            return Error("Ring import candidate needs a name")
+        description = str(
+            payload.get("description") or payload.get("summary") or payload.get("body") or ""
+        )
+        from packages.application.world_layer_service import WorldLayerService
+        layer_service = WorldLayerService(project_service=self.project_service)
+        return layer_service.create_layer(name=name, description=description)
 
     @staticmethod
     def _resolve_relation_endpoints_by_name(project: Any, proposed_data: dict) -> tuple[str, str]:

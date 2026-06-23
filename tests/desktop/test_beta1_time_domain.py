@@ -99,13 +99,27 @@ def test_milestone_year_serialization():
 
 # ── No-atemporalidad por defecto (servicios) ──────────────────────────────
 
-def test_create_entity_defaults_birth_year_to_present(ps):
+def test_create_entity_without_date_is_pending_not_present(ps):
+    # BETA1-J04: ya NO se asume present_year. Sin fecha → 'por datar' (pendiente),
+    # nunca un presente falso. La obligatoriedad es del write path de producto.
     ps.active_project.project_chronology.present_year = 312
     svc = EntityService(ps, ps.store)
     result = svc.create_entity({"name": "Nueva", "entity_type": "personaje"})
     assert isinstance(result, Ok)
-    assert result.value.birth_year == 312
-    assert result.value.death_year is None
+    assert result.value.birth_year is None  # no se inventa el presente
+    span = result.value.life_span
+    assert span is not None and span.is_dated() is False
+
+
+def test_create_entity_enforce_dating_blocks_undated(ps):
+    # BETA1-J04: en el write path de producto (enforce_dating=True) se rechaza.
+    svc = EntityService(ps, ps.store)
+    blocked = svc.create_entity({"name": "X", "entity_type": "personaje"}, enforce_dating=True)
+    assert isinstance(blocked, Error)
+    ok = svc.create_entity(
+        {"name": "Y", "entity_type": "personaje", "birth_year": -40}, enforce_dating=True
+    )
+    assert isinstance(ok, Ok) and ok.value.birth_year == -40
 
 
 def test_create_entity_respects_explicit_birth_year(ps):
@@ -128,15 +142,25 @@ def test_update_entity_edits_years(ps):
     assert isinstance(bad, Error)
 
 
-def test_create_milestone_defaults_year_to_present(ps):
+def test_create_milestone_without_year_is_pending_not_present(ps):
+    # BETA1-J04: el hito sin año ya NO hereda el presente; queda 'por datar'.
     ps.active_project.project_chronology.present_year = 7
     svc = CausalMilestoneService(project_service=ps)
     result = svc.create_hito_manual({"title": "Hito ahora"})
     assert isinstance(result, Ok)
-    assert result.value.year == 7
+    assert result.value.year is None
+    assert result.value.as_temporal_span().is_dated() is False
     explicit = svc.create_hito_manual({"title": "Hito antiguo", "year": -100})
     assert isinstance(explicit, Ok)
     assert explicit.value.year == -100
+
+
+def test_create_milestone_enforce_dating_blocks_undated(ps):
+    svc = CausalMilestoneService(project_service=ps)
+    blocked = svc.create_hito_manual({"title": "Sin año"}, enforce_dating=True)
+    assert isinstance(blocked, Error)
+    ok = svc.create_hito_manual({"title": "Datado", "year": -100}, enforce_dating=True)
+    assert isinstance(ok, Ok)
 
 
 # ── EraService ────────────────────────────────────────────────────────────
@@ -228,8 +252,11 @@ def test_time_fields_survive_save_and_reopen(ps, tmp_path):
     era_svc.create_era({"name": "Fundación", "start_year": -200, "end_year": -1, "order": 1})
 
     entity_svc = EntityService(ps, ps.store)
-    created = entity_svc.create_entity({"name": "Cron", "entity_type": "personaje"})
-    assert isinstance(created, Ok) and created.value.birth_year == 500
+    # BETA1-J04: la fecha se provee explícitamente (ya no se hereda del presente).
+    created = entity_svc.create_entity(
+        {"name": "Cron", "entity_type": "personaje", "birth_year": 480}
+    )
+    assert isinstance(created, Ok) and created.value.birth_year == 480
 
     hito_svc = CausalMilestoneService(project_service=ps)
     hito = hito_svc.create_hito_manual({"title": "El Pacto", "year": -150})
@@ -246,6 +273,8 @@ def test_time_fields_survive_save_and_reopen(ps, tmp_path):
     assert chrono.present_year == 500
     assert {era.name for era in chrono.eras} == {"Presente", "Fundación"}
     entity = next(e for e in project.entities if e.name == "Cron")
-    assert entity.birth_year == 500 and entity.death_year is None
+    assert entity.birth_year == 480 and entity.death_year is None
+    # BETA1-J04: el lapso rico también sobrevive el roundtrip.
+    assert entity.life_span is not None and entity.life_span.start_year == 480
     milestone = next(h for h in project.causal_milestones if h.title == "El Pacto")
     assert milestone.year == -150

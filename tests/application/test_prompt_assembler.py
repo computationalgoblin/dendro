@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 from packages.application.prompt_assembler import (
     PromptAssembler,
+    apply_section_exclusions,
+    build_context_preview,
     build_model_user_message,
 )
 
@@ -211,3 +213,100 @@ def test_debug_log_emitted_at_debug_level(caplog):
 def test_shim_delegates_to_assembler():
     plan = _plan()
     assert build_model_user_message(plan) == PromptAssembler().assemble(plan)
+
+
+# ── UX3: vista previa de contexto + exclusiones ──────────────────────────
+
+
+def test_preview_trimmed_matches_assemble():
+    # preview()['trimmed'] es exactamente lo que assemble() serializa.
+    plan = _plan(context={
+        "creative_brief": {"canon": {"hard_rules": ["r"]}},
+        "rag_context_pack": _pack([
+            {"kind": "entity", "ref_id": "e1", "rendered_text": "x",
+             "priority": "high", "reason": "r"},
+        ]),
+    })
+    asm = PromptAssembler()
+    assert json.loads(asm.assemble(plan)) == asm.preview(plan)["trimmed"]
+
+
+def test_apply_section_exclusions_drops_rag_item_by_id():
+    pack = _pack([
+        {"kind": "entity", "ref_id": "e1", "rendered_text": "x", "priority": "high", "reason": "r"},
+        {"kind": "entity", "ref_id": "e2", "rendered_text": "y", "priority": "high", "reason": "r"},
+    ])
+    ctx = apply_section_exclusions({"rag_context_pack": pack}, [], ["e1"])
+    ids = {it["ref_id"] for it in ctx["rag_context_pack"]["items"]}
+    assert ids == {"e2"}
+
+
+def test_apply_section_exclusions_drops_whole_rag_section():
+    pack = _pack([
+        {"kind": "entity", "ref_id": "e1", "rendered_text": "x",
+         "priority": "high", "reason": "r"},
+        {"kind": "candidate", "ref_id": "c1", "rendered_text": "p",
+         "priority": "normal", "reason": "r"},
+    ])
+    ctx = apply_section_exclusions({"rag_context_pack": pack}, ["canon_confirmado"], [])
+    kinds = {it["kind"] for it in ctx["rag_context_pack"]["items"]}
+    assert kinds == {"candidate"}  # canon eliminado, candidato conservado
+
+
+def test_apply_section_exclusions_drops_deterministic_section():
+    ctx = apply_section_exclusions(
+        {"cronologia": {"nombre": "Calendario"}, "contexto_causal": {"a": 1}},
+        ["cronologia"],
+        [],
+    )
+    assert "cronologia" not in ctx
+    assert "contexto_causal" in ctx  # solo se quita lo excluido
+
+
+def test_apply_section_exclusions_ignores_fixed_sections():
+    # Las secciones fijas/sagradas no son excluibles: no se tocan aunque lleguen.
+    ctx = apply_section_exclusions(
+        {"creative_brief": {"canon": {}}, "rag_context_pack": _pack([])},
+        ["configuracion_creativa", "prompt_exacto_usuario"],
+        [],
+    )
+    assert ctx["creative_brief"] == {"canon": {}}
+
+
+def test_preview_honours_exclusions_so_real_job_matches():
+    # Con preview_exclusions en el contexto, assemble() (= ejecución real) no
+    # incluye el item excluido. Así la vista previa y el job van sincronizados.
+    pack = _pack([
+        {"kind": "entity", "ref_id": "keep", "rendered_text": "x",
+         "priority": "high", "reason": "r"},
+        {"kind": "entity", "ref_id": "drop", "rendered_text": "y",
+         "priority": "high", "reason": "r"},
+    ])
+    plan = _plan(context={
+        "rag_context_pack": pack,
+        "preview_exclusions": {"sections": [], "item_ids": ["drop"]},
+    })
+    msg = json.loads(PromptAssembler().assemble(plan))
+    ids = {it["ref_id"] for it in msg["canon_confirmado"]["items"]}
+    assert ids == {"keep"}
+
+
+def test_build_context_preview_structure():
+    pack = _pack([
+        {"kind": "entity", "ref_id": "e1", "rendered_text": "Ariadna",
+         "priority": "high", "reason": "r"},
+    ])
+    plan = _plan(context={
+        "creative_brief": {"canon": {"hard_rules": ["r"]}},
+        "rag_context_pack": pack,
+    })
+    preview = build_context_preview(PromptAssembler().preview(plan))
+    by_key = {s["key"]: s for s in preview["sections"]}
+    # Sección sagrada: presente y NO excluible.
+    assert by_key["prompt_exacto_usuario"]["fixed"] is True
+    # Sección RAG: excluible y con item ref_id visible.
+    canon = by_key["canon_confirmado"]
+    assert canon["fixed"] is False
+    assert canon["items"][0]["ref_id"] == "e1"
+    assert canon["items"][0]["est_tokens"] >= 1
+    assert preview["total_tokens"] >= 1

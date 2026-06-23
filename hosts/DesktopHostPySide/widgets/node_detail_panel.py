@@ -31,10 +31,25 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge, enum_human, human_ref
+from hosts.DesktopHostPySide.widgets.design_system import (
+    GOLD,
+    INK,
+    INPUT_BG,
+    LINE,
+    LINE_STRONG,
+    AdvancedSection,
+    Badge,
+    enum_human,
+    human_ref,
+)
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
+from packages.domain.entity_taxonomy import (
+    BEING_NATURES,
+    LEAF_ENTITY_TYPES,
+    has_temporal_nature,
+)
 from packages.domain.result import Error
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 
@@ -47,19 +62,24 @@ _LABEL_COLOR = "#6F6A42"
 _MUTED_COLOR = "#7C806E"
 _SUGGESTION_BG = "#FFFDF7"
 
-# Default node colours per entity type (mirrors graph_canvas._NODE_COLORS)
+# Default node colours per entity type (mirrors graph_canvas._NODE_COLORS).
+# BETA1-UX04/UX07: paleta BOTÁNICA cálida (antes azules/lavandas frías que
+# pintaban un swatch azul fuera de paleta en el editor). Debe coincidir con
+# graph_canvas._NODE_COLORS.
 # B39 terminology: branch types show as "Rama", all others as "Hoja"
 BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
 
 _NODE_COLORS: dict[str, str] = {
-    "personaje": "#7C9BFF",
-    "lugar": "#7EC8A5",
-    "localizacion": "#7EC8A5",
-    "organizacion": "#DCA35F",
-    "faccion": "#D9908F",
-    "objeto": "#C9A5FF",
-    "evento": "#E0C46C",
-    "concepto": "#9BB4C7",
+    "personaje": "#C07B53",
+    "lugar": "#7E9568",
+    "localizacion": "#7E9568",
+    "organizacion": "#B28A3C",
+    "faccion": "#A65C54",
+    "objeto": "#937083",
+    "evento": "#C8A24C",
+    "concepto": "#8E8A6A",
+    "contenedor": "#A89878",
+    "nota": "#9A8E72",
 }
 
 # Simplified canon options for normal mode
@@ -308,7 +328,9 @@ class NodeDetailPanel(QWidget):
         first_row.addWidget(self.name_edit, 3)
         self.type_combo = QComboBox()
         self.type_combo.setEditable(True)
-        for item in EntityType:
+        # BETA1-J08: la HOJA solo ofrece tipos de hoja (sigue editable por los
+        # tipos personalizados).
+        for item in LEAF_ENTITY_TYPES:
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         first_row.addWidget(self.type_combo, 2)
@@ -327,53 +349,45 @@ class NodeDetailPanel(QWidget):
         first_row.addWidget(self.color_btn)
         form_layout.addRow(first_row)
 
-        # BETA1-G03: fila temporal DISCRETA bajo la identidad —
-        # Nace [año] · Muere [año|—] · Era (derivada, solo lectura).
-        time_row = QHBoxLayout()
-        time_row.setSpacing(6)
-        _time_label_ss = f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
-        _year_ss = (
-            "QLineEdit { background: transparent; border: none; "
-            "border-bottom: 1px solid #D8D6C8; border-radius: 0; "
-            "font-size: 12px; color: #3F3D2E; padding: 1px 2px; } "
-            "QLineEdit:focus { border-bottom: 1px solid #C9C0A0; }"
+        # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo
+        # en la vista Cronología; aquí solo se MUESTRA, derivado de birth/death y
+        # de las eras efectivas (las mismas que pinta la cronológica). Solo lectura.
+        self.lifespan_label = QLabel("")
+        self.lifespan_label.setWordWrap(True)
+        self.lifespan_label.setStyleSheet(
+            f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
         )
-        _year_validator = QIntValidator(-999999999, 999999999, self)
-        born_label = QLabel("Nace")
-        born_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(born_label)
-        self.birth_year_edit = QLineEdit()
-        self.birth_year_edit.setValidator(_year_validator)
-        self.birth_year_edit.setFixedWidth(64)
-        self.birth_year_edit.setStyleSheet(_year_ss)
-        self.birth_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        time_row.addWidget(self.birth_year_edit)
-        dies_label = QLabel("· Muere")
-        dies_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(dies_label)
-        self.death_year_edit = QLineEdit()
-        self.death_year_edit.setValidator(_year_validator)
-        self.death_year_edit.setFixedWidth(64)
-        self.death_year_edit.setPlaceholderText("—")
-        self.death_year_edit.setStyleSheet(_year_ss)
-        self.death_year_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        time_row.addWidget(self.death_year_edit)
-        self.era_label = QLabel("")
-        self.era_label.setStyleSheet(_time_label_ss)
-        time_row.addWidget(self.era_label, 1)
-        self.birth_year_edit.textEdited.connect(self._refresh_era_label)
-        form_layout.addRow(time_row)
+        self.lifespan_label.setToolTip(
+            "Define el origen y el fin estirando el nodo en la vista Cronología."
+        )
+        form_layout.addRow(self.lifespan_label)
+
+        # BETA1-J07/J08: naturaleza temporal SOLO para seres (personaje/criatura).
+        # Un eterno NO recibe nacimiento mortal; la IA la propone y el usuario manda.
+        self.nature_combo = QComboBox()
+        _NATURE_LABELS = {"mortal": "Mortal", "inmortal": "Inmortal", "eterno": "Eterno"}
+        for _nat in BEING_NATURES:
+            self.nature_combo.addItem(_NATURE_LABELS.get(_nat.value, _nat.value), _nat.value)
+        self.nature_combo.setToolTip(
+            "Cómo se relaciona el ser con el tiempo. Un ser eterno/inmortal no "
+            "nace en un año mortal. Solo aplica a personajes y criaturas."
+        )
+        self.nature_label = QLabel("Naturaleza temporal")
+        form_layout.addRow(self.nature_label, self.nature_combo)
 
         # Descripción breve: tras la imagen (montada fuera del form) — el
         # widget se crea aquí, se monta más abajo en el orden F05.
         self.brief_edit = QTextEdit()
         self.brief_edit.setMaximumHeight(64)
         self.brief_edit.setPlaceholderText("Descripción breve…")
-        # BETA1-F05: viñetas protagonistas (breve y cuerpo)
+        # BETA1-F05: viñetas protagonistas (breve y cuerpo).
+        # BETA1-UX08: estados coherentes con el sistema central (borde LINE,
+        # hover LINE_STRONG, foco oro 2px) en vez de hexes sueltos.
         _card_ss = (
-            "QTextEdit { background: #FFFDF7; border: 1px solid #E7E3D4; "
-            "border-radius: 12px; padding: 10px; font-size: 13px; color: #3F3D2E; } "
-            "QTextEdit:focus { border: 1px solid #C9C0A0; background: #FFFFFF; }"
+            f"QTextEdit {{ background: {INPUT_BG}; border: 1px solid {LINE}; "
+            f"border-radius: 12px; padding: 10px; font-size: 13px; color: {INK}; }} "
+            f"QTextEdit:hover {{ border-color: {LINE_STRONG}; }} "
+            f"QTextEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 9px; }}"
         )
         self.brief_edit.setStyleSheet(_card_ss)
         self._editorial_card_ss = _card_ss
@@ -633,8 +647,11 @@ class NodeDetailPanel(QWidget):
         root.addLayout(actions)
         root.addStretch()
 
-        # Apply drawer background
-        self.setStyleSheet(f"background: {_BG_DRAWER};")
+        # BETA1-UX08: fondo del panel SCOPED al objectName. Un stylesheet sin
+        # selector sangra a los hijos e interfiere con el estilo central de los
+        # botones (el primario disabled perdía contraste/etiqueta).
+        self.setObjectName("nodeDetailPanel")
+        self.setStyleSheet(f"QWidget#nodeDetailPanel {{ background: {_BG_DRAWER}; }}")
 
         self.set_advanced_mode(self.ctx.advanced_mode)
 
@@ -700,7 +717,18 @@ class NodeDetailPanel(QWidget):
         has_custom = bool(meta.get("_node_color"))
         if not has_custom:
             self._update_color_swatch(_default_color_for_type(type_val))
+        self._update_nature_visibility()
         self._schedule_autosave()
+
+    def _update_nature_visibility(self):
+        """BETA1-J08: el combo de naturaleza solo aparece para seres."""
+        type_val = self.type_combo.currentData() or self.type_combo.currentText().strip().lower()
+        try:
+            is_being = has_temporal_nature(EntityType(type_val))
+        except ValueError:
+            is_being = False
+        self.nature_combo.setVisible(is_being)
+        self.nature_label.setVisible(is_being)
 
     # ------------------------------------------------------------------
     # Auto-save (debounced)
@@ -716,9 +744,9 @@ class NodeDetailPanel(QWidget):
         self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
-        # BETA1-G03: años de vida
-        self.birth_year_edit.textEdited.connect(self._schedule_autosave)
-        self.death_year_edit.textEdited.connect(self._schedule_autosave)
+        self.nature_combo.currentIndexChanged.connect(self._schedule_autosave)
+        # BETA1-UX2C: el lapso de vida ya no se edita aquí (se estira el nodo en
+        # la cronología), así que no hay campos de año que autoguardar.
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -977,34 +1005,61 @@ class NodeDetailPanel(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
-    # BETA1-G03: helpers temporales -----------------------------------
+    # BETA1-UX2C: lapso de vida (solo lectura) -------------------------
 
-    @staticmethod
-    def _parse_year_edit(edit, fallback):
-        text = edit.text().strip()
-        if not text or text == "-":
-            return fallback
-        try:
-            return int(text)
-        except ValueError:
-            return fallback
-
-    def _refresh_era_label(self, *_args):
-        """Era derivada del año de nacimiento — solo lectura (contrato G01)."""
-        year = self._parse_year_edit(self.birth_year_edit, None)
+    def _era_name_for_year(self, year) -> str:
+        """Nombre de era para *year* usando las eras EFECTIVAS (las mismas que
+        pinta la cronológica: dominio o derivadas del calendario completo)."""
         if year is None:
-            self.era_label.setText("")
-            return
+            return ""
         project = self._project()
-        chronology = getattr(project, "project_chronology", None) if project else None
-        era = None
-        if chronology is not None:
-            try:
-                chronology.ensure_default_era()
-                era = chronology.era_for_year(year)
-            except Exception:
-                era = None
-        self.era_label.setText(f"· {era.name}" if era is not None else "")
+        if project is None:
+            return ""
+        try:
+            from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras
+            for era in effective_eras(project):
+                start = getattr(era, "start_year", None)
+                end = getattr(era, "end_year", None)
+                if start is None or int(year) < int(start):
+                    continue
+                if end is None or int(year) < int(end):
+                    return str(getattr(era, "name", "") or "")
+        except Exception:
+            return ""
+        return ""
+
+    def _refresh_lifespan_label(self, entity) -> None:
+        """Muestra el lapso derivado de birth/death (origen → fin/presente) y el
+        estado de datación (BETA1-J06: Por datar / Sin fundamentar / Datado…)."""
+        from hosts.DesktopHostPySide.widgets.candidate_review_panel import dating_badge_label
+
+        # BETA1-J07: sincroniza el combo de naturaleza temporal con la entidad.
+        span = getattr(entity, "life_span", None)
+        nature_value = getattr(getattr(span, "nature", None), "value", "mortal")
+        self.nature_combo.blockSignals(True)
+        idx = self.nature_combo.findData(nature_value)
+        self.nature_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.nature_combo.blockSignals(False)
+        self._update_nature_visibility()
+
+        badge = dating_badge_label(entity)
+        birth = getattr(entity, "birth_year", None)
+        death = getattr(entity, "death_year", None)
+        if birth is None:
+            self.lifespan_label.setText(
+                f"Lapso de vida: [{badge}] · dátalo aquí o en la Cronología"
+            )
+            return
+
+        def part(year: int) -> str:
+            era = self._era_name_for_year(year)
+            return f"año {int(year)}" + (f" · {era}" if era else "")
+
+        if death is None:
+            text = f"Lapso de vida:  origen {part(birth)}  →  presente"
+        else:
+            text = f"Lapso de vida:  origen {part(birth)}  →  fin {part(death)}"
+        self.lifespan_label.setText(f"{text}   [{badge}]")
 
     def _worldbuilding_active(self) -> bool:
         project = self._project()
@@ -1083,12 +1138,8 @@ class NodeDetailPanel(QWidget):
             self.name_edit.setText(getattr(entity, "name", ""))
             self._set_combo_value(self.type_combo, kind)
 
-            # BETA1-G03: fila temporal
-            birth = getattr(entity, "birth_year", None)
-            death = getattr(entity, "death_year", None)
-            self.birth_year_edit.setText("" if birth is None else str(birth))
-            self.death_year_edit.setText("" if death is None else str(death))
-            self._refresh_era_label()
+            # BETA1-UX2C: lapso de vida solo-lectura (se edita en la cronología)
+            self._refresh_lifespan_label(entity)
             self.brief_edit.setPlainText(getattr(entity, "brief_description", "") or "")
             self.extended_edit.setPlainText(getattr(entity, "extended_description", "") or "")
             self.private_notes_edit.setPlainText(getattr(entity, "private_notes", "") or "")
@@ -1236,10 +1287,12 @@ class NodeDetailPanel(QWidget):
             "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
-            # BETA1-G03: fila temporal (vacío en Nace → conserva el valor;
-            # vacío en Muere → sigue viva)
-            "birth_year": self._parse_year_edit(self.birth_year_edit, getattr(self._entity, "birth_year", None)),
-            "death_year": self._parse_year_edit(self.death_year_edit, None),
+            # BETA1-UX2C: el lapso de vida se edita en la cronología; al guardar
+            # el panel se conservan TAL CUAL (pass-through) para no borrarlo.
+            "birth_year": getattr(self._entity, "birth_year", None),
+            "death_year": getattr(self._entity, "death_year", None),
+            # BETA1-J07: naturaleza temporal editada en la ficha.
+            "temporal_nature": self.nature_combo.currentData(),
         }
         self.ctx.log(
             "info",

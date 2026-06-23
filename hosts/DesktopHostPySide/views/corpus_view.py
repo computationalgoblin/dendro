@@ -25,10 +25,10 @@ from packages.domain.entity import (
     CanonState,
     CertaintyLevel,
     DevelopmentLevel,
-    EntityType,
     NarrativeImportance,
     VisibilityState,
 )
+from packages.domain.entity_taxonomy import OFFERED_ENTITY_TYPES
 from packages.domain.result import Error
 
 
@@ -217,10 +217,18 @@ class CorpusView(QWidget):
         drawer.open()
 
     def _entity_fields(self, entity):
+        # BETA1-J08: el inspector ofrece solo tipos curados, pero SIEMPRE incluye
+        # el tipo actual de la entidad aunque esté oculto (evento, nota, legacy…):
+        # el combo del inspector no es editable y, sin esto, una entidad de tipo
+        # oculto se reescribiría al primer tipo curado al guardar.
+        type_options = [t.value for t in OFFERED_ENTITY_TYPES]
+        current_type = getattr(entity.entity_type, "value", str(entity.entity_type))
+        if current_type not in type_options:
+            type_options = [current_type, *type_options]
         return [
             {"name": "name", "label": "Nombre", "value": entity.name},
             {"name": "aliases", "label": "Aliases (csv)", "value": entity.aliases},
-            {"name": "entity_type", "label": "Tipo", "kind": "combo", "value": entity.entity_type, "options": _enum_values(EntityType)},
+            {"name": "entity_type", "label": "Tipo", "kind": "combo", "value": entity.entity_type, "options": type_options},
             {"name": "brief_description", "label": "Descripción breve", "kind": "multiline", "value": entity.brief_description},
             {"name": "extended_description", "label": "Descripción extendida", "kind": "multiline", "value": entity.extended_description},
             {"name": "canon_state", "label": "Canon", "kind": "combo", "value": entity.canon_state, "options": _enum_values(CanonState)},

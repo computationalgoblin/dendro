@@ -22,6 +22,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.temporal_dating import (
+    apply_nature_semantics,
+    coerce_nature,
+    normalize_entity_dating,
+    reconcile_entity_dating,
+)
+from packages.domain.entity_taxonomy import clamp_nature
 from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import (
     CanonState,
@@ -67,11 +74,20 @@ class EntityService:
     # CRUD
     # ------------------------------------------------------------------
 
-    def create_entity(self, data: dict[str, Any], history_service: Any = None) -> Result[NarrativeEntity, str]:
+    def create_entity(
+        self,
+        data: dict[str, Any],
+        history_service: Any = None,
+        *,
+        enforce_dating: bool = False,
+    ) -> Result[NarrativeEntity, str]:
         """Create a new entity, add it to the active project, and persist.
 
         Args:
             data: Dict with at least ``name`` and ``entity_type`` keys.
+            enforce_dating: BETA1-J04. Cuando True (write path de producto:
+                quick-create UI, aceptación de candidatos) rechaza la creación
+                si no hay datación. Por defecto False (creación programática).
 
         Returns:
             Ok(NarrativeEntity) on success.
@@ -87,12 +103,15 @@ class EntityService:
         entity = NarrativeEntity.from_dict(data)
         entity.name = name
 
-        # BETA1-G02: no-atemporalidad por defecto. Toda entidad nace en el
-        # present_year del proyecto salvo que la llamada indique otro año.
-        # El default vive AQUI (una sola fuente), nunca bloquea la creación.
-        if entity.birth_year is None:
-            chronology = getattr(proj.value, "project_chronology", None)
-            entity.birth_year = int(getattr(chronology, "present_year", 0) or 0)
+        # BETA1-J04/J07: ya NO se asume present_year. Se normaliza el lapso (sin
+        # fecha → 'pendiente') y se aplica la naturaleza temporal si la trae el
+        # payload (un eterno NO recibe nacimiento mortal).
+        normalize_entity_dating(entity, nature=data.get("temporal_nature"))
+        if enforce_dating and not entity.as_temporal_span().is_dated():
+            return Error(
+                "La entidad requiere una fecha de inicio antes de guardar "
+                "(un año concreto o una precisión explícita)."
+            )
 
         issues = validate_entity(entity)
         if issues:
@@ -149,12 +168,29 @@ class EntityService:
             "narrative_importance", "development_level", "custom_metadata",
             "custom_type_id", "custom_fields",
             "birth_year", "death_year",  # BETA1-G02
+            "life_span",  # BETA1-J04: lapso temporal rico
         }
         merged = found.to_dict()
         for key in editable_fields:
             if key in data:
                 merged[key] = data[key]
         updated = NarrativeEntity.from_dict(merged)
+        # BETA1-J04: respeta qué campo de datación tocó el usuario (mirror vs
+        # life_span) y mantiene ambos sincronizados.
+        reconcile_entity_dating(updated, set(data.keys()))
+        # BETA1-J07: naturaleza temporal editada en la ficha (origen explícito).
+        if "temporal_nature" in data and updated.life_span is not None:
+            nat = coerce_nature(data.get("temporal_nature"))
+            if nat is not None:
+                updated.life_span.nature = nat
+        # BETA1-J08: clamp final por tipo (cubre cambio de tipo y/o naturaleza):
+        # un no-ser nunca queda inmortal/eterno aunque se edite el tipo.
+        if updated.life_span is not None:
+            updated.life_span.nature = clamp_nature(
+                updated.entity_type, updated.life_span.nature
+            )
+            apply_nature_semantics(updated.life_span)
+            updated.set_life_span(updated.life_span)
         issues = validate_entity(updated)
         if issues:
             return Error(f"Entity validation failed: {'; '.join(issues)}")

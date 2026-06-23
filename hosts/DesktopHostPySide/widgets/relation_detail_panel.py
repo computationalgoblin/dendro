@@ -33,6 +33,7 @@ from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, VisibilityState
+from packages.domain.entity_taxonomy import OFFERED_RELATION_TYPES
 from packages.domain.relation import RelationType
 from packages.domain.result import Error
 
@@ -333,7 +334,9 @@ class RelationDetailPanel(QWidget):
         for custom in list(getattr(project, "custom_relation_types", []) or []) if project is not None else []:
             if getattr(custom, "is_active", True):
                 self.type_combo.addItem(str(getattr(custom, "name", "")), f"custom:{getattr(custom, 'id', '')}")
-        for item in RelationType:
+        # BETA1-J08: solo se ofrece el núcleo de relaciones (la familia de
+        # conocimiento se conserva en el enum pero no se ofrece).
+        for item in OFFERED_RELATION_TYPES:
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         type_row.addWidget(self.type_combo, 1)

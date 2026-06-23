@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.temporal_dating import normalize_relation_dating
 from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, VisibilityState
 from packages.domain.relation import (
@@ -23,6 +24,7 @@ from packages.domain.relation import (
     validate_relation,
 )
 from packages.domain.result import Error, Ok, Result
+from packages.domain.temporal_span import TemporalSpan
 from packages.persistence.store import ProjectStore
 
 
@@ -130,6 +132,8 @@ class RelationService:
         relation_type: RelationType | str | None = None,
         data: dict[str, Any] | None = None,
         history_service: Any = None,
+        *,
+        enforce_dating: bool = False,
     ) -> Result[NarrativeRelation, str]:
         """Create a new relation and add it to the active project.
 
@@ -170,21 +174,32 @@ class RelationService:
             relation_type=rtype,
         )
 
-        if data:
+        if isinstance(data, dict) and data:
             scalar_fields = (
                 "description", "temporality", "causality", "conditions", "source",
                 "direction", "intensity", "canon_state", "visibility_state",
                 "validity_conditions", "tags", "source_id", "target_id", "layer_ids",
                 "custom_relation_type_id",
+                "birth_year", "death_year",  # BETA1-J04: intervalo temporal
             )
             for key in scalar_fields:
                 if key in data:
                     setattr(relation, key, data[key])
             if "relation_type" in data:
                 relation.relation_type = data["relation_type"]
+            if isinstance(data.get("life_span"), dict):
+                relation.life_span = TemporalSpan.from_dict(data["life_span"])
             self._normalize_relation_enums(relation)
             if "custom_metadata" in data and isinstance(data["custom_metadata"], dict):
                 relation.custom_metadata.update(data["custom_metadata"])
+
+        # BETA1-J04: lapso coherente con el espejo entero; sin fecha → pendiente.
+        normalize_relation_dating(relation)
+        if enforce_dating and not relation.as_temporal_span().is_dated():
+            return Error(
+                "La relación requiere una fecha de inicio antes de guardar "
+                "(un año concreto o una precisión explícita)."
+            )
 
         issues = validate_relation(relation)
         if issues:

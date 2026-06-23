@@ -71,6 +71,9 @@ class IndexingOptions:
     # cannot resurface through its lingering accepted-candidate record.
     include_accepted_candidates: bool = True
     include_unaccepted_imports: bool = False
+    # Material de referencia (baskets en modo contexto): consulta permanente,
+    # independiente del estado de revisión. Activado por defecto.
+    include_reference_material: bool = True
     audience: str = "gm"
 
 
@@ -542,8 +545,15 @@ def _creative_record(project: Any, indexed_at: str) -> CorpusIndexRecord | None:
 def _iter_import_records(project: Any, options: IndexingOptions) -> Iterable[dict[str, Any]]:
     for basket in getattr(project, "import_baskets", []) or []:
         basket_state = _import_review_state(getattr(basket, "review_state", ""))
-        basket_rag_state = _import_rag_state(basket_state)
-        basket_allowed = _import_state_included(basket_state, options)
+        is_context = _basket_import_mode(basket) == "contexto"
+        if is_context:
+            # Modo contexto: material de referencia permanente, al margen del
+            # estado de revisión. Nunca propone canon (sin candidatos).
+            basket_rag_state = "referencia"
+            basket_allowed = bool(options.include_reference_material)
+        else:
+            basket_rag_state = _import_rag_state(basket_state)
+            basket_allowed = _import_state_included(basket_state, options)
         segment_by_id = {
             str(getattr(segment, "id", "")): segment
             for segment in getattr(basket, "segments", []) or []
@@ -582,6 +592,10 @@ def _iter_import_records(project: Any, options: IndexingOptions) -> Iterable[dic
                     },
                     "updated_at": _string_value(getattr(basket, "updated_at", "")),
                 }
+        if is_context and basket_allowed:
+            summary_record = _context_summary_record(basket)
+            if summary_record is not None:
+                yield summary_record
         for candidate in getattr(basket, "import_candidates", []) or []:
             state = _import_review_state(getattr(candidate, "review_state", ""))
             if not _import_state_included(state, options):
@@ -664,6 +678,63 @@ def _accepted_import_candidate_record(
     }
 
 
+def _basket_import_mode(basket: Any) -> str:
+    """Modo de la cesta ("canon"/"contexto"), con fallback a metadata."""
+    mode = str(getattr(basket, "import_mode", "") or "").strip().lower()
+    if not mode:
+        meta = getattr(basket, "metadata", {}) or {}
+        mode = str(meta.get("import_mode", "") or "").strip().lower()
+    return mode or "canon"
+
+
+def _context_summary_record(basket: Any) -> dict[str, Any] | None:
+    """Registro de referencia desde el resumen IA del modo contexto.
+
+    El resumen vive en ``basket.metadata['context_summary']`` (lo genera I12);
+    si no existe, no se emite nada. Nunca es canon.
+    """
+    meta = getattr(basket, "metadata", {}) or {}
+    summary = meta.get("context_summary")
+    if not isinstance(summary, dict):
+        return None
+    text = str(summary.get("summary", "") or "").strip()
+    cards = summary.get("topic_cards")
+    card_lines = []
+    if isinstance(cards, list):
+        for card in cards:
+            if isinstance(card, dict):
+                card_lines.append(
+                    f"{card.get('title', '')}: {card.get('text', '')}".strip(": ").strip()
+                )
+    if not text and not card_lines:
+        return None
+    return {
+        "kind": CorpusItemKind.IMPORT_DOCUMENT,
+        "ref_id": f"{getattr(basket, 'id', '')}:context_summary",
+        "source": "project.import_baskets.referencia.context_summary",
+        "rendered_text": _join_lines([
+            _line("Kind", "Import context summary"),
+            _line("Import state", "referencia"),
+            _line("Summary", text),
+            _line("Topics", _join_lines(card_lines) if card_lines else ""),
+        ]),
+        "references": _import_references(
+            source_id=getattr(basket, "source_id", ""),
+            segment_id="",
+            source_references=[],
+        ),
+        "metadata": {
+            "basket_id": getattr(basket, "id", ""),
+            "import_rag_state": "referencia",
+            "source_type": "referencia",
+            "namespace": "referencia",
+            "source_id": getattr(basket, "source_id", ""),
+            "context_summary": True,
+        },
+        "updated_at": _string_value(getattr(basket, "updated_at", "")),
+    }
+
+
 def _import_review_state(value: Any) -> str:
     return _enum_value(value).strip().lower() or "pendiente"
 
@@ -693,6 +764,8 @@ def _canon_kind_from_import_candidate(candidate: Any) -> CorpusItemKind:
     candidate_type = str(getattr(candidate, "candidate_type", "") or "").strip().lower()
     if kind == "branch":
         return CorpusItemKind.BRANCH
+    if kind == "ring_suggestion" or candidate_type in {"anillo", "ring"}:
+        return CorpusItemKind.WORLD_LAYER
     if kind == "relation" or candidate_type in {"relacion", "relation"}:
         return CorpusItemKind.RELATION
     if kind == "milestone" or candidate_type in {"hito", "milestone", "cambio"}:
@@ -703,6 +776,7 @@ def _canon_kind_from_import_candidate(candidate: Any) -> CorpusItemKind:
 def _canon_kind_label(kind: CorpusItemKind) -> str:
     return {
         CorpusItemKind.BRANCH: "Branch",
+        CorpusItemKind.WORLD_LAYER: "World layer",
         CorpusItemKind.RELATION: "Relation",
         CorpusItemKind.MILESTONE: "Milestone",
     }.get(kind, "Entity")

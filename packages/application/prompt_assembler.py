@@ -16,12 +16,13 @@ compatibilidad que delega en el :class:`PromptAssembler` por defecto.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any
 
 from packages.application.context_budget import ContextBudgetManager
-from packages.application.prompt_budget import enforce_budget
+from packages.application.prompt_budget import _estimate_tokens, enforce_budget
 
 logger = logging.getLogger("narrative.prompt_assembler")
 
@@ -37,7 +38,7 @@ _DUPLICATED_CONTEXT_KEYS = frozenset(
         "contexto_causal",  # → posicion_causal
         "vecindario",  # → vecindario
         "cronologia",  # → cronologia (sección determinista compacta)
-        "rag_context_pack",  # → canon_confirmado / candidates_pendientes / imports / rag_auxiliar
+        "rag_context_pack",  # → canon / candidates / imports / material_referencia / rag_auxiliar
     }
 )
 
@@ -48,6 +49,10 @@ _LABEL_CANDIDATES = (
 )
 _LABEL_IMPORTS = (
     "AUXILIAR NO REVISADO — fuente externa importada. No se impone sobre el canon aceptado."
+)
+_LABEL_REFERENCIA = (
+    "MATERIAL DE REFERENCIA — consulta permanente, NO canon. Úsalo como apoyo/inspiración; "
+    "no lo impongas sobre el canon aceptado."
 )
 _LABEL_RAG = "RAG AUXILIAR — recuperado, NO autoritativo. Úsalo como apoyo, no como verdad."
 
@@ -125,12 +130,28 @@ def _mentions_block(context: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _selection_block(context: dict[str, Any]) -> dict[str, Any]:
     """INFORMA. Entidad objetivo y anillo activo (CONO)."""
-    return {
+    block: dict[str, Any] = {
         "entity_ids": list(context.get("selected_entity_ids") or []),
         "relation_ids": list(context.get("selected_relation_ids") or []),
         "anillo_activo": context.get("active_ring_id") or context.get("focused_ring_id") or "",
         "focus_label": context.get("focus_label") or "",
     }
+    # UX5c: la NATURALEZA del anillo activo (descripción + dominio) viaja al modelo
+    # para que cree/edite entidades coherentes con ese anillo, no solo con su nombre.
+    ring = context.get("active_ring")
+    if isinstance(ring, dict) and ring:
+        if ring.get("name"):
+            block["anillo_activo_nombre"] = ring["name"]
+        if ring.get("description"):
+            block["anillo_activo_descripcion"] = ring["description"]
+        if ring.get("domain"):
+            block["anillo_activo_dominio"] = ring["domain"]
+        block["coherencia_anillo"] = (
+            "Si hay anillo activo, la entidad/edición DEBE encajar en su naturaleza, "
+            "escala y temática (su descripción y dominio mandan): p. ej. un anillo "
+            "cosmológico ⇒ entidades cosmológicas, no mundanas."
+        )
+    return block
 
 
 def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
@@ -149,6 +170,7 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
     canon: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     imports: list[dict[str, Any]] = []
+    referencia: list[dict[str, Any]] = []
     aux: list[dict[str, Any]] = []
     for it in items:
         if not isinstance(it, dict):
@@ -161,10 +183,17 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
             "reason": it.get("reason"),
         }
         kind = it.get("kind")
+        meta = it.get("metadata")
+        source_type = meta.get("source_type") if isinstance(meta, dict) else None
         if kind == "candidate":
             candidates.append(entry)
         elif kind == "import_document":
-            imports.append(entry)
+            # Material de referencia (modo contexto) va a su propia sección;
+            # el resto de importaciones quedan como auxiliar sin revisar.
+            if source_type == "referencia":
+                referencia.append(entry)
+            else:
+                imports.append(entry)
         elif kind in _CANON_KINDS:
             canon.append(entry)
         else:  # issue, creative_config, desconocido → apoyo auxiliar
@@ -177,6 +206,8 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
         out["candidates_pendientes"] = {"autoridad": _LABEL_CANDIDATES, "items": candidates}
     if imports:
         out["importaciones_sin_revisar"] = {"autoridad": _LABEL_IMPORTS, "items": imports}
+    if referencia:
+        out["material_referencia"] = {"autoridad": _LABEL_REFERENCIA, "items": referencia}
     warnings = pack.get("warnings")
     if aux or warnings:
         rag_section: dict[str, Any] = {"autoridad": _LABEL_RAG}
@@ -306,6 +337,160 @@ def _fase2_directives(context: dict[str, Any]) -> dict[str, Any] | None:
     return {"parametros": params, "instrucciones": instructions}
 
 
+# ---------------------------------------------------------------------------
+# Vista previa de contexto (UX3): exclusión por sección/item + estructura legible
+# ---------------------------------------------------------------------------
+
+# Etiquetas en español por sección (para la UI; el modelo ve las claves crudas).
+SECTION_LABELS: dict[str, str] = {
+    "prompt_exacto_usuario": "Tu petición",
+    "directivas": "Directivas",
+    "menciones": "Menciones (@)",
+    "configuracion_creativa": "Configuración creativa",
+    "cronologia": "Cronología",
+    "canon_confirmado": "Canon confirmado",
+    "posicion_causal": "Posición causal",
+    "seleccion": "Selección",
+    "vecindario": "Vecindario",
+    "candidates_pendientes": "Candidatos pendientes",
+    "importaciones_sin_revisar": "Importaciones sin revisar",
+    "material_referencia": "Material de referencia",
+    "rag_auxiliar": "RAG auxiliar",
+    "contexto_autorizado": "Contexto autorizado",
+    "formatos_h05": "Formato de salida",
+}
+
+# Secciones RAG-derivadas → qué `kind` del pack las nutre (para excluir por sección).
+_RAG_SECTION_KINDS: dict[str, frozenset[str] | None] = {
+    "canon_confirmado": _CANON_KINDS,
+    "candidates_pendientes": frozenset({"candidate"}),
+    "importaciones_sin_revisar": frozenset({"import_document"}),
+    "material_referencia": frozenset({"import_document"}),  # distinguido por source_type
+    "rag_auxiliar": None,  # el resto (issue, creative_config, desconocido)
+}
+
+# Secciones deterministas excluibles → claves del context_scope que las generan.
+_DETERMINISTIC_SECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "cronologia": ("cronologia",),
+    "posicion_causal": ("contexto_causal",),
+    "vecindario": ("vecindario",),
+    "seleccion": ("selected_entity_ids", "selected_relation_ids"),
+}
+
+# Lo que el usuario PUEDE quitar en la vista previa (lo demás es fijo/sagrado).
+_EXCLUDABLE_SECTIONS: frozenset[str] = frozenset(
+    set(_RAG_SECTION_KINDS) | set(_DETERMINISTIC_SECTION_KEYS)
+)
+
+
+def _section_for_kind(kind: Any, source_type: Any = None) -> str:
+    """Sección de autoridad a la que pertenece un item del pack.
+
+    Por ``kind``, salvo las importaciones, que se separan por ``source_type``:
+    el material de referencia (modo contexto) tiene su propia sección.
+    """
+    if kind == "candidate":
+        return "candidates_pendientes"
+    if kind == "import_document":
+        if source_type == "referencia":
+            return "material_referencia"
+        return "importaciones_sin_revisar"
+    if kind in _CANON_KINDS:
+        return "canon_confirmado"
+    return "rag_auxiliar"
+
+
+def apply_section_exclusions(
+    context: dict[str, Any],
+    excluded_sections: Any,
+    excluded_item_ids: Any,
+) -> dict[str, Any]:
+    """Devuelve una copia del context_scope sin las secciones/items excluidos.
+
+    Pura y defensiva. Las secciones deterministas se quitan eliminando sus claves
+    de origen; las RAG-derivadas filtran ``rag_context_pack['items']`` por ``kind``
+    (sección entera) y por ``ref_id`` (item suelto). Las secciones fijas/sagradas
+    no son excluibles: aunque lleguen en la lista, se ignoran.
+    """
+    ctx = copy.deepcopy(dict(context or {}))
+    sections = {s for s in (excluded_sections or []) if s in _EXCLUDABLE_SECTIONS}
+    item_ids = {str(i) for i in (excluded_item_ids or []) if str(i)}
+
+    for sec in sections:
+        for key in _DETERMINISTIC_SECTION_KEYS.get(sec, ()):
+            ctx.pop(key, None)
+
+    pack = ctx.get("rag_context_pack")
+    if isinstance(pack, dict) and isinstance(pack.get("items"), list):
+        kept: list[Any] = []
+        for it in pack["items"]:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("ref_id") or "") in item_ids:
+                continue
+            meta = it.get("metadata")
+            st = meta.get("source_type") if isinstance(meta, dict) else None
+            if _section_for_kind(it.get("kind"), st) in sections:
+                continue
+            kept.append(it)
+        new_pack = dict(pack)
+        new_pack["items"] = kept
+        ctx["rag_context_pack"] = new_pack
+    return ctx
+
+
+def _short_text(value: Any, *, limit: int = 320) -> str:
+    """Texto recortado de un item para previsualizar sin volcar todo el rendered."""
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(".,;:") + "…"
+
+
+def build_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
+    """Convierte ``PromptAssembler.preview()`` en una estructura para la UI.
+
+    Una fila por sección (con etiqueta, tokens estimados, si es fija y si se
+    recortó por presupuesto) y, en las secciones con ``items``, una sub-fila por
+    item (ref_id, kind, tokens y un extracto del texto). Refleja lo que REALMENTE
+    se enviará (``trimmed``, ya con presupuesto y exclusiones aplicados).
+    """
+    trimmed = preview.get("trimmed") or {}
+    sections_out: list[dict[str, Any]] = []
+    for key, value in trimmed.items():
+        items_out: list[dict[str, Any]] = []
+        raw_items = value.get("items") if isinstance(value, dict) else None
+        if isinstance(raw_items, list):
+            for it in raw_items:
+                if not isinstance(it, dict):
+                    continue
+                items_out.append(
+                    {
+                        "ref_id": str(it.get("ref_id") or ""),
+                        "kind": str(it.get("kind") or ""),
+                        "est_tokens": _estimate_tokens(it),
+                        "text": _short_text(it.get("rendered_text")),
+                    }
+                )
+        sections_out.append(
+            {
+                "key": key,
+                "label": SECTION_LABELS.get(key, key),
+                "fixed": key not in _EXCLUDABLE_SECTIONS,
+                "est_tokens": _estimate_tokens(value),
+                "truncado": bool(isinstance(value, dict) and value.get("truncado")),
+                "items": items_out,
+            }
+        )
+    return {
+        "intent": preview.get("intent"),
+        "tier": preview.get("tier"),
+        "input_budget": preview.get("input_budget"),
+        "total_tokens": sum(s["est_tokens"] for s in sections_out),
+        "sections": sections_out,
+    }
+
+
 class PromptAssembler:
     """Ensambla el mensaje de usuario para un plan de job IA.
 
@@ -320,26 +505,46 @@ class PromptAssembler:
 
     def assemble(self, plan: Any) -> str:
         """Construye el mensaje, aplica presupuesto por tier y devuelve JSON."""
+        pv = self.preview(plan)
+        self._log_debug(
+            intent=pv["intent"],
+            override=pv["override"],
+            budget=pv["input_budget"],
+            before=pv["sections"],
+            after=pv["trimmed"],
+            context=pv["context"],
+        )
+        return json.dumps(pv["trimmed"], ensure_ascii=False, indent=2)
+
+    def preview(self, plan: Any) -> dict[str, Any]:
+        """Igual que ``assemble`` pero SIN serializar: devuelve las secciones antes
+        y después del presupuesto, el tier y el budget. Lo usan la vista previa de
+        contexto (UX3) y ``assemble`` (única fuente del ensamblado). Si el contexto
+        trae ``preview_exclusions`` (secciones/items que el usuario quitó en la
+        vista previa), se aplican aquí, así el job real respeta lo mismo al ejecutar.
+        """
         context = getattr(plan, "context", None) or {}
+        excl = context.get("preview_exclusions")
+        if isinstance(excl, dict) and (excl.get("sections") or excl.get("item_ids")):
+            context = apply_section_exclusions(
+                context, excl.get("sections") or [], excl.get("item_ids") or []
+            )
         intent = _intent_value(plan)
-
         sections = self._build_sections(plan, context)
-
         override = context.get("prompt_budget_tokens")
         budget = self._budget.input_budget(intent, override_tokens=override)
         percentages = self._budget.section_percentages(intent)
-
         trimmed = enforce_budget(sections, budget, section_percentages=percentages)
-
-        self._log_debug(
-            intent=intent,
-            override=override,
-            budget=budget,
-            before=sections,
-            after=trimmed,
-            context=context,
-        )
-        return json.dumps(trimmed, ensure_ascii=False, indent=2)
+        return {
+            "intent": intent,
+            "tier": self._budget.tier_for(intent).value,
+            "input_budget": budget,
+            "override": override,
+            "percentages": percentages,
+            "sections": sections,
+            "trimmed": trimmed,
+            "context": context,
+        }
 
     # -- construcción de secciones -----------------------------------------
 
@@ -383,6 +588,8 @@ class PromptAssembler:
             message["candidates_pendientes"] = rag_sections["candidates_pendientes"]
         if "importaciones_sin_revisar" in rag_sections:
             message["importaciones_sin_revisar"] = rag_sections["importaciones_sin_revisar"]
+        if "material_referencia" in rag_sections:
+            message["material_referencia"] = rag_sections["material_referencia"]
         if "rag_auxiliar" in rag_sections:
             message["rag_auxiliar"] = rag_sections["rag_auxiliar"]
 
@@ -449,6 +656,8 @@ class PromptAssembler:
 
 __all__ = [
     "PromptAssembler",
+    "apply_section_exclusions",
+    "build_context_preview",
     "build_model_user_message",
 ]
 

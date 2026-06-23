@@ -28,6 +28,18 @@ class ImportFormat(str, Enum):
     PDF = "pdf"
 
 
+class ImportMode(str, Enum):
+    """Tratamiento del documento importado (elegido por documento).
+
+    - CANON: la pipeline extrae entidades/ramas/relaciones/anillos para
+      revisión y eventual paso a canon (flujo histórico).
+    - CONTEXTO: el documento enriquece el contexto de la IA como material de
+      referencia permanente en el RAG; nunca propone candidatos de canon.
+    """
+    CANON = "canon"
+    CONTEXTO = "contexto"
+
+
 class ImportReviewState(str, Enum):
     """Controlled review states for ImportCandidate (§17.4)."""
     PENDIENTE = "pendiente"
@@ -241,6 +253,7 @@ class ImportBasket:
     segments: list[DocumentSegment] = field(default_factory=list)
     import_candidates: list[ImportCandidate] = field(default_factory=list)
     review_state: str = "pendiente"
+    import_mode: str = "canon"  # ImportMode.value — baskets viejos = canon
     created_at: str = ""
     updated_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -252,6 +265,7 @@ class ImportBasket:
             "segments": [s.to_dict() for s in self.segments],
             "import_candidates": [c.to_dict() for c in self.import_candidates],
             "review_state": self.review_state,
+            "import_mode": self.import_mode,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "metadata": self.metadata,
@@ -276,6 +290,7 @@ class ImportBasket:
             segments=segments,
             import_candidates=candidates,
             review_state=data.get("review_state", "pendiente"),
+            import_mode=data.get("import_mode", "canon"),
             created_at=data.get("created_at") or now,
             updated_at=data.get("updated_at") or now,
             metadata=_parse_metadata(data.get("metadata")),

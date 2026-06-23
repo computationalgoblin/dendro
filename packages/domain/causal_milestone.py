@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from packages.domain.temporal_models import EventTemporality
+from packages.domain.temporal_span import TemporalSpan
 
 
 class CausalMilestoneType(str, Enum):
@@ -66,6 +67,27 @@ class CausalMilestone:
     updated_at: str = ""
     # BETA1-G02: año diegético del hito (None solo transitorio pre-migración)
     year: int | None = None
+
+    def as_temporal_span(self) -> TemporalSpan:
+        """BETA1-J01: vista de lapso unificada sobre ``temporality`` + ``year``.
+
+        El hito ya persiste un ``EventTemporality`` rico y su ``year`` entero;
+        no se añade campo nuevo (se respeta el contrato de 22 campos). El
+        ``year`` sigue siendo el espejo entero autoritativo del inicio.
+        """
+        start = EventTemporality.from_dict(self.temporality.to_dict())
+        if start.year is None and self.year is not None:
+            start.year = self.year
+        end: EventTemporality | None = None
+        # Proceso con duración en años (p.ej. guerra) → fin derivado.
+        if (
+            start.is_duration
+            and start.year is not None
+            and isinstance(start.duration_value, int)
+            and (start.duration_unit or "").lower() in ("year", "years", "año", "años", "")
+        ):
+            end = EventTemporality(year=start.year + start.duration_value)
+        return TemporalSpan(start=start, end=end, ongoing=end is None)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to the 22-field B41-T01 contract."""

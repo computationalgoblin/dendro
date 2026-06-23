@@ -25,8 +25,24 @@ class TemporalRelation(str, Enum):
     SIMULTANEOUS = "simultaneo_a"
 
 
+class TemporalNature(str, Enum):
+    """BETA1-J07: cómo se relaciona un ser con el tiempo.
+
+    Gobierna la datación coherente: un ETERNO/ATEMPORAL no recibe un nacimiento
+    mortal; un INMORTAL no muere.
+    """
+
+    MORTAL = "mortal"           # nace y muere (default)
+    INMORTAL = "inmortal"       # nace en un momento, no muere
+    ETERNO = "eterno"           # ni nace ni muere; origen primordial, sin año
+    ATEMPORAL = "atemporal"     # concepto/ley fuera del tiempo
+    CICLICO = "ciclico"         # muere y renace
+
+
 @dataclass
 class EventTemporality:
+    # BETA1-J01: año entero diegético — eje canónico ordenable del punto temporal.
+    year: int | None = None
     absolute_date: str | None = None
     world_date: str | None = None
     relative_date: str | None = None
@@ -44,6 +60,7 @@ class EventTemporality:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "year": self.year,
             "absolute_date": self.absolute_date,
             "world_date": self.world_date,
             "relative_date": self.relative_date,
@@ -63,6 +80,7 @@ class EventTemporality:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EventTemporality:
         return cls(
+            year=_py(data.get("year")),
             absolute_date=data.get("absolute_date"),
             world_date=data.get("world_date"),
             relative_date=data.get("relative_date"),
@@ -150,6 +168,16 @@ def _pe(ec, v, d):
 
 def _pl(v): return list(v) if isinstance(v, list) else []
 def _pd(v): return dict(v) if isinstance(v, dict) else {}
+
+
+def _py(v):
+    """Parse año entero (negativos permitidos) o None — BETA1-J01."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 __all__ = ["TemporalPrecision", "TemporalRelation", "EventTemporality", "TimelineEvent"]

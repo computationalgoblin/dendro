@@ -13,6 +13,7 @@ Diseño (ver docs/architecture/C01_physics_contract.md):
 
 Obsidian-like en sensación, Dendro-like en estructura.
 """
+
 from __future__ import annotations
 
 import math
@@ -44,6 +45,24 @@ class Body:
     # locales del contenedor. El clamp mata la componente normal de la
     # velocidad en la pared (sin rebote).
     bounds: tuple[float, float, float, float] | None = None
+    # Semilla viva: si está definido, el cuerpo mantiene una velocidad
+    # tangencial constante (orbita su corona sin amortiguarse hasta el
+    # reposo). El damping decae el resto, pero la tangencial se reinyecta
+    # cada paso. None = cuerpo normal (comportamiento sin cambios).
+    orbit_speed: float | None = None
+    # Deriva del eje: el CENTRO de la órbita migra describiendo un círculo
+    # lento de radio orbit_drift (px) a orbit_drift_rate (rad/paso), de modo
+    # que el recorrido nunca se repite. orbit_t es el acumulador interno
+    # (determinista, sin tiempo real). El clamp de banda sigue centrado en el
+    # origen → la semilla nunca abandona su corona.
+    orbit_drift: float = 0.0
+    orbit_drift_rate: float = 0.0
+    orbit_t: float = 0.0
+    # Centro de órbita vigente del paso (transitorio, recalculado en step a
+    # partir de orbit_t): lo comparten el resorte radial y la reinyección
+    # tangencial para que ambos giren en torno al MISMO eje móvil.
+    orbit_cx: float = 0.0
+    orbit_cy: float = 0.0
 
 
 @dataclass
@@ -82,7 +101,8 @@ class PhysicsEngine:
         self.bodies = {body.body_id: body for body in bodies}
         # Solo muelles cuyos dos extremos existen y no son el mismo cuerpo
         self.springs = [
-            spring for spring in springs
+            spring
+            for spring in springs
             if spring.a != spring.b and spring.a in self.bodies and spring.b in self.bodies
         ]
 
@@ -104,7 +124,7 @@ class PhysicsEngine:
         """Pequeño impulso determinista para reactivar tras auto-stop."""
         for index, body in enumerate(self.bodies.values()):
             if not body.pinned:
-                angle = (index * 2.399963)  # ángulo dorado: sin simetrías
+                angle = index * 2.399963  # ángulo dorado: sin simetrías
                 body.vx += math.cos(angle) * 0.8
                 body.vy += math.sin(angle) * 0.8
 
@@ -114,6 +134,15 @@ class PhysicsEngine:
         """Un paso de simulación. Devuelve la energía cinética total."""
         bodies = [b for b in self.bodies.values()]
         forces: dict[str, list[float]] = {b.body_id: [0.0, 0.0] for b in bodies}
+
+        # 0. Eje de órbita del paso (deriva): el centro migra lento describiendo
+        #    un círculo de radio orbit_drift. Se calcula una sola vez por paso y
+        #    lo usan el resorte radial (sección 3) y la tangente (sección 5).
+        for body in bodies:
+            if body.orbit_speed is not None:
+                body.orbit_t += body.orbit_drift_rate
+                body.orbit_cx = body.orbit_drift * math.cos(body.orbit_t)
+                body.orbit_cy = body.orbit_drift * math.sin(body.orbit_t)
 
         # 1. Repulsión entre pares (O(n²); presupuesto C05: ≤50 cuerpos)
         for i in range(len(bodies)):
@@ -155,17 +184,23 @@ class PhysicsEngine:
             forces[spring.b][1] -= fy
 
         # 3. Resorte radial de anillo (gana por construcción: se aplica
-        #    después y con rigidez mayor que los muelles)
+        #    después y con rigidez mayor que los muelles). Para semillas vivas
+        #    el resorte tira hacia el eje MÓVIL (deriva), no hacia el origen, de
+        #    modo que la órbita migra; el clamp de banda (sección 5, centrado en
+        #    el origen) sigue garantizando que no abandona la corona.
         for body in bodies:
             if body.target_radius is None:
                 continue
-            dist = math.hypot(body.x, body.y)
+            ox = body.orbit_cx if body.orbit_speed is not None else 0.0
+            oy = body.orbit_cy if body.orbit_speed is not None else 0.0
+            rx, ry = body.x - ox, body.y - oy
+            dist = math.hypot(rx, ry)
             if dist < 1e-6:
                 # En el centro exacto: empujar hacia fuera en dirección fija
                 direction_x, direction_y = 1.0, 0.0
                 dist = 1e-6
             else:
-                direction_x, direction_y = body.x / dist, body.y / dist
+                direction_x, direction_y = rx / dist, ry / dist
             deviation = body.target_radius - dist
             magnitude = self.ring_stiffness * deviation * body.mass
             forces[body.body_id][0] += direction_x * magnitude
@@ -185,6 +220,29 @@ class PhysicsEngine:
             fx, fy = forces[body.body_id]
             body.vx = (body.vx + (fx / body.mass) * dt) * self.damping
             body.vy = (body.vy + (fy / body.mass) * dt) * self.damping
+            # Semilla viva: reinyectar la componente tangencial para que
+            # orbite su corona sin asentarse (el damping ya decayó la previa).
+            # La repulsión sigue empujando a los vecinos (grafo "vivo").
+            if body.orbit_speed is not None:
+                # Tangente en torno al eje móvil del paso (sección 0): recorrido
+                # irregular que no se repite, en sintonía con el resorte radial.
+                cx, cy = body.orbit_cx, body.orbit_cy
+                rx, ry = body.x - cx, body.y - cy
+                d = math.hypot(rx, ry)
+                if d < 1e-6:
+                    # Sin radial definida: arrancar en target_radius (o band)
+                    r0 = body.target_radius
+                    if r0 is None and body.band_inner is not None and body.band_outer is not None:
+                        r0 = (body.band_inner + body.band_outer) / 2.0
+                    if r0:
+                        body.x, body.y = float(r0) + cx, cy
+                        body.vx, body.vy = 0.0, body.orbit_speed
+                else:
+                    tx, ty = -ry / d, rx / d
+                    v_tan = body.vx * tx + body.vy * ty
+                    corr = body.orbit_speed - v_tan
+                    body.vx += corr * tx
+                    body.vy += corr * ty
             speed = math.hypot(body.vx, body.vy)
             if speed > self.max_speed:
                 scale = self.max_speed / speed
@@ -240,8 +298,11 @@ class PhysicsEngine:
     def is_settled(self) -> bool:
         """True si la energía actual está por debajo del umbral de reposo."""
         energy = sum(
-            0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy)
-            for b in self.bodies.values()
-            if not b.pinned
+            0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy) for b in self.bodies.values() if not b.pinned
         )
         return energy < self.min_energy
+
+    def has_live_orbiters(self) -> bool:
+        """True si hay algún cuerpo orbitando (semilla viva): el bridge no
+        debe auto-detener el timer mientras exista uno."""
+        return any(b.orbit_speed is not None for b in self.bodies.values())

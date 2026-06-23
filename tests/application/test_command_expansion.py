@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import pytest
 
-from packages.application.ai_jobs import AIJobType, CommandAction, CommandScope
+from packages.application.ai_jobs import (
+    AIJobType,
+    CommandAction,
+    CommandScope,
+    valid_scopes_for_action,
+)
 from packages.application.command_expansion import (
     MAX_RELATION_JOBS,
     consecutive_batches,
+    example_for_command,
     parse_mentions,
     plan_command_jobs,
     relation_fanout_pairs,
@@ -205,3 +211,35 @@ def test_plan_explicar_branches_on_mentions():
     without = plan_command_jobs(A.EXPLICAR, S.HOJA, "explica el origen", active_ring_id="r1")
     assert without.jobs[0].context_overrides["explain_target"] == "create_in_active_ring"
     assert without.jobs[0].context_overrides["active_ring_id"] == "r1"
+
+
+# --- example_for_command (descubribilidad / placeholder dinámico) -----------
+
+def test_example_for_command_covers_all_cells():
+    # Toda celda Acción×Ámbito válida devuelve un ejemplo no vacío y distinto del
+    # fallback genérico (la UI muestra esto como placeholder del input).
+    for action in CommandAction:
+        for scope in valid_scopes_for_action(action):
+            example = example_for_command(action, scope)
+            assert isinstance(example, str) and example.strip()
+            assert example != "describe a Dendro qué quieres crear o cambiar"
+
+
+def test_example_for_command_varies_by_scope_for_crear():
+    hoja = example_for_command(A.CREAR, S.HOJA)
+    relacion = example_for_command(A.CREAR, S.RELACION)
+    assert hoja != relacion  # el ámbito cambia el ejemplo en acciones generativas
+
+
+def test_example_for_command_analytical_trio_is_scope_agnostic():
+    # ANALIZAR/EXPLICAR/EXPANDIR ocultan el ámbito: mismo ejemplo en todo scope.
+    for action in (A.ANALIZAR, A.EXPLICAR, A.EXPANDIR):
+        examples = {example_for_command(action, scope) for scope in CommandScope}
+        assert len(examples) == 1
+
+
+def test_example_for_command_accepts_strings_and_is_safe():
+    assert example_for_command("crear", "hoja") == example_for_command(A.CREAR, S.HOJA)
+    # Valores raros nunca lanzan: caen al texto genérico.
+    fallback = "describe a Dendro qué quieres crear o cambiar"
+    assert example_for_command("inventada", "rara") == fallback

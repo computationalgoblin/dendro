@@ -10,14 +10,46 @@ Provides:
 
 from __future__ import annotations
 
+import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
 from packages.domain.import_models import DocumentSegment, ImportFormat
-from packages.domain.result import Result, Ok, Error as Err
+from packages.domain.result import Error as Err
+from packages.domain.result import Ok, Result
+
+# ═══════════════════════════════════════════════════════════════════════
+# Chunking con tamaño objetivo (I11)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El troceado estructural produce un chunk por párrafo: en documentos grandes,
+# miles de segmentos diminutos que son malas unidades de recuperación para el
+# RAG (y antes, una llamada IA por cada uno). `_pack_chunks` fusiona párrafos
+# adyacentes hasta un tamaño objetivo y parte los gigantes, conservando las
+# fronteras de encabezado/lista. Versión de troceado sellada en metadata para
+# permitir migración aditiva (proyectos viejos quedan en la versión 1).
+CHUNK_TARGET_CHARS = 1200  # objetivo de fusión de párrafos cortos
+CHUNK_MAX_CHARS = 2000  # tope duro: por encima, se parte por frase
+CHUNK_OVERLAP_CHARS = 0  # solapamiento entre chunks (reservado; sin aplicar aún)
+CHUNKING_VERSION = 2  # versión del troceado de los segmentos nuevos
+
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+")
+
+
+def _resolve_chunk_target() -> int:
+    """Tamaño objetivo de chunk, configurable por ``NARRATIVE_CHUNK_TARGET_CHARS``.
+
+    ``0`` desactiva el empaquetado (comportamiento histórico: un chunk por
+    párrafo) — útil para comparar retrieval antes/después.
+    """
+    raw = os.environ.get("NARRATIVE_CHUNK_TARGET_CHARS", "")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return CHUNK_TARGET_CHARS
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -72,7 +104,12 @@ class PlainTextExtractor(TextExtractor):
             return Ok([])
 
         return Ok(_segments_from_text_chunks(
-            chunks=_plain_text_chunks(raw),
+            chunks=_pack_chunks(
+                _plain_text_chunks(raw),
+                target_chars=_resolve_chunk_target(),
+                max_chars=CHUNK_MAX_CHARS,
+                overlap_chars=CHUNK_OVERLAP_CHARS,
+            ),
             source_id=source_id,
             file_path=path,
             format_name=ImportFormat.TEXT_PLAIN.value,
@@ -102,7 +139,12 @@ class MarkdownExtractor(TextExtractor):
             return Ok([])
 
         return Ok(_segments_from_text_chunks(
-            chunks=_markdown_chunks(raw),
+            chunks=_pack_chunks(
+                _markdown_chunks(raw),
+                target_chars=_resolve_chunk_target(),
+                max_chars=CHUNK_MAX_CHARS,
+                overlap_chars=CHUNK_OVERLAP_CHARS,
+            ),
             source_id=source_id,
             file_path=path,
             format_name=ImportFormat.MARKDOWN.value,
@@ -409,6 +451,108 @@ def _normalized_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _split_spans(text: str, max_chars: int) -> list[tuple[int, int]]:
+    """Particiona ``text`` en spans (start, end) cada uno de ≤ ``max_chars``.
+
+    Corta preferentemente en frontera de frase; si no hay, en el último espacio;
+    en último término, corte duro. Los spans son posiciones exactas dentro de
+    ``text`` (offsets monótonos, sin pérdida).
+    """
+    spans: list[tuple[int, int]] = []
+    n = len(text)
+    pos = 0
+    while pos < n:
+        end = min(pos + max_chars, n)
+        if end < n:
+            window = text[pos:end]
+            matches = list(_SENTENCE_END_RE.finditer(window))
+            if matches:
+                end = pos + matches[-1].end()
+            else:
+                ws = window.rfind(" ")
+                if ws > 0:
+                    end = pos + ws + 1
+        spans.append((pos, end))
+        pos = end
+    return spans or [(0, n)]
+
+
+def _split_oversized_chunk(chunk: _TextChunk, max_chars: int) -> list[_TextChunk]:
+    """Parte un chunk mayor que ``max_chars`` en sub-chunks por frase."""
+    if max_chars <= 0 or len(chunk.text) <= max_chars:
+        return [chunk]
+    pieces: list[_TextChunk] = []
+    for start, end in _split_spans(chunk.text, max_chars):
+        pieces.append(_TextChunk(
+            text=chunk.text[start:end].rstrip(),
+            section=chunk.section,
+            start_offset=chunk.start_offset + start,
+            end_offset=chunk.start_offset + end,
+            section_path=chunk.section_path,
+            block_type=chunk.block_type,
+            heading_level=chunk.heading_level,
+        ))
+    return pieces
+
+
+def _merge_paragraph_group(group: list[_TextChunk]) -> _TextChunk:
+    """Funde un grupo de chunks de párrafo adyacentes en uno solo (sin pérdida)."""
+    if len(group) == 1:
+        return group[0]
+    first, last = group[0], group[-1]
+    return _TextChunk(
+        text="\n\n".join(c.text for c in group),
+        section=first.section,
+        start_offset=first.start_offset,
+        end_offset=last.end_offset,
+        section_path=first.section_path,
+        block_type="paragraph",
+        heading_level=None,
+    )
+
+
+def _pack_chunks(
+    chunks: list[_TextChunk],
+    *,
+    target_chars: int,
+    max_chars: int,
+    overlap_chars: int = 0,
+) -> list[_TextChunk]:
+    """Agrupa párrafos adyacentes hasta ``target_chars`` y parte los gigantes.
+
+    Solo se fusionan chunks ``paragraph`` consecutivos; ``heading``/``list`` (y
+    cualquier no-párrafo) pasan intactos y actúan de frontera, preservando la
+    estructura del documento. ``target_chars <= 0`` desactiva el empaquetado
+    (devuelve los chunks tal cual: troceado histórico por párrafo).
+    """
+    if target_chars <= 0 or not chunks:
+        return list(chunks)
+    out: list[_TextChunk] = []
+    group: list[_TextChunk] = []
+    group_len = 0
+
+    def flush() -> None:
+        nonlocal group, group_len
+        if not group:
+            return
+        out.extend(_split_oversized_chunk(_merge_paragraph_group(group), max_chars))
+        group = []
+        group_len = 0
+
+    for chunk in chunks:
+        if chunk.block_type != "paragraph":
+            flush()
+            out.extend(_split_oversized_chunk(chunk, max_chars))
+            continue
+        chunk_len = len(chunk.text)
+        if group and group_len + chunk_len > target_chars:
+            flush()
+        group.append(chunk)
+        group_len += chunk_len + 2  # separador "\n\n"
+    flush()
+    return out
+
+
 def _segments_from_text_chunks(
     chunks: list[_TextChunk],
     source_id: str,
@@ -434,6 +578,7 @@ def _segments_from_text_chunks(
             "chunk_id": chunk_id,
             "chunk_order": order,
             "order": order,
+            "chunking_version": CHUNKING_VERSION,
             "section": chunk.section,
             "section_path": chunk.section_path or chunk.section,
             "block_type": chunk.block_type,
@@ -487,7 +632,12 @@ def _pdf_page_segments(
             heading_level=chunk.heading_level,
         )
     return _segments_from_text_chunks(
-        chunks=chunks,
+        chunks=_pack_chunks(
+            chunks,
+            target_chars=_resolve_chunk_target(),
+            max_chars=CHUNK_MAX_CHARS,
+            overlap_chars=CHUNK_OVERLAP_CHARS,
+        ),
         source_id=source_id,
         file_path=file_path,
         format_name=ImportFormat.PDF.value,

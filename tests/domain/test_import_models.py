@@ -206,7 +206,8 @@ class TestImportBasket:
         assert basket.import_candidates == []
         assert basket.review_state == "pendiente"
 
-    def test_eight_fields(self):
+    def test_nine_fields(self):
+        # I08: + import_mode (modo canon/contexto elegido por documento).
         basket = ImportBasket(
             id="bsk_1",
             source_id="src_1",
@@ -218,7 +219,8 @@ class TestImportBasket:
             metadata={"file_path": "/tmp/doc.txt", "format": "TEXT_PLAIN"},
         )
         d = basket.to_dict()
-        assert len(d) == 8
+        assert len(d) == 9
+        assert d["import_mode"] == "canon"
         assert d["metadata"]["file_path"] == "/tmp/doc.txt"
 
     def test_roundtrip(self):

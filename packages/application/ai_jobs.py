@@ -29,7 +29,11 @@ from packages.application.ai_observability import AIJobRecord, AIObservabilityLo
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
 from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
 from packages.application.context_budget import ContextBudgetManager
-from packages.application.prompt_assembler import build_model_user_message
+from packages.application.prompt_assembler import (
+    PromptAssembler,
+    build_context_preview,
+    build_model_user_message,
+)
 
 
 def _now_iso() -> str:
@@ -71,6 +75,9 @@ class AIJobType(str, Enum):
     GENERATE_TREE = "generate_tree"
     SUGGEST_RELATIONS = "suggest_relations"
     ANALYZE_COHERENCE = "analyze_coherence"
+    # UX8: repara incoherencias del informe en cambios CONCRETOS sobre canon
+    # (no sugerencias literales). El usuario los revisa en un panel antes/después.
+    REPAIR_COHERENCE = "repair_coherence"
     EXPAND_WORLDBUILDING = "expand_worldbuilding"
     EXPLAIN_FROM_CAUSES = "explain_from_causes"
     REVIEW_GRAPH = "review_graph"
@@ -82,6 +89,9 @@ class AIJobType(str, Enum):
     EDIT_RELATION = "edit_relation"
     EDIT_RING = "edit_ring"
     EDIT_MILESTONE = "edit_milestone"
+    # CRON: paso del recorrido cronológico. Lectura editorial + diagnóstico +
+    # candidatos/diffs por el MISMO pipeline que analyze_coherence (no muta canon).
+    CHRONOLOGY_WALK_STEP = "chronology_walk_step"
     # BETA1-AI02: text-only intents. Free text, no JSON staging — the suggestion
     # stays inline (e.g. the entity detail panel) until the user saves.
     IMPROVE_TEXT = "improve_text"
@@ -480,6 +490,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["candidatos de edición de hito existente"]
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return ["candidatos de hito causal", "relaciones causales candidatas"]
+    if intent_type == AIJobType.CHRONOLOGY_WALK_STEP:
+        return ["informe editorial", "candidatos", "propuestas de cambio", "preguntas abiertas"]
     if intent_type in _TEXT_INTENTS:
         return ["texto sugerido (no canon hasta guardar)"]
     return ["plan revisable"]
@@ -508,6 +520,8 @@ def _expected_output_for_intent(intent_type: AIJobType) -> str:
         return "edit_candidates"
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return "milestone_candidates"
+    if intent_type == AIJobType.CHRONOLOGY_WALK_STEP:
+        return "chronology_walk_step"
     if intent_type in _TEXT_INTENTS:
         return "text"
     return "clarification_or_plan"
@@ -536,10 +550,27 @@ def build_job_plan(intent: CommandBarIntent, prompt: str, context: dict[str, Any
 
 
 def _first_active_layer(context_scope: dict[str, Any]) -> str:
+    # UX5b: una entidad/rama nueva nace en el anillo SELECCIONADO/enfocado si lo hay
+    # (antes caía en `active_layer_ids`, el filtro visual, a menudo vacío → la entidad
+    # quedaba sin anillo, «fuera de los definidos»).
+    focused = context_scope.get("active_ring_id") or context_scope.get("focused_ring_id")
+    if focused:
+        return str(focused)
     layers = context_scope.get("active_layer_ids") or []
     if isinstance(layers, (list, tuple)) and layers:
         return str(layers[0])
     return ""
+
+
+def _relation_body_meta(rel: dict[str, Any]) -> dict[str, Any]:
+    """UX5g: el CUERPO de una relación se guarda en `custom_metadata["_body"]`
+    (la clave que el panel de relación lee/escribe). Devuelve el fragmento de
+    proposed_data con ese cuerpo, o vacío si el modelo no lo proporcionó.
+    """
+    if not isinstance(rel, dict):
+        return {}
+    body = str(rel.get("body") or rel.get("extended_description") or "").strip()
+    return {"custom_metadata": {"_body": body}} if body else {}
 
 
 def _selected_entity_ids(context_scope: dict[str, Any]) -> list[str]:
@@ -550,6 +581,33 @@ def _selected_entity_ids(context_scope: dict[str, Any]) -> list[str]:
 def _selected_relation_ids(context_scope: dict[str, Any]) -> list[str]:
     value = context_scope.get("selected_relation_ids") or []
     return [str(item) for item in value if str(item)] if isinstance(value, (list, tuple)) else []
+
+
+def _active_ring_brief(project: Any, context_scope: dict[str, Any]) -> dict[str, Any]:
+    """Resumen determinista del anillo activo/enfocado: nombre + descripción + dominio.
+
+    UX5c: para que el modelo cree/edite entidades COHERENTES con el anillo seleccionado
+    (p. ej. un anillo cosmológico ⇒ entidades cosmológicas, no mundanas). Antes solo
+    viajaba el ID y el nombre del anillo, así que el modelo no sabía qué representa.
+    """
+    ring_id = str(
+        context_scope.get("active_ring_id") or context_scope.get("focused_ring_id") or ""
+    ).strip()
+    if not ring_id or project is None:
+        return {}
+    layers = getattr(project, "world_layers", None) or []
+    layer = next((wl for wl in layers if str(getattr(wl, "id", "")) == ring_id), None)
+    if layer is None:
+        return {}
+    out: dict[str, Any] = {"id": ring_id, "name": str(getattr(layer, "name", "") or "")}
+    desc = str(getattr(layer, "description", "") or "").strip()
+    if desc:
+        out["description"] = desc
+    meta = getattr(layer, "metadata", {}) or {}
+    domain = str(meta.get("domain") or "").strip() if isinstance(meta, dict) else ""
+    if domain:
+        out["domain"] = domain
+    return out
 
 
 def _compact_chronology(project: Any) -> dict[str, Any]:
@@ -698,9 +756,64 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _opt_year(value: Any) -> int | None:
+    """BETA1-J05: año diegético entero (negativos válidos) o None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+_VALID_NATURES = frozenset({"mortal", "inmortal", "eterno", "atemporal", "ciclico"})
+
+
+def _opt_nature(value: Any) -> str:
+    """BETA1-J07: naturaleza temporal saneada (default 'mortal')."""
+    if isinstance(value, str) and value.strip().lower() in _VALID_NATURES:
+        return value.strip().lower()
+    return "mortal"
+
+
 def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     """Convert model payload to reviewable candidates/report. Never mutates canon."""
     payload = dict(model_payload or {})
+
+    # UX8: una reparación de coherencia NO produce semillas/candidatos: devuelve un
+    # plan de cambios concretos que el host revisa en un panel antes/después y aplica
+    # explícitamente (acción humana). Se aísla de la maquinaria de candidatos.
+    if job.type == AIJobType.REPAIR_COHERENCE:
+        from packages.application.coherence_repair import normalize_repair_changes
+        changes = normalize_repair_changes(payload.get("repair_changes"))
+        return {
+            "kind": "repair_plan",
+            "summary": str(payload.get("summary") or f"{len(changes)} cambio(s) de reparación"),
+            "report": str(payload.get("report") or ""),
+            "repair_changes": changes,
+            "candidates": [],
+        }
+
+    # CRON: la AGRESIVIDAD del recorrido se ENFORZA aquí (determinista), no solo en
+    # el prompt. Sin esto, el modelo podía proponer un HITO NUEVO en otro año en lugar
+    # de EDITAR el hito actual (el bug del «hito duplicado en el año 86»).
+    #   solo_senalar         → sin cambios estructurales (solo informe);
+    #   sugerir_reparaciones → SOLO ediciones (nada de hitos/hojas/relaciones nuevas);
+    #   sugerir_nuevas_piezas → todo permitido.
+    if job.type == AIJobType.CHRONOLOGY_WALK_STEP:
+        _aggr = str(
+            ((job.context_scope.get("directivas") or {}).get("parametros") or {}).get(
+                "agresividad"
+            )
+            or ""
+        )
+        if _aggr != "sugerir_nuevas_piezas":
+            for _k in ("hitos", "milestones", "hojas", "entities", "relations", "rings", "anillos"):
+                payload.pop(_k, None)
+        if _aggr == "solo_senalar":
+            for _k in ("entity_edits", "milestone_edits", "ring_edits", "relation_edits"):
+                payload.pop(_k, None)
+
     layer_id = _first_active_layer(job.context_scope)
     selected_entity_ids = _selected_entity_ids(job.context_scope)
     selected_relation_ids = _selected_relation_ids(job.context_scope)
@@ -738,6 +851,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             "description": summary,
             "rationale": body,
             "status": "candidate",
+            # BETA1-J05: año diegético propuesto por la IA (None si lo desconoce).
+            "year": _opt_year(milestone.get("year")),
             "affected_entity_ids": list(selected_entity_ids),
             "caused_relation_ids": list(selected_relation_ids),
             "layer_ids": [layer_id] if layer_id else [],
@@ -774,9 +889,18 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             "name": name,
             "entity_type": entity_type,
             "brief_description": str(entity.get("brief_description") or entity.get("description") or "").strip(),
-            "body": str(entity.get("body") or entity.get("extended_description") or "").strip(),
+            # UX5b: el cuerpo debe ir en `extended_description` — es la única clave que
+            # NarrativeEntity.from_dict lee. En `body` se perdía (la entidad nacía vacía).
+            "extended_description": str(
+                entity.get("extended_description") or entity.get("body") or ""
+            ).strip(),
             "layer_ids": layer_ids,
             "display_type": display_type,
+            # BETA1-J05: datación propuesta por la IA (coherente con calendario/vecinos).
+            "birth_year": _opt_year(entity.get("birth_year")),
+            "death_year": _opt_year(entity.get("death_year")),
+            # BETA1-J07: naturaleza temporal (eterno/inmortal/…) propuesta por la IA.
+            "temporal_nature": _opt_nature(entity.get("temporal_nature")),
             "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id},
         }
         candidates.append(_candidate(
@@ -792,16 +916,50 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         if not isinstance(tree, dict):
             continue
         name = str(tree.get("name") or "Rama propuesta").strip()
-        entity_type = str(tree.get("entity_type") or "contenedor")
-        display_type = "rama"
+        # UX4 (C1/C2): una rama ES un contenedor. Forzamos entity_type="contenedor"
+        # —lo que el render reconoce como árbol— y guardamos el tipo semántico del
+        # modelo (religion/institucion/…) y el marcador de rama en custom_metadata,
+        # que SÍ sobrevive a NarrativeEntity.from_dict (display_type en la raíz no).
+        semantic_type = str(tree.get("entity_type") or "").strip()
         layer_ids = tree.get("layer_ids") if isinstance(tree.get("layer_ids"), list) else ([layer_id] if layer_id else [])
+        meta = {
+            "origin_prompt": job.prompt,
+            "ai_job_id": job.id,
+            "candidate_tree": True,
+            "display_type": "rama",
+        }
+        if semantic_type:
+            meta["semantic_type"] = semantic_type
+        # UX5d: si el usuario SELECCIONÓ entidades al crear la rama, esas entidades
+        # EXISTENTES son sus miembros (se enlazan con `contiene` al aceptar) y NO se
+        # regeneran como hojas nuevas — antes el modelo las recreaba y la rama nacía
+        # con duplicados. Sin selección, la rama nace con las hojas que proponga el
+        # modelo. Las @menciones son referencias externas (viajan en `mentions`),
+        # nunca miembros: no entran aquí.
+        contained_entity_ids = list(selected_entity_ids)
+        child_leaves = (
+            [] if contained_entity_ids else _safe_list(tree.get("hojas") or tree.get("children"))
+        )
         proposed = {
             "name": name,
-            "entity_type": entity_type,
+            "entity_type": "contenedor",
             "brief_description": str(tree.get("brief_description") or tree.get("description") or "").strip(),
+            # UX5b: el cuerpo de la rama también va a `extended_description` (no se pierde).
+            "extended_description": str(
+                tree.get("extended_description") or tree.get("body") or ""
+            ).strip(),
             "layer_ids": layer_ids,
-            "display_type": display_type,
-            "custom_metadata": {"origin_prompt": job.prompt, "ai_job_id": job.id, "candidate_tree": True},
+            "custom_metadata": meta,
+            # BETA1-J05: datación de la rama propuesta por la IA.
+            "birth_year": _opt_year(tree.get("birth_year")),
+            "death_year": _opt_year(tree.get("death_year")),
+            # BETA1-J07: naturaleza temporal de la rama.
+            "temporal_nature": _opt_nature(tree.get("temporal_nature")),
+            # UX4 (C4): hojas hijas NUEVAS declaradas por el modelo (solo si no hay
+            # selección), para materializar la contención (`contiene`) al aceptar.
+            "child_leaves": child_leaves,
+            # UX5d: entidades EXISTENTES seleccionadas → miembros de la rama.
+            "contained_entity_ids": contained_entity_ids,
         }
         candidates.append(_candidate(
             title=f"Rama candidata: {name}",
@@ -841,10 +999,78 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             expected_impact=f"Editar {field} de '{entity_name}' tras revisión humana.",
         ))
 
-    # Structured edits for relations / rings / milestones (deterministic "Editar"
-    # cells). Each becomes a reviewable sugerencia_ia candidate; never canon.
+    # UX5e: edición de RELACIÓN → UNA sola semilla con AMBOS campos (tipo + contenido).
+    # El modelo puede emitir una entrada combinada {relation_type, description} o,
+    # por compatibilidad, entradas por-campo {field, proposed_value}; en cualquier
+    # caso se AGRUPAN por relación para no producir dos semillas (una del tipo y otra
+    # del contenido), que era el bug reportado.
+    rel_groups: dict[str, dict[str, str]] = {}
+    rel_order: list[str] = []
+    for edit in _safe_list(payload.get("relation_edits")):
+        if not isinstance(edit, dict):
+            continue
+        target_name = str(edit.get("target_name") or edit.get("name") or "").strip()
+        new_type = str(edit.get("relation_type") or "").strip()
+        new_desc = str(edit.get("description") or "").strip()
+        field = str(edit.get("field") or "").strip().lower()
+        proposed_value = str(edit.get("proposed_value") or "").strip()
+        if field == "relation_type" and proposed_value:
+            new_type = new_type or proposed_value
+        elif proposed_value and not new_desc:  # field == "description" o sin field
+            new_desc = proposed_value
+        if not (new_type or new_desc):
+            continue
+        key = target_name or "__seleccion__"
+        if key not in rel_groups:
+            rel_groups[key] = {"target_name": target_name, "relation_type": "",
+                               "description": "", "rationale": ""}
+            rel_order.append(key)
+        grp = rel_groups[key]
+        if new_type:
+            grp["relation_type"] = new_type
+        if new_desc:
+            grp["description"] = new_desc
+        if not grp["rationale"]:
+            grp["rationale"] = str(edit.get("rationale") or "")
+
+    for key in rel_order:
+        grp = rel_groups[key]
+        label_target = grp["target_name"] or "relación seleccionada"
+        parts = []
+        if grp["relation_type"]:
+            parts.append(f"Tipo → {grp['relation_type']}")
+        if grp["description"]:
+            parts.append(f"Descripción → {grp['description']}")
+        report_body = "\n".join(parts)
+        candidates.append(_candidate(
+            title=f"Editar relación: {label_target}",
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "report": f"Propuesta de edición de relación '{label_target}':\n\n{report_body}",
+                "edit_kind": "relation_edits",
+                "edit_target_name": grp["target_name"],
+                "edit_field": "description",
+                # contenido (caja grande del panel) + tipo (campo aparte) en UNA semilla
+                "edit_proposed_value": grp["description"],
+                "edit_relation_type": grp["relation_type"],
+                "issues": [],
+                "proposals": [{"title": f"Editar relación: {label_target}",
+                               "description": report_body[:200]}],
+                "open_questions": [],
+                "prompt": job.prompt,
+            },
+            job=job,
+            justification=str(grp["rationale"]
+                              or "Edición propuesta de la relación seleccionada."),
+            confidence=0.65,
+            expected_impact=f"Editar la relación '{label_target}' "
+                            "(tipo y/o descripción) tras revisión humana.",
+        ))
+
+    # Structured edits for rings / milestones (deterministic "Editar" cells). Each
+    # becomes a reviewable sugerencia_ia candidate; never canon. (Las relaciones se
+    # tratan aparte arriba, agrupando tipo + contenido en una sola semilla.)
     for kind_key, label in (
-        ("relation_edits", "relación"),
         ("ring_edits", "anillo"),
         ("milestone_edits", "hito"),
     ):
@@ -865,6 +1091,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                     "report": f"Propuesta de edición de {label} '{target_name}':\n\n{proposed_value}",
                     "edit_kind": kind_key,
                     "edit_target_name": target_name,
+                    # CRON: id estable del objetivo (renombrados no rompen ediciones).
+                    "edit_target_id": str(edit.get("target_id") or "").strip(),
                     "edit_field": field,
                     "edit_proposed_value": proposed_value,
                     "issues": [],
@@ -917,13 +1145,21 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     allowed_ids = selected | relevant_ids
 
     report = str(payload.get("report") or payload.get("summary") or "Resultado IA listo para revisión.")
-    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES, AIJobType.EDIT_RELATION, AIJobType.EDIT_RING, AIJobType.EDIT_MILESTONE}
+    analytical = job.type in {AIJobType.ANALYZE_COHERENCE, AIJobType.REVIEW_GRAPH, AIJobType.EXPLAIN_FROM_CAUSES, AIJobType.FREEFORM_PLANNING, AIJobType.UNKNOWN, AIJobType.EDIT_ENTITIES, AIJobType.EDIT_RELATION, AIJobType.EDIT_RING, AIJobType.EDIT_MILESTONE, AIJobType.CHRONOLOGY_WALK_STEP}
     # BUG 1 fix: only add sugerencia_ia candidate for truly analytical jobs.
     # For generative jobs (entities/trees/relations), the structural candidates
     # are the real output; a synthetic "proposal" card is noise.
-    has_structural_candidates = any(
-        c.get("candidate_type") in ("entidad", "relacion") for c in candidates
-    )
+    def _is_actionable(cand: dict) -> bool:
+        if cand.get("candidate_type") in ("entidad", "relacion"):
+            return True
+        pd = cand.get("proposed_data") or {}
+        # UX4 (C5): ediciones y creaciones por ruta-segura también son accionables;
+        # con ellas presentes NO añadimos el informe genérico (era ruido "nada").
+        return bool(pd.get("edit_proposed_value")) or pd.get("kind") in (
+            "ring_template", "causal_milestone", "project_chronology_suggestion",
+        )
+
+    has_structural_candidates = any(_is_actionable(c) for c in candidates)
     if analytical and not has_structural_candidates:
         candidates.append(_candidate(
             title=str(payload.get("summary") or "Informe revisable de IA"),
@@ -948,6 +1184,34 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     # Ring templates have no relation entities: the causal structure lives in each
     # ring's order/derived_from, and the graph has no ring↔ring relations.
     relations_payload = [] if job.type == AIJobType.CREATE_RING_TEMPLATE else _safe_list(payload.get("relations"))
+    # UX4 (C6): en Crear Relación el plan ya fija el par exacto (fanout_pair). Usamos
+    # esos ids reales en vez de fiarnos de los nombres que invente el modelo (que no
+    # casaban con la selección → la aceptación fallaba). Una relación por par.
+    fanout_pair = job.context_scope.get("fanout_pair")
+    forced_pair = (
+        [str(fanout_pair[0]), str(fanout_pair[1])]
+        if isinstance(fanout_pair, (list, tuple)) and len(fanout_pair) == 2
+        and str(fanout_pair[0]) and str(fanout_pair[1])
+        else None
+    )
+    if forced_pair:
+        first = next((r for r in relations_payload if isinstance(r, dict)), {})
+        candidates.append(_candidate(
+            title="Relación candidata",
+            candidate_type="relacion",
+            proposed_data={
+                "source_id": forced_pair[0],
+                "target_id": forced_pair[1],
+                "relation_type": str(first.get("relation_type") or "esta_relacionado_con"),
+                "description": str(first.get("description") or "Relación propuesta."),
+                # UX5g: el CUERPO de la relación vive en custom_metadata["_body"] (la UI lo
+                # lee/escribe ahí). Antes solo se rellenaba la descripción breve.
+                **_relation_body_meta(first),
+            },
+            job=job,
+            justification=str(first.get("rationale") or "Relación entre el par seleccionado."),
+        ))
+        relations_payload = []  # el par forzado ya cubre Crear Relación
     for rel in relations_payload:
         if not isinstance(rel, dict):
             continue
@@ -969,6 +1233,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                         "target_id": target_id,
                         "relation_type": rel_type,
                         "description": desc,
+                        **_relation_body_meta(rel),
                     },
                     job=job,
                     justification=str(rel.get("rationale") or "Relación propuesta con endpoints del contexto."),
@@ -986,6 +1251,10 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                 "target_name": target_name,
                 "relation_type": rel_type,
                 "description": desc,
+                # BETA1-J05: datación del vínculo propuesta por la IA.
+                "birth_year": _opt_year(rel.get("birth_year")),
+                "death_year": _opt_year(rel.get("death_year")),
+                **_relation_body_meta(rel),
             },
             job=job,
             justification=f"Relación propuesta entre '{source_name}' y '{target_name}'. Se resolverá por nombre al aceptar.",
@@ -1095,6 +1364,73 @@ class AIJobService:
         self._provider = provider
         self._gateway = AIRequestGateway(provider=provider)
 
+    def _resolve_intent(
+        self,
+        resolved_type: AIJobType,
+        prompt: str,
+        context: dict[str, Any],
+        *,
+        explicit: bool,
+    ) -> "CommandBarIntent":
+        """Resuelve el intent de un job (explícito = autoritativo; si no, clasifica).
+
+        Única fuente compartida por ``create_job`` y ``preview_context`` para que
+        la vista previa use exactamente el mismo intent que el job real.
+        """
+        if explicit:
+            # BETA1-AI02: focused job — the caller's intent is authoritative, so
+            # skip prompt classification and run this exact task type.
+            return CommandBarIntent(
+                intent_type=resolved_type,
+                confidence=1.0,
+                target_scope=_scope_from_context(_norm(prompt), context),
+                expected_output_type=_expected_output_for_intent(resolved_type),
+                rationale="Acción enfocada (intent explícito).",
+                planner_source="explicit",
+            )
+        intent = classify_intent(prompt, context)
+        if resolved_type not in (AIJobType.UNKNOWN, intent.intent_type):
+            # UI may pass a legacy heuristic type; keep explicit type but preserve classifier rationale.
+            intent.intent_type = resolved_type
+        return intent
+
+    def preview_context(
+        self,
+        job_type: AIJobType | str,
+        prompt: str,
+        *,
+        context_scope: dict[str, Any] | None = None,
+        explicit: bool = True,
+    ) -> Result:
+        """UX3: calcula el contexto que se enviaría SIN crear ni ejecutar un job.
+
+        Reproduce el pipeline real (intent → plan → RAG → ensamblado) sobre un
+        ``AIJob`` efímero que NO se guarda en ``self._jobs`` (no aparece en Tareas),
+        y devuelve una estructura legible para la vista previa. Las exclusiones que
+        el usuario marque viajan luego en ``context_scope['preview_exclusions']`` y
+        las aplica el propio ``PromptAssembler`` tanto aquí como al ejecutar.
+        """
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return Error("El prompt no puede estar vacío")
+        context = dict(context_scope or {})
+        try:
+            resolved_type = job_type if isinstance(job_type, AIJobType) else AIJobType(str(job_type))
+        except ValueError:
+            resolved_type = AIJobType.REVIEW_GRAPH
+        intent = self._resolve_intent(resolved_type, prompt, context, explicit=explicit)
+        job = AIJob(
+            type=intent.intent_type,
+            explicit_intent=resolved_type if explicit else None,
+            prompt=prompt,
+            context_scope=context,
+            intent=intent.to_dict(),
+        )  # efímero: NO se registra en self._jobs
+        plan = build_job_plan(intent, prompt, context, job_id=job.id)
+        plan = self._with_rag_context(job, plan)
+        raw = PromptAssembler(self._budget).preview(plan)
+        return Ok(build_context_preview(raw))
+
     def create_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, explicit: bool = False) -> Result:
         prompt = (prompt or "").strip()
         if not prompt:
@@ -1104,22 +1440,7 @@ class AIJobService:
             resolved_type = job_type if isinstance(job_type, AIJobType) else AIJobType(str(job_type))
         except ValueError:
             resolved_type = AIJobType.REVIEW_GRAPH
-        if explicit:
-            # BETA1-AI02: focused job — the caller's intent is authoritative, so
-            # skip prompt classification and run this exact task type.
-            intent = CommandBarIntent(
-                intent_type=resolved_type,
-                confidence=1.0,
-                target_scope=_scope_from_context(_norm(prompt), context),
-                expected_output_type=_expected_output_for_intent(resolved_type),
-                rationale="Acción enfocada (intent explícito).",
-                planner_source="explicit",
-            )
-        else:
-            intent = classify_intent(prompt, context)
-            if resolved_type not in (AIJobType.UNKNOWN, intent.intent_type):
-                # UI may pass a legacy heuristic type; keep explicit type but preserve classifier rationale.
-                intent.intent_type = resolved_type
+        intent = self._resolve_intent(resolved_type, prompt, context, explicit=explicit)
         job = AIJob(
             type=intent.intent_type,
             explicit_intent=resolved_type if explicit else None,
@@ -1264,6 +1585,12 @@ class AIJobService:
         cronologia = _compact_chronology(project)
         if cronologia:
             context["cronologia"] = cronologia
+
+        # UX5c: el anillo activo viaja con su descripción y dominio (no solo el id/nombre)
+        # para que la creación/edición sea coherente con la naturaleza del anillo.
+        ring_brief = _active_ring_brief(project, context)
+        if ring_brief:
+            context["active_ring"] = ring_brief
 
         retrieval_plan = build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
         built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, retrieval_plan)

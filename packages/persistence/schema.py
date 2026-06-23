@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-# Current schema version for new projects (G06: relation temporal fields)
-CURRENT_SCHEMA_VERSION: int = 26
+# Current schema version for new projects
+# (v29: modos de importación canon/contexto + taxonomía de importación)
+CURRENT_SCHEMA_VERSION: int = 30
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 26
+MAX_SUPPORTED_VERSION: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +806,161 @@ def _parse_int_or_none(value: object) -> int | None:
         return None
 
 
+_J27_UNFOUNDED_NOTE = "no fundamentado (migración v27)"
+
+
+def _build_life_span_dict(
+    birth: int | None, death: int | None, present_year: int
+) -> dict[str, Any]:
+    """BETA1-J27: construye el dict de ``TemporalSpan`` desde el espejo entero.
+
+    Marca el inicio como **incierto / no fundamentado** cuando el año falta o
+    coincide con ``present_year`` (default por inercia de v25). No pierde el
+    año. Reutiliza los modelos de dominio para serializar con la forma canónica.
+    """
+    from packages.domain.temporal_models import EventTemporality, TemporalPrecision
+    from packages.domain.temporal_span import TemporalSpan
+
+    unfounded = birth is None or birth == present_year
+    start = EventTemporality(
+        year=birth,
+        precision=TemporalPrecision.UNKNOWN if unfounded else TemporalPrecision.EXACT,
+        notes=_J27_UNFOUNDED_NOTE if unfounded else "",
+    )
+    end = (
+        EventTemporality(year=death, precision=TemporalPrecision.EXACT)
+        if death is not None
+        else None
+    )
+    return TemporalSpan(start=start, end=end, ongoing=death is None).to_dict()
+
+
+def _apply_migration_v26_to_v27(data: dict[str, Any]) -> dict[str, Any]:
+    """v26 → v27: lapso temporal rico (BETA1-J01).
+
+    Añade ``life_span`` a entidades y relaciones a partir de su
+    ``birth_year``/``death_year``, marcando como **incierto** lo que venía del
+    default ``present_year`` (sin perder el año). Los hitos no ganan campo
+    nuevo (su ``temporal_span`` es vista computada); se refleja el año y la
+    marca de incertidumbre en su ``temporality`` rico ya persistido.
+    """
+    migrated = dict(data)
+
+    chronology = migrated.get("project_chronology")
+    present_year = 0
+    if isinstance(chronology, dict):
+        present_year = _parse_int_or_none(chronology.get("present_year")) or 0
+
+    for collection in ("entities", "relations"):
+        items = migrated.get(collection)
+        if not isinstance(items, list):
+            continue
+        patched = []
+        for raw in items:
+            if isinstance(raw, dict) and not isinstance(raw.get("life_span"), dict):
+                raw = dict(raw)
+                raw["life_span"] = _build_life_span_dict(
+                    _parse_int_or_none(raw.get("birth_year")),
+                    _parse_int_or_none(raw.get("death_year")),
+                    present_year,
+                )
+            patched.append(raw)
+        migrated[collection] = patched
+
+    milestones = migrated.get("causal_milestones")
+    if isinstance(milestones, list):
+        patched_m = []
+        for raw in milestones:
+            if isinstance(raw, dict):
+                raw = dict(raw)
+                year = _parse_int_or_none(raw.get("year"))
+                temporality = raw.get("temporality")
+                temporality = dict(temporality) if isinstance(temporality, dict) else {}
+                # Reflejar el año entero en el temporality rico si falta.
+                if temporality.get("year") is None:
+                    temporality["year"] = year
+                # Marcar incierto lo derivado del presente sin otra evidencia.
+                if (year is None or year == present_year) and not temporality.get("world_date"):
+                    if temporality.get("precision") in (None, "unknown"):
+                        temporality["precision"] = "unknown"
+                        if not temporality.get("notes"):
+                            temporality["notes"] = _J27_UNFOUNDED_NOTE
+                raw["temporality"] = temporality
+            patched_m.append(raw)
+        migrated["causal_milestones"] = patched_m
+
+    migrated["schema_version"] = 27
+    return migrated
+
+
+def _apply_migration_v27_to_v28(data: dict[str, Any]) -> dict[str, Any]:
+    """v27 → v28: recorrido cronológico persistente (CRON).
+
+    Aditiva y sin pérdida: inicializa las colecciones de sesiones e informes
+    del Modo Creación Cronológica si no existen. No toca canon.
+    """
+    migrated = dict(data)
+    migrated.setdefault("chronology_walk_sessions", [])
+    migrated.setdefault("chronology_walk_reports", [])
+    migrated["schema_version"] = 28
+    return migrated
+
+
+def _apply_migration_v28_to_v29(data: dict[str, Any]) -> dict[str, Any]:
+    """v28 → v29: modos de importación (canon/contexto) + taxonomía de proyecto.
+
+    Aditiva y sin pérdida: inicializa la taxonomía de importación si no existe
+    y marca los baskets previos como modo ``canon`` (comportamiento histórico).
+    No toca canon.
+    """
+    migrated = dict(data)
+    migrated.setdefault(
+        "import_taxonomy",
+        {
+            "allowed_entity_types": [],
+            "allowed_branch_types": [],
+            "allowed_ring_ids": [],
+            "extraction_guidance": "",
+            "strict": False,
+        },
+    )
+    baskets = migrated.get("import_baskets")
+    if isinstance(baskets, list):
+        for basket in baskets:
+            if isinstance(basket, dict):
+                basket.setdefault("import_mode", "canon")
+                meta = basket.get("metadata")
+                if isinstance(meta, dict):
+                    meta.setdefault("import_mode", "canon")
+    migrated["schema_version"] = 29
+    return migrated
+
+
+def _apply_migration_v29_to_v30(data: dict[str, Any]) -> dict[str, Any]:
+    """v29 → v30: versionado del troceado de documentos importados (I11).
+
+    Aditiva y sin pérdida: marca los segmentos ya persistidos con
+    ``chunking_version: 1`` (troceado histórico por párrafo). Los imports nuevos
+    usan el troceado con tamaño objetivo y sellan ``chunking_version: 2``. No
+    re-trocea (eso es una acción opt-in explícita); no toca canon ni el corpus
+    (que es in-memory y se reconstruye al reindexar).
+    """
+    migrated = dict(data)
+    baskets = migrated.get("import_baskets")
+    if isinstance(baskets, list):
+        for basket in baskets:
+            if not isinstance(basket, dict):
+                continue
+            for segment in basket.get("segments", []) or []:
+                if not isinstance(segment, dict):
+                    continue
+                meta = segment.get("metadata")
+                if isinstance(meta, dict):
+                    meta.setdefault("chunking_version", 1)
+    migrated["schema_version"] = 30
+    return migrated
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -831,7 +987,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     config_sections = (
         "general", "tone", "genre", "realism", "ai",
         "visibility", "export", "project_metadata", "advanced_config",
-        "project_chronology",
+        "project_chronology", "import_taxonomy",
     )
     for section in config_sections:
         if section in data and not isinstance(data[section], dict):
@@ -849,6 +1005,7 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "secrets", "clues",
         "factions", "fronts",
         "sessions", "saved_graph_views", "causal_milestones",
+        "chronology_walk_sessions", "chronology_walk_reports",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):

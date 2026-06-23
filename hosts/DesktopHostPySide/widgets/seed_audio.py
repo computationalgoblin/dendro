@@ -52,7 +52,7 @@ def random_bell_midi(rng: random.Random | None = None) -> int:
 class ZenBell:
     """Reproductor de campanas zen, cacheado y seguro sin audio."""
 
-    def __init__(self, *, volume: float = 0.16) -> None:
+    def __init__(self, *, volume: float = 0.14) -> None:
         self._volume = float(volume)
         self._rng = random.Random()
         self._effects: dict[int, object] = {}  # midi → QSoundEffect
@@ -81,6 +81,14 @@ class ZenBell:
         except Exception:  # noqa: BLE001 — el sonido nunca rompe el flujo
             return
 
+    def play_one(self) -> None:
+        """SEM04: una sola campana suave y consistente (raíz de D#m) por lote.
+
+        Sustituye al arpegio de N notas, que sonaba amontonado y áspero cuando se
+        creaban varios candidatos a la vez.
+        """
+        self.play(_ROOT_MIDI)
+
     def play_arpeggio(self, count: int, *, stagger_ms: int = 220, max_notes: int = 8) -> None:
         """Tañe ``count`` campanas escalonadas (arpegio), acotado a ``max_notes``."""
         if not self.available or count <= 0:
@@ -91,34 +99,46 @@ class ZenBell:
 
 
 def _render_bell(midi: int) -> str:
-    """Sintetiza una campana inarmónica con reverb y la cachea a WAV temporal."""
-    path = Path(tempfile.gettempdir()) / f"dendro_bell_{midi}.wav"
+    """Sintetiza una campana inarmónica suave (sin clipping) y la cachea a WAV.
+
+    SEM04: síntesis revisada para que suene agradable:
+    - parciales NORMALIZADOS (suma de amplitudes = 1) → sin pico inicial > 1.0,
+    - ataque suave (~30 ms) en vez de 4 ms (sin transitorio áspero),
+    - reverb con menos realimentación y re-normalizada después,
+    - soft-clip (tanh) en vez de recorte duro.
+    El nombre de caché lleva versión (``v2``) para no reusar los WAV ásperos viejos.
+    """
+    path = Path(tempfile.gettempdir()) / f"dendro_bell_v2_{midi}.wav"
     if path.exists():
         return str(path)
     rate = _RATE
     total = int(_BELL_SECONDS * rate)
     freq = 440.0 * (2.0 ** ((midi - 69) / 12.0))
     two_pi = 2.0 * math.pi
-    attack = max(1, int(0.004 * rate))  # ataque rápido (golpe de campana)
-    tau = 1.1  # s — decay exponencial largo
-    # Parciales inarmónicos típicos de campana (ratios + amplitudes decrecientes).
-    partials = ((1.0, 0.55), (2.01, 0.30), (2.78, 0.18), (4.07, 0.10), (5.43, 0.06))
+    attack = max(1, int(0.030 * rate))  # ataque suave (~30 ms): sin golpe áspero
+    tau = 1.2  # s — decay exponencial largo (cola zen)
+    # Parciales inarmónicos de campana, NORMALIZADOS para que sumen 1.0.
+    raw_partials = ((1.0, 0.55), (2.01, 0.30), (2.78, 0.18), (4.07, 0.10), (5.43, 0.06))
+    amp_sum = sum(amp for _, amp in raw_partials)
+    partials = tuple((ratio, amp / amp_sum) for ratio, amp in raw_partials)
     dry = [0.0] * total
     for ratio, amp in partials:
         w = two_pi * freq * ratio / rate
         for n in range(total):
             env = (n / attack) if n < attack else math.exp(-(n - attack) / (tau * rate))
             dry[n] += amp * env * math.sin(w * n)
-    # Reverb: combs con retroalimentación (cola zen).
-    for delay_s, feedback in ((0.137, 0.30), (0.211, 0.24)):
+    # Reverb: combs con retroalimentación suave (cola zen, sin acumular energía).
+    for delay_s, feedback in ((0.137, 0.18), (0.211, 0.14)):
         d = int(delay_s * rate)
         for n in range(d, total):
             dry[n] += feedback * dry[n - d]
+    # Normalizar tras la reverb y soft-clip (tanh) para un timbre cálido sin recorte.
     peak = max(0.0001, max(abs(s) for s in dry))
-    scale = 0.8 / peak
+    scale = 0.85 / peak
     frames = bytearray()
     for sample in dry:
-        frames += struct.pack("<h", int(max(-0.95, min(0.95, sample * scale)) * 32767))
+        shaped = math.tanh(sample * scale * 1.1)  # soft-clip suave
+        frames += struct.pack("<h", int(max(-1.0, min(1.0, shaped)) * 32767))
     with wave.open(str(path), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)

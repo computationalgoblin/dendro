@@ -169,13 +169,15 @@ def test_i07_import_document_to_review_to_canon_graph_rag_and_reload(tmp_path):
     assert {call[2] for call in provider.calls} == {300}
     assert project_service.active_project.entities == []
 
-    analysis = import_service.analyze_import_duplicates(basket.id)
-    assert isinstance(analysis, Ok)
-    suggestion = _candidate_by_kind(basket, "merge_suggestion")
-    merged = import_service.accept_import_merge_suggestion(basket.id, suggestion.id)
-    assert isinstance(merged, Ok)
-    merged_entity_candidate = merged.value
+    # I15: "Eldrin" y su alias "El Mago del Norte" se auto-consolidan durante la
+    # extracción en UN candidato enriquecido (sin paso manual de fusión).
+    merged_entity_candidate = next(
+        c for c in basket.import_candidates
+        if (c.proposed_data or {}).get("merged_from")
+        and c.review_state is ImportReviewState.PENDIENTE
+    )
     assert merged_entity_candidate.proposed_data["merged_from"]
+    assert "El Mago del Norte" in (merged_entity_candidate.proposed_data.get("aliases") or [])
 
     rumor = _candidate_by_name(basket, "Rumor Falso")
     rejected = import_service.reject_import_candidate(basket.id, rumor.id)

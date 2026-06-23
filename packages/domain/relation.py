@@ -18,6 +18,7 @@ from typing import Any
 
 from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, CertaintyLevel, VisibilityState
+from packages.domain.temporal_span import TemporalSpan
 
 # ═══════════════════════════════════════════════════════════════════════
 # Enums
@@ -124,6 +125,8 @@ class NarrativeRelation:
     # --- Temporal (BETA1-G06) ---
     birth_year: int | None = None   # año diegético en que nace la relación
     death_year: int | None = None   # año diegético en que termina; None = activa
+    # Lapso rico (BETA1-J01): birth_year/death_year son su espejo entero.
+    life_span: TemporalSpan | None = None
 
     # --- State (10–12, reused from entity.py) ---
     canon_state: CanonState = CanonState.BORRADOR
@@ -156,6 +159,22 @@ class NarrativeRelation:
     def touch(self) -> None:
         self.updated_at = _now()
 
+    # ── Tiempo del mundo (BETA1-J01) — sincronización año↔span ─────────────
+
+    def set_life_span(self, span: TemporalSpan) -> None:
+        """Fija el lapso rico y sincroniza el espejo entero birth/death."""
+        self.life_span = span
+        self.birth_year = span.start_year
+        self.death_year = span.end_year
+
+    def ensure_life_span(self) -> TemporalSpan:
+        if self.life_span is None:
+            self.life_span = TemporalSpan.from_years(self.birth_year, self.death_year)
+        return self.life_span
+
+    def as_temporal_span(self) -> TemporalSpan:
+        return self.ensure_life_span()
+
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
@@ -173,6 +192,7 @@ class NarrativeRelation:
             "causality": self.causality,
             "birth_year": self.birth_year,
             "death_year": self.death_year,
+            "life_span": self.life_span.to_dict() if self.life_span is not None else None,
             "canon_state": self.canon_state.value,
             "visibility_state": self.visibility_state.value,
             "certainty_level": self.certainty_level.value,
@@ -213,6 +233,7 @@ class NarrativeRelation:
             causality=data.get("causality", ""),
             birth_year=_parse_optional_int(data.get("birth_year")),
             death_year=_parse_optional_int(data.get("death_year")),
+            life_span=_parse_life_span(data.get("life_span")),
             canon_state=_parse_enum(
                 CanonState, data.get("canon_state"), CanonState.BORRADOR,
             ),
@@ -275,6 +296,13 @@ def _parse_enum(enum_cls: _EnumType, value: Any, default: Any) -> Any:
         except ValueError:
             pass
     return default
+
+
+def _parse_life_span(value: Any) -> TemporalSpan | None:
+    """BETA1-J01: reconstruye el lapso si está presente; si no, ``None``."""
+    if isinstance(value, dict):
+        return TemporalSpan.from_dict(value)
+    return None
 
 
 def _parse_datetime(value: Any) -> datetime:

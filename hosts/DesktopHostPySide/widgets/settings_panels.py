@@ -160,8 +160,9 @@ class ProjectPanel(QWidget):
             self.root_layout.addStretch(1)
             return
 
-        # ── Section B: Project Type ──
-        self._build_project_type_section()
+        # ── Section B: Project Type — RETIRADA (BETA1-UX): la caja "Tipo de
+        # proyecto" no aporta al flujo; el tipo almacenado se conserva al guardar.
+        # self._build_project_type_section()
 
         # ── Section C: Cronología (PA02: worldbuilding ya no es opcional) ──
         self._build_chronology_section()
@@ -400,6 +401,10 @@ class ProjectPanel(QWidget):
     # ── Visibility logic ──
 
     def _current_type_value(self) -> str:
+        # BETA1-UX: la caja "Tipo de proyecto" se retiró del menú; se conserva
+        # el tipo ya almacenado en el proyecto.
+        if not hasattr(self, "type_combo"):
+            return self._safe(self.project, "project_type", "otro")
         label = self.type_combo.currentText()
         return _PROJECT_TYPE_VALUES.get(label, "otro")
 
