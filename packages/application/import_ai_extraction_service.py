@@ -7,18 +7,23 @@ fall back to simulated AI unless a test explicitly allows it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
 import json
 import os
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest
 from packages.application.prompt_registry import get_prompt
 from packages.domain.candidate_issue import CandidateType
-from packages.domain.import_models import DocumentSegment, ImportBasket, ImportCandidate, ImportReviewState
-from packages.domain.result import Error, Ok, Result
+from packages.domain.import_models import (
+    DocumentSegment,
+    ImportBasket,
+    ImportCandidate,
+    ImportReviewState,
+)
+from packages.domain.result import Error, Ok, Result, is_error, unwrap
 from packages.infrastructure.ai_provider import AIProvider, create_provider
 
 
@@ -40,6 +45,9 @@ def resolve_configured_provider() -> AIProvider:
 IMPORT_EXTRACTION_INTENT = "import_extraction"
 # I23 Fase 3: agrupacion estructural a nivel documento (ramas + membresia + anidamiento).
 IMPORT_GROUPING_INTENT = "import_grouping"
+# I26: fase MAP del rediseño map→reduce — extrae MENCIONES por ventana (no candidatos
+# finales). Las menciones se consolidan luego en la fase REDUCE (I27).
+IMPORT_MAP_INTENT = "import_map"
 IMPORT_EXTRACTION_TIMEOUT_SECONDS = 300
 
 # Objetivo de caracteres por *ventana* de extracción. Los chunkers de I02
@@ -370,6 +378,308 @@ def _build_grouping_system_prompt(
     if rings:
         parts.append(rings)
     return "\n\n".join(parts)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fase MAP (I26) — extracción de menciones por ventana
+# ═══════════════════════════════════════════════════════════════════════
+
+# Tipos de relación válidos (vocabulario curado del dominio) + escape "otro".
+_RELATION_TYPE_VALUES: set[str] = set()
+_MENTION_KINDS = {"entity", "branch", "relation", "issue"}
+
+
+def _relation_type_vocabulary() -> list[str]:
+    """Lista ordenada de ``RelationType`` (cacheada) para prompt y coerción."""
+    global _RELATION_TYPE_VALUES
+    if not _RELATION_TYPE_VALUES:
+        from packages.domain.relation import RelationType
+        _RELATION_TYPE_VALUES = {t.value for t in RelationType}
+    return sorted(_RELATION_TYPE_VALUES)
+
+
+def _coerce_relation_type(value: Any) -> str:
+    """Devuelve el ``relation_type`` si está en el vocabulario curado, si no 'otro'."""
+    text = _as_text(value).strip().lower()
+    if not text:
+        return "otro"
+    _relation_type_vocabulary()  # asegura cache poblada
+    return text if text in _RELATION_TYPE_VALUES else "otro"
+
+
+def _clamp01(value: Any, default: float = 0.5) -> float:
+    """Normaliza un float a [0.0, 1.0]; ``default`` si no es numérico."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, f))
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mention_provenance(window: DocumentSegment) -> list[dict[str, Any]]:
+    """Referencias de procedencia de una ventana (para trazabilidad de menciones)."""
+    metadata = getattr(window, "metadata", {}) or {}
+    return [{
+        "segment_id": getattr(window, "id", ""),
+        "chunk_id": _segment_chunk_id(window),
+        "section": getattr(window, "section", ""),
+        "char_start": metadata.get("char_start", getattr(window, "start_offset", 0)),
+        "char_end": metadata.get("char_end", getattr(window, "end_offset", 0)),
+        "window_segment_ids": metadata.get("window_segment_ids", []),
+    }]
+
+
+def _build_map_system_prompt(
+    taxonomy: dict[str, Any],
+    canon_digest: dict[str, Any],
+    lang: str = "es",
+    *,
+    chronology_applied: dict[str, Any] | None = None,
+    world_layers: list[dict[str, Any]] | None = None,
+) -> str:
+    """System prompt de la fase MAP: prompt base + vocabulario de relaciones + bloques."""
+    base = get_prompt(IMPORT_MAP_INTENT, lang) or ""
+    parts = [base]
+    vocab = ", ".join(_relation_type_vocabulary())
+    parts.append(
+        "TIPOS DE RELACION PERMITIDOS (relation_type SOLO de esta lista, o 'otro'):\n" + vocab
+    )
+    block = _taxonomy_prompt_block(taxonomy, canon_digest)
+    if block:
+        parts.append(block)
+    framework = _framework_prompt_block(chronology_applied or {}, world_layers or [])
+    if framework:
+        parts.append(framework)
+    return "\n\n".join(parts)
+
+
+def _normalize_mention(
+    raw: Any, window: DocumentSegment, local_id: str
+) -> dict[str, Any]:
+    """Normaliza una mención cruda del MAP a un dict estable y validado.
+
+    - ``kind`` desconocido → ``issue``.
+    - entity/branch sin ``body`` → ``issue`` (el prompt lo exige; no se pierde, se
+      reporta como incidencia revisable).
+    - ``relation_type`` se acota al vocabulario curado (o ``otro``).
+    - ``relevance``/``confidence`` se normalizan a [0,1].
+    Siempre lleva ``local_id`` y ``source_references`` para trazabilidad.
+    """
+    payload = _as_dict(raw)
+    provenance = _mention_provenance(window)
+    kind = _as_text(payload.get("kind")).strip().lower()
+    if kind not in _MENTION_KINDS:
+        kind = "issue"
+
+    base = {
+        "local_id": local_id,
+        "kind": kind,
+        "evidence": _as_text(payload.get("evidence")),
+        "relevance": _clamp01(payload.get("relevance")),
+        "confidence": _clamp01(payload.get("confidence")),
+        "confidence_reason": _as_text(payload.get("confidence_reason")),
+        "source_references": provenance,
+    }
+
+    if kind == "relation":
+        base.update({
+            "source_name": _as_text(payload.get("source_name")),
+            "target_name": _as_text(payload.get("target_name")),
+            "relation_type": _coerce_relation_type(payload.get("relation_type")),
+            "summary": _as_text(payload.get("summary")),
+        })
+        if not base["source_name"] or not base["target_name"]:
+            return {
+                "local_id": local_id, "kind": "issue",
+                "message": "Relación sin source_name/target_name; el texto no nombra ambos.",
+                "relevance": base["relevance"], "confidence": base["confidence"],
+                "source_references": provenance,
+            }
+        return base
+
+    if kind in {"entity", "branch"}:
+        body = _as_text(payload.get("body"))
+        if not body.strip():
+            name = _as_text(payload.get("name"))
+            return {
+                "local_id": local_id, "kind": "issue",
+                "message": f"Mención '{name}' sin body; el extractor debe redactarlo.",
+                "relevance": base["relevance"], "confidence": base["confidence"],
+                "source_references": provenance,
+            }
+        base.update({
+            "name": _as_text(payload.get("name")),
+            "summary": _as_text(payload.get("summary")),
+            "body": body,
+            "aliases": [_as_text(a) for a in _as_list(payload.get("aliases")) if _as_text(a)],
+            "entity_type": _as_text(payload.get("entity_type")) if kind == "entity" else "",
+            "branch_type": _as_text(payload.get("branch_type")) if kind == "branch" else "",
+            "birth_year": _int_or_none(payload.get("birth_year")),
+            "death_year": _int_or_none(payload.get("death_year")),
+            "temporal_nature": _as_text(payload.get("temporal_nature")),
+            "layer_ids": [_as_text(x) for x in _as_list(payload.get("layer_ids")) if _as_text(x)],
+        })
+        if not base["name"]:
+            return {
+                "local_id": local_id, "kind": "issue",
+                "message": "Mención entity/branch sin name.",
+                "relevance": base["relevance"], "confidence": base["confidence"],
+                "source_references": provenance,
+            }
+        return base
+
+    # issue
+    base["message"] = (
+        _as_text(payload.get("message")) or "Fragmento ambiguo o sin contenido extraíble."
+    )
+    return base
+
+
+def _map_issue(
+    window: DocumentSegment, window_index: int, message: str, **extra: Any
+) -> dict[str, Any]:
+    """Construye una mención-incidencia de ventana (nunca se pierde, es revisable)."""
+    issue = {
+        "local_id": f"w{window_index}_m0",
+        "kind": "issue",
+        "message": message,
+        "source_references": _mention_provenance(window),
+    }
+    issue.update(extra)
+    return issue
+
+
+def _map_window(
+    provider: AIProvider,
+    window: DocumentSegment,
+    window_index: int,
+    project_context: dict[str, Any],
+    timeout_seconds: int,
+) -> Result[list[dict[str, Any]], str]:
+    """Extrae las menciones de UNA ventana (fase MAP), con 1 reintento ante JSON inválido.
+
+    - JSON válido → lista de menciones normalizadas (`_normalize_mention`).
+    - JSON inválido tras 1 reintento → una mención-incidencia (revisable, no se pierde).
+    - Rechazo por contenido del proveedor → incidencia (I24, sigue el resto).
+    - Error sistémico (auth, conexión) → ``Error`` (corta con progreso, lo gestiona el caller).
+    """
+    taxonomy = _as_dict(project_context.get("import_taxonomy"))
+    canon_digest = _as_dict(project_context.get("canon_digest"))
+    chronology_applied = _as_dict(project_context.get("chronology_applied"))
+    world_layers = _as_list(project_context.get("world_layers"))
+    lang = _as_text(project_context.get("language")) or "es"
+    system = _build_map_system_prompt(
+        taxonomy, canon_digest, lang,
+        chronology_applied=chronology_applied, world_layers=world_layers,
+    )
+    gateway = AIRequestGateway(provider=provider)
+    user_prompt = json.dumps(
+        {"task": "extract_mentions", "chunk": _segment_payload(window)},
+        ensure_ascii=False, default=str,
+    )
+
+    def _request(extra_hint: str = "") -> GatewayRequest:
+        return GatewayRequest(
+            intent=IMPORT_MAP_INTENT,
+            user_prompt=user_prompt,
+            context={
+                "project_name": project_context.get("project_name", ""),
+                "import_scope": "extract_mentions_only",
+                "import_taxonomy": taxonomy,
+            },
+            system_prompt_override=(system if not extra_hint else f"{system}\n\n{extra_hint}"),
+            timeout=max(1, int(timeout_seconds or IMPORT_EXTRACTION_TIMEOUT_SECONDS)),
+            json_mode=True,
+            validate=True,
+        )
+
+    response = gateway.execute(_request())
+    # 1 reintento SOLO ante fallo de validación (JSON malformado / falta 'mentions').
+    if response.error and response.metadata.get("error_type") == "validation":
+        hint = (
+            "REINTENTO: tu salida anterior fue rechazada por formato "
+            f"({response.error}). Devuelve SOLO un objeto JSON con la clave 'mentions' "
+            "(una lista); sin Markdown ni texto fuera del JSON."
+        )
+        response = gateway.execute(_request(hint))
+
+    if response.error:
+        error_type = response.metadata.get("error_type")
+        if error_type == "validation":
+            return Ok([_map_issue(
+                window, window_index,
+                f"Output IA malformado rechazado tras reintento: {response.error}",
+            )])
+        if _is_content_rejection(response.error):
+            return Ok([_map_issue(
+                window, window_index,
+                f"El proveedor rechazó esta sección por su filtro de contenido: {response.error}",
+                issue_type="ai_content_rejected",
+            )])
+        return Error(response.error)  # sistémico → corta (con progreso) en el caller
+
+    parsed = response.parsed_json
+    raw_mentions = parsed.get("mentions") if isinstance(parsed, dict) else None
+    if not isinstance(raw_mentions, list):
+        return Ok([_map_issue(
+            window, window_index,
+            "Output IA malformado: falta la lista 'mentions'.",
+        )])
+
+    mentions: list[dict[str, Any]] = []
+    for idx, raw in enumerate(raw_mentions):
+        mentions.append(_normalize_mention(raw, window, f"w{window_index}_m{idx}"))
+    return Ok(mentions)
+
+
+def extract_mentions_from_segments(
+    provider: AIProvider,
+    segments: list[DocumentSegment],
+    *,
+    project_context: dict[str, Any],
+    timeout_seconds: int | None = None,
+    window_chars: int = IMPORT_EXTRACTION_WINDOW_CHARS,
+    progress_callback: Any = None,
+    should_cancel: Any = None,
+) -> Result[list[dict[str, Any]], str]:
+    """Fase MAP del rediseño map→reduce (I26).
+
+    Agrupa los segmentos en ventanas (reutiliza ``_window_segments``) y extrae las
+    MENCIONES de cada una. Devuelve la lista plana de menciones (con id local estable
+    ``wN_mM`` y procedencia) que la fase REDUCE (I27) consolidará en un ``ImportGraph``.
+    Un error sistémico corta conservando lo ya extraído (parcial) — no se pierde nada.
+
+    ``progress_callback(done, total, label)`` y ``should_cancel()`` permiten feedback
+    por ventana y cancelación cooperativa (los usa el worker de la UI).
+    """
+    windows = _window_segments(list(segments or []), window_chars)
+    total = len(windows)
+    all_mentions: list[dict[str, Any]] = []
+    for window_index, window in enumerate(windows):
+        if should_cancel is not None and should_cancel():
+            break
+        result = _map_window(
+            provider, window, window_index, project_context,
+            timeout_seconds or IMPORT_EXTRACTION_TIMEOUT_SECONDS,
+        )
+        if is_error(result):
+            # Sistémico: corta. Devuelve el Error; el orquestador conserva lo parcial.
+            return result
+        all_mentions.extend(unwrap(result))
+        if progress_callback is not None:
+            progress_callback(window_index + 1, total, getattr(window, "section", ""))
+    return Ok(all_mentions)
 
 
 _KNOWN_BRANCH_TYPES = {"faccion", "cultura", "religion", "institucion", "trama", "contenedor"}

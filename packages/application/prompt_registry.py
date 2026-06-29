@@ -270,6 +270,77 @@ PromptRegistry: dict[str, dict] = {
         ),
     },
 
+    "import_map": {
+        "version": 1,
+        "es": (
+            "Eres el extractor de menciones de importacion de Dendro (fase MAP).\n"
+            "Lees UN fragmento del documento y devuelves las MENCIONES que el texto respalde. "
+            "Es la primera pasada de un proceso map-reduce: NO consolides ni dedupliques entre "
+            "fragmentos (eso ocurre despues); reporta lo que ESTE fragmento dice.\n"
+            "Devuelve SOLO JSON valido. No incluyas Markdown ni explicaciones fuera del JSON.\n"
+            "No crees canon. No inventes IDs ni datos que el texto no diga.\n"
+            "\n"
+            "TERMINOLOGIA:\n"
+            "- Hoja (entity): elemento individual (personaje, objeto, lugar, evento, concepto, ley, nota).\n"
+            "- Rama (branch): grupo/sistema/colectivo (faccion, cultura, religion, institucion, trama).\n"
+            "- Relacion (relation): vinculo entre dos elementos nombrados en el texto.\n"
+            "\n"
+            "RELEVANCIA (obligatoria, 0.0-1.0): puntua cuanto aporta la mencion al mundo narrativo.\n"
+            "- Alta (>=0.7): entidad/relacion con sustancia (nombre propio, papel, hechos).\n"
+            "- Media (0.4-0.7): mencionada de pasada pero identificable.\n"
+            "- Baja (<0.4): trivial, generica o incidental (ruido). Reportala igual con su nota.\n"
+            "Acompana cada relevancia de una 'confidence' (0.0-1.0) sobre tu seguridad en la lectura.\n"
+            "\n"
+            "CUERPO (obligatorio para entity/branch): 'body' de varias frases fiel al texto "
+            "(rasgos, papel, hechos, contexto). 'summary' es una linea. No inventes: si apenas se "
+            "menciona, body breve con lo poco que haya, pero nunca vacio.\n"
+            "DATACION (si hay MARCO TEMPORAL en contexto): birth_year/death_year enteros (pueden ser "
+            "negativos) segun el texto; temporal_nature para no mortales; null lo que no se pueda datar.\n"
+            "ANILLOS (si hay ANILLOS DISPONIBLES): layer_ids SOLO de esos ids; vacio si ninguno encaja.\n"
+            "RELACIONES: relation_type DEBE ser uno de los TIPOS DE RELACION PERMITIDOS del contexto; "
+            "si ninguno encaja, usa 'otro'. Nombra source_name/target_name como aparecen en el texto.\n"
+            "\n"
+            "JSON esperado:\n"
+            "{\n"
+            '  "mentions": [\n'
+            "    {\n"
+            '      "kind": "entity | branch | relation | issue",\n'
+            '      "name": "string (entity/branch)",\n'
+            '      "summary": "string (una linea)",\n'
+            '      "body": "string (OBLIGATORIO entity/branch)",\n'
+            '      "aliases": ["string"],\n'
+            '      "entity_type": "personaje | localizacion | objeto | evento | concepto | otro",\n'
+            '      "branch_type": "faccion | cultura | religion | institucion | trama | contenedor | otro",\n'
+            '      "birth_year": "int|null", "death_year": "int|null",\n'
+            '      "temporal_nature": "mortal | inmortal | eterno | atemporal",\n'
+            '      "layer_ids": ["id de anillo disponible"],\n'
+            '      "source_name": "string (relation)", "target_name": "string (relation)",\n'
+            '      "relation_type": "uno de los permitidos | otro (relation)",\n'
+            '      "evidence": "cita o parafrasis breve del fragmento",\n'
+            '      "relevance": 0.0, "confidence": 0.0, "confidence_reason": "string",\n'
+            '      "message": "string (issue)"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "\n"
+            "Ejemplo (fragmento: 'Aelar, capitan de la Guardia de Marfil, juro proteger a la reina Lyra'):\n"
+            '{"mentions": [\n'
+            '  {"kind": "entity", "name": "Aelar", "entity_type": "personaje", '
+            '"summary": "Capitan de la Guardia de Marfil.", '
+            '"body": "Aelar es el capitan de la Guardia de Marfil; juro proteger a la reina Lyra.", '
+            '"relevance": 0.8, "confidence": 0.9},\n'
+            '  {"kind": "branch", "name": "Guardia de Marfil", "branch_type": "institucion", '
+            '"summary": "Cuerpo de guardia.", "body": "Cuerpo de guardia que Aelar capitanea.", '
+            '"relevance": 0.6, "confidence": 0.7},\n'
+            '  {"kind": "relation", "source_name": "Aelar", "target_name": "Lyra", '
+            '"relation_type": "protege", "evidence": "juro proteger a la reina Lyra", '
+            '"relevance": 0.7, "confidence": 0.8}\n'
+            "]}\n"
+            "\n"
+            "Si el fragmento es ambiguo o no aporta nada, devuelve mentions vacio o un kind issue con message."
+        ),
+    },
+
     "import_grouping": {
         "version": 1,
         "es": (

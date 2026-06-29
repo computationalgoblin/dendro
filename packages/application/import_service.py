@@ -18,10 +18,12 @@ from typing import Any
 
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
 from packages.domain.import_models import (
+    ConsolidatedEntity,
     DocumentSegment,
     ImportBasket,
     ImportCandidate,
     ImportFormat,
+    ImportGraph,
     ImportMode,
     ImportReviewState,
 )
@@ -748,6 +750,83 @@ class ImportService:
         ]
         return Ok(presentable)
 
+    def extract_graph_for_basket(
+        self,
+        basket_id: str,
+        *,
+        provider=None,
+        allow_simulated: bool = False,
+        project_context: dict[str, Any] | None = None,
+        progress_callback: Any = None,
+        should_cancel: Any = None,
+    ) -> Result[ImportGraph, str]:
+        """I31: pipeline nueva map→reduce→structure→date — puebla ``basket.graph``.
+
+        Reemplaza ``extract_ai_candidates`` en modo CANON: en lugar de candidatos
+        sueltos produce un ``ImportGraph`` consolidado (entidades/ramas/relaciones con
+        IDs provisionales estables, datados y con relevancia en dos niveles). NO crea
+        canon — eso es ``commit_graph_to_canon`` tras la revisión del asistente.
+        Sin proveedor de IA real falla claro (nunca devuelve éxito simulado).
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = next((b for b in proj.import_baskets if b.id == basket_id), None)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+
+        from packages.application.import_ai_extraction_service import (
+            extract_mentions_from_segments,
+            resolve_configured_provider,
+        )
+        from packages.application.import_reconciliation_service import (
+            propose_structure,
+            reconcile_mentions,
+        )
+
+        prov = provider or resolve_configured_provider()
+        if not allow_simulated and getattr(prov, "provider_name", "") == "simulated":
+            return Error(
+                "No hay proveedor de IA configurado para la importación. "
+                "Configura un proveedor (NARRATIVE_AI_*) para extraer el grafo."
+            )
+
+        context = dict(project_context or {})
+        context.setdefault("project_name", getattr(proj, "name", ""))
+        context.setdefault("canon_digest", self._canon_digest(proj))
+        context.setdefault("chronology_applied", self._chronology_context(proj))
+        context.setdefault("world_layers", self._world_layers_context(proj))
+
+        # MAP — menciones por ventana.
+        mentions_r = extract_mentions_from_segments(
+            prov, basket.segments, project_context=context,
+            progress_callback=progress_callback, should_cancel=should_cancel,
+        )
+        if isinstance(mentions_r, Error):
+            return mentions_r
+        mentions = mentions_r.value
+
+        # REDUCE (+ DATE + relevancia, aplicados dentro de reconcile).
+        graph_r = reconcile_mentions(mentions, provider=prov, project_context=context)
+        if isinstance(graph_r, Error):
+            return graph_r
+        graph = graph_r.value
+
+        # STRUCTURE — agrupación en ramas con garantías (sin huérfanas/ramas vacías).
+        propose_structure(graph, provider=prov, project_context=context)
+
+        basket.graph = graph
+        basket.import_candidates = []  # el grafo sustituye a los candidatos sueltos
+        basket.metadata["import_graph"] = {
+            "entity_count": len(graph.entities),
+            "relation_count": len(graph.relations),
+            "issue_count": len(graph.metadata.get("issues", [])),
+            "built_at": _now_iso(),
+        }
+        basket.updated_at = _now_iso()
+        return Ok(graph)
+
     def propose_scaffolding(
         self,
         basket_id: str,
@@ -1328,6 +1407,189 @@ class ImportService:
         import_cand.review_state = ImportReviewState.ACEPTADO
         basket.updated_at = _now_iso()
         return result
+
+    # ------------------------------------------------------------------
+    # I28 — Commit atómico del grafo consolidado a canon
+    # ------------------------------------------------------------------
+
+    def _consolidated_entity_to_canon_data(
+        self, entity: ConsolidatedEntity, *, basket_id: str = ""
+    ) -> dict[str, Any]:
+        """Mapea una ``ConsolidatedEntity`` al dict que espera ``create_entity``.
+
+        Espeja el mapeo de ``_apply_entity_candidate`` (canon_state borrador,
+        descripciones, datación, anillos) y añade la trazabilidad del grafo.
+        """
+        is_branch = entity.is_branch
+        entity_type = (
+            (entity.branch_type or "contenedor") if is_branch
+            else (entity.entity_type or "nota")
+        )
+        custom_metadata: dict[str, Any] = {
+            "import_graph": True,
+            "import_provisional_id": entity.provisional_id,
+            "import_basket_id": basket_id,
+            "source_references": list(entity.source_references or []),
+            "import_relevance": entity.relevance,
+            "import_relevance_tier": entity.relevance_tier.value,
+            "import_dating_status": entity.dating_status.value,
+        }
+        if is_branch:
+            custom_metadata["display_type"] = "rama"
+            custom_metadata["candidate_tree"] = True
+        data: dict[str, Any] = {
+            "name": entity.name,
+            "aliases": list(entity.aliases or []),
+            "entity_type": entity_type,
+            "brief_description": entity.summary or "",
+            "extended_description": entity.body or "",
+            "canon_state": "borrador",
+            "visibility_state": "visible_usuario",
+            "origin": "import_review",
+            "custom_metadata": custom_metadata,
+        }
+        if entity.birth_year is not None:
+            data["birth_year"] = entity.birth_year
+        if entity.death_year is not None:
+            data["death_year"] = entity.death_year
+        if entity.temporal_nature:
+            data["temporal_nature"] = entity.temporal_nature
+        if entity.layer_ids:
+            data["layer_ids"] = list(entity.layer_ids)
+        return data
+
+    def commit_graph_to_canon(
+        self,
+        graph: ImportGraph,
+        accepted_ids: set[str] | None = None,
+        *,
+        basket_id: str = "",
+    ) -> Result[dict[str, Any], str]:
+        """Materializa ATÓMICAMENTE el subgrafo aceptado a canon (fase STRUCTURE).
+
+        ``accepted_ids`` son los IDs provisionales aceptados por el usuario (None =
+        aceptar todo). Garantías:
+        - *Sin huérfanas*: cada hoja aceptada se crea (esté o no en una rama).
+        - *Sin ramas vacías*: una rama solo se materializa si al menos un miembro es
+          también materializable (cálculo por punto fijo, transitivo para ramas
+          anidadas); sus relaciones ``contiene`` se crean junto a ella.
+        - *Atómico*: si algún paso falla, se revierte TODO (restaura las listas del
+          proyecto) y se devuelve ``Error`` — el canon no queda a medias.
+
+        La aceptación aquí ES la aceptación explícita (la IA nunca escribe canon
+        directamente). Resuelve IDs provisionales → IDs reales en bloque.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        from packages.application.entity_service import EntityService
+        from packages.application.relation_service import RelationService
+        entity_service = self.entity_service or EntityService(self.project_service)
+        relation_service = self.relation_service or RelationService(self.project_service)
+
+        entities_by_pid = {e.provisional_id: e for e in graph.entities}
+        if accepted_ids is None:
+            accepted = set(entities_by_pid) | {r.provisional_id for r in graph.relations}
+        else:
+            accepted = set(accepted_ids)
+        accepted_entity_pids = {pid for pid in accepted if pid in entities_by_pid}
+
+        # Materializables por punto fijo: hojas aceptadas + ramas con ≥1 miembro
+        # materializable (transitivo). Evita ramas vacías incluso anidadas.
+        committable = {
+            pid for pid in accepted_entity_pids if not entities_by_pid[pid].is_branch
+        }
+        branch_pids = [pid for pid in accepted_entity_pids if entities_by_pid[pid].is_branch]
+        changed = True
+        while changed:
+            changed = False
+            for pid in branch_pids:
+                if pid in committable:
+                    continue
+                if any(m in committable for m in entities_by_pid[pid].member_ids):
+                    committable.add(pid)
+                    changed = True
+        skipped_branches = [pid for pid in branch_pids if pid not in committable]
+
+        # Snapshot para rollback en memoria (antes de persistir).
+        snap_entities = list(getattr(proj, "entities", []))
+        snap_relations = list(getattr(proj, "relations", []))
+
+        def _rollback() -> None:
+            proj.entities[:] = snap_entities
+            proj.relations[:] = snap_relations
+
+        # 1) Entidades: hojas primero, ramas después (la rama contiene hojas/ramas).
+        pid_to_real: dict[str, str] = {}
+        ordered = sorted(committable, key=lambda p: entities_by_pid[p].is_branch)
+        for pid in ordered:
+            ent = entities_by_pid[pid]
+            res = entity_service.create_entity(
+                self._consolidated_entity_to_canon_data(ent, basket_id=basket_id)
+            )
+            if isinstance(res, Error):
+                _rollback()
+                return Error(f"Commit abortado al crear '{ent.name}': {res.error}")
+            pid_to_real[pid] = res.value.id
+
+        created_relations = 0
+        skipped_relations = 0
+
+        # 2) Relaciones de contención desde member_ids (rama → miembro).
+        for pid in committable:
+            ent = entities_by_pid[pid]
+            if not ent.is_branch:
+                continue
+            for member_pid in ent.member_ids:
+                if member_pid not in pid_to_real:
+                    continue
+                res = relation_service.create_relation(
+                    source_id=pid_to_real[pid],
+                    target_id=pid_to_real[member_pid],
+                    relation_type="contiene",
+                    data={"source": "import_review",
+                          "custom_metadata": {"import_graph": True}},
+                )
+                if isinstance(res, Error):
+                    _rollback()
+                    return Error(f"Commit abortado al anidar '{ent.name}': {res.error}")
+                created_relations += 1
+
+        # 3) Relaciones del grafo (aceptadas y con ambos extremos materializados).
+        for rel in graph.relations:
+            if rel.provisional_id not in accepted:
+                continue
+            source_real = pid_to_real.get(rel.source_provisional_id)
+            target_real = pid_to_real.get(rel.target_provisional_id)
+            if not source_real or not target_real:
+                skipped_relations += 1
+                continue
+            res = relation_service.create_relation(
+                source_id=source_real,
+                target_id=target_real,
+                relation_type=rel.relation_type or "esta_relacionado_con",
+                data={
+                    "description": rel.summary or rel.evidence or "",
+                    "source": "import_review",
+                    "custom_metadata": {
+                        "import_graph": True,
+                        "import_provisional_id": rel.provisional_id,
+                    },
+                },
+            )
+            if isinstance(res, Error):
+                _rollback()
+                return Error(f"Commit abortado al crear relación: {res.error}")
+            created_relations += 1
+
+        return Ok({
+            "pid_to_real_id": pid_to_real,
+            "created_entities": len(pid_to_real),
+            "created_relations": created_relations,
+            "skipped_branches": skipped_branches,
+            "skipped_relations": skipped_relations,
+        })
 
     def _enrich_entity_candidate(
         self,

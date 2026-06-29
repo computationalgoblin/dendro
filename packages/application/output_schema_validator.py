@@ -86,6 +86,20 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
         "container_key": "candidates",
         "required_item_fields": ["kind"],
     },
+    "import_map": {
+        # I26: fase MAP — menciones por ventana. Cada mención lleva 'kind'; la
+        # validación rica por tipo (body obligatorio, relation_type del vocabulario)
+        # la hace el servicio al normalizar.
+        "container_key": "mentions",
+        "required_item_fields": ["kind"],
+    },
+    "import_reconcile": {
+        # I27: fase REDUCE — el árbitro devuelve un objeto con el grafo consolidado;
+        # estructura libre validada/normalizada por el servicio de reconciliación.
+        "container_key": None,
+        "required_fields": [],
+        "optional_structure": True,
+    },
     "import_project_config": {
         # Andamiaje del mundo (I22): objeto plano libre (chronology/config/
         # world_layers/milestones). Cualquier JSON válido pasa; el servicio normaliza.
