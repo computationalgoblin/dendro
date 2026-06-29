@@ -611,6 +611,38 @@ def _active_ring_brief(project: Any, context_scope: dict[str, Any]) -> dict[str,
     return out
 
 
+def _selected_milestones_brief(
+    project: Any, context_scope: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """DC-UX4-HITO: datos vigentes de los hitos seleccionados (id+título+año+texto).
+
+    La cronología vive FUERA de RAG, así que el hito objetivo no llega al modelo por
+    recuperación. Sin sus datos actuales (sobre todo el `year`), el modelo no puede
+    EDITAR el hito (p. ej. "adelanta un siglo" = year+100) y rechaza la edición.
+    """
+    ids = [str(x).strip() for x in (context_scope.get("selected_milestone_ids") or []) if str(x).strip()]
+    if not ids or project is None:
+        return []
+    by_id = {str(getattr(m, "id", "")): m for m in (getattr(project, "causal_milestones", None) or [])}
+    out: list[dict[str, Any]] = []
+    for mid in ids:
+        hito = by_id.get(mid)
+        if hito is None:
+            continue
+        brief: dict[str, Any] = {"id": mid, "title": str(getattr(hito, "title", "") or "")}
+        year = getattr(hito, "year", None)
+        if year is not None:
+            brief["year"] = year
+        desc = str(getattr(hito, "description", "") or "").strip()
+        if desc:
+            brief["description"] = desc
+        rationale = str(getattr(hito, "rationale", "") or "").strip()
+        if rationale:
+            brief["rationale"] = rationale
+        out.append(brief)
+    return out
+
+
 def _compact_chronology(project: Any) -> dict[str, Any]:
     """Resumen compacto y determinista del calendario del proyecto (PA03).
 
@@ -1591,6 +1623,12 @@ class AIJobService:
         ring_brief = _active_ring_brief(project, context)
         if ring_brief:
             context["active_ring"] = ring_brief
+
+        # DC-UX4-HITO: el/los hito(s) seleccionado(s) viajan con sus datos vigentes
+        # (título, año, texto) para que `editar:hito` pueda EDITARLOS de verdad.
+        milestones_brief = _selected_milestones_brief(project, context)
+        if milestones_brief:
+            context["selected_milestones"] = milestones_brief
 
         retrieval_plan = build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
         built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, retrieval_plan)

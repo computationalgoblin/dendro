@@ -520,6 +520,20 @@ class CandidateService:
                              if str(getattr(m, "title", "")).lower() == nm), None)
             if hito is None:
                 return Error(f"No se encontró el hito a editar: '{target_name}'")
+            # DC-UX4-HITO: editar la DATACIÓN del hito (p.ej. "adelanta un siglo").
+            # `year` es el espejo entero autoritativo (J01); se refleja en `temporality`.
+            if field in ("year", "año", "anio", "fecha", "date"):
+                try:
+                    new_year = int(str(value).strip())
+                except (TypeError, ValueError):
+                    return Error(f"Año inválido para el hito: '{value}'")
+                hito.year = new_year
+                temporality = getattr(hito, "temporality", None)
+                if temporality is not None:
+                    temporality.year = new_year
+                if hasattr(project, "touch"):
+                    project.touch()
+                return Ok(("milestone", hito.id))
             attr = {"title": "title", "summary": "description", "description": "description",
                     "body": "rationale", "rationale": "rationale"}.get(field, "description")
             setattr(hito, attr, value)

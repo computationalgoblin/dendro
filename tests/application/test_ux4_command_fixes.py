@@ -7,6 +7,7 @@ from packages.application.entity_service import EntityService
 from packages.application.project_service import ProjectService
 from packages.application.relation_service import RelationService
 from packages.domain.entity import NarrativeEntity, normalize_entity_type
+from packages.domain.result import Error
 from packages.infrastructure.ai_provider import SimulatedAIProvider
 from packages.persistence.store import ProjectStore
 
@@ -297,6 +298,62 @@ def test_accepting_milestone_edit_applies_to_canon():
     _accept(cands, _edit_candidate(stage_results(payload, job)))
     hito = next(m for m in ps.active_project.causal_milestones if m.title == "Fundación")
     assert hito.description == "Nueva desc."
+
+
+def test_accepting_milestone_year_edit_redates_in_canon():
+    """DC-UX4-HITO: 'adelanta un siglo' → editar la datación (year) del hito."""
+    from packages.domain.causal_milestone import CausalMilestone
+    ps, _es, _rs, cands = _services()
+    ps.active_project.causal_milestones.append(
+        CausalMilestone.from_dict({"title": "Caída", "description": "x", "year": 1200}))
+    job = _job(AIJobType.EDIT_MILESTONE, "adelanta un siglo", {})
+    payload = {"milestone_edits": [
+        {"target_name": "Caída", "field": "year", "proposed_value": "1100"},
+    ]}
+    _accept(cands, _edit_candidate(stage_results(payload, job)))
+    hito = next(m for m in ps.active_project.causal_milestones if m.title == "Caída")
+    assert hito.year == 1100
+    assert hito.temporality.year == 1100  # espejo entero autoritativo (J01)
+
+
+def test_accepting_milestone_year_edit_rejects_non_integer():
+    """Un 'año' no numérico no debe corromper la datación: accept devuelve Error."""
+    from packages.domain.causal_milestone import CausalMilestone
+    ps, _es, _rs, cands = _services()
+    ps.active_project.causal_milestones.append(
+        CausalMilestone.from_dict({"title": "Caída", "year": 1200}))
+    job = _job(AIJobType.EDIT_MILESTONE, "x", {})
+    payload = {"milestone_edits": [
+        {"target_name": "Caída", "field": "year", "proposed_value": "hace mucho"},
+    ]}
+    made = cands.create_candidate(_edit_candidate(stage_results(payload, job))).value
+    res = cands.accept_candidate(made.id)
+    assert isinstance(res, Error)
+    hito = next(m for m in ps.active_project.causal_milestones if m.title == "Caída")
+    assert hito.year == 1200  # intacto
+
+
+def test_selected_milestone_brief_carries_current_year_and_text():
+    """DC-UX4-HITO: el hito seleccionado debe viajar al modelo con sus datos vigentes."""
+    from packages.application.ai_jobs import _selected_milestones_brief
+    from packages.domain.causal_milestone import CausalMilestone
+    ps, _es, _rs, _cands = _services()
+    hito = CausalMilestone.from_dict(
+        {"title": "Caída de Vael", "description": "El reino se hundió.", "year": 1200})
+    ps.active_project.causal_milestones.append(hito)
+    briefs = _selected_milestones_brief(
+        ps.active_project, {"selected_milestone_ids": [hito.id]})
+    assert briefs == [{"id": hito.id, "title": "Caída de Vael",
+                       "year": 1200, "description": "El reino se hundió."}]
+
+
+def test_selection_block_renders_selected_milestones_for_the_prompt():
+    """El bloque de selección expone los hitos al prompt (no solo entidades/anillos)."""
+    from packages.application.prompt_assembler import _selection_block
+    block = _selection_block({"selected_milestones": [
+        {"id": "m1", "title": "Caída de Vael", "year": 1200, "description": "x"}]})
+    assert block["hitos_seleccionados"][0]["year"] == 1200
+    assert "coherencia_hito" in block  # instrucción de editar a partir del dato vigente
 
 
 # ── Fix 3 (C6): Crear Relación usa el par exacto de la selección ──────────

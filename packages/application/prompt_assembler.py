@@ -155,6 +155,17 @@ def _selection_block(context: dict[str, Any]) -> dict[str, Any]:
             "escala y temática (su descripción y dominio mandan): p. ej. un anillo "
             "cosmológico ⇒ entidades cosmológicas, no mundanas."
         )
+    # DC-UX4-HITO: hitos seleccionados con sus datos VIGENTES (título, año, texto), para
+    # que `editar:hito` tenga el dato de partida y pueda calcular el resultado (p. ej.
+    # adelantar un siglo = year + 100). Sin esto el modelo rechaza la edición.
+    milestones = context.get("selected_milestones")
+    if isinstance(milestones, list) and milestones:
+        block["hitos_seleccionados"] = milestones
+        block["coherencia_hito"] = (
+            "Para editar un hito, parte de sus datos vigentes (arriba): calcula el "
+            "`year` resultante a partir del año actual y reescribe el texto sobre el "
+            "contenido actual. NO pidas datos que ya están aquí."
+        )
     return block
 
 

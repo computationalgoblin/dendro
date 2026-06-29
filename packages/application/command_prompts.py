@@ -122,9 +122,12 @@ _INTENT_SPECS_ES: dict[str, str] = {
         '"field": "description|order", "proposed_value": "...", "rationale": "..."}]}'
     ),
     "edit_milestone": (
-        "TAREA — EDITAR HITO. Edita el texto del hito seleccionado. NO crees nada nuevo.\n"
+        "TAREA — EDITAR HITO. Edita el hito seleccionado: su texto (título/cuerpo/descripción) o su "
+        "DATACIÓN. Para moverlo en el tiempo (adelantar/atrasar), usa field:\"year\" y pon en "
+        "proposed_value el AÑO diegético entero RESULTANTE (aplica el desplazamiento sobre el año "
+        "actual del hito). SIEMPRE rellena target_name y proposed_value. NO crees nada nuevo.\n"
         'FORMATO: {"summary": "...", "report": "...", "milestone_edits": [{"target_name": "título del hito", '
-        '"field": "body|description", "proposed_value": "...", "rationale": "..."}]}'
+        '"field": "title|body|description|year", "proposed_value": "...", "rationale": "..."}]}'
     ),
     "analyze_coherence": (
         "TAREA — ANALIZAR COHERENCIA. Analiza la coherencia causal, motivacional, tonal y de continuidad del "
