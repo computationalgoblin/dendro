@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TypeVar
+from typing import Any
 
 from packages.domain.candidate_issue import Issue, Candidate, StructuredIssue
 from packages.domain.causal_milestone import CausalMilestone
@@ -33,21 +33,9 @@ from packages.domain.custom_types import (
 from packages.domain.entity import NarrativeEntity
 from packages.domain.narrative_domain import NarrativeDomain
 from packages.domain.world_layer import WorldLayer
-from packages.domain.advanced_config import AdvancedProjectConfig
-from packages.domain.project_config import (
-    AIConfig,
-    ExportConfig,
-    GeneralProjectConfig,
-    GenreConfig,
-    ProjectMetadata,
-    RealismConfig,
-    ToneConfig,
-    VisibilityConfig,
-)
+from packages.domain.creative_config import CreativeProjectConfig
 from packages.domain.relation import NarrativeRelation
 from packages.domain.source_history import HistoryEntry, Source
-
-_T = TypeVar("_T")
 
 
 class ProjectType:
@@ -55,142 +43,6 @@ class ProjectType:
     CAMPANA = "campana"
     NOVELA = "novela"
     OTRO = "otro"
-
-
-@dataclass
-class CreativeProjectConfig:
-    """Creative project configuration (B31-T03, expanded B40)."""
-    # ── Original fields (B31-T03) ──
-    narrative_style: str = ""
-    main_themes: list[str] = field(default_factory=list)
-    target_audience: str = ""
-    creative_rules: list[str] = field(default_factory=list)
-
-    # ── New scalar fields (B40) ──
-    core_premise: str = ""
-    short_summary: str = ""
-    development_status: str = ""  # idea/borrador/expansion/revision/activa/archivado
-    format: str = ""  # novela/campana/videojuego/serie/comic/mundo_abierto/antologia/otro
-
-    # ── New structured sub-objects (B40) ──
-    creative_intent: dict = field(default_factory=dict)
-    narrative_engine: dict = field(default_factory=dict)
-    poetics: dict = field(default_factory=dict)
-    canon: dict = field(default_factory=dict)
-    negative_space: dict = field(default_factory=dict)
-    taste_memory: dict = field(default_factory=dict)
-    presets_applied: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "narrative_style": self.narrative_style,
-            "main_themes": self.main_themes,
-            "target_audience": self.target_audience,
-            "creative_rules": self.creative_rules,
-            "core_premise": self.core_premise,
-            "short_summary": self.short_summary,
-            "development_status": self.development_status,
-            "format": self.format,
-            "creative_intent": self.creative_intent,
-            "narrative_engine": self.narrative_engine,
-            "poetics": self.poetics,
-            "canon": self.canon,
-            "negative_space": self.negative_space,
-            "taste_memory": self.taste_memory,
-            "presets_applied": self.presets_applied,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> CreativeProjectConfig:
-        return cls(
-            narrative_style=data.get("narrative_style", ""),
-            main_themes=data.get("main_themes", []),
-            target_audience=data.get("target_audience", ""),
-            creative_rules=data.get("creative_rules", []),
-            core_premise=data.get("core_premise", ""),
-            short_summary=data.get("short_summary", ""),
-            development_status=data.get("development_status", ""),
-            format=data.get("format", ""),
-            creative_intent=data.get("creative_intent", {}),
-            narrative_engine=data.get("narrative_engine", {}),
-            poetics=data.get("poetics", {}),
-            canon=data.get("canon", {}),
-            negative_space=data.get("negative_space", {}),
-            taste_memory=data.get("taste_memory", {}),
-            presets_applied=data.get("presets_applied", []),
-        )
-
-
-@dataclass
-class NovelaConfig:
-    """Novela-specific configuration (B31-T03)."""
-    format: str = ""  # novela/relato/saga/antologia
-    point_of_view: str = ""
-    tense: str = ""
-    target_length: str = ""
-    narrative_structure: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "format": self.format,
-            "point_of_view": self.point_of_view,
-            "tense": self.tense,
-            "target_length": self.target_length,
-            "narrative_structure": self.narrative_structure,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> NovelaConfig:
-        return cls(
-            format=data.get("format", ""),
-            point_of_view=data.get("point_of_view", ""),
-            tense=data.get("tense", ""),
-            target_length=data.get("target_length", ""),
-            narrative_structure=data.get("narrative_structure", ""),
-        )
-
-
-@dataclass
-class ProjectTaxonomy:
-    """Taxonomía de importación del proyecto (Modo Canon).
-
-    Dirige y valida la extracción IA: indica qué tipos de entidad, géneros de
-    rama y anillos son válidos en ESTE proyecto. Listas vacías = sin
-    restricción (comportamiento histórico). Vive en domain (stdlib-only) para
-    que los servicios de application puedan consumirla sin romper capas.
-
-    Campos:
-      - allowed_entity_types: subconjunto de EntityType.value; [] = todos.
-      - allowed_branch_types: géneros de rama (faccion/cultura/...); [] = todos.
-      - allowed_ring_ids: ids de WorldLayer (anillos) del proyecto; [] = todos.
-      - extraction_guidance: texto libre inyectado al prompt de extracción.
-      - strict: True → candidatos fuera de taxonomía se RECHAZAN; False → INCIDENCIA.
-    """
-    allowed_entity_types: list[str] = field(default_factory=list)
-    allowed_branch_types: list[str] = field(default_factory=list)
-    allowed_ring_ids: list[str] = field(default_factory=list)
-    extraction_guidance: str = ""
-    strict: bool = False
-
-    def to_dict(self) -> dict:
-        return {
-            "allowed_entity_types": list(self.allowed_entity_types),
-            "allowed_branch_types": list(self.allowed_branch_types),
-            "allowed_ring_ids": list(self.allowed_ring_ids),
-            "extraction_guidance": self.extraction_guidance,
-            "strict": self.strict,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> ProjectTaxonomy:
-        data = data if isinstance(data, dict) else {}
-        return cls(
-            allowed_entity_types=_parse_str_list(data.get("allowed_entity_types")),
-            allowed_branch_types=_parse_str_list(data.get("allowed_branch_types")),
-            allowed_ring_ids=_parse_str_list(data.get("allowed_ring_ids")),
-            extraction_guidance=str(data.get("extraction_guidance", "") or ""),
-            strict=bool(data.get("strict", False)),
-        )
 
 
 def _now_utc() -> datetime:
@@ -247,16 +99,6 @@ class Project:
     updated_at: datetime = field(default_factory=_now_utc)
     metadata: dict[str, str] = field(default_factory=dict)
 
-    # Configuration dataclasses
-    project_metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
-    general: GeneralProjectConfig = field(default_factory=GeneralProjectConfig)
-    tone: ToneConfig = field(default_factory=ToneConfig)
-    genre: GenreConfig = field(default_factory=GenreConfig)
-    realism: RealismConfig = field(default_factory=RealismConfig)
-    ai: AIConfig = field(default_factory=AIConfig)
-    visibility: VisibilityConfig = field(default_factory=VisibilityConfig)
-    export: ExportConfig = field(default_factory=ExportConfig)
-
     # Prepared collections (empty, for Bloque 3-6+)
     entities: list[NarrativeEntity] = field(default_factory=list)
     relations: list[NarrativeRelation] = field(default_factory=list)
@@ -282,7 +124,6 @@ class Project:
         NarrativeDomain.SIN_ASIGNAR.value,
     ])
     world_layers: list[WorldLayer] = field(default_factory=list)
-    advanced_config: AdvancedProjectConfig = field(default_factory=AdvancedProjectConfig)
 
     # ── Import baskets (Bloque 17) ──
     import_baskets: list[ImportBasket] = field(default_factory=list)
@@ -325,40 +166,71 @@ class Project:
     # campo (persistencia/compat) pero se fuerza a True al crear y al cargar.
     worldbuilding_active: bool = True
     creative_config: CreativeProjectConfig = field(default_factory=CreativeProjectConfig)
-    novela_config: NovelaConfig | None = None
-    # Taxonomía de importación (Modo Canon) — dirige/valida la extracción IA.
-    import_taxonomy: ProjectTaxonomy = field(default_factory=ProjectTaxonomy)
 
     def touch(self) -> None:
-        """Mark the project as updated (bump updated_at)."""
-        self.updated_at = _now_utc()
+        """Mark the project as updated (bump updated_at).
 
-    # ------------------------------------------------------------------
-    # Serialization helpers for config dataclasses
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _config_to_dict(config: object) -> dict:
-        """Convert a config dataclass to a plain dict.
-
-        Uses __dict__ to avoid importing dataclasses.asdict (stdlib-only).
-        Excludes private attributes and nested dataclass instances.
+        BETA1-L01: también incrementa una revisión interna que invalida los
+        índices derivados (id→entidad, id→relación, adyacencia). Todas las
+        mutaciones de las colecciones pasan por ``touch()``, así que el índice
+        se reconstruye perezosamente solo cuando algo cambió.
         """
-        result: dict = {}
-        for key, value in config.__dict__.items():
-            if key.startswith("_"):
-                continue
-            result[key] = value
-        return result
+        self.updated_at = _now_utc()
+        self._index_revision = getattr(self, "_index_revision", 0) + 1
 
-    @staticmethod
-    def _config_from_dict(cls: type[_T], data: dict) -> _T:
-        """Reconstruct a config dataclass from a dict, using defaults
-        for missing keys."""
-        # Filter to only keys the dataclass actually accepts
-        field_names = {f.name for f in getattr(cls, "__dataclass_fields__", {}).values()}
-        filtered = {k: v for k, v in data.items() if k in field_names}
-        return cls(**filtered)
+    # ------------------------------------------------------------------
+    # Índices derivados (BETA1-L01) — caché de SOLO LECTURA, no es una segunda
+    # fuente de verdad: las listas ``entities``/``relations`` siguen mandando.
+    # Convierten búsquedas O(N) repetidas (get_by_id, vecindario) en O(1).
+    # ------------------------------------------------------------------
+
+    def _ensure_indexes(self) -> None:
+        """Construye/revalida los índices si la revisión o el tamaño cambió.
+
+        La revisión (vía ``touch()``) cubre cualquier mutación normal; el respaldo
+        por longitud captura un add/remove que excepcionalmente no llamara a
+        ``touch()``. Coste O(N) solo cuando hay cambios; gratis entre lecturas."""
+        rev = getattr(self, "_index_revision", 0)
+        sizes = (len(self.entities), len(self.relations))
+        if (
+            getattr(self, "_entity_index", None) is not None
+            and getattr(self, "_index_built_rev", None) == rev
+            and getattr(self, "_index_built_sizes", None) == sizes
+        ):
+            return
+        entity_index: dict[str, NarrativeEntity] = {}
+        for entity in self.entities:
+            entity_index[entity.id] = entity
+        relation_index: dict[str, NarrativeRelation] = {}
+        adjacency: dict[str, list[NarrativeRelation]] = {}
+        for relation in self.relations:
+            relation_index[relation.id] = relation
+            adjacency.setdefault(relation.source_id, []).append(relation)
+            if relation.target_id != relation.source_id:
+                adjacency.setdefault(relation.target_id, []).append(relation)
+        self._entity_index = entity_index
+        self._relation_index = relation_index
+        self._adjacency_index = adjacency
+        self._index_built_rev = rev
+        self._index_built_sizes = sizes
+
+    def entity_by_id(self, entity_id: str) -> NarrativeEntity | None:
+        """Entidad por id en O(1), o ``None`` si no existe."""
+        self._ensure_indexes()
+        return self._entity_index.get(entity_id)
+
+    def relation_by_id(self, relation_id: str) -> NarrativeRelation | None:
+        """Relación por id en O(1), o ``None`` si no existe."""
+        self._ensure_indexes()
+        return self._relation_index.get(relation_id)
+
+    def relations_for(self, entity_id: str) -> list[NarrativeRelation]:
+        """Relaciones donde la entidad participa (origen o destino), en O(1).
+
+        Devuelve una lista nueva (el llamante puede filtrarla sin alterar el
+        índice). El orden preserva el de ``relations``."""
+        self._ensure_indexes()
+        return list(self._adjacency_index.get(entity_id, ()))
 
     # ------------------------------------------------------------------
     # Serialization
@@ -381,15 +253,6 @@ class Project:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "metadata": dict(self.metadata),
-            # Config dataclasses
-            "project_metadata": self._config_to_dict(self.project_metadata),
-            "general": self._config_to_dict(self.general),
-            "tone": self._config_to_dict(self.tone),
-            "genre": self._config_to_dict(self.genre),
-            "realism": self._config_to_dict(self.realism),
-            "ai": self._config_to_dict(self.ai),
-            "visibility": self._config_to_dict(self.visibility),
-            "export": self._config_to_dict(self.export),
             # Prepared collections
             "entities": [e.to_dict() for e in self.entities],
             "relations": [r.to_dict() for r in self.relations],
@@ -412,7 +275,6 @@ class Project:
             # Domains, layers & advanced config (Bloque 10)
             "domains": list(self.domains),
             "world_layers": [wl.to_dict() for wl in self.world_layers],
-            "advanced_config": self.advanced_config.to_dict(),
             # ── Import baskets (Bloque 17) ──
             "import_baskets": [b.to_dict() for b in self.import_baskets],
             # ── Writing units (Bloque 19) ──
@@ -440,8 +302,6 @@ class Project:
             "project_type": self.project_type,
             "worldbuilding_active": self.worldbuilding_active,
             "creative_config": self.creative_config.to_dict(),
-            "novela_config": self.novela_config.to_dict() if self.novela_config else None,
-            "import_taxonomy": self.import_taxonomy.to_dict(),
         }
 
     @classmethod
@@ -473,31 +333,6 @@ class Project:
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             metadata=dict(data.get("metadata", {})),
-            # Config dataclasses (all optional — defaults apply)
-            project_metadata=cls._config_from_dict(
-                ProjectMetadata, data.get("project_metadata", {})
-            ),
-            general=cls._config_from_dict(
-                GeneralProjectConfig, data.get("general", {})
-            ),
-            tone=cls._config_from_dict(
-                ToneConfig, data.get("tone", {})
-            ),
-            genre=cls._config_from_dict(
-                GenreConfig, data.get("genre", {})
-            ),
-            realism=cls._config_from_dict(
-                RealismConfig, data.get("realism", {})
-            ),
-            ai=cls._config_from_dict(
-                AIConfig, data.get("ai", {})
-            ),
-            visibility=cls._config_from_dict(
-                VisibilityConfig, data.get("visibility", {})
-            ),
-            export=cls._config_from_dict(
-                ExportConfig, data.get("export", {})
-            ),
             # Prepared collections (all optional — empty list defaults)
             entities=[
                 NarrativeEntity.from_dict(e)
@@ -560,12 +395,6 @@ class Project:
                     if isinstance(wl, dict)
                 ]}
                 if "world_layers" in data else {}
-            ),
-            **(
-                {"advanced_config": AdvancedProjectConfig.from_dict(
-                    data.get("advanced_config", {})
-                )}
-                if "advanced_config" in data else {}
             ),
             # ── Import baskets (Bloque 17) ──
             **(
@@ -683,8 +512,6 @@ class Project:
             # PA02: worldbuilding siempre activo (incluido al cargar proyectos viejos).
             worldbuilding_active=True,
             creative_config=CreativeProjectConfig.from_dict(data.get("creative_config", {})),
-            novela_config=NovelaConfig.from_dict(data["novela_config"]) if data.get("novela_config") else None,
-            import_taxonomy=ProjectTaxonomy.from_dict(data.get("import_taxonomy", {})),
         )
 
 # ── Helpers ──

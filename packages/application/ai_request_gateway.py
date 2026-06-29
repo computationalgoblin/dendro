@@ -77,6 +77,14 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "consistency":         ModelParams(temperature=0.2, max_tokens=2000),
     "extract":             ModelParams(temperature=0.15, max_tokens=1500),
     "import_extraction":   ModelParams(temperature=0.15, max_tokens=3000),
+    # Andamiaje del mundo (I22): UNA llamada a nivel documento que devuelve un objeto
+    # grande (calendario + eras + entity_temporal + anillos + hitos). Necesita techo
+    # alto o la respuesta JSON se trunca y queda inválida.
+    "import_project_config": ModelParams(temperature=0.2, max_tokens=4000),
+    # Agrupacion estructural (I23): UNA llamada a nivel documento que agrupa las entidades
+    # ya extraidas en ramas (con membresia y anidamiento). La salida puede listar muchas
+    # ramas con miembros → techo alto para no truncar el JSON.
+    "import_grouping":     ModelParams(temperature=0.2, max_tokens=4000),
     "import_context_summary": ModelParams(temperature=0.2, max_tokens=2500),
     "classify":            ModelParams(temperature=0.15, max_tokens=1000),
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),

@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection
+from hosts.DesktopHostPySide.widgets.design_system import SPACE_LG, SPACE_MD, AdvancedSection
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.application.tree_meta import NARRATIVE_ROLES, TreeMeta
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
@@ -239,8 +239,8 @@ class TreeDetailPanel(QWidget):
         self.setStyleSheet(f"background: {_BG_DRAWER};")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)  # UX23: ritmo del scaffold
+        root.setSpacing(SPACE_MD)
 
         # -- Header --
         self.header_label = QLabel("Rama")
@@ -275,6 +275,8 @@ class TreeDetailPanel(QWidget):
         first_row.addWidget(self.layer_combo, 2)
         self.color_edit = _styled_edit("#D0D8E0")
         self.color_edit.setVisible(False)  # editable desde el botón
+        # UX28: el color de la rama lo decide el TIPO de entidad (paleta de Dendro),
+        # no un selector manual. Objeto conservado para refs internas, fuera del layout.
         self.color_btn = QPushButton("")
         self.color_btn.setFixedSize(28, 28)
         self.color_btn.setToolTip("Color de la rama")
@@ -282,7 +284,7 @@ class TreeDetailPanel(QWidget):
             "QPushButton { border: 1px solid #C8C6B8; border-radius: 14px; background: #D0D8E0; }"
         )
         self.color_btn.clicked.connect(self._pick_color)
-        first_row.addWidget(self.color_btn)
+        self.color_btn.setVisible(False)
         form.addRow(first_row)
 
         # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo

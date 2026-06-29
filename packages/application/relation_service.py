@@ -61,16 +61,13 @@ class RelationService:
         proj = self._active_project()
         if isinstance(proj, Error):
             return False
-        return any(e.id == entity_id for e in proj.value.entities)
+        return proj.value.entity_by_id(entity_id) is not None  # BETA1-L01: O(1)
 
     def _find_entity(self, entity_id: str):
         proj = self._active_project()
         if isinstance(proj, Error):
             return None
-        for e in proj.value.entities:
-            if e.id == entity_id:
-                return e
-        return None
+        return proj.value.entity_by_id(entity_id)  # BETA1-L01: O(1)
 
     def _normalize_relation_enums(self, relation: NarrativeRelation) -> None:
         """Coerce UI payload strings into domain enums without creating parallel models."""
@@ -204,7 +201,10 @@ class RelationService:
         issues = validate_relation(relation)
         if issues:
             return Error(f"Relation validation failed: {'; '.join(issues)}")
-        if self._has_duplicate_relation(relation, proj.value.relations):
+        # BETA1-L01: un duplicado comparte source_id (parte de la firma), así que
+        # basta comprobar la adyacencia de ese origen — O(grado) en vez de O(M).
+        # Hace la importación masiva O(N) en vez de O(N²).
+        if self._has_duplicate_relation(relation, proj.value.relations_for(relation.source_id)):
             return Error("Ya existe una relación con el mismo origen, destino, tipo y dirección")
 
         proj.value.relations.append(relation)
@@ -270,7 +270,8 @@ class RelationService:
                     for key, value in previous.items():
                         setattr(r, key, value)
                     return Error(f"Relation validation failed: {'; '.join(issues)}")
-                if self._has_duplicate_relation(r, proj.value.relations):
+                # BETA1-L01: duplicados solo entre la adyacencia del origen (O(grado)).
+                if self._has_duplicate_relation(r, proj.value.relations_for(r.source_id)):
                     for key, value in previous.items():
                         setattr(r, key, value)
                     return Error("Ya existe una relación con el mismo origen, destino, tipo y dirección")
@@ -335,9 +336,9 @@ class RelationService:
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
-        for r in proj.value.relations:
-            if r.id == relation_id:
-                return Ok(r)
+        relation = proj.value.relation_by_id(relation_id)  # BETA1-L01: O(1)
+        if relation is not None:
+            return Ok(relation)
         return Error(f"Relation with id '{relation_id}' not found")
 
     # ------------------------------------------------------------------
@@ -348,13 +349,15 @@ class RelationService:
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
-        return Ok([r for r in proj.value.relations if r.target_id == entity_id])
+        # BETA1-L01: adyacencia O(grado) en vez de escaneo O(M).
+        return Ok([r for r in proj.value.relations_for(entity_id) if r.target_id == entity_id])
 
     def get_outgoing(self, entity_id: str) -> Result[list[NarrativeRelation], str]:
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
-        return Ok([r for r in proj.value.relations if r.source_id == entity_id])
+        # BETA1-L01: adyacencia O(grado) en vez de escaneo O(M).
+        return Ok([r for r in proj.value.relations_for(entity_id) if r.source_id == entity_id])
 
     def get_between(
         self, entity_a_id: str, entity_b_id: str
@@ -374,10 +377,8 @@ class RelationService:
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
-        return Ok([
-            r for r in proj.value.relations
-            if r.source_id == entity_id or r.target_id == entity_id
-        ])
+        # BETA1-L01: vecindario directo desde el índice de adyacencia (O(grado)).
+        return Ok(proj.value.relations_for(entity_id))
 
     def find_simple_paths(
         self,

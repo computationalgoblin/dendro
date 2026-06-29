@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QSize
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, QSize
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -32,6 +32,7 @@ from hosts.DesktopHostPySide.widgets.modal_overlay import ModalOverlay
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
+from hosts.DesktopHostPySide.controllers.import_job_runner import ImportJobRunner
 from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
 from hosts.DesktopHostPySide.controllers.project_controller import ProjectController
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
@@ -65,6 +66,7 @@ from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
 from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
 from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
+from hosts.DesktopHostPySide.widgets.toast_layer import ToastLayer
 
 
 # Index constants for the stack widget (BETA1-A01: only Home + Creation in runtime)
@@ -102,6 +104,14 @@ class MainWindow(QMainWindow):
         self._build_controllers()
         self._build_views()
         self._build_shell()
+        # UX13: capa de toasts app-wide; ctx.notify(msg, kind) la alimenta.
+        self._toast_layer = ToastLayer(self)
+        # UX33: levanta los toasts sobre la command bar para que queden junto al
+        # botón Guardar (abajo-derecha), no pegados al borde inferior.
+        self._toast_layer.set_bottom_offset(120)
+        self.ctx.notify_sink = lambda msg, kind="info": self._toast_layer.show_toast(
+            msg, kind=kind
+        )
         self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
         # PA02: auto-carga el último proyecto al arrancar (queda cargado pero el
@@ -125,6 +135,17 @@ class MainWindow(QMainWindow):
         )
         self.src = SourceController(project_service=ps)
         self.lc = LayerController(project_service=ps)
+        # UX33: runner persistente de importación, dueño de los QThread de
+        # andamiaje/extracción. Debe existir ANTES de construir las vistas (la
+        # ImportExportView lee ctx.import_jobs en su __init__).
+        self.import_job_runner = ImportJobRunner(self.controller, parent=self)
+        self.ctx.import_jobs = self.import_job_runner
+        self.import_job_runner.extractionDone.connect(self._on_import_extraction_done)
+        self.import_job_runner.scaffoldingDone.connect(self._on_import_scaffolding_done)
+        # UX33: autoguardado silencioso al terminar un job de importación.
+        self.ctx.request_save_silent = self._save_active_project_silent
+        # I23/UX33-fix: reabrir el menú de importación (volver tras revisar el andamiaje).
+        self.ctx.reopen_import = self._import_document
 
     # ── Views ────────────────────────────────────────────────────────────────
 
@@ -161,6 +182,9 @@ class MainWindow(QMainWindow):
             source_view=self.source_view,
             layer_view=self.layer_view,
         )
+        # UX33: el botón de importación del canvas reusa la misma puerta de entrada
+        # que el Home (crea la vista con el controller correcto y la monta en el cajón).
+        self.creation_workspace._on_open_import = self._import_document
         # BETA1-H02: legacy gallery/session workspace classes were physically
         # removed from views/workspaces.py.
 
@@ -184,15 +208,12 @@ class MainWindow(QMainWindow):
         topbar.setVisible(False)
         root.addWidget(topbar)
 
-        # Stack + Drawers horizontal layout
+        # Stack horizontal layout. Los cajones YA NO viven aquí: son overlay
+        # (ver abajo), así que el stack ocupa el 100% del ancho y la command bar
+        # nunca se estrecha al abrir un cajón.
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-
-        # Left drawer (global, shared via AppContext) — for Config panel
-        self.left_drawer = LeftDrawer(self)
-        self.ctx.left_drawer = self.left_drawer
-        body.addWidget(self.left_drawer)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.home_view)        # 0 - home
@@ -200,12 +221,21 @@ class MainWindow(QMainWindow):
         # BETA1-A01: stack only holds Home + Creation
         body.addWidget(self.stack, stretch=1)
 
-        # Right drawer (global, shared via AppContext) — for Project panel
-        self.drawer = RightDrawer(self)
-        self.ctx.drawer = self.drawer
-        body.addWidget(self.drawer)
-
         root.addLayout(body, stretch=1)
+
+        # Cajones como OVERLAY: hijos del widget central (como ModalOverlay), NO
+        # en el layout `body`. Flotan sobre el área del grafo y terminan justo
+        # encima de la command bar (ver _drawer_overlay_rect), de modo que ni el
+        # grafo ni la barra se estrechan. set_area_provider inyecta esa región.
+        self.left_drawer = LeftDrawer(cw)           # for Config panel
+        self.ctx.left_drawer = self.left_drawer
+        self.left_drawer.set_area_provider(self._drawer_overlay_rect)
+        self.drawer = RightDrawer(cw)               # for Project panel
+        self.ctx.drawer = self.drawer
+        self.drawer.set_area_provider(self._drawer_overlay_rect)
+        # Reposicionar el rect reservado al cambiar Home↔Creación (Home no tiene
+        # command bar). Al navegar los cajones se cierran, pero es barato y robusto.
+        self.stack.currentChanged.connect(self._reposition_drawers)
 
         # Diagnostic log (hidden by default)
         self.log = QTextEdit()
@@ -237,15 +267,31 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(_IDX_HOME)
 
     def resizeEvent(self, event):
-        """Update drawer heights on window resize."""
+        """Recolocar los cajones overlay al redimensionar la ventana."""
         super().resizeEvent(event)
-        h = self.height()
-        if hasattr(self, "left_drawer") and self.left_drawer is not None:
-            self.left_drawer.setFixedHeight(h)
-            self.left_drawer.update_target_width()
-        if hasattr(self, "drawer") and self.drawer is not None:
-            self.drawer.setFixedHeight(h)
-            self.drawer.update_target_width()
+        for drawer in (getattr(self, "left_drawer", None), getattr(self, "drawer", None)):
+            if drawer is not None:
+                drawer.update_target_width()
+                drawer.reposition()
+
+    def _drawer_overlay_rect(self) -> QRect:
+        """Región (coords del widget central) que un cajón overlay puede cubrir:
+        el área del stack MENOS la command bar inferior cuando Creación está
+        activa (Home no tiene barra). Así el cajón flota sobre el grafo y su borde
+        inferior queda justo encima de la barra, que conserva el ancho completo."""
+        g = self.stack.geometry()
+        reserved = (
+            CreationWorkspace.COMMAND_BAR_HEIGHT
+            if self.stack.currentIndex() == _IDX_CREATION
+            else 0
+        )
+        return QRect(g.x(), g.y(), g.width(), max(0, g.height() - reserved))
+
+    def _reposition_drawers(self, *_args) -> None:
+        """Reaplica la geometría overlay de ambos cajones (cambio de página)."""
+        for drawer in (getattr(self, "left_drawer", None), getattr(self, "drawer", None)):
+            if drawer is not None:
+                drawer.reposition()
 
     def _build_topbar(self) -> QWidget:
         bar = QFrame()
@@ -633,12 +679,14 @@ class MainWindow(QMainWindow):
                 self.controller.current_path = str(path)
             result = self.controller.save()
             if not isinstance(result, Ok):
-                self.log_msg(f"Error guardando proyecto: {getattr(result, 'error', result)}")
+                self.ctx.notify(
+                    f"Error guardando proyecto: {getattr(result, 'error', result)}", "error"
+                )
                 return False
             if self.controller.current_path:
                 self.ctx.remember_project(self.controller.current_path)
                 self._refresh_recent_project_option()
-            self.log_msg("Proyecto guardado")
+            self.ctx.notify("Proyecto guardado", "success")
             self._refresh_all_views()
             if self.ctx.drawer:
                 self.ctx.drawer.close()
@@ -647,7 +695,93 @@ class MainWindow(QMainWindow):
             self.log_msg(f"Error guardando proyecto: {exc}")
             return False
 
+    def _save_active_project_silent(self) -> bool:
+        """UX33: guarda el proyecto SIN efectos de UI (autoguardado de jobs).
+
+        A diferencia de ``_save_active_project``, no muestra toast "Proyecto
+        guardado", no refresca todas las vistas, no cierra el cajón y NO abre un
+        diálogo si falta ruta (en ese caso no guarda: los candidatos quedan en
+        memoria hasta que el usuario guarde a mano). Pensado para correr en el
+        hilo principal desde el slot de fin de un job de importación."""
+        try:
+            if self.controller.ps.active_project is None:
+                return True
+            if not self.controller.current_path:
+                self.log_msg("Importación: sin ruta de proyecto; candidatos en memoria")
+                return False
+            result = self.controller.save()
+            if not isinstance(result, Ok):
+                self.ctx.notify(
+                    f"Error guardando importación: {getattr(result, 'error', result)}", "error"
+                )
+                return False
+            self.ctx.remember_project(self.controller.current_path)
+            return True
+        except Exception as exc:  # noqa: BLE001 — el autoguardado nunca rompe la app
+            self.log_msg(f"Error en autoguardado de importación: {exc}")
+            return False
+
+    def _import_extraction_meta(self, basket_id: str) -> dict:
+        """Resumen de la última extracción del basket (I24): aborted/skipped/pending."""
+        proj = self._get_active_project()
+        for b in getattr(proj, "import_baskets", []) or []:
+            if getattr(b, "id", "") == basket_id:
+                meta = (getattr(b, "metadata", {}) or {}).get("ai_extraction")
+                return meta if isinstance(meta, dict) else {}
+        return {}
+
+    def _on_import_extraction_done(self, basket_id: str, count: int, error: str):
+        """UX33/I24 (hilo principal): autoguarda + avisa al terminar la extracción.
+
+        I24: un error sistémico a media extracción YA NO llega como ``error`` duro
+        (la extracción devuelve parcial); el desenlace real vive en la metadata del
+        basket. Se autoguarda siempre que haya progreso para poder reanudar."""
+        if error:
+            # Error de arranque (p. ej. proveedor no configurado): nada que guardar.
+            self.ctx.notify(f"No se pudo analizar el documento: {error}", "error")
+            return
+
+        meta = self._import_extraction_meta(basket_id)
+        aborted = bool(meta.get("aborted"))
+        skipped = int(meta.get("skipped_sections") or 0)
+        pending = int(meta.get("pending_sections") or 0)
+
+        self._save_active_project_silent()  # I24: persiste el progreso (parcial o total)
+
+        if aborted:
+            reason = str(meta.get("abort_reason") or "")[:120]
+            self.ctx.notify(
+                f"Importación interrumpida ({reason}). Progreso guardado: {count} "
+                f"candidato(s); reanúdala cuando el proveedor esté disponible "
+                f"({pending} sección(es) pendientes).",
+                "error",
+            )
+            return
+
+        workspace = getattr(self, "creation_workspace", None)
+        if skipped:
+            self.ctx.notify(
+                f"Importación parcial: {count} candidato(s); {skipped} sección(es) "
+                "omitida(s) por el filtro de contenido del proveedor.",
+                "info",
+            )
+        else:
+            self.ctx.notify(f"Importación lista: {count} candidato(s) para revisar.", "success")
+        if workspace is not None and hasattr(workspace, "add_import_seed"):
+            workspace.add_import_seed(basket_id, count)
+
+    def _on_import_scaffolding_done(self, _basket_id: str, ok: bool, error: str):
+        """UX33: avisa al terminar el andamiaje (no crea candidatos → solo toast)."""
+        if not ok:
+            self.ctx.notify(f"No se pudo proponer el andamiaje: {error}", "error")
+            return
+        self.ctx.notify("Andamiaje propuesto: revísalo y aplícalo en la importación.", "info")
+
     def closeEvent(self, event):
+        # UX33: cancela y espera (corto) los jobs de importación vivos antes de cerrar.
+        runner = getattr(self, "import_job_runner", None)
+        if runner is not None:
+            runner.shutdown()
         if self._get_active_project() is None:
             event.accept()
             return

@@ -10,11 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects
-# (v29: modos de importación canon/contexto + taxonomía de importación)
-CURRENT_SCHEMA_VERSION: int = 30
+# (v32: I25 — rediseño import map→reduce; descarta candidatos de importación viejos)
+CURRENT_SCHEMA_VERSION: int = 32
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 30
+MAX_SUPPORTED_VERSION: int = 32
 
 
 # ---------------------------------------------------------------------------
@@ -368,10 +368,9 @@ def _apply_migration_v6_to_v7(data: dict[str, Any]) -> dict[str, Any]:
         from packages.domain.world_layer import default_world_layers
         migrated["world_layers"] = [wl.to_dict() for wl in default_world_layers()]
 
-    # Advanced config (§10.4) — all defaults
+    # Advanced config (§10.4) — placeholder; PA04 (v30→v31) lo descarta luego.
     if "advanced_config" not in migrated:
-        from packages.domain.advanced_config import AdvancedProjectConfig
-        migrated["advanced_config"] = AdvancedProjectConfig().to_dict()
+        migrated["advanced_config"] = {}
 
     # ── Entity-level ──
     raw_entities = migrated.get("entities")
@@ -961,6 +960,237 @@ def _apply_migration_v29_to_v30(data: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _strip_accents(text: str) -> str:
+    import unicodedata
+
+    return "".join(
+        c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn"
+    )
+
+
+def _norm_token(value: Any) -> str:
+    """Normaliza un texto a token comparable (minúsculas, sin acentos, _)."""
+    if not isinstance(value, str):
+        return ""
+    return _strip_accents(value.strip().lower()).replace(" ", "_").replace("-", "_")
+
+
+def _pick_option(value: Any, options: list[str]) -> str:
+    """Devuelve el valor normalizado si encaja en options; si no, ""."""
+    token = _norm_token(value)
+    return token if token in options else ""
+
+
+def _first_option(value: Any, options: list[str]) -> str:
+    """Para listas viejas → primer elemento que encaje en options."""
+    if isinstance(value, list):
+        for item in value:
+            picked = _pick_option(item, options)
+            if picked:
+                return picked
+    return _pick_option(value, options)
+
+
+def _scale3(value: Any, low: str, mid: str, high: str) -> str:
+    """Mapea un slider 0-10 a tres categorías. No-int → ""."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return ""
+    if value <= 3:
+        return low
+    if value <= 6:
+        return mid
+    return high
+
+
+def _scale3_5(value: Any, options: list[str]) -> str:
+    """Mapea un slider 0-10 a cinco categorías (options con 5 niveles)."""
+    if isinstance(value, bool) or not isinstance(value, int) or len(options) != 5:
+        return ""
+    buckets = (1, 3, 6, 8, 10)  # convencional..muy_autoral
+    for idx, top in enumerate(buckets):
+        if value <= top:
+            return options[idx]
+    return options[-1]
+
+
+def _apply_migration_v30_to_v31(data: dict[str, Any]) -> dict[str, Any]:
+    """v30 → v31 (PA04): config creativa canónica de 30 campos.
+
+    Colapsa las tres generaciones de configuración (Gen A ``genre/tone/realism/...``,
+    Gen B ``advanced_config`` y los dicts sin esquema de B40 en ``creative_config``)
+    en una única ``creative_config`` tipada de 5 secciones. Convierte sliders 0-10 a
+    categorías, fusiona las listas de espacio negativo en ``evitar`` y descarta todo
+    lo eliminado (config IA editable, taxonomía, novela_config, metadata estructurada).
+    Sin pérdida de los 30 campos conservados; lo demás se descarta a propósito.
+    """
+    from packages.domain.creative_config import (
+        AGENCIA_OPCIONES,
+        AMBIGUEDAD_OPCIONES,
+        CAMBIO_PERSONAJE_OPCIONES,
+        CAUSALIDAD_OPCIONES,
+        DENSIDAD_OPCIONES,
+        ESCALADA_OPCIONES,
+        ESTADO_OPCIONES,
+        EXPOSICION_OPCIONES,
+        FUENTE_CONFLICTO_OPCIONES,
+        GRADO_ESPECULATIVO_OPCIONES,
+        MECANISMO_OPCIONES,
+        ORIGINALIDAD_OPCIONES,
+        REALISMO_OPCIONES,
+    )
+
+    migrated = dict(data)
+    cc = migrated.get("creative_config") if isinstance(migrated.get("creative_config"), dict) else {}
+    genre = migrated.get("genre") if isinstance(migrated.get("genre"), dict) else {}
+    tone = migrated.get("tone") if isinstance(migrated.get("tone"), dict) else {}
+    realism = migrated.get("realism") if isinstance(migrated.get("realism"), dict) else {}
+    advanced = migrated.get("advanced_config") if isinstance(migrated.get("advanced_config"), dict) else {}
+    intent = cc.get("creative_intent") if isinstance(cc.get("creative_intent"), dict) else {}
+    engine = cc.get("narrative_engine") if isinstance(cc.get("narrative_engine"), dict) else {}
+    poetics = cc.get("poetics") if isinstance(cc.get("poetics"), dict) else {}
+    canon = cc.get("canon") if isinstance(cc.get("canon"), dict) else {}
+    negative = cc.get("negative_space") if isinstance(cc.get("negative_space"), dict) else {}
+
+    def _list(d: dict, key: str) -> list[str]:
+        v = d.get(key)
+        return [str(x) for x in v if str(x).strip()] if isinstance(v, list) else []
+
+    def _str(d: dict, key: str) -> str:
+        v = d.get(key)
+        return v.strip() if isinstance(v, str) else ""
+
+    # ── Estado: idea/borrador/expansion/revision/activa/archivado → nuevas opciones ──
+    estado_old = _norm_token(cc.get("development_status"))
+    estado_map = {
+        "idea": "exploracion",
+        "borrador": "borrador",
+        "expansion": "produccion",
+        "revision": "canon_en_consolidacion",
+        "activa": "campana_activa",
+        "archivado": "borrador",
+    }
+    estado = estado_map.get(estado_old, estado_old if estado_old in ESTADO_OPCIONES else "")
+
+    # ── Grado especulativo: deriva de magia/fantasía/tecnología (best-effort) ──
+    spec_tokens = {_norm_token(realism.get(k)) for k in ("magic_level", "fantasy_scale", "technology_level")}
+    if spec_tokens & {"high", "alto", "prevalent", "epico"}:
+        grado_especulativo = "alto"
+    elif spec_tokens & {"medium", "medio", "moderate", "rare"}:
+        grado_especulativo = "moderado"
+    elif spec_tokens & {"none", "ninguno", "low", "bajo"}:
+        grado_especulativo = "realista"
+    else:
+        grado_especulativo = ""
+
+    # ── Evitar: fusión de las 5 listas de negative_space + tics de estilo ──
+    evitar: list[str] = []
+    for key in ("avoid_tropes", "avoid_solutions", "avoid_style_habits", "avoid_tones", "avoid_phrases"):
+        evitar.extend(_list(negative, key))
+    evitar.extend(_list(poetics, "forbidden_style_habits"))
+
+    nueva_cc = {
+        "identidad": {
+            "premisa": _str(cc, "core_premise"),
+            "resumen_corto": _str(cc, "short_summary"),
+            "genero_principal": _str(genre, "primary_genre") or _str(advanced, "primary_genre"),
+            "subgeneros": _list(genre, "subgenres") or _list(advanced, "subgenres"),
+            "formato": _str(cc, "format"),
+            "publico": _str(cc, "target_audience"),
+            "estado": estado,
+        },
+        "direccion": {
+            "promesa": _str(intent, "reader_promise"),
+            "pregunta_dramatica": _str(intent, "central_question"),
+            "temas": _list(cc, "main_themes"),
+            "emociones": _list(intent, "desired_emotions"),
+            "sensacion_final": _str(intent, "aftertaste"),
+            "originalidad": _scale3_5(intent.get("originality"), ORIGINALIDAD_OPCIONES),
+            "ambiguedad": _scale3(intent.get("ambiguity"), *AMBIGUEDAD_OPCIONES),
+            "tipo_impacto": _list(intent, "impact_types"),
+        },
+        "motor": {
+            "fuente_conflicto": _first_option(engine.get("conflict_sources"), FUENTE_CONFLICTO_OPCIONES),
+            "mecanismo": _pick_option(engine.get("progression_mechanism"), MECANISMO_OPCIONES)
+            or _pick_option(engine.get("dominant_tension"), MECANISMO_OPCIONES),
+            "causalidad": _scale3(engine.get("causality"), "suave", "", "estricta")
+            or _pick_option(engine.get("causality"), CAUSALIDAD_OPCIONES),
+            "agencia": _scale3(engine.get("character_agency"), "baja", "media", "alta")
+            or _pick_option(engine.get("character_agency"), AGENCIA_OPCIONES),
+            "escalada": _pick_option(engine.get("escalation"), ESCALADA_OPCIONES),
+            "cambio_personaje": _pick_option(engine.get("character_change"), CAMBIO_PERSONAJE_OPCIONES),
+        },
+        "estilo": {
+            "tono": _str(tone, "narrative_tone"),
+            "realismo": {"low": "bajo", "medium": "medio", "high": "alto"}.get(
+                _norm_token(realism.get("realism_level")),
+                _pick_option(realism.get("realism_level"), REALISMO_OPCIONES),
+            ),
+            "grado_especulativo": grado_especulativo if grado_especulativo in GRADO_ESPECULATIVO_OPCIONES else "",
+            "estilo_narrativo": _str(cc, "narrative_style"),
+            "densidad": _scale3(poetics.get("description_density"), *DENSIDAD_OPCIONES),
+            "exposicion": _first_option(poetics.get("exposition_modes"), EXPOSICION_OPCIONES),
+        },
+        "reglas": {
+            "reglas_canon": _list(canon, "hard_rules"),
+            "evitar": evitar,
+        },
+    }
+    migrated["creative_config"] = nueva_cc
+
+    # Descartar estructuras eliminadas en PA04.
+    for dead in (
+        "general", "tone", "genre", "realism", "ai", "visibility", "export",
+        "project_metadata", "advanced_config", "novela_config", "import_taxonomy",
+    ):
+        migrated.pop(dead, None)
+
+    migrated["schema_version"] = 31
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Migration: v31 → v32
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v31_to_v32(data: dict[str, Any]) -> dict[str, Any]:
+    """v31 → v32 (I25): rediseño de importación map→reduce — romper compat.
+
+    El nuevo pipeline (extracción a menciones → reconciliación → grafo
+    consolidado) usa una forma de candidato incompatible con la anterior. Al
+    estar en beta, se descartan los candidatos de importación viejos: por cada
+    ``ImportBasket`` se vacían ``import_candidates`` y se resetea el progreso de
+    extracción IA (``ai_extraction``/``ai_grouping`` en metadata) para que el
+    basket pueda reprocesarse limpio con el pipeline nuevo. Se CONSERVAN los
+    ``segments`` (texto ya extraído, sin re-subir el documento), el vínculo a la
+    ``Source`` y todo el canon (entidades, relaciones, cronología) intacto.
+    """
+    migrated = dict(data)
+
+    baskets = migrated.get("import_baskets")
+    if isinstance(baskets, list):
+        new_baskets: list[dict[str, Any]] = []
+        for basket in baskets:
+            if not isinstance(basket, dict):
+                continue
+            nb = dict(basket)
+            nb["import_candidates"] = []
+            nb["graph"] = None
+            nb["review_state"] = "pendiente"
+            meta = nb.get("metadata")
+            meta = dict(meta) if isinstance(meta, dict) else {}
+            # Resetear progreso de extracción/agrupación del formato viejo.
+            meta.pop("ai_extraction", None)
+            meta.pop("ai_grouping", None)
+            meta["schema_v32_reset"] = True
+            nb["metadata"] = meta
+            new_baskets.append(nb)
+        migrated["import_baskets"] = new_baskets
+
+    migrated["schema_version"] = 32
+    return migrated
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -983,11 +1213,10 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         if key not in data:
             return f"Project file is missing required field: '{key}'"
 
-    # Config sections must be dicts when present
+    # Config sections must be dicts when present (PA04: solo creative_config + chronology)
     config_sections = (
-        "general", "tone", "genre", "realism", "ai",
-        "visibility", "export", "project_metadata", "advanced_config",
-        "project_chronology", "import_taxonomy",
+        "creative_config",
+        "project_chronology",
     )
     for section in config_sections:
         if section in data and not isinstance(data[section], dict):

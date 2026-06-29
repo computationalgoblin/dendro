@@ -1,18 +1,22 @@
 """Tests for B10-T02: Persistence schema v7 — domains, layers, advanced config.
 
 Covers:
-- Schema v7 constants
+- Schema version constants
 - Migration v6→v7 (conservative: no inference from legacy fields)
-- Validation functions (domains, world_layers, advanced_config, entity_domain_ids)
+- Validation functions (domains, world_layers, entity_domain_ids)
 - Migration chain v1→v7 accumulation test
 - ProjectStore v7 roundtrip
-- Future version rejection (v9)
+- Future version rejection
+
+PA04 eliminó ``AdvancedProjectConfig`` y ``project.advanced_config``; la
+migración v6→v7 ahora deja un placeholder vacío (``advanced_config = {}``) que el
+paso v30→v31 descarta. Los tests de AdvancedProjectConfig y del roundtrip de
+advanced_config se retiraron; domains/world_layers siguen vivos.
 """
 
 import json
 from pathlib import Path
 
-from packages.domain.advanced_config import AdvancedProjectConfig
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok
 from packages.domain.world_layer import default_world_layers
@@ -20,14 +24,12 @@ from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
     MAX_SUPPORTED_VERSION,
     _apply_migration_v6_to_v7,
-    validate_advanced_config,
     validate_domains,
     validate_entity_domain_ids,
     validate_project_structure,
     validate_world_layers,
 )
-from packages.persistence.store import ProjectStore, load_project_data, save_project_data
-
+from packages.persistence.store import ProjectStore, load_project_data
 
 # ── V6 minimal project fixture ──
 
@@ -70,11 +72,9 @@ def _v6_minimal(**overrides) -> dict:
 # ══════════════════════════════════════════════════════════════════
 
 class TestSchemaVersionV7:
-    def test_current_schema_is_v9(self):
-        assert CURRENT_SCHEMA_VERSION == 20
-
-    def test_max_supported_is_v9(self):
-        assert MAX_SUPPORTED_VERSION == 20
+    def test_current_and_max_are_aligned(self):
+        assert CURRENT_SCHEMA_VERSION == MAX_SUPPORTED_VERSION
+        assert CURRENT_SCHEMA_VERSION >= 31
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -111,24 +111,11 @@ class TestMigrationV6ToV7:
         ids = [wl["id"] for wl in layers]
         assert len(ids) == len(set(ids))
 
-    def test_adds_advanced_config_defaults(self):
+    def test_adds_advanced_config_placeholder(self):
+        # PA04: v6→v7 deja advanced_config como placeholder vacío (lo descarta v30→v31).
         v6 = _v6_minimal()
         m = _apply_migration_v6_to_v7(v6)
-        assert "advanced_config" in m
-        ac = m["advanced_config"]
-        assert ac["primary_genre"] == ""
-        assert ac["subgenres"] == []
-        assert ac["global_tone"] == "neutral"
-        assert ac["secondary_tones"] == []
-        assert ac["realism_level"] == "medium"
-        assert ac["contradiction_tolerance"] == "media"
-        assert ac["naming_conventions"] == ""
-        assert ac["internal_languages"] == []
-        assert ac["internal_calendar"] == ""
-        assert ac["measurement_units"] == ""
-        assert ac["visibility_rules"] == ""
-        assert ac["creative_restrictions"] == []
-        assert ac["future_ai_preferences"] == []
+        assert m["advanced_config"] == {}
 
     def test_adds_domain_ids_to_existing_entities(self):
         v6 = _v6_minimal(entities=[
@@ -263,22 +250,6 @@ class TestValidateWorldLayers:
         assert len(errors) > 0
 
 
-class TestValidateAdvancedConfig:
-    def test_valid_config_no_error(self):
-        cfg = AdvancedProjectConfig().to_dict()
-        errors = validate_advanced_config(cfg)
-        assert errors == []
-
-    def test_not_a_dict_error(self):
-        errors = validate_advanced_config([])  # type: ignore[arg-type]
-        assert len(errors) > 0
-
-    def test_missing_key_fields_ok(self):
-        """Missing optional fields is fine — they get defaults on load."""
-        errors = validate_advanced_config({})
-        assert errors == []
-
-
 class TestValidateEntityDomainIds:
     def test_all_valid_no_warning(self):
         warnings = validate_entity_domain_ids(
@@ -344,26 +315,6 @@ class TestProjectStoreRoundtripV7:
         assert loaded.world_layers[0].description == "Custom description"
         assert len(loaded.world_layers) == 16
 
-    def test_v7_project_roundtrip_preserves_advanced_config(self, tmp_path: Path):
-        store = ProjectStore()
-        path = tmp_path / "project.json"
-
-        project = Project(id="proj-r3", name="Roundtrip 3")
-        project.advanced_config.primary_genre = "fantasía épica"
-        project.advanced_config.subgenres = ["alta fantasía", "espada y brujería"]
-        project.advanced_config.realism_level = "alto"
-
-        result = store.save(project, path)
-        assert isinstance(result, Ok)
-
-        result2 = store.load(path)
-        assert isinstance(result2, Ok)
-        loaded = result2.value
-        assert loaded.advanced_config.primary_genre == "fantasía épica"
-        assert "alta fantasía" in loaded.advanced_config.subgenres
-        assert loaded.advanced_config.realism_level == "alto"
-
-
 # ══════════════════════════════════════════════════════════════════
 # Migration chain: v1 → v7 (accumulative)
 # ══════════════════════════════════════════════════════════════════
@@ -389,15 +340,18 @@ class TestMigrationChainV1ToV9:
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
 
-        # Verify the result is v7
-        assert data["schema_version"] == 20
+        # Migra hasta la versión actual.
+        assert data["schema_version"] == CURRENT_SCHEMA_VERSION
 
-        # All v7 fields present
+        # Campos de v7 que siguen vivos.
         assert data["domains"] == [
             "mundo", "historia", "campaña", "compartido", "sin_asignar",
         ]
         assert len(data["world_layers"]) == 16
-        assert "advanced_config" in data
+        # PA04 (v30→v31) descarta advanced_config.
+        assert "advanced_config" not in data
+        # creative_config canónico presente.
+        assert "creative_config" in data
 
         # All intermediate migration fields present
         assert "description" in data  # v2
@@ -414,7 +368,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 20
+        assert data["schema_version"] == CURRENT_SCHEMA_VERSION
 
         # Legacy data preserved
         assert data["id"] == "proj-001"
@@ -433,7 +387,7 @@ class TestMigrationChainV1ToV9:
              "is_visible": True, "is_default": False, "description": "",
              "metadata": {}}
         ]
-        v7["advanced_config"] = AdvancedProjectConfig().to_dict()
+        v7["advanced_config"] = {}  # PA04: placeholder; se descarta al migrar.
         for e in v7["entities"]:
             e.setdefault("domain_ids", [])
             e.setdefault("layer_ids", [])
@@ -445,7 +399,7 @@ class TestMigrationChainV1ToV9:
         result = load_project_data(path)
         assert isinstance(result, Ok), f"Expected Ok, got {result}"
         data = result.value
-        assert data["schema_version"] == 20
+        assert data["schema_version"] == CURRENT_SCHEMA_VERSION
         assert data["domains"] == ["mundo", "historia"]
         assert len(data["world_layers"]) == 1
         assert data["world_layers"][0]["name"] == "Custom"
@@ -456,16 +410,17 @@ class TestMigrationChainV1ToV9:
 # ══════════════════════════════════════════════════════════════════
 
 class TestFutureVersionRejection:
-    def test_v20_rejected(self, tmp_path: Path):
+    def test_future_version_rejected(self, tmp_path: Path):
+        # Una versión por encima de la actual debe rechazarse.
         path = tmp_path / "future.json"
-        future = {"schema_version": 20, "id": "x", "name": "Future",
+        future = {"schema_version": CURRENT_SCHEMA_VERSION + 1, "id": "x", "name": "Future",
                    "created_at": "2026-01-01T00:00:00+00:00",
                    "updated_at": "2026-01-01T00:00:00+00:00"}
         path.write_text(json.dumps(future), encoding="utf-8")
 
         result = load_project_data(path)
         assert isinstance(result, Error)
-        assert "v19" in result.error or "schema" in result.error.lower()
+        assert "schema" in result.error.lower() or f"v{MAX_SUPPORTED_VERSION}" in result.error
 
     def test_v7_passes_validation(self, tmp_path: Path):
         path = tmp_path / "v7ok.json"
@@ -476,7 +431,7 @@ class TestFutureVersionRejection:
             {"id": "layer_premisa", "name": "Premisa", "order": 1,
              "is_visible": True, "is_default": True, "description": "", "metadata": {}}
         ]
-        v7["advanced_config"] = AdvancedProjectConfig().to_dict()
+        v7["advanced_config"] = {}  # PA04: placeholder; se descarta al migrar.
         for e in v7["entities"]:
             e.setdefault("domain_ids", [])
             e.setdefault("layer_ids", [])
@@ -502,7 +457,7 @@ class TestStructureValidationV7:
             {"id": "layer_premisa", "name": "Premisa", "order": 1,
              "is_visible": True, "is_default": True, "description": "", "metadata": {}}
         ]
-        data["advanced_config"] = AdvancedProjectConfig().to_dict()
+        data["advanced_config"] = {}  # PA04: placeholder; se descarta al migrar.
         for e in data["entities"]:
             e.setdefault("domain_ids", [])
             e.setdefault("layer_ids", [])
@@ -524,9 +479,6 @@ class TestStructureValidationV7:
         assert err is not None
         assert "world_layers" in err.lower()
 
-    def test_advanced_config_not_a_dict_fails(self):
-        data = _v6_minimal()
-        data["advanced_config"] = []
-        err = validate_project_structure(data)
-        assert err is not None
-        assert "advanced_config" in err.lower()
+    # PA04: advanced_config ya no es una sección validada por
+    # validate_project_structure (se eliminó del modelo), así que el caso
+    # "advanced_config no es dict" deja de tener sentido y se retiró.

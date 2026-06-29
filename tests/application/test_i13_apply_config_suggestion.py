@@ -1,8 +1,14 @@
 """I13 — aplicar la propuesta de config de proyecto (acción explícita).
 
 Aceptar aplica el calendario (apply_candidate), ubica las entidades en el tiempo
-(mergea birth/death/nature en sus candidatos) y aplica la taxonomía. Antes de
-aceptar no se aplica nada. Nunca escribe canon directamente.
+(mergea birth/death/nature en sus candidatos) y aplica tono/género a
+``creative_config``. Antes de aceptar no se aplica nada. Nunca escribe canon
+directamente.
+
+PA04: la taxonomía de importación se eliminó (``project.import_taxonomy`` ya no
+existe); tono/género ahora se aplican a ``creative_config`` (estilo.tono /
+identidad.genero_principal), solo si están vacíos. Las aserciones de taxonomía se
+retiraron.
 """
 
 from __future__ import annotations
@@ -44,6 +50,18 @@ def _proposal():
             "taxonomy": {"allowed_entity_types": ["personaje"], "allowed_branch_types": [],
                          "extraction_guidance": "núcleo"},
         },
+        "world_layers": {
+            "activate_default_layer_ids": ["layer_historia"],
+            "custom_layers": [
+                {"name": "Linaje real", "description": "Sucesión dinástica",
+                 "causal_role": "dynasty", "causal_parent_layer_ids": ["layer_historia"]},
+            ],
+        },
+        "milestones": [
+            {"title": "Caída del reino", "description": "El fin de la dinastía.",
+             "milestone_type": "caida", "year": 1180, "date_label": "",
+             "affected_layer_ids": ["layer_historia", "Linaje real"], "tags": [], "rationale": ""},
+        ],
         "applied": False,
     }
 
@@ -68,14 +86,17 @@ def _service_with_proposal():
 
 
 @pytest.mark.application
-def test_apply_calendar_entities_and_taxonomy():
+def test_apply_calendar_entities_and_tone_genre():
     svc, proj, basket, cand = _service_with_proposal()
     result = svc.apply_project_config_suggestion("b1")
     assert is_ok(result)
     applied = unwrap(result)
     assert applied["chronology"] is True
     assert applied["entities_placed"] == 1
-    assert applied["taxonomy"] is True
+    assert applied["tone_genre"] is True
+    # PA04: tono/género aplicados a creative_config (sin pisar lo del usuario).
+    assert proj.creative_config.estilo.tono == "épico"
+    assert proj.creative_config.identidad.genero_principal == "fantasía"
     # Calendario aplicado al proyecto.
     meta = proj.project_chronology.metadata
     assert meta["mode"] == "vague_periods"
@@ -84,10 +105,47 @@ def test_apply_calendar_entities_and_taxonomy():
     assert cand.proposed_data["birth_year"] == 900
     assert cand.proposed_data["death_year"] == 1180
     assert cand.proposed_data["temporal_nature"] == "mortal"
-    # Taxonomía aplicada.
-    assert "personaje" in proj.import_taxonomy.allowed_entity_types
+    # Andamiaje: anillos (1 predefinido activado + 1 a medida creado).
+    assert applied["world_layers_activated"] == 1
+    assert applied["world_layers_created"] == 1
+    hist = [wl for wl in proj.world_layers if wl.id == "layer_historia"]
+    assert len(hist) == 1 and hist[0].is_default is True
+    custom = [wl for wl in proj.world_layers if wl.name == "Linaje real"]
+    assert len(custom) == 1
+    assert custom[0].metadata.get("causal_role") == "dynasty"
+    assert "layer_historia" in custom[0].metadata.get("causal_parent_layer_ids", "")
+    # Andamiaje: hito datado en canon y enlazado a la cronología.
+    assert applied["milestones"] == 1
+    assert len(proj.causal_milestones) == 1
+    hito = proj.causal_milestones[0]
+    assert hito.year == 1180
+    assert hito.id in proj.project_chronology.milestone_ids
+    # affected_layer_ids resueltos: id del catálogo + custom por nombre → id real.
+    assert "layer_historia" in hito.affected_layer_ids
+    assert custom[0].id in hito.affected_layer_ids
     # Propuesta marcada como aplicada.
     assert basket.metadata["project_config_suggestion"]["applied"] is True
+
+
+@pytest.mark.application
+def test_reapply_is_blocked():
+    svc, _proj, _basket, _cand = _service_with_proposal()
+    assert is_ok(svc.apply_project_config_suggestion("b1"))
+    # Re-aplicar la misma propuesta debe fallar (guarda de idempotencia).
+    assert is_error(svc.apply_project_config_suggestion("b1"))
+
+
+@pytest.mark.application
+def test_default_layer_not_duplicated_if_already_present():
+    from packages.domain.world_layer import default_world_layers
+
+    svc, proj, _basket, _cand = _service_with_proposal()
+    # El proyecto YA tiene la capa de historia: activar no debe duplicarla.
+    proj.world_layers.append(next(wl for wl in default_world_layers() if wl.id == "layer_historia"))
+    result = svc.apply_project_config_suggestion("b1")
+    assert is_ok(result)
+    assert unwrap(result)["world_layers_activated"] == 0
+    assert len([wl for wl in proj.world_layers if wl.id == "layer_historia"]) == 1
 
 
 @pytest.mark.application
@@ -95,8 +153,21 @@ def test_nothing_applied_before_accept():
     _svc, proj, _basket, cand = _service_with_proposal()
     # Sin llamar a apply: canon/config intactos.
     assert cand.proposed_data.get("birth_year") is None
-    assert proj.import_taxonomy.allowed_entity_types == []
+    # PA04: tono/género viven en creative_config y siguen vacíos antes de aceptar.
+    assert proj.creative_config.estilo.tono == ""
+    assert proj.creative_config.identidad.genero_principal == ""
     assert proj.entities == []
+
+
+@pytest.mark.application
+def test_apply_tone_genre_does_not_overwrite_user_choices():
+    svc, proj, _basket, _cand = _service_with_proposal()
+    # PA04: el usuario ya fijó tono/género en creative_config: NO debe pisarlos.
+    proj.creative_config.estilo.tono = "sombrío"
+    proj.creative_config.identidad.genero_principal = "terror"
+    svc.apply_project_config_suggestion("b1")
+    assert proj.creative_config.estilo.tono == "sombrío"
+    assert proj.creative_config.identidad.genero_principal == "terror"
 
 
 @pytest.mark.application

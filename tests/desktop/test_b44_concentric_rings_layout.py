@@ -364,7 +364,10 @@ def test_b44_concentric_widget_opens_with_empty_project(qapp):
     widget.set_layout_mode("concentric_rings")
 
     assert widget.canvas.isHidden() is False
-    assert widget.empty.isHidden() is True
+    # UX34: en concéntrico con proyecto vacío mostramos los ANILLOS y superponemos la
+    # invitación "Crear primera entidad" (decisión de producto: "anillos + invitación
+    # encima"). El canvas/anillos siguen activos; la invitación flota encima.
+    assert widget.empty.isHidden() is False
     assert widget.canvas._layout_mode_active == "concentric_rings"
     assert len(widget.canvas._ring_items) == 0
     assert widget.canvas.select_ring("layer_metafisica") is False

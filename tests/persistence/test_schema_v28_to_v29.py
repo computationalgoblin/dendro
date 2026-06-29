@@ -13,7 +13,6 @@ from packages.persistence.schema import (
     CURRENT_SCHEMA_VERSION,
     MAX_SUPPORTED_VERSION,
     _apply_migration_v28_to_v29,
-    validate_project_structure,
 )
 
 
@@ -101,14 +100,7 @@ def test_migration_v28_to_v29_is_idempotent():
     assert twice == once
 
 
-@pytest.mark.persistence
-def test_validate_rejects_non_dict_taxonomy():
-    data = _v28_project()
-    data["schema_version"] = CURRENT_SCHEMA_VERSION
-    data["import_taxonomy"] = ["not", "a", "dict"]
-
-    error = validate_project_structure(data)
-
-    assert error == (
-        "Project config section 'import_taxonomy' must be a JSON object, got list"
-    )
+# PA04: la validación de import_taxonomy se eliminó de validate_project_structure
+# (la taxonomía de importación ya no existe como sección de config). El test
+# test_validate_rejects_non_dict_taxonomy se retiró por probar funcionalidad
+# eliminada. Los modos de importación canon/contexto siguen vivos (arriba).

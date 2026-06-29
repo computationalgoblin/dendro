@@ -268,9 +268,9 @@ class EntityService:
         if isinstance(proj, Error):
             return Error(proj.error)
 
-        for e in proj.value.entities:
-            if e.id == entity_id:
-                return Ok(e)
+        entity = proj.value.entity_by_id(entity_id)  # BETA1-L01: O(1)
+        if entity is not None:
+            return Ok(entity)
         return Error(f"Entity with id '{entity_id}' not found")
 
     # ------------------------------------------------------------------

@@ -2,9 +2,9 @@
 
 Muestra la propuesta de configuración que la IA generó al importar un documento
 (``basket.metadata['project_config_suggestion']``): calendario (modo + nombre +
-año presente + eras), ubicación temporal de entidades, taxonomía y tono/género.
+año presente + eras), ubicación temporal de entidades, anillos, hitos y tono/género.
 El núcleo del calendario es editable; al aceptar, guarda las ediciones y aplica
-la configuración (calendario + ubicación temporal + taxonomía) en un paso.
+la configuración (calendario + ubicación temporal + anillos + hitos + tono/género) en un paso.
 
 No escribe persistencia directamente: delega en el ImportController.
 """
@@ -57,7 +57,6 @@ class ImportProjectConfigPanel(QWidget):
         self.on_decision = on_decision
         chronology = self.proposal.get("chronology") or {}
         config = self.proposal.get("config") or {}
-        taxonomy = config.get("taxonomy") or {}
         placements = self.proposal.get("entity_temporal") or []
 
         layout = QVBoxLayout(self)
@@ -114,19 +113,37 @@ class ImportProjectConfigPanel(QWidget):
                 nature = place.get("nature", "mortal")
                 layout.addWidget(_muted(f"• {place['name']} [{nature}]{when}"))
 
-        # ── Taxonomía / tono / género (solo lectura) ──
-        chips = list(taxonomy.get("allowed_entity_types") or [])
+        # ── Anillos / capas causales propuestos (solo lectura) ──
+        world_layers = self.proposal.get("world_layers") or {}
+        activated = list(world_layers.get("activate_default_layer_ids") or [])
+        custom = [c for c in (world_layers.get("custom_layers") or []) if isinstance(c, dict)]
+        if activated or custom:
+            layout.addWidget(SectionHeader("Anillos (capas causales)"))
+            for layer_id in activated:
+                layout.addWidget(_muted(f"• {layer_id} (predefinido)"))
+            for layer in custom:
+                role = str(layer.get("causal_role") or "")
+                suffix = f" — {role}" if role else ""
+                layout.addWidget(_muted(f"• {layer.get('name', '?')} (a medida){suffix}"))
+
+        # ── Hitos propuestos (solo lectura) ──
+        milestones = [m for m in (self.proposal.get("milestones") or []) if isinstance(m, dict)]
+        if milestones:
+            layout.addWidget(SectionHeader("Hitos en la cronología"))
+            for hito in milestones:
+                year = hito.get("year")
+                when = f" · año {year}" if year is not None else ""
+                layout.addWidget(_muted(f"• {hito.get('title', '?')}{when}"))
+
+        # ── Tono / género (solo lectura) ──
         tone, genre = str(config.get("tone") or ""), str(config.get("genre") or "")
-        if chips or tone or genre:
+        if tone or genre:
             layout.addWidget(SectionHeader("Otros ajustes"))
-            if chips:
-                layout.addWidget(_muted("Tipos de entidad sugeridos: " + ", ".join(chips)))
             if tone:
                 layout.addWidget(_muted(f"Tono: {tone}"))
             if genre:
                 layout.addWidget(_muted(f"Género: {genre}"))
-            if tone or genre:
-                layout.addWidget(_muted("(Tono/género se capturan; se aplicarán más adelante.)"))
+            layout.addWidget(_muted("(Se aplican solo si el proyecto no los tenía fijados.)"))
 
         layout.addStretch()
         self.status = QLabel("")
@@ -135,7 +152,7 @@ class ImportProjectConfigPanel(QWidget):
         layout.addWidget(self.status)
 
         actions = QHBoxLayout()
-        close_btn = QPushButton("Cerrar")
+        close_btn = QPushButton("Volver")
         close_btn.clicked.connect(lambda: self._finish("close"))
         discard_btn = QPushButton("Descartar")
         discard_btn.clicked.connect(self._discard)

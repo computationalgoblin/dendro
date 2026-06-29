@@ -46,16 +46,13 @@ PromptRegistry: dict[str, dict] = {
             "NUNCA generes notes, visibility, metadata internos ni muestres JSON crudo al usuario. "
             "El usuario solo ve el report y summary en texto natural.\n"
             "\n"
-            "CONFIGURACIÓN CREATIVA B40:\n"
-            "- El contexto incluye configuracion_creativa (config creativa COMPLETA del proyecto).\n"
-            "- configuracion_creativa.canon.hard_rules son canon duro: no los contradigas; si una "
+            "CONFIGURACIÓN CREATIVA:\n"
+            "- El contexto incluye configuracion_creativa (config creativa del proyecto, 5 secciones).\n"
+            "- configuracion_creativa.reglas.reglas_canon son canon duro: no los contradigas; si una "
             "petición los contradice, marca issue/proposal, no lo corrijas automáticamente.\n"
-            "- configuracion_creativa.negative_space indica tropos, soluciones, tonos o frases a evitar.\n"
-            "- configuracion_creativa.taste_memory indica patrones aceptados/rechazados por el usuario.\n"
-            "- configuracion_creativa.ai_preferences define rol, agresividad, estrategia, número de "
-            "opciones y modo de respuesta.\n"
-            "- branch_creative_context contiene overrides efectivos de ramas seleccionadas; si existe, "
-            "tiene prioridad sobre la configuración global para esas ramas.\n"
+            "- configuracion_creativa.reglas.evitar indica tropos, soluciones, tonos o frases a evitar.\n"
+            "- configuracion_creativa.identidad/direccion/motor/estilo definen género, formato, tono, "
+            "motor narrativo y rumbo: respétalos al generar.\n"
             "- En worldbuilding activo, usa anillos/capas superiores como prioridad explicativa descendente.\n"
             "\n"
             "Si el usuario pide EDITAR o RELLENAR el cuerpo/historia/motivaciones de hojas o ramas "
@@ -157,7 +154,7 @@ PromptRegistry: dict[str, dict] = {
             "Eres un editor de coherencia narrativa integrado en Dendro. Tu tarea es analizar si un "
             "conjunto de entidades y relaciones encaja con el canon existente, la motivación de los "
             "personajes y la configuración creativa del proyecto. Usa especialmente configuracion_creativa: "
-            "canon.hard_rules, canon.continuity_strictness, negative_space, taste_memory y preferencias IA. "
+            "reglas.reglas_canon, reglas.evitar e identidad/direccion/motor/estilo. "
             "No debes modificar contenido durante el análisis. No debes crear entidades ni relaciones. "
             "Devuelve observaciones claras y propuestas de reparación. Respeta el idioma configurado. "
             "Prioriza coherencia causal, motivacional, tonal y dramática. Estructura la respuesta con "
@@ -168,8 +165,8 @@ PromptRegistry: dict[str, dict] = {
         "en": (
             "You are a narrative coherence editor integrated into Dendro. Analyze whether a selected set "
             "of entities and relationships fits the existing canon, character motivation, and project "
-            "creative configuration. Use configuracion_creativa explicitly: canon.hard_rules, "
-            "canon.continuity_strictness, negative_space, taste_memory, and AI preferences. Do not modify "
+            "creative configuration. Use configuracion_creativa explicitly: reglas.reglas_canon, "
+            "reglas.evitar, and identidad/direccion/motor/estilo. Do not modify "
             "content during analysis. Do not create entities or relationships. Return clear observations "
             "and repair proposals. Prioritize causal, motivational, tonal, and dramatic coherence. "
             "Structure the response with sections: Global verdict, Entity observations, Relationship "
@@ -215,7 +212,7 @@ PromptRegistry: dict[str, dict] = {
     },
 
     "import_extraction": {
-        "version": 1,
+        "version": 3,
         "es": (
             "Eres el extractor de importacion documental de Dendro.\n"
             "Devuelve SOLO JSON valido. No incluyas Markdown ni explicaciones fuera del JSON.\n"
@@ -224,33 +221,45 @@ PromptRegistry: dict[str, dict] = {
             "TERMINOLOGIA DE DENDRO:\n"
             "- Hoja (entity): elemento individual (personaje, objeto, lugar, evento, concepto, ley, nota).\n"
             "- Rama (branch): grupo/sistema/colectivo (faccion, cultura, religion, institucion, trama).\n"
-            "- Anillo (ring_suggestion): estrato causal de worldbuilding (capa metafisica o causal).\n"
+            "El ANDAMIAJE del mundo (calendario, anillos/capas causales e hitos) YA esta definido y "
+            "llega en el contexto. Aqui NO propones anillos ni hitos: pueblas entidades y relaciones, "
+            "las DATAS contra el calendario y las clasificas en los anillos existentes.\n"
             "\n"
-            "Cuando el contexto incluya una TAXONOMIA DEL PROYECTO, extrae SOLO entity_type, "
-            "branch_type y anillos dentro de los valores permitidos; usa el canon existente para "
-            "desambiguar nombres y no duplicar elementos ya presentes.\n"
+            "Cuando el contexto incluya una TAXONOMIA DEL PROYECTO, extrae SOLO entity_type y "
+            "branch_type dentro de los valores permitidos; usa el canon existente para desambiguar "
+            "nombres y no duplicar elementos ya presentes.\n"
+            "DATACION: cuando el MARCO TEMPORAL este disponible, situa cada entidad en el eje del "
+            "mundo (birth_year/death_year enteros, pueden ser negativos) segun lo que diga el texto; "
+            "usa temporal_nature para seres no mortales; deja en null lo que el texto no permita datar.\n"
+            "ANILLOS: asigna layer_ids eligiendo SOLO ids de los ANILLOS DISPONIBLES del contexto "
+            "(capa causal a la que pertenece la entidad). Si ninguno encaja, deja layer_ids vacio.\n"
+            "CUERPO (OBLIGATORIO): para CADA hoja y rama redacta un 'body' de varias frases que "
+            "sintetice FIELMENTE lo que la fuente dice de ella (rasgos, papel, hechos, contexto). "
+            "'summary' es un resumen de una linea; 'body' es el desarrollo. No inventes lo que el "
+            "texto no diga: si la fuente apenas la menciona, escribe un body breve con lo poco que "
+            "haya, pero nunca lo dejes vacio.\n"
             "\n"
             "JSON esperado:\n"
             "{\n"
             '  "candidates": [\n'
             "    {\n"
-            '      "kind": "entity | branch | relation | milestone | ring_suggestion | merge_suggestion | import_issue",\n'
+            '      "kind": "entity | branch | relation | merge_suggestion | import_issue",\n'
             '      "name": "string opcional",\n'
             '      "title": "string opcional",\n'
-            '      "summary": "string opcional",\n'
-            '      "body": "string opcional",\n'
+            '      "summary": "string opcional (resumen de una linea)",\n'
+            '      "body": "string OBLIGATORIO para entity/branch (cuerpo de varias frases, fiel al texto)",\n'
             '      "confidence": 0.0,\n'
             '      "confidence_reason": "string",\n'
             '      "aliases": ["string"],\n'
             '      "entity_type": "personaje | localizacion | objeto | evento | concepto | otro",\n'
             '      "branch_type": "faccion | cultura | institucion | trama | contenedor | otro",\n'
-            '      "ring_name": "string para ring_suggestion",\n'
-            '      "ring_id": "string opcional para ring_suggestion",\n'
+            '      "birth_year": "int|null (nacimiento/inicio en el eje del mundo)",\n'
+            '      "death_year": "int|null (muerte/fin; null si sigue vigente)",\n'
+            '      "temporal_nature": "mortal | inmortal | eterno | atemporal",\n'
+            '      "layer_ids": ["id de anillo de ANILLOS DISPONIBLES"],\n'
             '      "source_name": "string para relaciones",\n'
             '      "target_name": "string para relaciones",\n'
             '      "relation_type": "string para relaciones",\n'
-            '      "date_label": "string para hitos",\n'
-            '      "structured_date": {},\n'
             '      "evidence": "string",\n'
             '      "message": "string para import_issue"\n'
             "    }\n"
@@ -258,6 +267,42 @@ PromptRegistry: dict[str, dict] = {
             "}\n"
             "\n"
             "Si el chunk es ambiguo o insuficiente, devuelve un candidate con kind import_issue."
+        ),
+    },
+
+    "import_grouping": {
+        "version": 1,
+        "es": (
+            "Eres el agrupador estructural de importacion de Dendro.\n"
+            "Devuelve SOLO JSON valido. No incluyas Markdown ni explicaciones fuera del JSON.\n"
+            "No crees canon. No inventes IDs ni nombres nuevos: usa SOLO los nombres de las "
+            "ENTIDADES YA EXTRAIDAS que llegan en el contexto.\n"
+            "\n"
+            "TERMINOLOGIA DE DENDRO:\n"
+            "- Hoja: elemento individual (personaje, objeto, lugar, evento, concepto).\n"
+            "- Rama: grupo/sistema/colectivo que CONTIENE a otros (faccion, cultura, religion, "
+            "institucion, trama, contenedor).\n"
+            "\n"
+            "TAREA: a partir de las entidades ya extraidas, identifica las RAMAS (agrupaciones que "
+            "el texto respalde) y di QUE entidades contiene cada una ('members') y, si una rama "
+            "esta dentro de otra, su rama contenedora ('parent'). Agrupa solo lo que el material "
+            "justifique; si nada agrupa, devuelve branches vacio. Para cada rama redacta un 'body' "
+            "de varias frases fiel al texto. Asigna 'layer_ids' SOLO con ids de los ANILLOS "
+            "DISPONIBLES del contexto; si ninguno encaja, dejalo vacio.\n"
+            "\n"
+            "JSON esperado:\n"
+            "{\n"
+            '  "branches": [\n'
+            "    {\n"
+            '      "name": "nombre de la rama",\n'
+            '      "branch_type": "faccion | cultura | religion | institucion | trama | contenedor",\n'
+            '      "body": "cuerpo de varias frases, fiel al texto",\n'
+            '      "layer_ids": ["id de anillo de ANILLOS DISPONIBLES"],\n'
+            '      "members": ["nombre EXACTO de una entidad ya extraida o de otra rama de esta lista"],\n'
+            '      "parent": "nombre de la rama contenedora | null"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
         ),
     },
 

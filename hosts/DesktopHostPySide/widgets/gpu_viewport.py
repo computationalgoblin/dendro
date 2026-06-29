@@ -22,6 +22,14 @@ def install_gpu_viewport(view) -> bool:
     """
     if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
         return False
+    # BETA1-L01: escape hatch para A/B testear render. Con viewport GL, Qt fuerza
+    # FullViewportUpdate: CUALQUIER update() (hover, selección, física, paneo)
+    # repinta TODO el viewport. En grafos grandes y/o GPU flojas eso domina la
+    # sensación de lentitud; el viewport raster permite repintados PARCIALES
+    # (solo la región del item que cambió). NARRATIVE_DISABLE_GPU_VIEWPORT=1
+    # fuerza raster para comparar.
+    if os.environ.get("NARRATIVE_DISABLE_GPU_VIEWPORT", "").strip() in {"1", "true", "True"}:
+        return False
     try:
         from PySide6.QtOpenGLWidgets import QOpenGLWidget
         from PySide6.QtWidgets import QGraphicsView

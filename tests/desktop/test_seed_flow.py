@@ -166,6 +166,7 @@ def test_coherence_job_plants_seed_in_active_ring(qapp, monkeypatch):
         _on_ai_job_finished=lambda *a: None,
         _on_ai_job_failed=lambda *a: None,
         _on_ai_worker_stopped=lambda *a: None,
+        _refresh_busy_indicator=lambda *a: None,  # UX11
     )
     CreationWorkspace._start_ai_job_worker(stub, "job-1")
     assert captured["seed"] == ("job-1", "ring-meta")  # semilla en el anillo activo
@@ -189,6 +190,7 @@ def test_inline_text_job_plants_no_seed(qapp, monkeypatch):
         _on_ai_job_finished=lambda *a: None,
         _on_ai_job_failed=lambda *a: None,
         _on_ai_worker_stopped=lambda *a: None,
+        _refresh_busy_indicator=lambda *a: None,  # UX11
     )
     CreationWorkspace._start_ai_job_worker(stub, "job-2")
     assert "seed" not in captured  # texto inline no germina

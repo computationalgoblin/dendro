@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-
 # ═══════════════════════════════════════════════════════════════════════
 # Enums
 # ═══════════════════════════════════════════════════════════════════════
@@ -48,6 +47,28 @@ class ImportReviewState(str, Enum):
     RECHAZADO = "rechazado"
     FUSIONADO = "fusionado"
     PARCIAL = "parcial"
+
+
+class RelevanceTier(str, Enum):
+    """Nivel de relevancia de un candidato consolidado (I30).
+
+    - FUERTE: candidato destacado, presentado en primer plano.
+    - MARGINAL: candidato plegado en sección secundaria; nunca se descarta.
+    """
+    FUERTE = "fuerte"
+    MARGINAL = "marginal"
+
+
+class DatingStatus(str, Enum):
+    """Estado de datación temporal de una entidad consolidada (I29).
+
+    - DATADO: fecha propuesta y válida dentro del rango de eras.
+    - SIN_DATAR: el texto no permite datar (fecha nula).
+    - FUERA_DE_RANGO: fecha propuesta fuera del rango de eras / incoherente.
+    """
+    DATADO = "datado"
+    SIN_DATAR = "sin_datar"
+    FUERA_DE_RANGO = "fuera_de_rango"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -110,6 +131,44 @@ def _parse_iso_datetime(value: Any) -> str:
     if isinstance(value, str):
         return value
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_int_opt(value: Any) -> int | None:
+    """Parse optional integer (e.g. birth_year), None on missing/invalid."""
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool es subclase de int; no lo queremos
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_relevance_tier(value: Any) -> RelevanceTier:
+    """Parse RelevanceTier, default MARGINAL (conservador: no destaca de más)."""
+    if isinstance(value, RelevanceTier):
+        return value
+    if isinstance(value, str):
+        try:
+            return RelevanceTier(value)
+        except ValueError:
+            pass
+    return RelevanceTier.MARGINAL
+
+
+def _parse_dating_status(value: Any) -> DatingStatus:
+    """Parse DatingStatus, default SIN_DATAR."""
+    if isinstance(value, DatingStatus):
+        return value
+    if isinstance(value, str):
+        try:
+            return DatingStatus(value)
+        except ValueError:
+            pass
+    return DatingStatus.SIN_DATAR
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -229,6 +288,198 @@ class ImportCandidate:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Grafo de candidatos consolidado (rediseño I25 — map→reduce)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class ConsolidatedEntity:
+    """Entidad o rama única tras la reconciliación global (fase REDUCE).
+
+    Sustituye, en el flujo CANON, a la fusión por nombre de ``ImportCandidate``.
+    La identidad es estable dentro de un grafo vía ``provisional_id`` (p.ej.
+    ``imp_e_0001`` para hojas, ``imp_b_0001`` para ramas); las relaciones y la
+    pertenencia a ramas referencian ESE id, nunca el nombre.
+
+    ``kind`` es ``"entity"`` (hoja) o ``"branch"`` (contenedor). Para ramas,
+    ``member_ids`` lleva los ``provisional_id`` de sus miembros (I28).
+    """
+
+    provisional_id: str = ""
+    kind: str = "entity"  # "entity" | "branch"
+    name: str = ""
+    aliases: list[str] = field(default_factory=list)
+    entity_type: str = ""  # personaje, localizacion, … (hojas)
+    branch_type: str = ""  # faccion, cultura, contenedor, … (ramas)
+    summary: str = ""
+    body: str = ""
+    evidence: str = ""
+    source_references: list[dict] = field(default_factory=list)
+    birth_year: int | None = None
+    death_year: int | None = None
+    temporal_nature: str = ""
+    layer_ids: list[str] = field(default_factory=list)
+    member_ids: list[str] = field(default_factory=list)  # solo ramas
+    mention_ids: list[str] = field(default_factory=list)  # trazas del MAP
+    relevance: float = 0.5
+    relevance_tier: RelevanceTier = RelevanceTier.MARGINAL
+    confidence: float = 0.5
+    dating_status: DatingStatus = DatingStatus.SIN_DATAR
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provisional_id": self.provisional_id,
+            "kind": self.kind,
+            "name": self.name,
+            "aliases": self.aliases,
+            "entity_type": self.entity_type,
+            "branch_type": self.branch_type,
+            "summary": self.summary,
+            "body": self.body,
+            "evidence": self.evidence,
+            "source_references": self.source_references,
+            "birth_year": self.birth_year,
+            "death_year": self.death_year,
+            "temporal_nature": self.temporal_nature,
+            "layer_ids": self.layer_ids,
+            "member_ids": self.member_ids,
+            "mention_ids": self.mention_ids,
+            "relevance": self.relevance,
+            "relevance_tier": self.relevance_tier.value,
+            "confidence": self.confidence,
+            "dating_status": self.dating_status.value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ConsolidatedEntity:
+        return cls(
+            provisional_id=data.get("provisional_id", ""),
+            kind=data.get("kind", "entity"),
+            name=data.get("name", ""),
+            aliases=_parse_str_list(data.get("aliases")),
+            entity_type=data.get("entity_type", ""),
+            branch_type=data.get("branch_type", ""),
+            summary=data.get("summary", ""),
+            body=data.get("body", ""),
+            evidence=data.get("evidence", ""),
+            source_references=_parse_dict_list(data.get("source_references")),
+            birth_year=_parse_int_opt(data.get("birth_year")),
+            death_year=_parse_int_opt(data.get("death_year")),
+            temporal_nature=data.get("temporal_nature", ""),
+            layer_ids=_parse_str_list(data.get("layer_ids")),
+            member_ids=_parse_str_list(data.get("member_ids")),
+            mention_ids=_parse_str_list(data.get("mention_ids")),
+            relevance=_parse_float(data.get("relevance"), 0.5),
+            relevance_tier=_parse_relevance_tier(data.get("relevance_tier")),
+            confidence=_parse_float(data.get("confidence"), 0.5),
+            dating_status=_parse_dating_status(data.get("dating_status")),
+        )
+
+    @property
+    def is_branch(self) -> bool:
+        return self.kind == "branch"
+
+
+@dataclass
+class ConsolidatedRelation:
+    """Relación única tras la reconciliación (fase REDUCE).
+
+    Los extremos referencian ``provisional_id`` de ``ConsolidatedEntity`` del
+    mismo grafo — adiós a la resolución frágil por nombre. ``relation_type`` es
+    un valor curado (``RelationType``) o ``"otro"``.
+    """
+
+    provisional_id: str = ""
+    source_provisional_id: str = ""
+    target_provisional_id: str = ""
+    relation_type: str = "otro"
+    summary: str = ""
+    evidence: str = ""
+    mention_ids: list[str] = field(default_factory=list)
+    relevance: float = 0.5
+    relevance_tier: RelevanceTier = RelevanceTier.MARGINAL
+    confidence: float = 0.5
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provisional_id": self.provisional_id,
+            "source_provisional_id": self.source_provisional_id,
+            "target_provisional_id": self.target_provisional_id,
+            "relation_type": self.relation_type,
+            "summary": self.summary,
+            "evidence": self.evidence,
+            "mention_ids": self.mention_ids,
+            "relevance": self.relevance,
+            "relevance_tier": self.relevance_tier.value,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ConsolidatedRelation:
+        return cls(
+            provisional_id=data.get("provisional_id", ""),
+            source_provisional_id=data.get("source_provisional_id", ""),
+            target_provisional_id=data.get("target_provisional_id", ""),
+            relation_type=data.get("relation_type", "otro"),
+            summary=data.get("summary", ""),
+            evidence=data.get("evidence", ""),
+            mention_ids=_parse_str_list(data.get("mention_ids")),
+            relevance=_parse_float(data.get("relevance"), 0.5),
+            relevance_tier=_parse_relevance_tier(data.get("relevance_tier")),
+            confidence=_parse_float(data.get("confidence"), 0.5),
+        )
+
+
+@dataclass
+class ImportGraph:
+    """Grafo de candidatos consolidado de un documento (fase REDUCE).
+
+    Es el producto único que presenta el asistente de revisión (I31) y que se
+    materializa atómicamente a canon al confirmar (I28). ``raw_mentions``
+    conserva las menciones crudas del MAP para trazabilidad/auditoría.
+    """
+
+    entities: list[ConsolidatedEntity] = field(default_factory=list)
+    relations: list[ConsolidatedRelation] = field(default_factory=list)
+    raw_mentions: list[dict] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entities": [e.to_dict() for e in self.entities],
+            "relations": [r.to_dict() for r in self.relations],
+            "raw_mentions": self.raw_mentions,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ImportGraph:
+        entities_data = data.get("entities", [])
+        relations_data = data.get("relations", [])
+        return cls(
+            entities=[
+                ConsolidatedEntity.from_dict(e)
+                for e in (entities_data if isinstance(entities_data, list) else [])
+                if isinstance(e, dict)
+            ],
+            relations=[
+                ConsolidatedRelation.from_dict(r)
+                for r in (relations_data if isinstance(relations_data, list) else [])
+                if isinstance(r, dict)
+            ],
+            raw_mentions=_parse_dict_list(data.get("raw_mentions")),
+            metadata=_parse_metadata(data.get("metadata")),
+        )
+
+    def entity_by_provisional_id(self, provisional_id: str) -> ConsolidatedEntity | None:
+        """Localiza una entidad/rama por su id provisional (None si no existe)."""
+        for entity in self.entities:
+            if entity.provisional_id == provisional_id:
+                return entity
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ImportBasket
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -257,6 +508,8 @@ class ImportBasket:
     created_at: str = ""
     updated_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Grafo consolidado del rediseño map→reduce (I25); None hasta correr REDUCE.
+    graph: ImportGraph | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -269,6 +522,7 @@ class ImportBasket:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "metadata": self.metadata,
+            "graph": self.graph.to_dict() if self.graph is not None else None,
         }
 
     @classmethod
@@ -284,6 +538,8 @@ class ImportBasket:
             for c in (candidates_data if isinstance(candidates_data, list) else [])
         ]
         now = datetime.now(timezone.utc).isoformat()
+        graph_data = data.get("graph")
+        graph = ImportGraph.from_dict(graph_data) if isinstance(graph_data, dict) else None
         return cls(
             id=data.get("id") or str(uuid.uuid4()),
             source_id=data.get("source_id", ""),
@@ -294,4 +550,5 @@ class ImportBasket:
             created_at=data.get("created_at") or now,
             updated_at=data.get("updated_at") or now,
             metadata=_parse_metadata(data.get("metadata")),
+            graph=graph,
         )

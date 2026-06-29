@@ -12,12 +12,15 @@ from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
     QObject,
-    QParallelAnimationGroup,
+    QPoint,
     QPropertyAnimation,
+    QRect,
     QRectF,
+    QSize,
     Qt,
+    QTimer,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
@@ -26,6 +29,8 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -90,6 +95,138 @@ RADIUS_SM   = 9    # chips, celdas, controles pequeños
 RADIUS_MD   = 12   # botones, inputs, combos
 RADIUS_LG   = 16   # tarjetas, cajones
 RADIUS_PILL = 999  # botones-cápsula
+
+# Espaciado: escala 4-pt única (en vez de valores mágicos dispersos por widget).
+# Úsala para márgenes, padding y spacing de layouts. El ritmo espacial consistente
+# es el factor invisible que más "ordena" una UI.
+SPACE_XS  = 4   # micro: separación interna de chips, gaps mínimos
+SPACE_SM  = 8   # estándar entre controles afines
+SPACE_MD  = 12  # entre grupos dentro de un bloque
+SPACE_LG  = 16  # márgenes de tarjeta/panel, separación de secciones
+SPACE_XL  = 24  # aire entre secciones mayores
+SPACE_2XL = 32  # respiración de cabeceras / zonas vacías
+
+# Animación: cadencia única de los widgets que repintan por timer (~25 fps, barato).
+# Una sola fuente del FPS en vez de "40" duplicado por widget.
+TICK_INTERVAL = 40  # ms entre fotogramas de animaciones pintadas a mano
+
+# Paleta cálida por tipo de entidad (BETA1-UX05): única fuente para nodos del grafo
+# y paneles de detalle (antes duplicada idéntica en cada widget). Tonos botánicos
+# coherentes con el pergamino, NUNCA azules/púrpuras fríos.
+ENTITY_KIND_PALETTE: dict[str, str] = {
+    "personaje": "#C07B53",      # terracota — calidez humana
+    "lugar": "#7E9568",          # salvia — tierra y lugar
+    "localizacion": "#7E9568",   # alias de lugar
+    "organizacion": "#B28A3C",   # oro-oliva — institución
+    "faccion": "#A65C54",        # granate-arcilla — conflicto
+    "objeto": "#937083",         # ciruela apagada — reliquia
+    "evento": "#C8A24C",         # miel — momento
+    "concepto": "#8E8A6A",       # oliva-piedra — idea
+    "contenedor": "#A89878",     # madera clara — rama
+    "nota": "#9A8E72",           # piedra cálida — nota
+}
+_ENTITY_KIND_DEFAULT = "#9A8E72"  # piedra cálida (neutro de la propia gama)
+
+
+def entity_kind_color(kind: str | None, default: str = _ENTITY_KIND_DEFAULT) -> str:
+    """Color cálido del tipo de entidad (clave normalizada en minúsculas)."""
+    return ENTITY_KIND_PALETTE.get(str(kind or "").lower(), default)
+
+
+# Paleta cálida por tipo de relación (BETA1-UX05): única fuente para los arcos del
+# grafo y el panel de detalle. Familias por significado: vínculo (salvia), conflicto
+# (granate), contención/lugar (oliva), jerarquía (oro-oliva), afecto/familia
+# (terracota/rosa), causalidad (ciruela apagada). NUNCA azules/púrpuras fríos.
+RELATION_KIND_PALETTE: dict[str, str] = {
+    "es_aliado_de": "#7E9568",
+    "es_amigo_de": "#7E9568",
+    "protege": "#7E9568",
+    "es_enemigo_de": "#A65C54",
+    "es_rival_de": "#A65C54",
+    "esta_en_conflicto_con": "#A65C54",
+    "traiciono": "#A65C54",
+    "contradice": "#A65C54",
+    "pertenece_a": "#B28A3C",
+    "es_mentor_de": "#B28A3C",
+    "depende_de": "#B28A3C",
+    "sospecha": "#B28A3C",
+    "gobierna": "#B28A3C",
+    "controla": "#B28A3C",
+    "contiene": "#94A06F",
+    "esta_ubicado_en": "#94A06F",
+    "esta_en": "#94A06F",
+    "sirve_a": "#94A06F",
+    "es_familiar_de": "#C07B53",
+    "ama_a": "#BD7E73",
+    "posee": "#C07B53",
+    "busca": "#C8A24C",
+    "oculta": "#8E8A6A",
+    "conoce": "#8E8A6A",
+    "simboliza": "#8E8A6A",
+    "esta_relacionado_con": "#9A8E72",
+    "deriva_de": "#8A6B7C",
+    "condiciona": "#8A6B7C",
+    "explica": "#8A6B7C",
+    "produce_consecuencia_en": "#8A6B7C",
+    "faccion": "#A65C54",
+}
+_RELATION_KIND_DEFAULT = "#9A8E72"  # piedra cálida (neutro de la propia gama)
+
+
+def relation_kind_color(rel_type: str | None, default: str = _RELATION_KIND_DEFAULT) -> str:
+    """Color cálido del tipo de relación (clave normalizada en minúsculas)."""
+    return RELATION_KIND_PALETTE.get(str(rel_type or "").lower(), default)
+
+
+# Tipografía: familias + jerarquía nombrada (en vez de font-size sueltos por widget).
+# Serif (Georgia) para contenido editorial; sans (Segoe UI) para controles/datos.
+FONT_SERIF = '"Georgia", "Iowan Old Style", "Palatino Linotype", serif'
+FONT_SANS = '"Segoe UI", "Inter", "Helvetica Neue", "Arial", sans-serif'
+
+TYPE_H1_PX = 19       # título de sección
+TYPE_H2_PX = 16       # título de tarjeta/panel
+TYPE_BODY_PX = 13     # cuerpo del sistema
+TYPE_LABEL_PX = 12    # etiquetas/chips
+TYPE_CAPTION_PX = 11  # subtítulos muted / pies
+
+WEIGHT_BOLD = 700
+WEIGHT_SEMIBOLD = 600
+
+_TYPE_ROLES: dict[str, tuple[int, QFont.Weight]] = {
+    "h1": (TYPE_H1_PX, QFont.Weight.Bold),
+    "h2": (TYPE_H2_PX, QFont.Weight.Bold),
+    "body": (TYPE_BODY_PX, QFont.Weight.Normal),
+    "label": (TYPE_LABEL_PX, QFont.Weight.DemiBold),
+    "caption": (TYPE_CAPTION_PX, QFont.Weight.Normal),
+}
+
+
+def relative_luminance(hex_color: str) -> float:
+    """Luminancia relativa WCAG 2.x de un color #RRGGBB (0=negro, 1=blanco)."""
+    h = hex_color.lstrip("#")
+    channels = [int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(hex_a: str, hex_b: str) -> float:
+    """Ratio de contraste WCAG entre dos colores (1.0 = igual, 21 = blanco/negro)."""
+    la, lb = relative_luminance(hex_a), relative_luminance(hex_b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def role_font(role: str = "body", *, serif: bool = True) -> QFont:
+    """QFont para un rol tipográfico nombrado (h1/h2/body/label/caption).
+
+    Para widgets que fijan fuente por código; el QSS global sigue usando el stack
+    completo de familias. Rol desconocido → body."""
+    size, weight = _TYPE_ROLES.get(role, _TYPE_ROLES["body"])
+    font = QFont()
+    font.setFamily("Georgia" if serif else "Segoe UI")
+    font.setPixelSize(size)
+    font.setWeight(weight)
+    return font
 
 # Movimiento: tres niveles + curvas con carácter
 MOTION_FAST     = 150   # micro-feedback: hover, foco, press
@@ -194,6 +331,7 @@ QToolButton {{
 }}
 QToolButton:hover {{ background: {SURFACE_HI}; border-color: {LINE}; color: {INK_STRONG}; }}
 QToolButton:checked {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}
+QToolButton:focus {{ border-color: {GOLD}; }}
 QLabel#mutedLabel {{ color: {INK_MUTED}; }}
 QLabel#sectionTitle {{
     font-size: 19px;
@@ -290,7 +428,13 @@ def apply_shadow(
     x: float = 0.0,
     alpha: int = 48,
 ) -> QGraphicsDropShadowEffect:
-    """Sombra cálida suave para dar elevación a una superficie."""
+    """Sombra cálida suave para dar elevación a una superficie ESTÁTICA.
+
+    AVISO (G08): NO usar en widgets dinámicos, dentro de scroll areas o sobre el
+    canvas — QGraphicsDropShadowEffect cachea el render y deja zonas en blanco al
+    refrescar. Para esos casos usa ``paint_soft_shadow`` (pintada) o elevación por
+    contraste (Card). Para realce-al-hover usa ``install_hover_lift`` (canvas-safe).
+    """
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setXOffset(x)
@@ -301,78 +445,46 @@ def apply_shadow(
 
 
 class _HoverLift(QObject):
-    """Filtro de eventos que ELEVA una superficie al pasar el ratón.
+    """Filtro de eventos que REALZA una superficie al pasar el ratón, CANVAS-SAFE.
 
-    Anima la sombra (blur + desplazamiento) para que la tarjeta/botón parezca
-    despegarse del lienzo. Movimiento sutil, ~150 ms, OutCubic."""
+    En vez de proyectar sombra con QGraphicsDropShadowEffect (que cachea el render
+    y deja zonas en blanco en widgets dinámicos; lección G08), resalta el borde por
+    contraste — la elevación canon del repo. Una regla QSS sin selector aplica al
+    propio widget, así que ``base + 'border: ...'`` funciona sobre cualquier
+    superficie sin tocar su selector con objectName. Falla en silencio."""
 
-    def __init__(
-        self,
-        widget: QWidget,
-        *,
-        rest_blur: float,
-        rest_y: float,
-        rest_alpha: int,
-        lift_blur: float,
-        lift_y: float,
-        lift_alpha: int,
-        duration: int = MOTION_FAST,
-    ):
+    def __init__(self, widget: QWidget, *, hover_border: str = GOLD_SOFT):
         super().__init__(widget)
         self._w = widget
-        self._rest = (rest_blur, rest_y, rest_alpha)
-        self._lift = (lift_blur, lift_y, lift_alpha)
-        self._duration = duration
-        self._effect = apply_shadow(widget, blur=rest_blur, y=rest_y, alpha=rest_alpha)
-        self._group: QParallelAnimationGroup | None = None
+        self._base = widget.styleSheet() or ""
+        self._hover = f"{self._base}\nborder: 1px solid {hover_border};"
         widget.installEventFilter(self)
 
-    def _animate_to(self, blur: float, y: float, alpha: int):
-        try:
-            if self._group is not None:
-                self._group.stop()
-            group = QParallelAnimationGroup(self)
-            for prop, end in ((b"blurRadius", blur), (b"yOffset", y)):
-                anim = QPropertyAnimation(self._effect, prop)
-                anim.setDuration(self._duration)
-                anim.setEndValue(end)
-                anim.setEasingCurve(EASING_STD)
-                group.addAnimation(anim)
-            color = QColor(SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], alpha)
-            self._effect.setColor(color)
-            self._group = group
-            group.start()
-        except Exception:  # noqa: BLE001
-            pass
-
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
-        etype = event.type()
-        if etype == QEvent.Type.Enter:
-            self._animate_to(*self._lift)
-        elif etype == QEvent.Type.Leave:
-            self._animate_to(*self._rest)
+        try:
+            etype = event.type()
+            if etype == QEvent.Type.Enter:
+                self._w.setStyleSheet(self._hover)
+            elif etype == QEvent.Type.Leave:
+                self._w.setStyleSheet(self._base)
+        except Exception:  # noqa: BLE001 - el pulido nunca rompe la UI
+            pass
         return False
 
 
 def install_hover_lift(
     widget: QWidget,
     *,
-    rest_blur: float = 20.0,
-    rest_y: float = 6.0,
-    rest_alpha: int = 38,
-    lift_blur: float = 38.0,
-    lift_y: float = 12.0,
-    lift_alpha: int = 64,
-    duration: int = MOTION_FAST,
+    hover_border: str = GOLD_SOFT,
+    **_legacy: object,
 ) -> _HoverLift | None:
-    """Instala una elevación-al-hover sobre *widget* y devuelve el filtro."""
+    """Instala un realce-al-hover CANVAS-SAFE (contraste de borde) y lo devuelve.
+
+    Sustituye al antiguo realce por sombra (QGraphicsDropShadowEffect, prohibido en
+    widgets dinámicos). Acepta y descarta kwargs legados (blur/alpha/duration) para
+    no romper llamadas existentes."""
     try:
-        return _HoverLift(
-            widget,
-            rest_blur=rest_blur, rest_y=rest_y, rest_alpha=rest_alpha,
-            lift_blur=lift_blur, lift_y=lift_y, lift_alpha=lift_alpha,
-            duration=duration,
-        )
+        return _HoverLift(widget, hover_border=hover_border)
     except Exception:  # noqa: BLE001
         return None
 
@@ -423,12 +535,13 @@ class Card(QFrame):
         )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(16, 14, 16, 14)
-        self.layout.setSpacing(8)
+        self.layout.setContentsMargins(SPACE_LG, 14, SPACE_LG, 14)
+        self.layout.setSpacing(SPACE_SM)
         if title:
             self.title = QLabel(title)
             self.title.setStyleSheet(
-                f"font-size: 16px; font-weight: 700; color: {INK_STRONG}; background: transparent;"
+                f"font-size: {TYPE_H2_PX}px; font-weight: {WEIGHT_BOLD}; "
+                f"color: {INK_STRONG}; background: transparent;"
             )
             self.title.setWordWrap(True)
             self.layout.addWidget(self.title)
@@ -455,9 +568,88 @@ class Card(QFrame):
 
     def add_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.setSpacing(8)
+        row.setSpacing(SPACE_SM)
         self.layout.addLayout(row)
         return row
+
+    def add_flow_row(self) -> "FlowLayout":
+        """Fila que envuelve sus hijos cuando no caben (badges, botones de acción).
+
+        Evita el desbordamiento horizontal de la tarjeta en paneles estrechos.
+        """
+        row = FlowLayout(spacing=SPACE_SM)
+        self.layout.addLayout(row)
+        return row
+
+
+class FlowLayout(QLayout):
+    """Layout que coloca los hijos en fila y los ENVUELVE a la siguiente línea
+    cuando no caben en el ancho disponible.
+
+    Necesario en las tarjetas: con un QHBoxLayout, una fila de badges o de varios
+    botones impone un ancho mínimo igual a la suma de sus hijos y se pierde hacia
+    la derecha en paneles estrechos. Con FlowLayout el ancho mínimo es el del hijo
+    más ancho, así que la tarjeta cabe a cualquier anchura.
+    """
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 8):
+        super().__init__(parent)
+        self._items: list[Any] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    def addItem(self, item):  # noqa: N802 (API Qt)
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        x, y, line_height = rect.x(), rect.y(), 0
+        spacing = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + spacing
+            if next_x - spacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + spacing
+                next_x = x + hint.width() + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y()
 
 
 class Badge(QLabel):
@@ -485,7 +677,7 @@ class SectionHeader(QWidget):
     def __init__(self, title: str, subtitle: str = "", parent: QWidget | None = None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setContentsMargins(0, 0, 0, SPACE_XS)
         layout.setSpacing(5)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
@@ -504,12 +696,102 @@ class SectionHeader(QWidget):
 
 
 class EmptyState(Card):
-    def __init__(self, title: str, message: str, parent: QWidget | None = None):
+    """Estado vacío que GUÍA: título + mensaje y, opcionalmente, una acción sugerida.
+
+    Con ``action_text`` + ``on_action`` añade un botón primario centrado para que la
+    pantalla/lista vacía invite a actuar ("Crea tu primera entidad") en vez de
+    quedar en blanco."""
+
+    def __init__(
+        self,
+        title: str,
+        message: str,
+        parent: QWidget | None = None,
+        *,
+        action_text: str | None = None,
+        on_action=None,
+    ):
         super().__init__(title, message, parent, elevated=False)
         self.setStyleSheet(
             f"QFrame#card {{ background: {SURFACE}; border: 1px dashed {LINE_STRONG}; "
             f"border-radius: {RADIUS_LG}px; }}"
         )
+        self.action_button: QPushButton | None = None
+        if action_text and callable(on_action):
+            button = QPushButton(action_text)
+            button.setObjectName("primaryButton")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(on_action)
+            row = self.add_row()
+            row.addStretch(1)
+            row.addWidget(button)
+            row.addStretch(1)
+            self.action_button = button
+
+
+class PanelScaffold(QWidget):
+    """Estructura común de los paneles de cajón.
+
+    Unifica jerarquía y márgenes: cabecera (``SectionHeader`` + badge opcional),
+    ``body`` (QVBoxLayout para el contenido) con márgenes-token, y una barra de
+    acciones inferior opcional (secundarios a la izquierda, primario a la derecha).
+    Construir paneles a partir de esto, en vez de a mano, mantiene coherentes TODOS
+    los cajones. Sin graphics effect (canvas-safe)."""
+
+    def __init__(
+        self,
+        title: str = "",
+        subtitle: str = "",
+        *,
+        badge: str | None = None,
+        badge_tone: str = "neutral",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        self._outer.setSpacing(SPACE_MD)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(SPACE_SM)
+        self.header = SectionHeader(title, subtitle)
+        header_row.addWidget(self.header, 1)
+        if badge:
+            header_row.addWidget(
+                Badge(badge, tone=badge_tone), 0, Qt.AlignmentFlag.AlignTop
+            )
+        self._outer.addLayout(header_row)
+
+        self.body = QVBoxLayout()
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(SPACE_MD)
+        self._outer.addLayout(self.body, 1)
+
+        self._action_bar: QHBoxLayout | None = None
+
+    def add_widget(self, widget: QWidget) -> QWidget:
+        self.body.addWidget(widget)
+        return widget
+
+    def add_layout(self, layout: QLayout) -> QLayout:
+        self.body.addLayout(layout)
+        return layout
+
+    def add_stretch(self) -> None:
+        self.body.addStretch(1)
+
+    def add_action_bar(self) -> QHBoxLayout:
+        """Crea (una vez) la fila de acciones al pie del panel y la devuelve.
+
+        Añade tú los botones: los secundarios primero, luego ``addStretch()`` y
+        el primario, para el patrón estándar (primario a la derecha)."""
+        if self._action_bar is None:
+            self._action_bar = QHBoxLayout()
+            self._action_bar.setContentsMargins(0, 0, 0, 0)
+            self._action_bar.setSpacing(SPACE_SM)
+            self._outer.addLayout(self._action_bar)
+        return self._action_bar
 
 
 class AdvancedSection(QWidget):
@@ -580,6 +862,34 @@ def fade_in(widget: QWidget, *, duration_ms: int = MOTION_BASE, start_opacity: f
         pass
 
 
+def fade_out(widget: QWidget, *, duration_ms: int = MOTION_BASE, on_done=None):
+    """Desvanece *widget* de opaco a transparente y, al terminar, llama on_done.
+
+    Pensado para velos/overlays PLANOS (sin hijos interactivos) — p. ej. la
+    transición entre vistas. NO usar sobre widgets con menús/botones dinámicos
+    (los efectos de opacidad los vacían; lección conocida). Falla en silencio."""
+    try:
+        effect = widget.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+        effect.setOpacity(1.0)
+        animation = QPropertyAnimation(effect, b"opacity", widget)
+        animation.setDuration(duration_ms)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(EASING_STD)
+        if on_done is not None:
+            animation.finished.connect(on_done)
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+    except Exception:
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:
+                pass
+
+
 def pulse_feedback(widget: QWidget, *, duration_ms: int = MOTION_BASE):
     """Quick tactile feedback for successful/acknowledged actions."""
     try:
@@ -597,6 +907,97 @@ def pulse_feedback(widget: QWidget, *, duration_ms: int = MOTION_BASE):
         animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
     except Exception:
         pass
+
+
+class BusyIndicator(QWidget):
+    """Indicador de actividad orgánico, canvas-safe.
+
+    Un arco dorado que gira mientras una operación asíncrona está en curso. Pensado
+    para puntos SIN metáfora de semilla (cálculo de vista previa, jobs IA en vuelo).
+    Usa el patrón establecido (QTimer ~40fps + paintEvent), nunca QGraphicsEffect
+    (que vacía widgets dinámicos; lección G08). Oculto y parado por defecto: no
+    consume CPU hasta que se llama a ``start()``.
+    """
+
+    def __init__(
+        self,
+        *,
+        diameter: int = 18,
+        period_ms: int = 900,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._diameter = max(8, int(diameter))
+        self._period_ms = max(120, int(period_ms))
+        self._angle = 0.0  # grados
+        self._running = False
+        self.setFixedSize(self._diameter + 4, self._diameter + 4)
+        self._timer = QTimer(self)
+        self._timer.setInterval(TICK_INTERVAL)  # cadencia única del design system
+        self._timer.timeout.connect(self._tick)
+        self.hide()
+
+    # ── API ──────────────────────────────────────────────────────────────
+    def set_period_ms(self, period_ms: int) -> None:
+        """Duración de una vuelta completa (ms). El caller la deriva de
+        ``animation_duration()`` para respetar la intensidad del usuario."""
+        self._period_ms = max(120, int(period_ms))
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop(self) -> None:
+        self._running = False
+        self._timer.stop()
+        self.hide()
+
+    def is_running(self) -> bool:
+        return self._running
+
+    # ── animación ────────────────────────────────────────────────────────
+    def _tick(self) -> None:
+        # Grados por tick = 360 * (intervalo / periodo). Avance constante y suave.
+        self._angle = (self._angle + 360.0 * (self._timer.interval() / self._period_ms)) % 360.0
+        self.update()
+
+    def hideEvent(self, event):  # noqa: N802 (Qt signature)
+        # Parar el timer al ocultar evita consumir CPU en vano.
+        self._timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):  # noqa: N802 (Qt signature)
+        if self._running and not self._timer.isActive():
+            self._timer.start()
+        super().showEvent(event)
+
+    def paintEvent(self, _event):  # noqa: N802
+        if not self._running:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect()
+        m = 2.0
+        arc_rect = QRectF(m, m, rect.width() - 2 * m, rect.height() - 2 * m)
+        pen = QPen(QColor(GOLD), 2.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        # Pista tenue de fondo (anillo completo) para dar cuerpo sin ruido.
+        track = QPen(QColor(GOLD_SOFT), 2.0)
+        track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        track_col = QColor(GOLD_SOFT)
+        track_col.setAlpha(70)
+        track.setColor(track_col)
+        painter.setPen(track)
+        painter.drawArc(arc_rect, 0, 360 * 16)
+        # Arco activo: 270° que giran. Qt mide en 1/16 de grado, sentido antihorario.
+        painter.setPen(pen)
+        start_angle = int(-self._angle * 16)
+        painter.drawArc(arc_rect, start_angle, 270 * 16)
 
 
 def make_scroll_area(content: QWidget) -> QScrollArea:

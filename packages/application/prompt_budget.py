@@ -112,19 +112,54 @@ def _is_empty(value: Any) -> bool:
     return isinstance(value, (str, list, dict, tuple)) and len(value) == 0
 
 
+# Etiquetas legibles para los avisos de truncado (claves de FLEXIBLE_PRIORITY_ORDER).
+_SECTION_WARNING_LABELS = {
+    "seleccion": "selección",
+    "canon_confirmado": "canon",
+    "posicion_causal": "posición causal",
+    "vecindario": "vecindario",
+    "candidates_pendientes": "candidatos",
+    "rag_auxiliar": "contexto auxiliar",
+    "importaciones_sin_revisar": "importaciones",
+}
+
+
+def _section_truncated(before: Any, after: Any) -> bool:
+    """True si ``after`` perdió contenido respecto a ``before`` al recortar."""
+    if isinstance(after, dict) and after.get("truncado"):
+        return True
+    if isinstance(before, str) and isinstance(after, str):
+        return len(after) < len(before)
+    return _estimate_tokens(after) < _estimate_tokens(before)
+
+
 def enforce_budget(
     message: dict,
     total_budget_tokens: int,
     section_percentages: dict[str, float] | None = None,
 ) -> dict:
-    """Aplica el presupuesto adaptativo (reserva fija + water-filling).
+    """Aplica el presupuesto adaptativo y devuelve solo el mensaje (compat).
 
-    ``section_percentages`` es el perfil por intent (porcentajes por sección). Se
-    usa solo para el reparto inicial del pool entre las secciones flexibles; las
-    secciones fijas se reservan enteras al margen del perfil. No muta la entrada.
+    Para obtener también los avisos de truncado, usa :func:`enforce_budget_report`.
+    """
+    return enforce_budget_report(message, total_budget_tokens, section_percentages)[0]
+
+
+def enforce_budget_report(
+    message: dict,
+    total_budget_tokens: int,
+    section_percentages: dict[str, float] | None = None,
+) -> tuple[dict, list[str]]:
+    """Aplica el presupuesto adaptativo (reserva fija + water-filling) y devuelve
+    ``(mensaje, avisos)``.
+
+    ``avisos`` lista una entrada por sección flexible que se recortó, para que la
+    UI no presente un truncado silencioso. ``section_percentages`` es el perfil por
+    intent (solo reparte el pool flexible; lo fijo se reserva entero). No muta la
+    entrada.
     """
     if not isinstance(message, dict):
-        return message
+        return message, []
     total = int(total_budget_tokens or DEFAULT_PROMPT_BUDGET_TOKENS)
     percentages = section_percentages or {}
 
@@ -170,17 +205,24 @@ def enforce_budget(
             assigned[key] += give
             surplus -= give
 
-    # 6. Recortar las flexibles que no caben (eliminando items enteros).
+    # 6. Recortar las flexibles que no caben (eliminando items enteros) y anotar
+    #    un aviso por cada sección realmente recortada (no recorte silencioso).
+    warnings: list[str] = []
     for key in present:
         if demand[key] > assigned[key]:
-            flexible[key] = _trim_section(flexible[key], int(assigned[key]))
+            before = flexible[key]
+            after = _trim_section(before, int(assigned[key]))
+            flexible[key] = after
+            if _section_truncated(before, after):
+                label = _SECTION_WARNING_LABELS.get(key, key.replace("_", " "))
+                warnings.append(f"{label} recortado por presupuesto")
 
     # 7. Reensamblar en el orden original (sin mutar la entrada).
     result: dict[str, Any] = {}
     for key in order:
         source = flexible[key] if key in flexible else fixed[key]
         result[key] = copy.deepcopy(source)
-    return result
+    return result, warnings
 
 
 __all__ = [
@@ -189,4 +231,5 @@ __all__ = [
     "tokens_to_chars",
     "truncate_to_chars",
     "enforce_budget",
+    "enforce_budget_report",
 ]

@@ -9,8 +9,38 @@ Freeform/unknown intents always pass.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+_FENCE_OPEN_RE = re.compile(r"^```[a-zA-Z0-9_-]*\s*")
+_FENCE_CLOSE_RE = re.compile(r"\s*```\s*$")
+
+
+def _coerce_json(text: str) -> Any:
+    """Parsea JSON tolerando fences markdown y prosa alrededor del objeto.
+
+    Los modelos reales a menudo envuelven la salida en ```json ... ``` o añaden un
+    preámbulo en prosa, lo que rompe ``json.loads`` en el carácter 0. Se intenta:
+    1) parseo directo, 2) quitar los fences, 3) extraer el objeto más externo
+    ``{...}``. Lanza ``json.JSONDecodeError`` si no hay un objeto JSON parseable
+    (incl. JSON truncado sin cierre), preservando el contrato de "inválido → error".
+    """
+    s = (text or "").strip()
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if s.startswith("```"):
+        inner = _FENCE_CLOSE_RE.sub("", _FENCE_OPEN_RE.sub("", s)).strip()
+        try:
+            return json.loads(inner)
+        except (json.JSONDecodeError, ValueError):
+            s = inner
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end > start:
+        return json.loads(s[start:end + 1])  # puede lanzar → inválido
+    raise json.JSONDecodeError("no se encontró un objeto JSON", s or "", 0)
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +85,21 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
     "import_extraction": {
         "container_key": "candidates",
         "required_item_fields": ["kind"],
+    },
+    "import_project_config": {
+        # Andamiaje del mundo (I22): objeto plano libre (chronology/config/
+        # world_layers/milestones). Cualquier JSON válido pasa; el servicio normaliza.
+        "container_key": None,
+        "required_fields": [],
+        "optional_structure": True,
+    },
+    "import_grouping": {
+        # Agrupación estructural (I23): objeto con "branches"; cada rama puede traer
+        # members/parent. Estructura opcional: cualquier JSON válido pasa y el servicio
+        # normaliza/expande a candidatos branch + relaciones contiene.
+        "container_key": "branches",
+        "required_item_fields": [],
+        "optional_structure": True,
     },
     "import_context_summary": {
         # Resumen no-canon del documento de referencia (modo contexto).
@@ -139,9 +184,9 @@ def validate_ai_output(text: str | None, intent: str) -> ValidationResult:
             retry_hint="Reintentar — el modelo no produjo salida",
         )
 
-    # Try to parse JSON
+    # Try to parse JSON (tolerante a fences markdown / prosa envolvente)
     try:
-        parsed = json.loads(text)
+        parsed = _coerce_json(text)
     except (json.JSONDecodeError, ValueError) as e:
         return ValidationResult(
             is_valid=False,

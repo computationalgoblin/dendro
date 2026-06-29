@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import uuid
-import pytest
-
 from packages.domain.import_models import (
-    ImportFormat,
-    ImportReviewState,
+    ConsolidatedEntity,
+    ConsolidatedRelation,
+    DatingStatus,
     DocumentSegment,
-    ImportCandidate,
     ImportBasket,
+    ImportCandidate,
+    ImportFormat,
+    ImportGraph,
+    ImportReviewState,
+    RelevanceTier,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # ImportFormat
@@ -206,8 +207,9 @@ class TestImportBasket:
         assert basket.import_candidates == []
         assert basket.review_state == "pendiente"
 
-    def test_nine_fields(self):
+    def test_ten_fields(self):
         # I08: + import_mode (modo canon/contexto elegido por documento).
+        # I25: + graph (grafo consolidado del rediseño map→reduce; None por defecto).
         basket = ImportBasket(
             id="bsk_1",
             source_id="src_1",
@@ -219,8 +221,9 @@ class TestImportBasket:
             metadata={"file_path": "/tmp/doc.txt", "format": "TEXT_PLAIN"},
         )
         d = basket.to_dict()
-        assert len(d) == 9
+        assert len(d) == 10
         assert d["import_mode"] == "canon"
+        assert d["graph"] is None
         assert d["metadata"]["file_path"] == "/tmp/doc.txt"
 
     def test_roundtrip(self):
@@ -305,3 +308,96 @@ class TestImportBasket:
         basket2 = ImportBasket.from_dict(d)
         assert basket2.created_at == "2026-05-30T10:00:00Z"
         assert basket2.updated_at == "2026-05-30T10:00:00Z"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Grafo consolidado (I25 — rediseño map→reduce)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestConsolidatedGraph:
+    def test_consolidated_entity_roundtrip_leaf(self):
+        e = ConsolidatedEntity(
+            provisional_id="imp_e_0001",
+            kind="entity",
+            name="Arturo",
+            aliases=["Rey Arturo"],
+            entity_type="personaje",
+            body="Rey legendario de Britania.",
+            birth_year=480,
+            death_year=542,
+            temporal_nature="mortal",
+            layer_ids=["layer_humano"],
+            mention_ids=["w0_m1", "w3_m2"],
+            relevance=0.92,
+            relevance_tier=RelevanceTier.FUERTE,
+            confidence=0.8,
+            dating_status=DatingStatus.DATADO,
+        )
+        e2 = ConsolidatedEntity.from_dict(e.to_dict())
+        assert e2.to_dict() == e.to_dict()
+        assert e2.relevance_tier is RelevanceTier.FUERTE
+        assert e2.dating_status is DatingStatus.DATADO
+        assert e2.is_branch is False
+
+    def test_consolidated_entity_branch_with_members(self):
+        b = ConsolidatedEntity(
+            provisional_id="imp_b_0001",
+            kind="branch",
+            name="Caballeros de la Mesa Redonda",
+            branch_type="faccion",
+            member_ids=["imp_e_0001", "imp_e_0002"],
+        )
+        b2 = ConsolidatedEntity.from_dict(b.to_dict())
+        assert b2.is_branch is True
+        assert b2.member_ids == ["imp_e_0001", "imp_e_0002"]
+
+    def test_consolidated_relation_references_provisional_ids(self):
+        r = ConsolidatedRelation(
+            provisional_id="imp_r_0001",
+            source_provisional_id="imp_b_0001",
+            target_provisional_id="imp_e_0001",
+            relation_type="contiene",
+            evidence="...",
+            relevance_tier=RelevanceTier.MARGINAL,
+        )
+        r2 = ConsolidatedRelation.from_dict(r.to_dict())
+        assert r2.to_dict() == r.to_dict()
+        assert r2.source_provisional_id == "imp_b_0001"
+        assert r2.relation_type == "contiene"
+
+    def test_relation_type_defaults_to_otro(self):
+        r = ConsolidatedRelation()
+        assert r.relation_type == "otro"
+
+    def test_import_graph_roundtrip_and_lookup(self):
+        e = ConsolidatedEntity(provisional_id="imp_e_0001", name="Arturo")
+        b = ConsolidatedEntity(provisional_id="imp_b_0001", kind="branch", name="Caballeros",
+                               member_ids=["imp_e_0001"])
+        r = ConsolidatedRelation(provisional_id="imp_r_0001",
+                                 source_provisional_id="imp_b_0001",
+                                 target_provisional_id="imp_e_0001",
+                                 relation_type="contiene")
+        g = ImportGraph(entities=[e, b], relations=[r], raw_mentions=[{"id": "w0_m0"}])
+        g2 = ImportGraph.from_dict(g.to_dict())
+        assert g2.to_dict() == g.to_dict()
+        assert g2.entity_by_provisional_id("imp_e_0001").name == "Arturo"
+        assert g2.entity_by_provisional_id("inexistente") is None
+
+    def test_basket_carries_graph(self):
+        g = ImportGraph(entities=[ConsolidatedEntity(provisional_id="imp_e_0001", name="X")])
+        basket = ImportBasket(id="bk1", source_id="s1", graph=g)
+        basket2 = ImportBasket.from_dict(basket.to_dict())
+        assert basket2.graph is not None
+        assert len(basket2.graph.entities) == 1
+
+    def test_basket_without_graph_is_none(self):
+        basket2 = ImportBasket.from_dict(ImportBasket(id="bk0").to_dict())
+        assert basket2.graph is None
+
+    def test_int_opt_rejects_bool_and_invalid(self):
+        # bool no debe colarse como año; texto inválido → None.
+        e = ConsolidatedEntity.from_dict({"provisional_id": "x", "birth_year": True,
+                                          "death_year": "no-es-año"})
+        assert e.birth_year is None
+        assert e.death_year is None

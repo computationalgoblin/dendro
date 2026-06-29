@@ -42,9 +42,10 @@ def _v29_project():
 
 
 @pytest.mark.persistence
-def test_current_version_is_30():
-    assert CURRENT_SCHEMA_VERSION == 30
-    assert MAX_SUPPORTED_VERSION == 30
+def test_current_version_is_32():
+    # PA04 subió a v31; I25 (rediseño import map→reduce) sube a v32.
+    assert CURRENT_SCHEMA_VERSION == 32
+    assert MAX_SUPPORTED_VERSION == 32
 
 
 @pytest.mark.persistence

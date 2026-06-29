@@ -60,10 +60,6 @@ def register_project_commands(subparsers: Any) -> None:
     p_set.add_argument("path", help="Dotted configuration path")
     p_set.add_argument("value", help="New value (string, JSON for dicts/lists)")
 
-    # project config advanced (get|set|show)
-    from packages.ui.cli_advanced_config import register_advanced_config_commands
-    register_advanced_config_commands(cfg_subs)
-
 
 # ---------------------------------------------------------------------------
 # Handlers
@@ -251,8 +247,4 @@ def _cmd_config(args: argparse.Namespace, session: SessionContext) -> None:
             sys.exit(1)
 
         print(f"Set {args.path} = {args.value}")
-    elif args.config_command == "advanced":
-        from packages.ui.cli_advanced_config import handle_advanced_config_command
-        handle_advanced_config_command(args, session)
-        return
     sys.exit(0)

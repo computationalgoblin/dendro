@@ -13,7 +13,7 @@ Contratos que dependen de los atributos internos (tests UX09/UXFB): `_animation`
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -32,6 +32,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     MOTION_SLOW,
     install_wheel_guard,
 )
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive
 
 
 class BaseSlideDrawer(QFrame):
@@ -40,6 +41,9 @@ class BaseSlideDrawer(QFrame):
 
     # ── Parámetros de subclase (ancho/cabecera) ──────────────────────────────
     OBJECT_NAME = "slideDrawer"
+    # Lado al que se ancla el cajón en modo OVERLAY ("right" → crece desde el
+    # borde derecho; "left" → desde el izquierdo). Lo fija cada subclase.
+    ANCHOR = "right"
     WIDTH_FRACTION = 0.44
     WIDTH_MIN = 520
     WIDTH_MAX = 680
@@ -56,7 +60,13 @@ class BaseSlideDrawer(QFrame):
         self._target_width = self._compute_target_width()
         self.setMinimumWidth(0)
         self.setMaximumWidth(0)
-        self.setFixedHeight(parent.height() if parent else 800)
+        # OVERLAY: el cajón flota sobre el área central (no vive en un layout) y
+        # se posiciona por geometría. `_area_provider`, inyectado por MainWindow,
+        # devuelve el rectángulo (coords del padre) que el cajón puede cubrir —el
+        # área del grafo MENOS la command bar—; sin él, cae al rect del padre.
+        # El alto lo fija `_apply_overlay_geometry`, NO `setFixedHeight` (fijarlo
+        # chocaría con el alto reservado del rect y taparía la command bar).
+        self._area_provider = None  # type: ignore[var-annotated]
         self.setStyleSheet(self._frame_style())
 
         # Layout raíz: cabecera + contenido desplazable
@@ -155,21 +165,59 @@ class BaseSlideDrawer(QFrame):
         """Recalcula el ancho objetivo (llamar al redimensionar el padre)."""
         self._target_width = self._compute_target_width()
 
+    # ── Posicionamiento overlay ───────────────────────────────────────────────
+    def set_area_provider(self, provider) -> None:
+        """Inyecta el proveedor del área overlay (callable → QRect en coords del
+        padre). MainWindow lo usa para que el cajón termine encima de la barra."""
+        self._area_provider = provider
+
+    def _overlay_area(self) -> QRect:
+        """Rectángulo —coords del padre— donde el cajón se despliega. Con
+        proveedor: área del grafo (sin command bar). Sin él: todo el padre."""
+        if self._area_provider is not None:
+            return self._area_provider()
+        parent = self.parentWidget()
+        if parent is not None:
+            return parent.rect()
+        return QRect(0, 0, self._target_width, 800)
+
+    def _apply_overlay_geometry(self, width: int) -> None:
+        """Coloca el cajón anclado a su lado, con `width` actual, ocupando el alto
+        del área overlay. Se llama frame a frame durante la animación y al
+        reposicionar (resize de ventana / cambio de página)."""
+        area = self._overlay_area()
+        w = max(0, int(width))
+        x = area.x() + area.width() - w if self.ANCHOR == "right" else area.x()
+        self.setGeometry(x, area.y(), w, area.height())
+
+    def reposition(self) -> None:
+        """Reaplica la geometría overlay con el ancho actual (sin reanimar)."""
+        self._apply_overlay_geometry(self.maximumWidth())
+
     def _replace_content(self, widget: QWidget | None) -> None:
         """Quita el contenido actual (ocultar → takeWidget → reparentar →
         deleteLater) y monta `widget` si no es None. Reparentar antes de borrar
-        evita que Qt deje el viejo widget colgando en el scroll."""
+        evita que Qt deje el viejo widget colgando en el scroll.
+
+        BETA1-K01: el panel anterior (o el entrante) puede haber sido ya destruido
+        por Qt (deleteLater/reparentado externo); se guarda cada acceso con
+        `_qt_alive` para no tocar un objeto C++ borrado (libshiboken)."""
         if self._content is not None:
             old = self._content
-            old.hide()
-            taken = self._scroll.takeWidget()
-            if taken is not None:
-                old = taken
-            if old is not None:
-                old.setParent(self)
-                old.deleteLater()
             self._content = None
+            if _qt_alive(old):
+                old.hide()
+            # takeWidget() es seguro aunque el widget ya esté muerto.
+            taken = self._scroll.takeWidget()
+            victim = taken if taken is not None else old
+            if _qt_alive(victim):
+                victim.setParent(self)
+                victim.deleteLater()
         if widget is not None:
+            if not _qt_alive(widget):
+                # Panel entrante ya destruido: el cajón queda vacío en vez de crashear.
+                self._content = None
+                return
             self._content = widget
             self._scroll.setWidget(widget)
             install_wheel_guard(widget)  # la rueda no cambia combos/spin/slider
@@ -190,12 +238,14 @@ class BaseSlideDrawer(QFrame):
         if self.isVisible() and self.maximumWidth() >= self._target_width - 10:
             self.setMinimumWidth(self._target_width)
             self.setMaximumWidth(self._target_width)
+            self._apply_overlay_geometry(self._target_width)
             self.show()
             self.raise_()
             self.setFocus(Qt.FocusReason.OtherFocusReason)
             return
         self.setMinimumWidth(0)
         self.setMaximumWidth(0)
+        self._apply_overlay_geometry(0)
         self.show()
         self.raise_()
         self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -226,8 +276,18 @@ class BaseSlideDrawer(QFrame):
         # quedaba clavado a tope hasta el último frame y el cajón "desaparecía de
         # golpe" dejando hueco. Animando el suelo a la par, el ancho real se
         # encoge frame a frame (apertura y cierre igual de fluidos).
+        # OVERLAY: el cajón no está en un layout, así que el ancho real se aplica
+        # por geometría frame a frame (anclado a su lado), no por el sistema de
+        # layout. setMinimumWidth se mantiene EN LOCKSTEP antes de la geometría
+        # para preservar el contrato de paridad de cierre (UX6).
         self.setMinimumWidth(max(0, int(start)))
-        animation.valueChanged.connect(lambda v: self.setMinimumWidth(max(0, int(v))))
+        self._apply_overlay_geometry(int(start))
+
+        def _on_value(v: int) -> None:
+            self.setMinimumWidth(max(0, int(v)))
+            self._apply_overlay_geometry(int(v))
+
+        animation.valueChanged.connect(_on_value)
 
         if cleanup:
             def finish_close():

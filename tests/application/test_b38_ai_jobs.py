@@ -189,7 +189,9 @@ def test_b38_unconfigured_default_provider_fails_instead_of_fake_success():
     assert isinstance(result, Error)
     failed = service.get_job(job.id).value
     assert failed.status is AIJobStatus.FAILED
-    assert "proveedor IA real" in failed.error
+    # K02/fila32: el mensaje es accionable (no "fake success"): explica cómo configurar.
+    assert "IA no configurada" in failed.error
+    assert "NARRATIVE_AI" in failed.error
     assert failed.result == {}
 
 

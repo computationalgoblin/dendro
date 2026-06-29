@@ -26,11 +26,11 @@ from packages.persistence.store import ProjectStore, save_project_data
 
 
 class TestSchemaVersionB02T03:
-    def test_current_schema_is_v8(self):
-        assert CURRENT_SCHEMA_VERSION == 20
-
-    def test_max_supported_is_v8(self):
-        assert MAX_SUPPORTED_VERSION == 20
+    def test_current_and_max_are_aligned(self):
+        # El número exacto sube con cada migración; lo invariante es que ambos
+        # coinciden y que el actual es al menos la v31 de PA04.
+        assert CURRENT_SCHEMA_VERSION == MAX_SUPPORTED_VERSION
+        assert CURRENT_SCHEMA_VERSION >= 31
 
 
 class TestMigrationV1ToV2:
@@ -116,15 +116,16 @@ class TestStructuralValidation:
         assert "created_at" in err
 
     def test_config_section_wrong_type(self):
+        # PA04: la sección de config validada ahora es creative_config.
         data = {
             "id": "x", "name": "bad",
             "created_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
-            "general": "not_a_dict",
+            "creative_config": "not_a_dict",
         }
         err = validate_project_structure(data)
         assert err is not None
-        assert "general" in err
+        assert "creative_config" in err
 
     def test_collection_wrong_type(self):
         data = {
@@ -139,7 +140,7 @@ class TestStructuralValidation:
 
 
 class TestProjectStoreV2:
-    def test_save_produces_schema_version_8(self, tmp_path: Path):
+    def test_save_produces_current_schema_version(self, tmp_path: Path):
         store = ProjectStore()
         p = Project(name="v2test")
         path = tmp_path / "v2.json"
@@ -147,28 +148,23 @@ class TestProjectStoreV2:
         assert isinstance(result, Ok), f"Save failed: {result}"
 
         raw = json.loads(path.read_text("utf-8"))
-        assert raw.get("schema_version") == 20
+        assert raw.get("schema_version") == CURRENT_SCHEMA_VERSION
 
     def test_save_load_roundtrip_full_project(self, tmp_path: Path):
-        from packages.domain.entity import NarrativeEntity, EntityType
-
+        from packages.domain.entity import EntityType, NarrativeEntity
         from packages.domain.relation import NarrativeRelation
 
         store = ProjectStore()
         p = Project(name="Full", description="All fields")
         p.primary_language = "en"
         p.secondary_languages = ["fr", "de"]
-        p.general.theme = "dark fantasy"
-        p.tone.narrative_tone = "dark"
-        p.genre.primary_genre = "Fantasy"
-        p.realism.magic_level = "high"
-        p.ai.enabled = True
-        p.visibility.default_entity_visibility = "privado"
-        p.export.export_format_preference = "pdf"
-        p.project_metadata.author = "Alice"
+        # PA04: la config creativa vive en creative_config (5 secciones).
+        p.creative_config.identidad.genero_principal = "Fantasy"
+        p.creative_config.estilo.tono = "dark"
+        p.creative_config.estilo.realismo = "alto"
         p.metadata["custom"] = "val"
         p.entities.append(NarrativeEntity(name="Orc", entity_type=EntityType.CRIATURA))
-        from packages.domain.source_history import Source, HistoryEntry, HistoryEventType
+        from packages.domain.source_history import HistoryEntry, HistoryEventType, Source
 
         p.relations.append(NarrativeRelation(source_id="x", target_id="y"))
         p.sources.append(Source(name="src1"))
@@ -188,14 +184,9 @@ class TestProjectStoreV2:
         assert p2.description == "All fields"
         assert p2.primary_language == "en"
         assert p2.secondary_languages == ["fr", "de"]
-        assert p2.general.theme == "dark fantasy"
-        assert p2.tone.narrative_tone == "dark"
-        assert p2.genre.primary_genre == "Fantasy"
-        assert p2.realism.magic_level == "high"
-        assert p2.ai.enabled is True
-        assert p2.visibility.default_entity_visibility == "privado"
-        assert p2.export.export_format_preference == "pdf"
-        assert p2.project_metadata.author == "Alice"
+        assert p2.creative_config.identidad.genero_principal == "Fantasy"
+        assert p2.creative_config.estilo.tono == "dark"
+        assert p2.creative_config.estilo.realismo == "alto"
         assert p2.metadata["custom"] == "val"
         assert len(p2.entities) == 1
         assert p2.entities[0].name == "Orc"
@@ -208,9 +199,8 @@ class TestProjectStoreV2:
         assert p2.issues[0].description == "issue1"
 
     def test_save_load_collections_preserved(self, tmp_path: Path):
-        from packages.domain.entity import NarrativeEntity, EntityType
+        from packages.domain.entity import NarrativeEntity
         from packages.domain.relation import NarrativeRelation
-        from packages.domain.source_history import HistoryEventType, Source, HistoryEntry
 
         store = ProjectStore()
         p = Project(name="Full")
@@ -254,9 +244,8 @@ class TestV1MigrationThroughStore:
         assert p.description == ""
         assert p.primary_language == "es"
         assert p.secondary_languages == []
-        assert p.general.theme == ""
-        assert p.ai.enabled is False
-        assert p.project_metadata.author == ""
+        # PA04: config creativa vacía por defecto tras migrar v1.
+        assert p.creative_config.identidad.premisa == ""
         assert p.entities == []
         assert p.relations == []
         assert p.sources == []
@@ -285,62 +274,59 @@ class TestV1MigrationThroughStore:
 
 
 class TestModifyConfigRoundtrip:
-    def test_modify_general_config_persists(self, tmp_path: Path):
+    """PA04: la config editable es ahora creative_config (5 secciones)."""
+
+    def test_modify_identidad_persists(self, tmp_path: Path):
         store = ProjectStore()
         p = Project(name="ModTest")
         path = tmp_path / "mod.json"
 
         store.save(p, path)
-        p.general.theme = "cyberpunk"
-        p.general.tags = ["hackers", "megacorps"]
+        p.creative_config.identidad.genero_principal = "cyberpunk"
+        p.creative_config.identidad.subgeneros = ["noir", "high-tech"]
         store.save(p, path)
 
         result = store.load(path)
         assert isinstance(result, Ok)
         p2 = result.value
-        assert p2.general.theme == "cyberpunk"
-        assert p2.general.tags == ["hackers", "megacorps"]
+        assert p2.creative_config.identidad.genero_principal == "cyberpunk"
+        assert p2.creative_config.identidad.subgeneros == ["noir", "high-tech"]
 
-    def test_modify_tone_config_persists(self, tmp_path: Path):
+    def test_modify_estilo_persists(self, tmp_path: Path):
         store = ProjectStore()
         p = Project(name="ToneTest")
         path = tmp_path / "tone.json"
 
         store.save(p, path)
-        p.tone.narrative_tone = "dark"
-        p.tone.humor_level = "low"
+        p.creative_config.estilo.tono = "dark"
+        p.creative_config.estilo.densidad = "denso"
         store.save(p, path)
 
         result = store.load(path)
         assert isinstance(result, Ok)
         p2 = result.value
-        assert p2.tone.narrative_tone == "dark"
-        assert p2.tone.humor_level == "low"
-        assert p2.tone.language_formality == "neutral"
+        assert p2.creative_config.estilo.tono == "dark"
+        assert p2.creative_config.estilo.densidad == "denso"
 
-    def test_modify_multiple_configs_persists(self, tmp_path: Path):
+    def test_modify_multiple_sections_persists(self, tmp_path: Path):
         store = ProjectStore()
         p = Project(name="MultiTest")
         path = tmp_path / "multi.json"
 
         store.save(p, path)
-        p.general.theme = "steampunk"
-        p.genre.primary_genre = "Science Fiction"
-        p.realism.technology_level = "high"
-        p.ai.enabled = True
-        p.visibility.default_entity_visibility = "privado"
-        p.project_metadata.author = "Jules Verne"
+        p.creative_config.identidad.genero_principal = "Science Fiction"
+        p.creative_config.estilo.realismo = "alto"
+        p.creative_config.motor.fuente_conflicto = "ideologia"
+        p.creative_config.reglas.reglas_canon = ["Sin viajes en el tiempo"]
         store.save(p, path)
 
         result = store.load(path)
         assert isinstance(result, Ok)
         p2 = result.value
-        assert p2.general.theme == "steampunk"
-        assert p2.genre.primary_genre == "Science Fiction"
-        assert p2.realism.technology_level == "high"
-        assert p2.ai.enabled is True
-        assert p2.visibility.default_entity_visibility == "privado"
-        assert p2.project_metadata.author == "Jules Verne"
+        assert p2.creative_config.identidad.genero_principal == "Science Fiction"
+        assert p2.creative_config.estilo.realismo == "alto"
+        assert p2.creative_config.motor.fuente_conflicto == "ideologia"
+        assert p2.creative_config.reglas.reglas_canon == ["Sin viajes en el tiempo"]
 
 
 class TestLoadStructuralErrors:
@@ -357,19 +343,12 @@ class TestLoadStructuralErrors:
         assert isinstance(result, Error)
         assert "id" in result.error
 
-    def test_load_config_section_wrong_type(self, tmp_path: Path):
-        store = ProjectStore()
-        path = tmp_path / "badtype.json"
-        path.write_text(json.dumps({
-            "schema_version": 3,
-            "id": "x", "name": "bad",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "updated_at": "2026-01-01T00:00:00+00:00",
-            "general": "should_be_dict",
-        }), encoding="utf-8")
-        result = store.load(path)
-        assert isinstance(result, Error)
-        assert "general" in result.error
+    # PA04: el caso "sección de config con tipo incorrecto" a nivel de carga se
+    # retiró aquí. Las secciones de config viejas (general/tone/ai/...) ya no
+    # existen; la validación estructural de la única sección viva (creative_config)
+    # se cubre en TestStructuralValidation::test_config_section_wrong_type, que
+    # ejercita validate_project_structure directamente sin pasar por la cadena de
+    # migración (un str en creative_config la rompería antes de validar).
 
     def test_load_collection_wrong_type(self, tmp_path: Path):
         store = ProjectStore()

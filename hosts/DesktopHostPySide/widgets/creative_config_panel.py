@@ -1,221 +1,117 @@
-"""
-Creative config panel with 9 tabs (B40-T03).
+"""Panel de configuración creativa canónica (PA04).
 
-Replaces the flat creative config section in ProjectPanel with a tabbed
-interface covering: Basico, Direccion creativa, Narrativa, Estilo,
-Reglas, IA, Evitar, Memoria creativa, Ramas.
+5 pestañas que reflejan las 5 secciones de ``CreativeProjectConfig``:
+Identidad, Dirección, Motor, Estilo y Reglas. Sustituye al panel de 10
+pestañas anterior (que mezclaba IA, memoria, ramas e importación sobre un
+modelo de configuración ya retirado).
+
+El **idioma** del proyecto no vive en ``creative_config``: se edita aquí pero se
+escribe en ``project.primary_language``. La IA nunca escribe canon: este panel
+solo persiste configuración del proyecto.
+
+Los desplegables categóricos usan los tokens canónicos de
+[creative_config.py]; muestran una etiqueta legible y guardan el token en
+``currentData``. Género/formato/público son combos editables (texto libre).
 """
 
 from __future__ import annotations
 
-from typing import Callable, Optional
-
 from PySide6.QtCore import Qt
-
-from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QScrollArea,
-    QSlider,
-    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from hosts.DesktopHostPySide.widgets.field_help import labeled_row
+from packages.domain.creative_config import (
+    AGENCIA_OPCIONES,
+    AMBIGUEDAD_OPCIONES,
+    CAMBIO_PERSONAJE_OPCIONES,
+    CAUSALIDAD_OPCIONES,
+    DENSIDAD_OPCIONES,
+    ESCALADA_OPCIONES,
+    ESTADO_OPCIONES,
+    EXPOSICION_OPCIONES,
+    FUENTE_CONFLICTO_OPCIONES,
+    GRADO_ESPECULATIVO_OPCIONES,
+    MECANISMO_OPCIONES,
+    ORIGINALIDAD_OPCIONES,
+    REALISMO_OPCIONES,
+)
+
 # ---------------------------------------------------------------------------
-# Constants — option lists for dropdowns
+# Sugerencias para combos de texto libre (no son tokens cerrados)
 # ---------------------------------------------------------------------------
 
-GENRE_OPTIONS = [
-    "", "Fantasía", "Ciencia ficción", "Terror", "Misterio", "Thriller",
-    "Drama", "Romance", "Histórico", "Realismo mágico", "Weird fiction",
-    "Distopía", "Otro",
+GENERO_SUGERENCIAS = [
+    "fantasía", "ciencia ficción", "terror", "noir", "realismo mágico",
+    "thriller", "drama", "misterio", "histórico", "weird fiction", "distopía",
 ]
 
-FORMAT_OPTIONS = [
-    "", "Novela", "Campaña de rol", "Videojuego narrativo", "Serie",
-    "Cómic", "Mundo narrativo abierto", "Antología", "Otro",
+FORMATO_SUGERENCIAS = [
+    "novela", "campaña de rol", "videojuego", "mundo abierto", "antología",
+    "serie", "relato", "cómic",
 ]
 
-STATUS_OPTIONS = [
-    "", "Idea inicial", "Primer borrador", "En expansión",
-    "En revisión", "Campaña activa", "Proyecto archivado",
-]
-
-AUDIENCE_OPTIONS = ["", "Todos", "Joven adulto", "Adulto"]
-
-TENSION_OPTIONS = [
-    "", "Suspense", "Fricción emocional", "Amenaza física",
-    "Dilema ético", "Ironía dramática", "Misterio", "Paranoia social",
-    "Conflicto político", "Terror psicológico", "Tensión romántica",
-    "Tensión existencial",
-]
-
-PROGRESSION_OPTIONS = [
-    "", "Revelación", "Pérdida", "Traición", "Descubrimiento",
-    "Decisión irreversible", "Coste acumulativo", "Investigación",
-    "Transformación personal", "Choque de intereses",
-    "Consecuencia imprevista",
-]
-
-CHANGE_OPTIONS = [
-    "", "Aprende", "Se corrompe", "Se endurece", "Se libera",
-    "Fracasa", "Se transforma", "Se sacrifica",
-    "Descubre verdad incómoda", "Pierde agencia", "Gana agencia",
-]
-
-ESCALATION_OPTIONS = [
-    "", "Gradual", "Súbita", "Cíclica", "Fragmentaria",
-    "Episódica", "Falsa calma con rupturas", "Lineal", "En espiral",
-]
-
-DISTANCE_OPTIONS = [
-    "", "Muy cercana", "Cercana", "Media", "Observacional",
-    "Distante", "Omnisciente", "Fragmentada", "Variable según escena",
-]
-
-DIALOGUE_OPTIONS = [
-    "Naturalista", "Lacónico", "Teatral", "Poético", "Evasivo",
-    "Irónico", "Barroco", "Directo", "Fragmentado", "Con mucho subtexto",
-]
-
-EXPOSITION_OPTIONS = [
-    "Directa", "Dosificada", "Implícita", "Ambiental",
-    "Mediante conflicto", "Mediante documentos", "Mediante diálogo",
-    "Mediante acciones", "Mediante contradicciones",
-]
-
-CONTRADICTION_OPTIONS = [
-    "Permitidas libremente", "Si son interesantes",
-    "Solo si son intencionales", "No permitidas",
-]
-
-AI_ROLE_OPTIONS = [
-    "Coautor", "Editor literario", "Dramaturgo",
-    "Supervisor de continuidad", "Worldbuilder",
-    "Analista de personajes", "Explorador", "Corrector conservador",
-]
-
-AI_ROLE_KEYS = [
-    "coauthor", "editor", "dramaturgo", "supervisor",
-    "worldbuilder", "analista", "explorador", "corrector",
-]
-
-AI_OUTPUT_OPTIONS = [
-    ("Respuesta final pulida", "single"),
-    ("Opciones contrastadas", "contrastive_options"),
-    ("Diagnóstico + propuesta", "diagnosis"),
-    ("Preguntas antes de crear", "questions"),
-    ("Cambios mínimos", "minimal"),
-    ("Propuesta estructurada", "structured"),
-]
-
-AI_UNCERTAINTY_OPTIONS = [
-    ("Preguntar siempre", "ask"),
-    ("Propuesta conservadora", "conservative_proposal"),
-    ("Inventar libremente", "invent"),
-    ("Marcar huecos", "mark_gaps"),
-    ("Varias interpretaciones", "interpretations"),
-]
-
-AI_STRATEGY_OPTIONS = [
-    "Profundizar", "Contrastar", "Complicar", "Extrañar",
-    "Conectar con otra hoja/rama", "Reducir", "Intensificar",
-    "Subvertir", "Hacer más coherente", "Hacer más ambiguo",
-    "Hacer más emocional", "Hacer más extraño",
-]
-
-AI_STRATEGY_KEYS = [
-    "profundizar", "contrastar", "complicar", "extranar",
-    "conectar", "reducir", "intensificar", "subvertir",
-    "coherente", "ambiguo", "emocional", "extrano",
-]
-
-AI_DEPTH_OPTIONS = [
-    ("Rápido", "quick"), ("Equilibrado", "balanced"), ("Profundo", "deep"),
-]
-
-EMOTION_OPTIONS = [
-    "Maravilla", "Inquietud", "Melancolía", "Tensión", "Ternura",
-    "Fascinación", "Horror", "Catarsis", "Paranoia", "Extrañeza",
-    "Euforia", "Tristeza", "Esperanza", "Fatalidad", "Humor",
-    "Culpa", "Nostalgia",
-]
-
-IMPACT_OPTIONS = [
-    "Aventura", "Inquietud", "Melancolía", "Dilema moral",
-    "Épica", "Intimidad", "Misterio", "Sátira", "Horror",
-    "Belleza", "Extrañeza", "Asombro",
-]
-
-CONFLICT_OPTIONS = [
-    "Interno", "Interpersonal", "Familiar", "Social", "Político",
-    "Moral", "Económico", "Religioso", "Cósmico", "Metafísico",
-    "Bélico", "Ambiental",
-]
-
-NARRATIVE_FUNCTIONS = [
-    "Revelar", "Ocultar", "Decidir", "Mostrar coste", "Contrastar",
-    "Presagiar", "Romper expectativa", "Confirmar regla",
-    "Desviar atención", "Sintetizar tramas", "Presentar personaje",
-    "Expandir mundo", "Intensificar conflicto", "Resolver consecuencia",
+PUBLICO_SUGERENCIAS = [
+    "adulto", "juvenil", "todos", "jugadores de rol", "lectores de fantasía oscura",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Reusable helper widgets
+# Helpers de widgets reutilizables
 # ---------------------------------------------------------------------------
 
 def _make_textarea(text: str = "", max_h: int = 80) -> QTextEdit:
-    """Create a QTextEdit with limited height."""
+    """QTextEdit de altura limitada."""
     te = QTextEdit()
     te.setPlainText(text)
     te.setMaximumHeight(max_h)
-    te.setPlaceholderText("...")
+    te.setPlaceholderText("…")
     return te
 
 
-def _make_slider(value: int = 5, lo: int = 0, hi: int = 10) -> tuple[QSlider, QLabel]:
-    """Create a slider with value label. Returns (slider, label)."""
-    sl = QSlider(Qt.Orientation.Horizontal)
-    sl.setRange(lo, hi)
-    sl.setValue(value)
-    lbl = QLabel(str(value))
-    sl.valueChanged.connect(lambda v: lbl.setText(str(v)))
-    return sl, lbl
+def _legible(token: str) -> str:
+    """Etiqueta legible para un token (capitaliza, reemplaza `_` por espacio)."""
+    return token.replace("_", " ").capitalize()
 
 
-def _make_combo(options: list[str], current: str = "") -> QComboBox:
-    """Create a combo box with options."""
+def _make_combo_keyed(opciones: list[str], current: str = "") -> QComboBox:
+    """Combo de tokens cerrados: muestra etiqueta legible, guarda token en userData.
+
+    Incluye una opción vacía inicial ("—") para "sin definir".
+    """
     cb = QComboBox()
-    cb.addItems(options)
-    idx = cb.findText(current)
-    cb.setCurrentIndex(idx if idx >= 0 else 0)
-    return cb
-
-
-def _make_combo_keyed(keys: list[str], labels: list[str], current: str = "") -> QComboBox:
-    """Create combo with display labels, store keys in userData."""
-    cb = QComboBox()
-    for k, l in zip(keys, labels):
-        cb.addItem(l, k)
+    cb.addItem("—", "")
+    for token in opciones:
+        cb.addItem(_legible(token), token)
     idx = cb.findData(current)
     cb.setCurrentIndex(idx if idx >= 0 else 0)
     return cb
 
 
+def _make_combo_editable(sugerencias: list[str], current: str = "") -> QComboBox:
+    """Combo editable (texto libre permitido) con sugerencias."""
+    cb = QComboBox()
+    cb.setEditable(True)
+    cb.addItem("")
+    cb.addItems(sugerencias)
+    cb.setCurrentText(current or "")
+    return cb
+
+
 class TagInput(QWidget):
-    """Chips/tags input: text field + add button + list of removable tags."""
+    """Entrada de tags: campo + botón añadir + lista de tags eliminables."""
 
     def __init__(self, tags: list[str] | None = None, parent=None):
         super().__init__(parent)
@@ -226,7 +122,7 @@ class TagInput(QWidget):
 
         row = QHBoxLayout()
         self.field = QLineEdit()
-        self.field.setPlaceholderText("Añadir...")
+        self.field.setPlaceholderText("Añadir…")
         self.field.returnPressed.connect(self._add_tag)
         row.addWidget(self.field)
 
@@ -238,6 +134,7 @@ class TagInput(QWidget):
 
         self.tag_list = QListWidget()
         self.tag_list.setMaximumHeight(100)
+        self.tag_list.itemDoubleClicked.connect(self._remove_tag)
         layout.addWidget(self.tag_list)
 
         self._refresh_list()
@@ -256,11 +153,10 @@ class TagInput(QWidget):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
             self.tag_list.addItem(item)
-        # Connect removal on double-click
-        self.tag_list.itemDoubleClicked.connect(self._remove_tag)
 
     def _remove_tag(self, item):
-        self.tags.remove(item.text())
+        if item.text() in self.tags:
+            self.tags.remove(item.text())
         self._refresh_list()
 
     def value(self) -> list[str]:
@@ -268,9 +164,9 @@ class TagInput(QWidget):
 
 
 class ListEditor(QWidget):
-    """Editable string list with add/remove."""
+    """Lista de strings editable con añadir/quitar."""
 
-    def __init__(self, items: list[str] | None = None, parent=None):
+    def __init__(self, items: list[str] | None = None, placeholder: str = "Añadir…", parent=None):
         super().__init__(parent)
         self.items: list[str] = [i for i in (items or []) if i]
         layout = QVBoxLayout(self)
@@ -279,7 +175,7 @@ class ListEditor(QWidget):
 
         row = QHBoxLayout()
         self.field = QLineEdit()
-        self.field.setPlaceholderText("Añadir regla...")
+        self.field.setPlaceholderText(placeholder)
         self.field.returnPressed.connect(self._add_item)
         row.addWidget(self.field)
 
@@ -308,7 +204,8 @@ class ListEditor(QWidget):
 
     def _del_selected(self):
         for item in self.lw.selectedItems():
-            self.items.remove(item.text())
+            if item.text() in self.items:
+                self.items.remove(item.text())
         self._refresh()
 
     def _refresh(self):
@@ -321,647 +218,216 @@ class ListEditor(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Main panel
+# Panel principal
 # ---------------------------------------------------------------------------
 
 class CreativeConfigPanel(QTabWidget):
-    """Tabbed creative config panel (B40-T03)."""
+    """Panel de configuración creativa (PA04): 5 pestañas tipadas."""
 
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.project = project
-        self._fields: dict = {}  # key → widget for collect()
+        self._fields: dict = {}  # clave → widget para collect()
 
         self.setDocumentMode(True)
 
-        # Build 9 tabs
-        self._build_tab_basico()
+        self._build_tab_identidad()
         self._build_tab_direccion()
-        self._build_tab_narrativa()
+        self._build_tab_motor()
         self._build_tab_estilo()
         self._build_tab_reglas()
-        self._build_tab_ia()
-        self._build_tab_evitar()
-        self._build_tab_memoria()
-        self._build_tab_ramas()
-        self._build_tab_importacion()
 
-    # ── Tab builders ──────────────────────────────────────────────
+    # ── chrome ──────────────────────────────────────────────────────
 
     def _scroll(self, widget: QWidget) -> QScrollArea:
-        """Wrap a widget in a scroll area."""
         sa = QScrollArea()
         sa.setWidgetResizable(True)
         sa.setWidget(widget)
         return sa
 
-    def _form_tab(self, title: str) -> tuple[QWidget, QFormLayout]:
-        """Create a form tab, return (page_widget, form_layout)."""
+    def _form_tab(self) -> tuple[QWidget, QFormLayout]:
         page = QWidget()
         form = QFormLayout(page)
         form.setSpacing(8)
         form.setContentsMargins(12, 12, 12, 12)
-        # BETA1-UX (config llena el ancho): los campos CRECEN hasta ocupar todo
-        # el ancho del menú (antes quedaban estrechos y pegados a la izquierda,
-        # dejando vacío el lado derecho) y las etiquetas largas envuelven sobre
-        # su campo en lugar de desbordar/recortarse a la derecha.
+        # Los campos crecen hasta ocupar todo el ancho; las etiquetas largas
+        # envuelven sobre su campo en lugar de desbordar a la derecha.
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         return page, form
 
-    # ── Tab 1: Básico ─────────────────────────────────────────────
+    def _add(self, form: QFormLayout, label: str, key: str, widget: QWidget):
+        """Registra el widget bajo ``key`` y lo añade con su etiqueta + ayuda (ⓘ).
 
-    def _build_tab_basico(self):
-        _, form = self._form_tab("Básico")
-        p = self.project
-        cc = p.creative_config
+        La clave de campo coincide con la clave del catálogo de ayuda ``FIELD_HELP``.
+        """
+        self._fields[key] = widget
+        form.addRow(labeled_row(label, key), widget)
 
-        self._fields["core_premise"] = _make_textarea(cc.core_premise, 60)
-        form.addRow("Premisa central", self._fields["core_premise"])
+    # ── Pestaña 1: Identidad ────────────────────────────────────────
 
-        self._fields["genre"] = _make_combo(GENRE_OPTIONS, p.genre.primary_genre)
-        form.addRow("Género principal", self._fields["genre"])
+    def _build_tab_identidad(self):
+        page, form = self._form_tab()
+        i = self.project.creative_config.identidad
 
-        self._fields["subgenres"] = TagInput(p.genre.subgenres)
-        form.addRow("Subgéneros", self._fields["subgenres"])
+        self._add(form, "Premisa", "premisa", _make_textarea(i.premisa, 70))
+        self._add(form, "Resumen corto", "resumen_corto", _make_textarea(i.resumen_corto, 90))
+        self._add(form, "Género principal", "genero_principal",
+                  _make_combo_editable(GENERO_SUGERENCIAS, i.genero_principal))
+        self._add(form, "Subgéneros", "subgeneros", TagInput(i.subgeneros))
+        self._add(form, "Formato", "formato", _make_combo_editable(FORMATO_SUGERENCIAS, i.formato))
+        self._add(form, "Público", "publico", _make_combo_editable(PUBLICO_SUGERENCIAS, i.publico))
+        self._add(form, "Idioma", "idioma", QLineEdit(self.project.primary_language))
+        self._add(form, "Estado", "estado", _make_combo_keyed(ESTADO_OPCIONES, i.estado))
 
-        self._fields["target_audience"] = _make_combo(AUDIENCE_OPTIONS, cc.target_audience)
-        form.addRow("Público objetivo", self._fields["target_audience"])
+        self.addTab(self._scroll(page), "Identidad")
 
-        self._fields["format"] = _make_combo(FORMAT_OPTIONS, cc.format)
-        form.addRow("Formato narrativo", self._fields["format"])
-
-        self._fields["development_status"] = _make_combo(STATUS_OPTIONS, cc.development_status)
-        form.addRow("Estado de desarrollo", self._fields["development_status"])
-
-        self._fields["short_summary"] = _make_textarea(cc.short_summary, 60)
-        form.addRow("Resumen corto", self._fields["short_summary"])
-
-        self._fields["language"] = QLineEdit(p.primary_language)
-        form.addRow("Idioma principal", self._fields["language"])
-
-        # PA02: el toggle de worldbuilding se eliminó — siempre está activo.
-
-        self.addTab(self._scroll(form.parentWidget()), "Básico")
-
-    # ── Tab 2: Dirección creativa ──────────────────────────────────
+    # ── Pestaña 2: Dirección ────────────────────────────────────────
 
     def _build_tab_direccion(self):
-        _, form = self._form_tab("Dirección creativa")
-        ci = self.project.creative_config.creative_intent
+        page, form = self._form_tab()
+        d = self.project.creative_config.direccion
 
-        self._fields["reader_promise"] = _make_textarea(ci.get("reader_promise", ""), 60)
-        form.addRow("Promesa al lector", self._fields["reader_promise"])
+        self._add(form, "Promesa", "promesa", _make_textarea(d.promesa, 70))
+        self._add(form, "Pregunta dramática", "pregunta_dramatica",
+                  _make_textarea(d.pregunta_dramatica, 70))
+        self._add(form, "Temas", "temas", TagInput(d.temas))
+        self._add(form, "Emociones", "emociones", TagInput(d.emociones))
+        self._add(form, "Sensación final", "sensacion_final", _make_textarea(d.sensacion_final, 70))
+        self._add(form, "Originalidad", "originalidad",
+                  _make_combo_keyed(ORIGINALIDAD_OPCIONES, d.originalidad))
+        self._add(form, "Ambigüedad", "ambiguedad",
+                  _make_combo_keyed(AMBIGUEDAD_OPCIONES, d.ambiguedad))
+        self._add(form, "Tipo de impacto", "tipo_impacto", TagInput(d.tipo_impacto))
 
-        self._fields["central_question"] = _make_textarea(ci.get("central_question", ""), 60)
-        form.addRow("Pregunta dramática central", self._fields["central_question"])
+        self.addTab(self._scroll(page), "Dirección")
 
-        self._fields["desired_emotions"] = TagInput(ci.get("desired_emotions", []))
-        form.addRow("Emociones buscadas", self._fields["desired_emotions"])
+    # ── Pestaña 3: Motor ────────────────────────────────────────────
 
-        self._fields["aftertaste"] = _make_textarea(ci.get("aftertaste", ""), 60)
-        form.addRow("Sensación final", self._fields["aftertaste"])
+    def _build_tab_motor(self):
+        page, form = self._form_tab()
+        m = self.project.creative_config.motor
 
-        orig = ci.get("originality", 5)
-        self._fields["originality"], lbl_o = _make_slider(orig)
-        row_o = QHBoxLayout()
-        row_o.addWidget(self._fields["originality"])
-        row_o.addWidget(lbl_o)
-        form.addRow("Originalidad (0=convencional, 10=experimental)", row_o)
+        self._add(form, "Fuente de conflicto", "fuente_conflicto",
+                  _make_combo_keyed(FUENTE_CONFLICTO_OPCIONES, m.fuente_conflicto))
+        self._add(form, "Mecanismo", "mecanismo",
+                  _make_combo_keyed(MECANISMO_OPCIONES, m.mecanismo))
+        self._add(form, "Causalidad", "causalidad",
+                  _make_combo_keyed(CAUSALIDAD_OPCIONES, m.causalidad))
+        self._add(form, "Agencia", "agencia",
+                  _make_combo_keyed(AGENCIA_OPCIONES, m.agencia))
+        self._add(form, "Escalada", "escalada",
+                  _make_combo_keyed(ESCALADA_OPCIONES, m.escalada))
+        self._add(form, "Cambio de personaje", "cambio_personaje",
+                  _make_combo_keyed(CAMBIO_PERSONAJE_OPCIONES, m.cambio_personaje))
 
-        amb = ci.get("ambiguity", 5)
-        self._fields["ambiguity"], lbl_a = _make_slider(amb)
-        row_a = QHBoxLayout()
-        row_a.addWidget(self._fields["ambiguity"])
-        row_a.addWidget(lbl_a)
-        form.addRow("Ambigüedad (0=explícito, 10=enigmático)", row_a)
+        self.addTab(self._scroll(page), "Motor")
 
-        self._fields["impact_types"] = TagInput(ci.get("impact_types", []))
-        form.addRow("Tipos de impacto", self._fields["impact_types"])
-
-        self.addTab(self._scroll(form.parentWidget()), "Dirección")
-
-    # ── Tab 3: Narrativa ───────────────────────────────────────────
-
-    def _build_tab_narrativa(self):
-        _, form = self._form_tab("Narrativa")
-        ne = self.project.creative_config.narrative_engine
-
-        self._fields["conflict_sources"] = TagInput(ne.get("conflict_sources", []))
-        form.addRow("Fuentes de conflicto", self._fields["conflict_sources"])
-
-        self._fields["dominant_tension"] = _make_combo(TENSION_OPTIONS, ne.get("dominant_tension", ""))
-        form.addRow("Tensión dominante", self._fields["dominant_tension"])
-
-        self._fields["progression"] = _make_combo(PROGRESSION_OPTIONS, ne.get("progression_mechanism", ""))
-        form.addRow("Mecanismo de avance", self._fields["progression"])
-
-        self._fields["character_change"] = _make_combo(CHANGE_OPTIONS, ne.get("character_change", ""))
-        form.addRow("Cambio de personajes", self._fields["character_change"])
-
-        self._fields["escalation"] = _make_combo(ESCALATION_OPTIONS, ne.get("escalation", ""))
-        form.addRow("Escalada", self._fields["escalation"])
-
-        agency = ne.get("character_agency", 5)
-        self._fields["agency"], lbl_ag = _make_slider(agency)
-        row_ag = QHBoxLayout()
-        row_ag.addWidget(self._fields["agency"])
-        row_ag.addWidget(lbl_ag)
-        form.addRow("Agencia de personajes (0=baja, 10=alta)", row_ag)
-
-        caus = ne.get("causality", 5)
-        self._fields["causality"], lbl_c = _make_slider(caus)
-        row_c = QHBoxLayout()
-        row_c.addWidget(self._fields["causality"])
-        row_c.addWidget(lbl_c)
-        form.addRow("Causalidad (0=flexible, 10=estricta)", row_c)
-
-        self.addTab(self._scroll(form.parentWidget()), "Narrativa")
-
-    # ── Tab 4: Estilo ──────────────────────────────────────────────
+    # ── Pestaña 4: Estilo ───────────────────────────────────────────
 
     def _build_tab_estilo(self):
-        _, form = self._form_tab("Estilo")
-        cc = self.project.creative_config
-        po = cc.poetics
+        page, form = self._form_tab()
+        e = self.project.creative_config.estilo
 
-        self._fields["narrative_style"] = _make_textarea(cc.narrative_style, 60)
-        form.addRow("Estilo narrativo", self._fields["narrative_style"])
+        self._add(form, "Tono", "tono", QLineEdit(e.tono))
+        self._add(form, "Realismo", "realismo",
+                  _make_combo_keyed(REALISMO_OPCIONES, e.realismo))
+        self._add(form, "Grado especulativo", "grado_especulativo",
+                  _make_combo_keyed(GRADO_ESPECULATIVO_OPCIONES, e.grado_especulativo))
+        self._add(form, "Estilo narrativo", "estilo_narrativo", QLineEdit(e.estilo_narrativo))
+        self._add(form, "Densidad", "densidad",
+                  _make_combo_keyed(DENSIDAD_OPCIONES, e.densidad))
+        self._add(form, "Exposición", "exposicion",
+                  _make_combo_keyed(EXPOSICION_OPCIONES, e.exposicion))
 
-        self._fields["tone_general"] = _make_textarea(self.project.tone.narrative_tone, 60)
-        form.addRow("Tono general", self._fields["tone_general"])
+        self.addTab(self._scroll(page), "Estilo")
 
-        self._fields["narrative_distance"] = _make_combo(DISTANCE_OPTIONS, po.get("narrative_distance", ""))
-        form.addRow("Distancia narrativa", self._fields["narrative_distance"])
-
-        dd = po.get("description_density", 5)
-        self._fields["desc_density"], lbl_dd = _make_slider(dd)
-        row_dd = QHBoxLayout()
-        row_dd.addWidget(self._fields["desc_density"])
-        row_dd.addWidget(lbl_dd)
-        form.addRow("Densidad descriptiva (0=seca, 10=sensorial)", row_dd)
-
-        cd = po.get("conceptual_density", 5)
-        self._fields["conc_density"], lbl_cd = _make_slider(cd)
-        row_cd = QHBoxLayout()
-        row_cd.addWidget(self._fields["conc_density"])
-        row_cd.addWidget(lbl_cd)
-        form.addRow("Densidad conceptual (0=ligera, 10=reflexiva)", row_cd)
-
-        st = po.get("subtext_level", 5)
-        self._fields["subtext"], lbl_st = _make_slider(st)
-        row_st = QHBoxLayout()
-        row_st.addWidget(self._fields["subtext"])
-        row_st.addWidget(lbl_st)
-        form.addRow("Subtexto (0=directo, 10=muy implícito)", row_st)
-
-        self._fields["dialogue_styles"] = TagInput(po.get("dialogue_styles", []))
-        form.addRow("Tipos de diálogo", self._fields["dialogue_styles"])
-
-        self._fields["exposition_modes"] = TagInput(po.get("exposition_modes", []))
-        form.addRow("Modo de exposición", self._fields["exposition_modes"])
-
-        self._fields["recurring_imagery"] = TagInput(po.get("recurring_imagery", []))
-        form.addRow("Imágenes/motivos recurrentes", self._fields["recurring_imagery"])
-
-        self._fields["forbidden_style"] = ListEditor(po.get("forbidden_style_habits", []))
-        form.addRow("Prohibiciones de estilo", self._fields["forbidden_style"])
-
-        self.addTab(self._scroll(form.parentWidget()), "Estilo")
-
-    # ── Tab 5: Reglas ──────────────────────────────────────────────
+    # ── Pestaña 5: Reglas ───────────────────────────────────────────
 
     def _build_tab_reglas(self):
-        _, form = self._form_tab("Reglas")
-        ca = self.project.creative_config.canon
+        page, form = self._form_tab()
+        r = self.project.creative_config.reglas
 
-        form.addRow(QLabel("Canon duro (inviolable para la IA)"))
-        self._fields["hard_rules"] = ListEditor(ca.get("hard_rules", []))
-        form.addRow("", self._fields["hard_rules"])
+        self._add(form, "Reglas de canon", "reglas_canon",
+                  ListEditor(r.reglas_canon, placeholder="Añadir regla de canon…"))
+        self._add(form, "Evitar", "evitar",
+                  ListEditor(r.evitar, placeholder="Añadir algo a evitar…"))
 
-        form.addRow(QLabel("Preferencias blandas"))
-        self._fields["soft_prefs"] = ListEditor(ca.get("soft_preferences", []))
-        form.addRow("", self._fields["soft_prefs"])
+        self.addTab(self._scroll(page), "Reglas")
 
-        cs = ca.get("continuity_strictness", 5)
-        self._fields["continuity"], lbl_cs = _make_slider(cs)
-        row_cs = QHBoxLayout()
-        row_cs.addWidget(self._fields["continuity"])
-        row_cs.addWidget(lbl_cs)
-        form.addRow("Continuidad (0=flexible, 10=estricta)", row_cs)
-
-        self._fields["contradiction"] = _make_combo(CONTRADICTION_OPTIONS, ca.get("contradiction_policy", ""))
-        form.addRow("Política de contradicciones", self._fields["contradiction"])
-
-        form.addRow(QLabel("Reglas de mundo"))
-        self._fields["world_rules"] = ListEditor(ca.get("world_rules", []))
-        form.addRow("", self._fields["world_rules"])
-
-        form.addRow(QLabel("Reglas de personajes"))
-        self._fields["char_rules"] = ListEditor(ca.get("character_rules", []))
-        form.addRow("", self._fields["char_rules"])
-
-        form.addRow(QLabel("Reglas de cronología"))
-        self._fields["time_rules"] = ListEditor(ca.get("timeline_rules", []))
-        form.addRow("", self._fields["time_rules"])
-
-        self.addTab(self._scroll(form.parentWidget()), "Reglas")
-
-    # ── Tab 6: IA ──────────────────────────────────────────────────
-
-    def _build_tab_ia(self):
-        _, form = self._form_tab("IA")
-        ai = self.project.ai
-
-        self._fields["ai_role"] = _make_combo_keyed(AI_ROLE_KEYS, AI_ROLE_OPTIONS, ai.default_role)
-        form.addRow("Rol por defecto", self._fields["ai_role"])
-
-        ag = ai.change_aggressiveness
-        self._fields["ai_aggression"], lbl_ag = _make_slider(ag)
-        row_ag = QHBoxLayout()
-        row_ag.addWidget(self._fields["ai_aggression"])
-        row_ag.addWidget(lbl_ag)
-        form.addRow("Agresividad (0=mínima, 10=radical)", row_ag)
-
-        self._fields["ai_num_options"] = BotanicalSpinBox()
-        self._fields["ai_num_options"].setRange(1, 5)
-        self._fields["ai_num_options"].setValue(ai.default_num_options)
-        form.addRow("Propuestas por defecto", self._fields["ai_num_options"])
-
-        self._fields["ai_output"] = _make_combo_keyed(
-            [v for _, v in AI_OUTPUT_OPTIONS],
-            [l for l, _ in AI_OUTPUT_OPTIONS],
-            ai.output_mode,
-        )
-        form.addRow("Tipo de respuesta", self._fields["ai_output"])
-
-        self._fields["ai_uncertainty"] = _make_combo_keyed(
-            [v for _, v in AI_UNCERTAINTY_OPTIONS],
-            [l for l, _ in AI_UNCERTAINTY_OPTIONS],
-            ai.uncertainty_policy,
-        )
-        form.addRow("Cuando falte contexto", self._fields["ai_uncertainty"])
-
-        self._fields["ai_strategy"] = _make_combo_keyed(AI_STRATEGY_KEYS, AI_STRATEGY_OPTIONS, ai.default_strategy)
-        form.addRow("Estrategia creativa", self._fields["ai_strategy"])
-
-        self._fields["ai_depth"] = _make_combo_keyed(
-            [v for _, v in AI_DEPTH_OPTIONS],
-            [l for l, _ in AI_DEPTH_OPTIONS],
-            ai.context_depth,
-        )
-        form.addRow("Profundidad de contexto", self._fields["ai_depth"])
-
-        self.addTab(self._scroll(form.parentWidget()), "IA")
-
-    # ── Tab 7: Evitar ──────────────────────────────────────────────
-
-    def _build_tab_evitar(self):
-        _, form = self._form_tab("Evitar")
-        ns = self.project.creative_config.negative_space
-
-        self._fields["avoid_tropes"] = ListEditor(ns.get("avoid_tropes", []))
-        form.addRow("Tropos a evitar", self._fields["avoid_tropes"])
-
-        self._fields["avoid_solutions"] = ListEditor(ns.get("avoid_solutions", []))
-        form.addRow("Soluciones a evitar", self._fields["avoid_solutions"])
-
-        self._fields["avoid_style"] = ListEditor(ns.get("avoid_style_habits", []))
-        form.addRow("Tics de estilo a evitar", self._fields["avoid_style"])
-
-        self._fields["avoid_tones"] = ListEditor(ns.get("avoid_tones", []))
-        form.addRow("Tonos prohibidos", self._fields["avoid_tones"])
-
-        self._fields["avoid_phrases"] = ListEditor(ns.get("avoid_phrases", []))
-        form.addRow("Frases o gestos prohibidos", self._fields["avoid_phrases"])
-
-        self.addTab(self._scroll(form.parentWidget()), "Evitar")
-
-    # ── Tab 8: Memoria creativa ────────────────────────────────────
-
-    def _build_tab_memoria(self):
-        _, form = self._form_tab("Memoria")
-        tm = self.project.creative_config.taste_memory
-
-        self._fields["accepted"] = ListEditor(tm.get("accepted_patterns", []))
-        form.addRow("Patrones aceptados", self._fields["accepted"])
-
-        self._fields["rejected"] = ListEditor(tm.get("rejected_patterns", []))
-        form.addRow("Patrones rechazados", self._fields["rejected"])
-
-        self._fields["style_notes"] = ListEditor(tm.get("user_style_notes", []))
-        form.addRow("Notas de estilo", self._fields["style_notes"])
-
-        self._fields["learned"] = ListEditor(tm.get("learned_decisions", []))
-        form.addRow("Decisiones creativas aprendidas", self._fields["learned"])
-
-        self._fields["pending"] = ListEditor(tm.get("pending_suggestions", []))
-        form.addRow("Sugerencias pendientes", self._fields["pending"])
-
-        self.addTab(self._scroll(form.parentWidget()), "Memoria")
-
-    # ── Tab 9: Ramas ───────────────────────────────────────────────
-
-    def _build_tab_ramas(self):
-        _, form = self._form_tab("Ramas")
-
-        info = QLabel(
-            "Configura overrides locales por rama.\n"
-            "Las ramas heredan la configuración del proyecto por defecto.\n"
-            "Puedes sobrescribir campos concretos aquí."
-        )
-        info.setWordWrap(True)
-        info.setObjectName("mutedLabel")
-        form.addRow(info)
-
-        self._fields["branch_select"] = QComboBox()
-        self._fields["branch_select"].addItem("— Seleccionar rama —", "")
-        # Populate with CONTENEDOR entities
-        for e in self.project.entities:
-            if e.entity_type.value == "CONTENEDOR":
-                self._fields["branch_select"].addItem(e.name, e.id)
-        form.addRow("Rama", self._fields["branch_select"])
-
-        self._fields["branch_function"] = _make_combo([""] + NARRATIVE_FUNCTIONS)
-        form.addRow("Función narrativa", self._fields["branch_function"])
-
-        self._fields["branch_motifs"] = TagInput()
-        form.addRow("Motivos locales", self._fields["branch_motifs"])
-
-        self._fields["branch_tone"] = QLineEdit()
-        self._fields["branch_tone"].setPlaceholderText("Override de tono local...")
-        form.addRow("Tono local", self._fields["branch_tone"])
-
-        self._fields["branch_rules"] = ListEditor()
-        form.addRow("Reglas locales", self._fields["branch_rules"])
-
-        restore_btn = QPushButton("Restaurar configuración global")
-        restore_btn.setObjectName("secondaryButton")
-        restore_btn.clicked.connect(self._restore_branch_global)
-        form.addRow(restore_btn)
-
-        self._fields["branch_select"].currentIndexChanged.connect(self._on_branch_selected)
-
-        self.addTab(self._scroll(form.parentWidget()), "Ramas")
-
-    def _on_branch_selected(self):
-        """Load branch config when a rama is selected."""
-        entity_id = self._fields["branch_select"].currentData()
-        if not entity_id:
-            return
-        for e in self.project.entities:
-            if e.id == entity_id:
-                from packages.domain.branch_config import get_branch_config
-                cfg = get_branch_config(e)
-                self._fields["branch_function"].setCurrentText(
-                    cfg.get("local_narrative_function", ""))
-                # Reset tag input
-                self._fields["branch_motifs"].tags = cfg.get("local_motifs", [])
-                self._fields["branch_motifs"]._refresh_list()
-                self._fields["branch_tone"].setText(cfg.get("local_tone_override", ""))
-                self._fields["branch_rules"].items = cfg.get("local_rules", [])
-                self._fields["branch_rules"]._refresh()
-                break
-
-    def _restore_branch_global(self):
-        """Reset selected branch to inherit from project."""
-        entity_id = self._fields["branch_select"].currentData()
-        if not entity_id:
-            return
-        for e in self.project.entities:
-            if e.id == entity_id:
-                from packages.domain.branch_config import clear_all_branch_overrides
-                clear_all_branch_overrides(e)
-                self._on_branch_selected()
-                break
-
-    # ── Collect values ─────────────────────────────────────────────
+    # ── Recogida de valores ─────────────────────────────────────────
 
     def collect(self) -> dict:
-        """Collect all edited values into a nested dict."""
-        def _text(w):
-            return w.toPlainText().strip() if isinstance(w, QTextEdit) else w.text().strip()
-
-        def _val(w):
+        """Recoge los valores editados en un dict anidado por sección."""
+        def _text(w) -> str:
             if isinstance(w, QTextEdit):
                 return w.toPlainText().strip()
             if isinstance(w, QLineEdit):
                 return w.text().strip()
-            if isinstance(w, QSlider):
-                return w.value()
-            if isinstance(w, QSpinBox):
-                return w.value()
-            if isinstance(w, QCheckBox):
-                return w.isChecked()
-            if isinstance(w, TagInput):
-                return w.value()
-            if isinstance(w, ListEditor):
-                return w.value()
-            if isinstance(w, QComboBox):
-                data = w.currentData()
-                return data if data is not None else w.currentText().strip()
             return ""
+
+        def _combo(w: QComboBox) -> str:
+            # Combos cerrados guardan token en userData; editables, texto libre.
+            if w.isEditable():
+                return w.currentText().strip()
+            data = w.currentData()
+            return data if data is not None else w.currentText().strip()
 
         f = self._fields
         return {
-            "core_premise": _text(f["core_premise"]),
-            "short_summary": _text(f["short_summary"]),
-            "genre": _val(f["genre"]),
-            "subgenres": f["subgenres"].value(),
-            "target_audience": _val(f["target_audience"]),
-            "format": _val(f["format"]),
-            "development_status": _val(f["development_status"]),
-            "language": _text(f["language"]),
-            "creative_intent": {
-                "reader_promise": _text(f["reader_promise"]),
-                "central_question": _text(f["central_question"]),
-                "desired_emotions": f["desired_emotions"].value(),
-                "aftertaste": _text(f["aftertaste"]),
-                "originality": f["originality"].value(),
-                "ambiguity": f["ambiguity"].value(),
-                "impact_types": f["impact_types"].value(),
+            "idioma": _text(f["idioma"]),
+            "identidad": {
+                "premisa": _text(f["premisa"]),
+                "resumen_corto": _text(f["resumen_corto"]),
+                "genero_principal": _combo(f["genero_principal"]),
+                "subgeneros": f["subgeneros"].value(),
+                "formato": _combo(f["formato"]),
+                "publico": _combo(f["publico"]),
+                "estado": _combo(f["estado"]),
             },
-            "narrative_engine": {
-                "conflict_sources": f["conflict_sources"].value(),
-                "dominant_tension": _val(f["dominant_tension"]),
-                "progression_mechanism": _val(f["progression"]),
-                "character_change": _val(f["character_change"]),
-                "escalation": _val(f["escalation"]),
-                "character_agency": f["agency"].value(),
-                "causality": f["causality"].value(),
+            "direccion": {
+                "promesa": _text(f["promesa"]),
+                "pregunta_dramatica": _text(f["pregunta_dramatica"]),
+                "temas": f["temas"].value(),
+                "emociones": f["emociones"].value(),
+                "sensacion_final": _text(f["sensacion_final"]),
+                "originalidad": _combo(f["originalidad"]),
+                "ambiguedad": _combo(f["ambiguedad"]),
+                "tipo_impacto": f["tipo_impacto"].value(),
             },
-            "poetics": {
-                "narrative_distance": _val(f["narrative_distance"]),
-                "description_density": f["desc_density"].value(),
-                "conceptual_density": f["conc_density"].value(),
-                "subtext_level": f["subtext"].value(),
-                "dialogue_styles": f["dialogue_styles"].value(),
-                "exposition_modes": f["exposition_modes"].value(),
-                "recurring_imagery": f["recurring_imagery"].value(),
-                "forbidden_style_habits": f["forbidden_style"].value(),
+            "motor": {
+                "fuente_conflicto": _combo(f["fuente_conflicto"]),
+                "mecanismo": _combo(f["mecanismo"]),
+                "causalidad": _combo(f["causalidad"]),
+                "agencia": _combo(f["agencia"]),
+                "escalada": _combo(f["escalada"]),
+                "cambio_personaje": _combo(f["cambio_personaje"]),
             },
-            "canon": {
-                "hard_rules": f["hard_rules"].value(),
-                "soft_preferences": f["soft_prefs"].value(),
-                "continuity_strictness": f["continuity"].value(),
-                "contradiction_policy": _val(f["contradiction"]),
-                "world_rules": f["world_rules"].value(),
-                "character_rules": f["char_rules"].value(),
-                "timeline_rules": f["time_rules"].value(),
+            "estilo": {
+                "tono": _text(f["tono"]),
+                "realismo": _combo(f["realismo"]),
+                "grado_especulativo": _combo(f["grado_especulativo"]),
+                "estilo_narrativo": _text(f["estilo_narrativo"]),
+                "densidad": _combo(f["densidad"]),
+                "exposicion": _combo(f["exposicion"]),
             },
-            "narrative_style": _text(f["narrative_style"]),
-            "tone_general": _text(f["tone_general"]),
-            "ai": {
-                "default_role": _val(f["ai_role"]),
-                "change_aggressiveness": f["ai_aggression"].value(),
-                "default_num_options": f["ai_num_options"].value(),
-                "output_mode": _val(f["ai_output"]),
-                "uncertainty_policy": _val(f["ai_uncertainty"]),
-                "default_strategy": _val(f["ai_strategy"]),
-                "context_depth": _val(f["ai_depth"]),
+            "reglas": {
+                "reglas_canon": f["reglas_canon"].value(),
+                "evitar": f["evitar"].value(),
             },
-            "negative_space": {
-                "avoid_tropes": f["avoid_tropes"].value(),
-                "avoid_solutions": f["avoid_solutions"].value(),
-                "avoid_style_habits": f["avoid_style"].value(),
-                "avoid_tones": f["avoid_tones"].value(),
-                "avoid_phrases": f["avoid_phrases"].value(),
-            },
-            "taste_memory": {
-                "accepted_patterns": f["accepted"].value(),
-                "rejected_patterns": f["rejected"].value(),
-                "user_style_notes": f["style_notes"].value(),
-                "learned_decisions": f["learned"].value(),
-                "pending_suggestions": f["pending"].value(),
-            },
-            # Branch config handled separately via _on_branch_selected
         }
 
-    # ── Tab: Importación (taxonomía dirigida) ─────────────────────
-
-    def _build_tab_importacion(self):
-        page, form = self._form_tab("Importación")
-        tax = getattr(self.project, "import_taxonomy", None)
-        entity_types = list(getattr(tax, "allowed_entity_types", []) or [])
-        branch_types = list(getattr(tax, "allowed_branch_types", []) or [])
-        ring_ids = list(getattr(tax, "allowed_ring_ids", []) or [])
-        guidance = str(getattr(tax, "extraction_guidance", "") or "")
-        strict = bool(getattr(tax, "strict", False))
-
-        info = QLabel(
-            "Taxonomía de importación (Modo Canon): acota qué entidades, ramas y "
-            "anillos extrae la IA de los documentos. Vacío = sin restricción."
-        )
-        info.setWordWrap(True)
-        form.addRow(info)
-
-        self._fields["tax_entity_types"] = ListEditor(entity_types)
-        form.addRow(QLabel("Tipos de entidad permitidos"), self._fields["tax_entity_types"])
-        self._fields["tax_branch_types"] = ListEditor(branch_types)
-        form.addRow(QLabel("Tipos de rama permitidos"), self._fields["tax_branch_types"])
-        self._fields["tax_ring_ids"] = ListEditor(ring_ids)
-        form.addRow(QLabel("Anillos permitidos (ring_id)"), self._fields["tax_ring_ids"])
-
-        self._fields["tax_guidance"] = QLineEdit(guidance)
-        self._fields["tax_guidance"].setPlaceholderText("Guía libre para la extracción IA…")
-        form.addRow(QLabel("Guía de extracción"), self._fields["tax_guidance"])
-
-        self._fields["tax_strict"] = QCheckBox(
-            "Estricto: rechazar candidatos fuera de la taxonomía (si no, se marcan como incidencia)"
-        )
-        self._fields["tax_strict"].setChecked(strict)
-        form.addRow(self._fields["tax_strict"])
-
-        self.addTab(self._scroll(page), "Importación")
-
     def apply_to_project(self, project):
-        """Apply collected values to a project object."""
+        """Vuelca los valores recogidos a ``project.creative_config`` + idioma."""
         data = self.collect()
         cc = project.creative_config
-        ai = project.ai
 
-        cc.core_premise = data["core_premise"]
-        cc.short_summary = data["short_summary"]
-        cc.development_status = data["development_status"]
-        cc.format = data["format"]
-        cc.narrative_style = data["narrative_style"]
+        for section_name in ("identidad", "direccion", "motor", "estilo", "reglas"):
+            section = getattr(cc, section_name)
+            for key, value in data[section_name].items():
+                setattr(section, key, value)
 
-        project.genre.primary_genre = data["genre"]
-        project.genre.subgenres = data["subgenres"]
-
-        cc.target_audience = data["target_audience"]
-        project.primary_language = data["language"]
-        # PA02: worldbuilding siempre activo (sin toggle en la config).
+        project.primary_language = data["idioma"] or project.primary_language
+        # Worldbuilding por capas causales siempre activo (PA02).
         project.worldbuilding_active = True
-
-        # Update sub-dicts (only non-empty)
-        if any(data["creative_intent"].values()):
-            existing = dict(cc.creative_intent) if cc.creative_intent else {}
-            existing.update({k: v for k, v in data["creative_intent"].items() if v})
-            cc.creative_intent = existing
-
-        if any(data["narrative_engine"].values()):
-            existing = dict(cc.narrative_engine) if cc.narrative_engine else {}
-            existing.update({k: v for k, v in data["narrative_engine"].items() if v})
-            cc.narrative_engine = existing
-
-        if any(data["poetics"].values()):
-            existing = dict(cc.poetics) if cc.poetics else {}
-            existing.update({k: v for k, v in data["poetics"].items() if v})
-            cc.poetics = existing
-
-        if any(data["canon"].values()):
-            existing = dict(cc.canon) if cc.canon else {}
-            existing.update({k: v for k, v in data["canon"].items() if v})
-            cc.canon = existing
-
-        if any(data["negative_space"].values()):
-            existing = dict(cc.negative_space) if cc.negative_space else {}
-            existing.update({k: v for k, v in data["negative_space"].items() if v})
-            cc.negative_space = existing
-
-        if any(data["taste_memory"].values()):
-            existing = dict(cc.taste_memory) if cc.taste_memory else {}
-            existing.update({k: v for k, v in data["taste_memory"].items() if v})
-            cc.taste_memory = existing
-
-        # Tone
-        project.tone.narrative_tone = data["tone_general"]
-
-        # AI
-        ai.default_role = data["ai"]["default_role"] or "coauthor"
-        ai.change_aggressiveness = data["ai"]["change_aggressiveness"]
-        ai.default_num_options = data["ai"]["default_num_options"]
-        ai.output_mode = data["ai"]["output_mode"] or "contrastive_options"
-        ai.uncertainty_policy = data["ai"]["uncertainty_policy"] or "conservative_proposal"
-        ai.default_strategy = data["ai"]["default_strategy"] or "profundizar"
-        ai.context_depth = data["ai"]["context_depth"] or "balanced"
-
-        # Save branch config for selected branch
-        entity_id = self._fields["branch_select"].currentData()
-        if entity_id:
-            for e in project.entities:
-                if e.id == entity_id:
-                    from packages.domain.branch_config import set_branch_config
-                    set_branch_config(e, {
-                        "inherits_from_project": False,
-                        "local_narrative_function": self._fields["branch_function"].currentText(),
-                        "local_motifs": self._fields["branch_motifs"].value(),
-                        "local_tone_override": self._fields["branch_tone"].text().strip(),
-                        "local_ai_role": "",
-                        "local_rules": self._fields["branch_rules"].value(),
-                        "overrides": {},
-                    })
-                    break
-
-        # Import taxonomy (Modo Canon dirigido)
-        if "tax_entity_types" in self._fields:
-            from packages.domain.project import ProjectTaxonomy
-            project.import_taxonomy = ProjectTaxonomy(
-                allowed_entity_types=self._fields["tax_entity_types"].value(),
-                allowed_branch_types=self._fields["tax_branch_types"].value(),
-                allowed_ring_ids=self._fields["tax_ring_ids"].value(),
-                extraction_guidance=self._fields["tax_guidance"].text().strip(),
-                strict=self._fields["tax_strict"].isChecked(),
-            )

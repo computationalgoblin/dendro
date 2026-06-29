@@ -21,6 +21,7 @@ class LeftDrawer(BaseSlideDrawer):
     """
 
     OBJECT_NAME = "leftDrawer"
+    ANCHOR = "left"  # overlay: crece desde el borde izquierdo del área del grafo
     # BETA1-UX: mínimo amplio para que la configuración no se corte.
     WIDTH_FRACTION = 0.42
     WIDTH_MIN = 480

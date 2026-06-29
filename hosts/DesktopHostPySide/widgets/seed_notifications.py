@@ -19,7 +19,12 @@ from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from hosts.DesktopHostPySide.widgets.design_system import GOLD, INK_SOFT, SURFACE_HI
+from hosts.DesktopHostPySide.widgets.design_system import (
+    GOLD,
+    INK_SOFT,
+    SURFACE_HI,
+    TICK_INTERVAL,
+)
 
 _ERROR_COLOR = "#C0392B"
 _DOT_DIAMETER = 34
@@ -53,7 +58,7 @@ class SeedNotification(QWidget):
         if label:
             self.setToolTip(label)
         self._timer = QTimer(self)
-        self._timer.setInterval(40)  # ~25 fps, barato
+        self._timer.setInterval(TICK_INTERVAL)  # cadencia única del design system
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 

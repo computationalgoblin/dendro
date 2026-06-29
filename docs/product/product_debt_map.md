@@ -20,6 +20,7 @@
 | DC-034-02 | _tree_context sin cache | baja | abierta | B34 |
 | DC-034-03 | Collapse/expand se pierde al refrescar | baja | abierta | B34 |
 | DC-034-04 | Layout jerárquico Windows imperfecto | media | abierta | B34 |
+| DC-UX4-HITO | editar:hito no aplica (modelo no rellena proposed_value en cambios de fecha; _apply_edit hito sin edición de datación) | media | abierta | UX4 |
 
 ## Deuda cerrada
 

@@ -553,6 +553,53 @@ def _pack_chunks(
     return out
 
 
+def repack_segments(segments: list[DocumentSegment]) -> list[DocumentSegment]:
+    """Re-trocea segmentos ya persistidos con el chunker de tamaño objetivo (I11-F3).
+
+    Losless y sin el documento original: convierte cada ``DocumentSegment`` a un
+    ``_TextChunk``, los empaqueta (fuerza el objetivo aunque el entorno lo tenga a
+    0) y reconstruye segmentos regenerando ``chunk_id``/``order`` y sellando
+    ``chunking_version=2``. Preserva ``source_id``/formato/método del primer
+    segmento. Nota: la paginación de PDF no se conserva en el repack.
+    """
+    segments = list(segments or [])
+    if not segments:
+        return []
+    first_meta = getattr(segments[0], "metadata", {}) or {}
+    source_id = getattr(segments[0], "source_id", "") or str(first_meta.get("source_id", ""))
+    format_name = str(first_meta.get("format") or ImportFormat.TEXT_PLAIN.value)
+    extraction_method = str(first_meta.get("extraction_method") or "plain_text")
+    file_path = Path(str(first_meta.get("file_path") or first_meta.get("file_name") or "document"))
+    confidence = min((float(getattr(s, "confidence", 1.0) or 1.0) for s in segments), default=1.0)
+
+    chunks: list[_TextChunk] = []
+    for seg in segments:
+        meta = getattr(seg, "metadata", {}) or {}
+        chunks.append(_TextChunk(
+            text=getattr(seg, "raw_text", ""),
+            section=getattr(seg, "section", ""),
+            start_offset=int(getattr(seg, "start_offset", 0) or 0),
+            end_offset=int(getattr(seg, "end_offset", 0) or 0),
+            section_path=str(meta.get("section_path") or getattr(seg, "section", "")),
+            block_type=str(meta.get("block_type") or "paragraph"),
+            heading_level=meta.get("heading_level"),
+        ))
+    packed = _pack_chunks(
+        chunks,
+        target_chars=_resolve_chunk_target() or CHUNK_TARGET_CHARS,
+        max_chars=CHUNK_MAX_CHARS,
+        overlap_chars=CHUNK_OVERLAP_CHARS,
+    )
+    return _segments_from_text_chunks(
+        chunks=packed,
+        source_id=source_id,
+        file_path=file_path,
+        format_name=format_name,
+        extraction_method=extraction_method,
+        confidence=confidence,
+    )
+
+
 def _segments_from_text_chunks(
     chunks: list[_TextChunk],
     source_id: str,

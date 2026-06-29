@@ -55,6 +55,20 @@ class TestValidJson:
         result = validate_ai_output(text, "import_extraction")
         assert result.is_valid
 
+    def test_fenced_json_is_parsed(self):
+        # Los modelos reales suelen envolver en ```json ... ```; debe tolerarse.
+        text = '```json\n{"entities": [{"name": "Fosco", "entity_type": "personaje"}]}\n```'
+        result = validate_ai_output(text, "generate_entities")
+        assert result.is_valid
+        assert result.parsed["entities"][0]["name"] == "Fosco"
+
+    def test_prose_wrapped_json_is_parsed(self):
+        # Preámbulo en prosa antes del objeto JSON: se extrae el objeto más externo.
+        text = 'Aquí tienes la configuración:\n{"candidates": [{"kind": "entity", "name": "X"}]}\nEspero que sirva.'
+        result = validate_ai_output(text, "import_extraction")
+        assert result.is_valid
+        assert result.parsed["candidates"][0]["name"] == "X"
+
 
 class TestInvalidJson:
     def test_malformed_json_no_crash(self):

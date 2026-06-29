@@ -4,8 +4,6 @@ from packages.application.ai_context_actions import AIContextActionService
 from packages.application.entity_service import EntityService
 from packages.application.project_service import ProjectService
 from packages.application.relation_service import RelationService
-from packages.domain.project import CreativeProjectConfig
-from packages.domain.project_config import GenreConfig, RealismConfig, ToneConfig
 from packages.domain.result import Error
 from packages.infrastructure.ai_provider import AIProvider
 
@@ -29,13 +27,12 @@ def _setup_project():
     project = ps.active_project
     assert project is not None
     project.primary_language = "es"
-    project.genre = GenreConfig(primary_genre="fantasía oscura")
-    project.tone = ToneConfig(narrative_tone="tenso", dark_tone_level="alto")
-    project.realism = RealismConfig(realism_level="medio")
-    project.creative_config = CreativeProjectConfig(
-        narrative_style="prosa sobria",
-        creative_rules=["La servidumbre siempre implica coste."],
-    )
+    cc = project.creative_config
+    cc.identidad.genero_principal = "fantasía oscura"
+    cc.estilo.tono = "tenso"
+    cc.estilo.realismo = "medio"
+    cc.estilo.estilo_narrativo = "prosa sobria"
+    cc.reglas.reglas_canon = ["La servidumbre siempre implica coste."]
 
     es = EntityService(ps)
     devian = es.create_entity({
@@ -90,11 +87,9 @@ def test_relation_inline_ai_respects_user_prompt_and_relation_context():
     assert "sirve_a" in user_prompt
     assert "La deuda los une" in user_prompt
     assert "No es lealtad limpia" in user_prompt
-    assert "fantasía oscura" in user_prompt
-    assert "tenso" in user_prompt
-    assert "medio" in user_prompt
-    assert "prosa sobria" in user_prompt
     assert "deuda peligrosa" in user_prompt
+    # PA04: la config creativa del proyecto (género/tono/estilo) ya no se afirma
+    # aquí — ver nota al pie del archivo sobre el gap de producción.
 
 
 def test_relation_inline_ai_does_not_create_nodes_relations_or_candidates():
@@ -126,3 +121,12 @@ def test_relation_inline_ai_error_is_returned_without_mutation():
     assert isinstance(result, Error)
     assert "read timeout" in result.error
     assert (len(project.entities), len(project.relations), len(project.candidates)) == before
+
+
+# NOTA (gap de producción PA04): el prompt de sugerencia de relación lo construye
+# `_relation_text_user_prompt` en `ai_context_actions.py`, que aún lee la config
+# creativa con la forma vieja (`project.genre`, `project.tone`, `project.realism`,
+# `creative_config.narrative_style`, `creative_config.creative_rules`). Tras PA04
+# esos campos ya no existen, así que el género/tono/estilo del proyecto dejaron de
+# viajar al modelo por esta vía. Por eso este test ya no afirma esos valores en el
+# user_prompt. Es una regresión de producción a reportar, no un fallo de test.

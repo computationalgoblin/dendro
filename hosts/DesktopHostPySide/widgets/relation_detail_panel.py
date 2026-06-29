@@ -29,7 +29,15 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.widgets.design_system import AdvancedSection, Badge, enum_human, human_ref
+from hosts.DesktopHostPySide.widgets.design_system import (
+    RELATION_KIND_PALETTE,
+    SPACE_LG,
+    SPACE_MD,
+    AdvancedSection,
+    Badge,
+    enum_human,
+    human_ref,
+)
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, VisibilityState
@@ -49,35 +57,9 @@ _SUGGESTION_BG = "#FFFDF7"
 # Simplified canon options for normal mode
 _SIMPLE_CANON = ["borrador", "canonico"]
 
-# Default edge colours per relation type (mirrors graph_canvas._EDGE_COLORS)
-_EDGE_COLORS: dict[str, str] = {
-    "pertenece_a": "#7C9BFF",
-    "contiene": "#7EC8A5",
-    "esta_ubicado_en": "#7EC8A5",
-    "es_aliado_de": "#78B891",
-    "es_enemigo_de": "#D46A6A",
-    "faccion": "#D9908F",
-    "busca": "#E0C46C",
-    "protege": "#78B891",
-    "oculta": "#9BB4C7",
-    "sospecha": "#DCA35F",
-    "esta_en_conflicto_con": "#D46A6A",
-    "es_amigo_de": "#78B891",
-    "es_familiar_de": "#C9A5FF",
-    "ama_a": "#D9908F",
-    "es_mentor_de": "#7C9BFF",
-    "es_aliado_de": "#78B891",
-    "es_rival_de": "#D46A6A",
-    "depende_de": "#DCA35F",
-    "esta_relacionado_con": "#A4AEC0",
-    "gobierna": "#DCA35F",
-    "sirve_a": "#7EC8A5",
-    "conoce": "#9BB4C7",
-    "traiciono": "#D46A6A",
-    "controla": "#DCA35F",
-    "posee": "#C9A5FF",
-    "simboliza": "#9BB4C7",
-}
+# UX21: paleta cálida de relaciones centralizada (antes este mapa estaba drifteado
+# a azules/púrpuras fríos pese a "mirrors graph_canvas"). Ahora coincide con el arco.
+_EDGE_COLORS: dict[str, str] = RELATION_KIND_PALETTE
 
 _DIRECTION_ICONS = {
     "unidireccional": "→",
@@ -96,7 +78,7 @@ def _split_lines(text: str) -> list[str]:
 
 
 def _default_color_for_type(relation_type_str: str) -> str:
-    return _EDGE_COLORS.get((relation_type_str or "").lower(), "#A4AEC0")
+    return _EDGE_COLORS.get((relation_type_str or "").lower(), "#9A8E72")  # UX21: neutro cálido
 
 
 def _custom_relation_label(relation) -> str:
@@ -267,8 +249,8 @@ class RelationDetailPanel(QWidget):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)  # UX23: ritmo del scaffold
+        root.setSpacing(SPACE_MD)
 
         # -- Header --
         head = QHBoxLayout()

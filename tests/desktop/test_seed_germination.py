@@ -109,57 +109,47 @@ def test_rehydrate_excludes_postponed_and_archived(qapp):
 
 
 def _decision_stub(layer, candidate):
-    graph_calls = []
+    calls = {"bloom_seed": [], "wither_seed": [], "bloom_node": []}
     stub = SimpleNamespace(
         _seed_notifications=layer,
         ctx=SimpleNamespace(drawer=None, log=lambda *a, **k: None),
         _on_suggestion_changed=lambda: None,
         _find_candidate=lambda cid: candidate,
         graph=SimpleNamespace(
-            bloom_node=lambda eid: graph_calls.append(eid),
-            bloom_seed=lambda cid: None,  # SEM04
-            wither_seed=lambda cid: None,  # SEM04
+            bloom_node=lambda eid: calls["bloom_node"].append(eid),
+            bloom_seed=lambda cid: calls["bloom_seed"].append(cid),  # UX33
+            wither_seed=lambda cid: calls["wither_seed"].append(cid),
         ),
     )
-    stub._germinate = lambda meta: CreationWorkspace._germinate(stub, meta)
-    return stub, graph_calls
+    return stub, calls
 
 
-def test_accept_blooms_created_entity(qapp):
+def test_accept_blooms_seed_not_node(qapp):
+    # UX33: aceptar florece la SEMILLA en su posición viva; ya NO se vuelve a
+    # florecer el nodo recién creado en otro punto (era una doble floración).
     layer = _layer(qapp)
     layer.add("cand-1", "Aldea del Sur")
     candidate = SimpleNamespace(metadata={"created_entity_id": "ent-99"})
-    stub, graph_calls = _decision_stub(layer, candidate)
+    stub, calls = _decision_stub(layer, candidate)
 
     CreationWorkspace._on_candidate_decision(stub, "cand-1", "accept")
 
-    assert graph_calls == ["ent-99"]  # germinó el nodo nuevo
+    assert calls["bloom_seed"] == ["cand-1"]  # florece la semilla
+    assert calls["bloom_node"] == []  # ya no germina el nodo nuevo
     assert not layer.has("cand-1")  # notificación retirada (sin wither)
 
 
-def test_accept_without_entity_id_does_not_bloom(qapp):
-    # Relaciones/hitos no estampan created_entity_id → no hay nodo que germinar.
-    layer = _layer(qapp)
-    layer.add("cand-1", "Relación")
-    candidate = SimpleNamespace(metadata={})
-    stub, graph_calls = _decision_stub(layer, candidate)
-
-    CreationWorkspace._on_candidate_decision(stub, "cand-1", "accept")
-
-    assert graph_calls == []
-    assert not layer.has("cand-1")
-
-
-def test_reject_withers_without_bloom(qapp):
+def test_reject_withers_seed_without_bloom(qapp):
     layer = _layer(qapp)
     layer.add("cand-1", "Aldea")
     candidate = SimpleNamespace(metadata={"created_entity_id": "ent-99"})
-    stub, graph_calls = _decision_stub(layer, candidate)
+    stub, calls = _decision_stub(layer, candidate)
 
     CreationWorkspace._on_candidate_decision(stub, "cand-1", "reject")
 
-    assert graph_calls == []  # rechazar no germina nada
-    # Wither es animado: la notificación sigue presente hasta terminar.
+    assert calls["wither_seed"] == ["cand-1"]  # marchita la semilla
+    assert calls["bloom_seed"] == [] and calls["bloom_node"] == []
+    # Wither de la notificación es animado: sigue presente hasta terminar.
     dot = layer.notifications["cand-1"]
     assert dot._withering is True
     for _ in range(12):  # avanzar la animación a mano (sin event loop)

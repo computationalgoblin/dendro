@@ -89,7 +89,8 @@ def test_has_config_suggestion_respects_applied(qapp):
 def test_config_card_built_with_title(qapp):
     view = _view(qapp, _proposal())
     card = view._make_config_card(view.ic._basket())
-    assert "Configuración propuesta" in card.title.text()
+    # I22: la tarjeta pasó a representar el andamiaje del mundo (config+anillos+hitos).
+    assert "Andamiaje propuesto" in card.title.text()
 
 
 def test_refresh_renders_config_card(qapp):

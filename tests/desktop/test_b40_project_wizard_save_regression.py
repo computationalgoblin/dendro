@@ -24,7 +24,7 @@ def test_project_controller_create_with_path_saves_loadable_json(tmp_path: Path)
     assert project is not None
     project.primary_language = "es"
     project.worldbuilding_active = True
-    project.creative_config.core_premise = "Premisa creada desde wizard"
+    project.creative_config.identidad.premisa = "Premisa creada desde wizard"
 
     saved = controller.save()
     assert isinstance(saved, Ok)
@@ -37,7 +37,7 @@ def test_project_controller_create_with_path_saves_loadable_json(tmp_path: Path)
     assert loaded is not None
     assert loaded.name == "Proyecto Wizard"
     assert loaded.worldbuilding_active is True
-    assert loaded.creative_config.core_premise == "Premisa creada desde wizard"
+    assert loaded.creative_config.identidad.premisa == "Premisa creada desde wizard"
     assert len(loaded.entities) == 0
     assert len(loaded.relations) == 0
     assert len(loaded.candidates) == 0

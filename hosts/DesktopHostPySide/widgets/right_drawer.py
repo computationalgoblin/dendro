@@ -30,6 +30,7 @@ class RightDrawer(BaseSlideDrawer):
     """
 
     OBJECT_NAME = "rightDrawer"
+    ANCHOR = "right"  # overlay: crece desde el borde derecho del área del grafo
     # BETA1-UX feedback: mínimo MÁS amplio (520) para que el contenido de
     # configuración —cronología/calendario incluidos— quepa siempre sin cortarse
     # a la derecha, incluso en la ventana más estrecha.

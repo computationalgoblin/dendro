@@ -60,6 +60,15 @@ class ImportController:
         _apptrace(f"CTRL ImportController.partial basket_id={basket_id!r}"[:120])
         return self.svc.partial_import(basket_id, filters or {})
 
+    def propose_scaffolding(self, basket_id, *, progress_callback=None, should_cancel=None):
+        """I22 Fase 1: propone el andamiaje del mundo (config+calendario+anillos+hitos).
+
+        Se ejecuta al importar, ANTES de extraer entidades. El usuario revisa y aplica
+        la propuesta en bloque; recién entonces se dispara la extracción (Fase 2).
+        """
+        _apptrace(f"CTRL ImportController.propose_scaffolding basket_id={basket_id!r}"[:120])
+        return self.svc.propose_scaffolding(basket_id)
+
     def extract_ai_candidates(self, basket_id, *, progress_callback=None, should_cancel=None):
         _apptrace(f"CTRL ImportController.extract_ai_candidates basket_id={basket_id!r}"[:120])
         return self.svc.extract_ai_candidates(
@@ -67,7 +76,7 @@ class ImportController:
             replace_existing=True,
             progress_callback=progress_callback,
             should_cancel=should_cancel,
-            generate_config=True,  # I13: propuesta de config/calendario al importar
+            generate_config=False,  # I22: el andamiaje (Fase 1) ya corrió y se aplicó
         )
 
     def apply_project_config_suggestion(self, basket_id):
@@ -84,6 +93,11 @@ class ImportController:
         """I13: descarta la propuesta de config sin aplicarla."""
         _apptrace(f"CTRL ImportController.discard_project_config_suggestion basket_id={basket_id!r}"[:120])
         return self.svc.discard_project_config_suggestion(basket_id)
+
+    def rechunk_basket(self, basket_id):
+        """I11-F3: re-trocea los segmentos de una cesta con el chunker nuevo."""
+        _apptrace(f"CTRL ImportController.rechunk_basket basket_id={basket_id!r}"[:120])
+        return self.svc.rechunk_basket(basket_id)
 
     def analyze_duplicates(self, basket_id):
         _apptrace(f"CTRL ImportController.analyze_duplicates basket_id={basket_id!r}"[:120])

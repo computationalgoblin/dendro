@@ -19,18 +19,20 @@ def test_b27_5_import_normal_mode_uses_cards_not_only_table():
     assert "Descartar" in text
 
 
-def test_b27_5_import_hides_technical_data_behind_advanced_section():
+def test_b27_5_import_has_no_technical_export_section():
+    # El desplegable de datos técnicos / export se retiró por completo.
     text = IMPORT_VIEW.read_text(encoding="utf-8")
-    assert 'AdvancedSection("Datos técnicos / export")' in text
-    assert "self.advanced.setVisible(bool(enabled))" in text
-    assert "Datos técnicos — Modo avanzado" in text
-    assert "Activa Modo avanzado" in text
+    assert 'AdvancedSection("Datos técnicos / export")' not in text
+    assert "self.table" not in text
+    assert "QTableWidget" not in text
+    assert "_export_all" not in text
+    assert "_export_single" not in text
 
 
 def test_b27_5_import_no_raw_ids_in_clean_detail():
     text = IMPORT_VIEW.read_text(encoding="utf-8")
     start = text.index("    def _show_clean_detail")
-    end = text.index("    def _show_detail_from_table")
+    end = text.index("    def _show_detail")
     clean_detail = text[start:end]
     assert "basket_id" not in clean_detail
     assert "candidate_id" not in clean_detail

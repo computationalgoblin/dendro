@@ -4,9 +4,12 @@ Visual graph derived from the active project. The graph is a view over existing
 entities and relations; relation creation is emitted as an intent and executed
 outside the canvas through application services.
 """
+
 from __future__ import annotations
 
 import math
+import os
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -21,7 +24,17 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPainterPathStroker, QPen, QRadialGradient, QTransform
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPainterPathStroker,
+    QPen,
+    QRadialGradient,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -53,17 +66,24 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.canvas_atmosphere import CanvasAtmosphere
 from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras, effective_present_year
 from hosts.DesktopHostPySide.widgets.gpu_viewport import install_gpu_viewport
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
+    ENTITY_KIND_PALETTE,
+    RELATION_KIND_PALETTE,
+    TICK_INTERVAL,
     EmptyState,
     enum_human,
     GOLD,
     GOLD_DEEP,
     GOLD_SOFT,
     GOLD_TINT,
+    INK_MUTED,
     INK_SOFT,
     INK_STRONG,
     LINE,
+    RADIUS_LG,
+    SPACE_2XL,
     SURFACE,
     SURFACE_HI,
 )
@@ -76,6 +96,71 @@ from packages.ui.graph_physics import (
     Spring,
     resolve_effective_ring_id,
 )
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    """Entero positivo desde entorno con fallback (override de tuners L01)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+# BETA1-L01: umbral de "modo rendimiento". Por encima de este nº de cuerpos
+# top-level en el motor global, el grafo deja de recalcular los anillos por
+# frame (O(n)) y la física hace ráfagas de asentamiento ACOTADAS (autofreeze) en
+# vez de correr en vivo indefinidamente tras cada cambio. Conserva la sensación
+# "viva" en proyectos pequeños/medianos; en enormes prioriza la usabilidad.
+PHYSICS_LIVE_MAX_BODIES = _env_positive_int("NARRATIVE_PHYSICS_LIVE_MAX_BODIES", 300)
+# Frames máximos por ráfaga de asentamiento en modo rendimiento (16 ms/frame →
+# 75 ≈ 1.2 s). Para antes lo que ocurra: convergencia por energía o fin del presupuesto.
+PHYSICS_SETTLE_FRAME_BUDGET = _env_positive_int("NARRATIVE_PHYSICS_SETTLE_FRAMES", 75)
+# BETA1-L01: por encima de este nº de items visibles se PAUSA la brisa de fondo
+# (atmósfera). Es decorativa, pero su timer hace `viewport.update()` ~18 veces/seg
+# y, con viewport GL (repintado total), eso REPINTA todo el grafo de forma continua
+# aunque nada se mueva ni la física esté activa. Con cientos de nodos el coste del
+# repintado permanente supera con creces el valor del adorno. Override por entorno.
+ATMOSPHERE_MAX_ITEMS = _env_positive_int("NARRATIVE_ATMOSPHERE_MAX_ITEMS", 250)
+# BETA1-L01: instrumentación de pintado. NARRATIVE_PERF_LOG=1 imprime cada ~1s:
+# pintados/seg (si es >0 en reposo → repintado continuo), ms medio/máx por frame
+# y si el viewport es GL. Cero coste cuando está apagado.
+_PERF_LOG = os.environ.get("NARRATIVE_PERF_LOG", "").strip() in {"1", "true", "True"}
+# BETA1-L01: nivel de detalle (LOD) del lienzo. Visto de lejos (zoom out) se
+# pintan TODOS los nodos visibles a la vez; el texto es ilegible y el halo de 3
+# pasadas con antialiasing por nodo cuesta cientos de ms con ~779 nodos. Por
+# debajo de estos LOD se pinta barato o se omite. De cerca (pocos nodos) detalle
+# completo. lod = 1.0 ≈ 1:1; <1 = alejado.
+# Detalle COMPLETO (halo de 3 pasadas + texto + hover/selección) solo de cerca.
+_NODE_FULL_LOD = float(os.environ.get("NARRATIVE_NODE_FULL_LOD", "") or 0.55)
+# Por debajo de esto: nodo MÍNIMO (punto liso con antialiasing). Entre _NODE_MIN_LOD
+# y _NODE_FULL_LOD: tier MEDIO — antialiasing + UNA pasada de halo cálido + relleno
+# (se ve bien de lejos a una fracción del coste). El texto aparece con el detalle
+# completo. Todos los valores son ajustables por entorno.
+_NODE_MIN_LOD = float(os.environ.get("NARRATIVE_NODE_MIN_LOD", "") or 0.12)
+_LABEL_MIN_LOD = _NODE_FULL_LOD
+
+# BETA1-L02: navegación / zoom. Paso por gesto de rueda y techo de acercamiento.
+# El SUELO de alejamiento es dinámico (ver _min_zoom): para grafos pequeños es
+# _ZOOM_OUT_FLOOR, pero para grafos enormes baja hasta la escala que enmarca todo
+# el contenido — antes estaba fijo en 0.22 y no dejaba ver el grafo completo.
+_ZOOM_STEP = 1.08
+_ZOOM_MAX = 3.0
+_ZOOM_OUT_FLOOR = 0.22
+
+
+class _LodTextItem(QGraphicsSimpleTextItem):
+    """BETA1-L01: etiqueta que NO se pinta con zoom bajo. Rasterizar cientos de
+    etiquetas ilegibles domina el coste al ver el grafo entero; de cerca (pocos
+    nodos visibles) se pinta con normalidad."""
+
+    def paint(self, painter, option, widget=None):  # noqa: N802 (Qt signature)
+        if option.levelOfDetailFromTransform(painter.worldTransform()) < _LABEL_MIN_LOD:
+            return
+        super().paint(painter, option, widget)
 
 
 def _paint_inner_halo(painter: QPainter, path: QPainterPath):
@@ -110,56 +195,19 @@ def _b44trace(message: str):
 # instante (las animaciones no terminan con processEvents sin tiempo real).
 MOTION_ENABLED = True
 _CAM_MS = 360  # ~MOTION_SLOW
+# BETA1-L02c: foco de anillo "inmersivo" (como introducirse en él). La cámara del
+# foco usa una transición más larga y de desaceleración profunda; los vecinos
+# (anillo de dentro y de fuera) quedan tenues pero visibles, y el encuadre es algo
+# más amplio para que asomen. Afinables por si el feel necesita retoque.
+_RING_FOCUS_CAM_MS = 600  # transición del foco de anillo (resto de cámaras = _CAM_MS)
+_RING_NEIGHBOR_OPACITY = 0.18  # opacidad de nodos/anillos NO enfocados (contexto tenue)
+_RING_FRAME_PAD_FACTOR = 0.5  # margen extra = banda del anillo × factor (vecinos asoman)
 
-_NODE_COLORS = {
-    "personaje": "#C07B53",    # terracota — calidez humana
-    "lugar": "#7E9568",        # salvia — tierra y lugar
-    "organizacion": "#B28A3C",  # oro-oliva — institución
-    "faccion": "#A65C54",      # granate-arcilla — conflicto
-    "objeto": "#937083",       # ciruela apagada — reliquia
-    "evento": "#C8A24C",       # miel — momento
-    "concepto": "#8E8A6A",     # oliva-piedra — idea
-    "contenedor": "#A89878",   # madera clara — rama
-    "nota": "#9A8E72",         # piedra cálida — nota
-}
+# UX15: paleta cálida por tipo centralizada en el design system (antes duplicada).
+_NODE_COLORS = ENTITY_KIND_PALETTE
 
-# BETA1-UX05: colores de relación en PALETA CÁLIDA (antes azules/púrpuras
-# fríos que rompían el pergamino). Familias por significado: vínculo (salvia),
-# conflicto (granate), contención/lugar (oliva), jerarquía (oro-oliva),
-# afecto/familia (terracota/rosa), causalidad (ciruela apagada).
-_EDGE_COLORS = {
-    "es_aliado_de": "#7E9568",
-    "es_amigo_de": "#7E9568",
-    "protege": "#7E9568",
-    "es_enemigo_de": "#A65C54",
-    "es_rival_de": "#A65C54",
-    "esta_en_conflicto_con": "#A65C54",
-    "traiciono": "#A65C54",
-    "contradice": "#A65C54",
-    "pertenece_a": "#B28A3C",
-    "es_mentor_de": "#B28A3C",
-    "depende_de": "#B28A3C",
-    "sospecha": "#B28A3C",
-    "gobierna": "#B28A3C",
-    "controla": "#B28A3C",
-    "contiene": "#94A06F",
-    "esta_ubicado_en": "#94A06F",
-    "esta_en": "#94A06F",
-    "sirve_a": "#94A06F",
-    "es_familiar_de": "#C07B53",
-    "ama_a": "#BD7E73",
-    "posee": "#C07B53",
-    "busca": "#C8A24C",
-    "oculta": "#8E8A6A",
-    "conoce": "#8E8A6A",
-    "simboliza": "#8E8A6A",
-    "esta_relacionado_con": "#9A8E72",
-    "deriva_de": "#8A6B7C",
-    "condiciona": "#8A6B7C",
-    "explica": "#8A6B7C",
-    "produce_consecuencia_en": "#8A6B7C",
-    "faccion": "#A65C54",
-}
+# UX21: paleta cálida de relaciones (UX05) centralizada en el design system.
+_EDGE_COLORS = RELATION_KIND_PALETTE
 
 _STATUS_COLORS = {
     "canonico": "#6CCB8E",
@@ -359,12 +407,8 @@ def _relation_view(relation: Any) -> _EdgeView:
         causal=relation_family(kind) == "causal",
         # BETA1-G06: leer del campo de dominio (v26+); caer a custom_metadata
         # como respaldo para SimpleNamespace de tests que no tienen el atributo.
-        birth_year=_parse_optional_year(
-            getattr(relation, "birth_year", meta.get("birth_year"))
-        ),
-        death_year=_parse_optional_year(
-            getattr(relation, "death_year", meta.get("death_year"))
-        ),
+        birth_year=_parse_optional_year(getattr(relation, "birth_year", meta.get("birth_year"))),
+        death_year=_parse_optional_year(getattr(relation, "death_year", meta.get("death_year"))),
     )
 
 
@@ -388,7 +432,14 @@ def _candidate_node_view(candidate: Any) -> _NodeView | None:
         subtitle="Sugerencia IA · no canon",
         canon="propuesto",
         visibility="privado",
-        layer_id=str(data.get("layer_id") or ((data.get("layer_ids") or [""])[0] if isinstance(data.get("layer_ids"), list) else "")),
+        layer_id=str(
+            data.get("layer_id")
+            or (
+                (data.get("layer_ids") or [""])[0]
+                if isinstance(data.get("layer_ids"), list)
+                else ""
+            )
+        ),
         proposed=True,
     )
 
@@ -397,7 +448,12 @@ def _candidate_edge_view(candidate: Any, known_entity_ids: set[str]) -> _EdgeVie
     data = dict(getattr(candidate, "proposed_data", {}) or {})
     source_id = str(data.get("source_id") or "")
     target_id = str(data.get("target_id") or "")
-    if not source_id or not target_id or source_id not in known_entity_ids or target_id not in known_entity_ids:
+    if (
+        not source_id
+        or not target_id
+        or source_id not in known_entity_ids
+        or target_id not in known_entity_ids
+    ):
         return None
     kind = str(data.get("relation_type") or "esta_relacionado_con")
     return _EdgeView(
@@ -456,7 +512,7 @@ _SEED_MOTES = 7
 # ~½ de la inicial: deriva pausada. La irregularidad (deriva del eje) la añade
 # el motor vía Body.orbit_drift / orbit_drift_rate.
 _SEED_ORBIT_SPEED = 1.5
-_SEED_ORBIT_DRIFT = 16.0       # radio (px) de migración del centro de la órbita
+_SEED_ORBIT_DRIFT = 16.0  # radio (px) de migración del centro de la órbita
 _SEED_ORBIT_DRIFT_RATE = 0.011  # rad/paso: el eje migra lento → no se repite
 
 
@@ -485,13 +541,24 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self._connected_edges: list = []
         self.setAcceptHoverEvents(True)
         self.setZValue(2)
+        # BETA1-L01: NO usar setCacheMode(DeviceCoordinateCache) aquí. Parecía
+        # buena idea (cachear la hoja estática), pero con el viewport GL
+        # (QOpenGLWidget) es una patología conocida de Qt: cada item cacheado
+        # necesita su propia superficie raster que se sube a textura GL en cada
+        # frame → el pintado de 779 nodos pasó de ~30ms a ~750ms en hardware real
+        # (medido con NARRATIVE_PERF_LOG). Sin caché, Qt pinta los items
+        # directamente por el viewport GL, que es justo lo que conviene.
 
         color = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
-        self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0)
+        self._normal_pen = QPen(
+            QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0
+        )
         if node.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 4.0)
-        self._selected_pen = QPen(QColor("#8B7A36"), 5.0)  # oro (vestigial; selección real = halo interno)
+        self._selected_pen = QPen(
+            QColor("#8B7A36"), 5.0
+        )  # oro (vestigial; selección real = halo interno)
         # BETA1-F05: hojas BLANCAS — el color del tipo vive como halo sutil
         # exterior (ver paint()), no como relleno.
         self._halo_color = QColor(color)
@@ -499,7 +566,7 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setPen(self._normal_pen)
 
         # Name — centred, fitted to node width
-        title = QGraphicsSimpleTextItem(_fit_text(node.name, 20), self)
+        title = _LodTextItem(_fit_text(node.name, 20), self)
         title.setBrush(QBrush(QColor("#111827")))
         font = QFont()
         font.setBold(True)
@@ -507,25 +574,32 @@ class GraphNodeItem(QGraphicsEllipseItem):
         title.setFont(font)
         title_rect = title.boundingRect()
         title.setPos(-title_rect.width() / 2, -title_rect.height() / 2 - 6)
+        self._title_item = title  # BETA1-L01: ref para update-in-place
 
         # Type — small label below name
-        type_label = QGraphicsSimpleTextItem(_fit_text(enum_human(node.kind), 18), self)
+        type_label = _LodTextItem(_fit_text(enum_human(node.kind), 18), self)
         type_label.setBrush(QBrush(QColor("#4B5563")))
         type_label.setFont(QFont("", 7))
         type_rect = type_label.boundingRect()
         type_label.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
+        self._type_item = type_label  # BETA1-L01: ref para update-in-place
 
-        # Status dot (top-left)
+        # UX28: se retiran las "bolitas" de estado/visibilidad del nodo — el detalle
+        # ya muestra canon y visibilidad; en el lienzo ensuciaban la hoja.
         self._status_dot = QGraphicsEllipseItem(-radius + 8, -radius + 8, 10, 10, self)
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
         self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
+        self._status_dot.setVisible(False)
 
-        # Visibility dot (top-right)
         visibility_key = node.visibility.lower()
-        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {"publico", "publico_mundo"}:
+        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {
+            "publico",
+            "publico_mundo",
+        }:
             self._visibility_dot = QGraphicsEllipseItem(radius - 18, -radius + 8, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
+            self._visibility_dot.setVisible(False)
 
         self.setToolTip("")
 
@@ -546,6 +620,30 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self._bloom_phase = phase
         self.update()
 
+    def apply_view_update(self, node: _NodeView) -> None:
+        """BETA1-L01: refresca los visuales de una HOJA in situ (sin reconstruir
+        el grafo). Solo cambia lo visible de una edición de atributos: nombre,
+        tipo (etiqueta + halo) y estado 'propuesto'. NO toca posición ni física.
+        El llamante garantiza que sigue siendo una hoja (no contenedor)."""
+        self.node = node
+        # Nombre (recentrado)
+        self._title_item.setText(_fit_text(node.name, 20))
+        title_rect = self._title_item.boundingRect()
+        self._title_item.setPos(-title_rect.width() / 2, -title_rect.height() / 2 - 6)
+        # Tipo (recentrado bajo el nombre)
+        self._type_item.setText(_fit_text(enum_human(node.kind), 18))
+        type_rect = self._type_item.boundingRect()
+        self._type_item.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
+        # Halo del tipo
+        self._halo_color = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
+        # Trazo 'propuesto' (rastro discontinuo ámbar) vs canónico
+        self._normal_pen = QPen(
+            QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0
+        )
+        if node.proposed:
+            self._normal_pen.setStyle(Qt.PenStyle.DashLine)
+        self.update()
+
     def boundingRect(self):  # noqa: N802 (Qt signature)
         # SEM02: ampliar solo durante el glow para cubrirlo sin artefactos.
         base = super().boundingRect()
@@ -564,6 +662,28 @@ class GraphNodeItem(QGraphicsEllipseItem):
         super().hoverLeaveEvent(event)
 
     def paint(self, painter: QPainter, option, widget=None):
+        # BETA1-L01: LOD con tier MEDIO de calidad. Visto de lejos (muchos nodos
+        # a la vez) se omiten texto y adornos, pero el NODO conserva calidad:
+        # antialiasing siempre + un halo cálido (1 pasada en vez de 3). Solo a
+        # zoom extremo se cae a punto liso. Pasa de cientos de ms a una fracción
+        # sin el escalón feo del recorte total.
+        lod = option.levelOfDetailFromTransform(painter.worldTransform())
+        if lod < _NODE_FULL_LOD:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            halo = getattr(self, "_halo_color", None)
+            if halo is not None and lod >= _NODE_MIN_LOD:
+                glow = QColor(halo)
+                glow.setAlpha(120)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(glow, 6.0))
+                painter.drawEllipse(self.rect())
+            painter.setBrush(self.brush())
+            if halo is not None and lod < _NODE_MIN_LOD:
+                painter.setPen(QPen(halo, 1.0))  # borde fino para definir el punto
+            else:
+                painter.setPen(QPen(Qt.PenStyle.NoPen))
+            painter.drawEllipse(self.rect())
+            return
         # BETA1-F05: pintura propia — SIN marquee negro de Qt (causa de las
         # "pestañas negras"), SIN contorno marcado, halo interno al
         # seleccionar y aro ámbar solo como destino de drop.
@@ -576,7 +696,8 @@ class GraphNodeItem(QGraphicsEllipseItem):
         halo = getattr(self, "_halo_color", None)
         if halo is not None:
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            for width, alpha in ((11.0, 22), (6.0, 38)):
+            # UX28: contorno de tipo más presente (antes apenas se percibía).
+            for width, alpha in ((13.0, 40), (7.0, 80), (3.0, 140)):
                 glow = QColor(halo)
                 glow.setAlpha(alpha)
                 painter.setPen(QPen(glow, width))
@@ -634,7 +755,15 @@ class GraphTreeItem(QGraphicsRectItem):
     the tree's header or border, not the center.
     """
 
-    def __init__(self, node: _NodeView, *, x: float, y: float, width: float = _CONTAINER_MIN_WIDTH, height: float = _CONTAINER_MIN_HEIGHT):
+    def __init__(
+        self,
+        node: _NodeView,
+        *,
+        x: float,
+        y: float,
+        width: float = _CONTAINER_MIN_WIDTH,
+        height: float = _CONTAINER_MIN_HEIGHT,
+    ):
         super().__init__(0, 0, width, height)
         self.node = node
         self._width = width
@@ -665,17 +794,24 @@ class GraphTreeItem(QGraphicsRectItem):
         self._DEPTH = 0  # set during set_graph for nested containers
 
         # Pens
-        self._normal_pen = QPen(QColor("#DCA35F" if node.proposed else "#A4AEC0"), 2.0 if not node.proposed else 2.6)
+        self._normal_pen = QPen(
+            QColor("#DCA35F" if node.proposed else "#A4AEC0"), 2.0 if not node.proposed else 2.6
+        )
         if node.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self._highlight_pen = QPen(QColor("#EBCB8B"), 3.5)
-        self._selected_pen = QPen(QColor("#8B7A36"), 4.0)  # oro (vestigial; selección real = halo interno)
+        self._selected_pen = QPen(
+            QColor("#8B7A36"), 4.0
+        )  # oro (vestigial; selección real = halo interno)
 
-        # BETA1-F05 (estética): la rama no tiene color propio — ACLARA el
-        # espacio que ocupa (velo blanco translúcido) con un trazo suave.
+        # UX28: la rama no se rellena de color (velo blanco translúcido), pero su
+        # CONTORNO lleva el color de su TIPO de entidad (paleta de Dendro) — así el
+        # color "funciona" sin teñir la caja.
         bg_color = QColor(255, 255, 255, 80)
         self.setBrush(QBrush(bg_color))
-        self._normal_pen = QPen(QColor(111, 106, 66, 70), 1.4)
+        _tcolor = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
+        _tcolor.setAlpha(170)
+        self._normal_pen = QPen(_tcolor, 1.8)
         if node.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
         self.setPen(self._normal_pen)
@@ -717,17 +853,21 @@ class GraphTreeItem(QGraphicsRectItem):
         self._collapse_indicator.setFont(QFont("", 8))
         self._collapse_indicator.setVisible(False)
 
-        # Status dot (top-right of header)
+        # UX28: se retiran las "bolitas" de estado/visibilidad también en la rama.
         self._status_dot = QGraphicsEllipseItem(width - 20, 8, 10, 10, self)
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
         self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
+        self._status_dot.setVisible(False)
 
-        # Visibility dot
         visibility_key = node.visibility.lower()
-        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {"publico", "publico_mundo"}:
+        if visibility_key in _VISIBILITY_COLORS and visibility_key not in {
+            "publico",
+            "publico_mundo",
+        }:
             self._visibility_dot = QGraphicsEllipseItem(width - 36, 8, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
+            self._visibility_dot.setVisible(False)
 
         # Track children and internal edges
         self._child_nodes: list[GraphNodeItem | GraphTreeItem] = []
@@ -749,7 +889,9 @@ class GraphTreeItem(QGraphicsRectItem):
 
     def _reposition_type_badge(self):
         br = self._type_badge.boundingRect()
-        self._type_badge.setPos(self._width - br.width() - 46, (_CONTAINER_HEADER_HEIGHT - br.height()) / 2)
+        self._type_badge.setPos(
+            self._width - br.width() - 46, (_CONTAINER_HEADER_HEIGHT - br.height()) / 2
+        )
 
     def _reposition_status_dots(self):
         self._status_dot.setRect(self._width - 20, 8, 10, 10)
@@ -962,7 +1104,9 @@ class GraphTreeItem(QGraphicsRectItem):
         # Make child a Qt child of this container for z-ordering
         child.setParentItem(self)
         # Position relative to parent's local coordinates
-        child.setZValue(self._CHILD_Z + child._DEPTH if isinstance(child, GraphTreeItem) else self._CHILD_Z)
+        child.setZValue(
+            self._CHILD_Z + child._DEPTH if isinstance(child, GraphTreeItem) else self._CHILD_Z
+        )
         self._update_count()
 
     def child_node_count(self) -> int:
@@ -1034,7 +1178,10 @@ class GraphTreeItem(QGraphicsRectItem):
         self._height = h
         self.setRect(min_x, min_y, w, h)
         self._header_item.setRect(min_x, min_y, w, _CONTAINER_HEADER_HEIGHT)
-        self._title_item.setPos(min_x + 10, min_y + (_CONTAINER_HEADER_HEIGHT - self._title_item.boundingRect().height()) / 2)
+        self._title_item.setPos(
+            min_x + 10,
+            min_y + (_CONTAINER_HEADER_HEIGHT - self._title_item.boundingRect().height()) / 2,
+        )
         self._type_badge.setPos(
             min_x + w - self._type_badge.boundingRect().width() - 46,
             min_y + (_CONTAINER_HEADER_HEIGHT - self._type_badge.boundingRect().height()) / 2,
@@ -1070,7 +1217,9 @@ class GraphTreeItem(QGraphicsRectItem):
         """
         center = self.scenePos() + QPointF(self._width / 2, self._height / 2)
         # Prefer connecting to the header area (top portion)
-        header_center = self.scenePos() + QPointF(self._width / 2, self.rect().top() + _CONTAINER_HEADER_HEIGHT / 2)
+        header_center = self.scenePos() + QPointF(
+            self._width / 2, self.rect().top() + _CONTAINER_HEADER_HEIGHT / 2
+        )
         return header_center
 
     def set_drag_highlight(self, enabled: bool):
@@ -1139,10 +1288,9 @@ class GraphTreeItem(QGraphicsRectItem):
         capsule = QPainterPath()
         capsule.addRoundedRect(rect, radius, radius)
         painter.setBrush(self.brush())
-        if self.node.proposed:
-            painter.setPen(self._normal_pen)
-        else:
-            painter.setPen(QPen(Qt.PenStyle.NoPen))
+        # UX28: el contorno de la rama lleva SIEMPRE el color de su tipo (antes solo
+        # se dibujaba si era propuesta → las ramas canónicas salían sin color).
+        painter.setPen(self._normal_pen)
         painter.drawPath(capsule)
         if getattr(self, "_drag_highlighted", False):
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1178,7 +1326,12 @@ class GraphEdgeItem(QGraphicsPathItem):
 
     _ARROW_SIZE = 12.0
 
-    def __init__(self, edge: _EdgeView, source: GraphNodeItem | GraphTreeItem, target: GraphNodeItem | GraphTreeItem):
+    def __init__(
+        self,
+        edge: _EdgeView,
+        source: GraphNodeItem | GraphTreeItem,
+        target: GraphNodeItem | GraphTreeItem,
+    ):
         super().__init__()
         self.edge = edge
         self.source = source
@@ -1206,7 +1359,9 @@ class GraphEdgeItem(QGraphicsPathItem):
 
         self._normal_pen = QPen(color, 2.6 if edge.proposed else 2.2)
         if edge.inter_ring:
-            self._normal_pen.setStyle(Qt.PenStyle.DashDotLine if edge.causal else Qt.PenStyle.DotLine)
+            self._normal_pen.setStyle(
+                Qt.PenStyle.DashDotLine if edge.causal else Qt.PenStyle.DotLine
+            )
             self._normal_pen.setWidthF(3.0 if edge.causal else 2.4)
         elif edge.proposed:
             self._normal_pen.setStyle(Qt.PenStyle.DashLine)
@@ -1324,7 +1479,9 @@ class GraphEdgeItem(QGraphicsPathItem):
                 start_adj.y() - c1.y(),
                 start_adj.x() - c1.x(),
             )
-            self._arrow_bwd.setPath(self._make_arrowhead(start_adj, angle_at_start, self._ARROW_SIZE))
+            self._arrow_bwd.setPath(
+                self._make_arrowhead(start_adj, angle_at_start, self._ARROW_SIZE)
+            )
 
         # Label at ~45% (so it doesn't overlap arrows)
         label_pt = path.pointAtPercent(0.45)
@@ -1495,10 +1652,10 @@ class GraphSeedItem(QGraphicsEllipseItem):
         self.candidate_id = candidate_id
         self.job_id = job_id
         self.mode = "germinating" if job_id else "candidate"
-        self._phase = 0.0          # germinación mostrada 0..1 (suavizada)
-        self._target_phase = 0.0   # objetivo según el progreso real del job
-        self._pulse = 0.0   # latido continuo
-        self._anim = 0.0    # avance de bloom/wither 0..1
+        self._phase = 0.0  # germinación mostrada 0..1 (suavizada)
+        self._target_phase = 0.0  # objetivo según el progreso real del job
+        self._pulse = 0.0  # latido continuo
+        self._anim = 0.0  # avance de bloom/wither 0..1
         self.setZValue(1500)
         self.setBrush(QBrush(QColor(255, 255, 253, 235)))
         self.setPen(QPen(QColor(GOLD), 2.0))
@@ -1638,7 +1795,7 @@ class GraphSeedItem(QGraphicsEllipseItem):
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt signature)
         if self.candidate_id and event.button() == Qt.MouseButton.LeftButton:
-            for view in (self.scene().views() if self.scene() else []):
+            for view in self.scene().views() if self.scene() else []:
                 if isinstance(view, GraphCanvasView):
                     view._seed_clicked(self.candidate_id)
                     break
@@ -1662,6 +1819,7 @@ def relation_family(kind: str) -> str:
         return "coherencia"
     return "narrativa"
 
+
 class GraphCanvasView(QGraphicsView):
     """Interactive view: pan/zoom with selectable nodes and edges."""
 
@@ -1673,6 +1831,8 @@ class GraphCanvasView(QGraphicsView):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)  # ring_id, display_name
     ringFocused = Signal(str, str)  # ring_id, display_name
+    ringFocusCleared = Signal()  # BETA1-L02: foco de anillo eliminado (panel resalta)
+    searchRequested = Signal()  # BETA1-L02b: tecla 'd' → barra de búsqueda flotante
     seedClicked = Signal(str)  # SEM04: candidate_id de una semilla germinante pulsada
     # BETA1-B01: context-menu intents. The canvas only emits intent; the
     # CreationWorkspace wires them to its existing creation/deletion routes
@@ -1717,10 +1877,10 @@ class GraphCanvasView(QGraphicsView):
         # se hunde hacia los bordes. Da profundidad e inmersión sin distraer;
         # las hojas blancas y los velos de rama siguen destacando.
         vignette = QRadialGradient(QPointF(0.0, 0.0), 1500.0)
-        vignette.setColorAt(0.0, QColor("#F3EDDD"))   # corazón del mundo: luz cálida
+        vignette.setColorAt(0.0, QColor("#F3EDDD"))  # corazón del mundo: luz cálida
         vignette.setColorAt(0.50, QColor("#E6DFCD"))
         vignette.setColorAt(0.82, QColor("#DBD1B9"))
-        vignette.setColorAt(1.0, QColor("#CFC4A8"))   # los bordes se hunden
+        vignette.setColorAt(1.0, QColor("#CFC4A8"))  # los bordes se hunden
         self.setBackgroundBrush(QBrush(vignette))
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
@@ -1792,6 +1952,10 @@ class GraphCanvasView(QGraphicsView):
         # reheat, así la física reacciona a cualquier cambio.
         self._physics_enabled = True
         self._physics_engine = PhysicsEngine()
+        # BETA1-L01: presupuesto de frames de la ráfaga de asentamiento (autofreeze).
+        # Solo se consume en "modo rendimiento" (grafos grandes); en pequeños la
+        # física se detiene por convergencia de energía como siempre.
+        self._physics_frames_left = 0
         # Motores locales intrarrama: tree_id → engine en coords del padre
         self._physics_local: dict[str, PhysicsEngine] = {}
         self._physics_timer = QTimer(self)
@@ -1829,16 +1993,110 @@ class GraphCanvasView(QGraphicsView):
         self._atmosphere = CanvasAtmosphere(self, ctx=None, count=11)
 
     def drawBackground(self, painter, rect):  # noqa: N802 (Qt API)
+        if not _PERF_LOG:
+            super().drawBackground(painter, rect)  # viñeta cálida
+            self._atmosphere.paint(painter)
+            return
+        t0 = time.perf_counter()
         super().drawBackground(painter, rect)  # viñeta cálida
         self._atmosphere.paint(painter)
+        self._perf_bg = getattr(self, "_perf_bg", 0.0) + (time.perf_counter() - t0) * 1000.0
+
+    # UX31: transición entre vistas DENTRO del viewport (drawForeground), porque el
+    # viewport GPU pinta por encima de cualquier overlay hermano. Un velo de pergamino
+    # se desvanece sobre el lienzo al revelar la vista. Fail-soft.
+    def play_reveal(self, *, duration_ms: int = 220) -> None:
+        try:
+            self._reveal_alpha = 1.0
+            self._reveal_step = TICK_INTERVAL / max(1, int(duration_ms))
+            timer = getattr(self, "_reveal_timer", None)
+            if timer is None:
+                timer = QTimer(self)
+                timer.setInterval(TICK_INTERVAL)
+                timer.timeout.connect(self._reveal_tick)
+                self._reveal_timer = timer
+            if not timer.isActive():
+                timer.start()
+            self.viewport().update()
+        except Exception:  # noqa: BLE001 — el pulido nunca rompe el cambio de vista
+            self._reveal_alpha = 0.0
+
+    def _reveal_tick(self) -> None:
+        self._reveal_alpha = getattr(self, "_reveal_alpha", 0.0) - getattr(
+            self, "_reveal_step", 0.2
+        )
+        if self._reveal_alpha <= 0.0:
+            self._reveal_alpha = 0.0
+            timer = getattr(self, "_reveal_timer", None)
+            if timer is not None:
+                timer.stop()
+        self.viewport().update()
+
+    def drawForeground(self, painter, rect):  # noqa: N802 (Qt API)
+        super().drawForeground(painter, rect)
+        alpha = getattr(self, "_reveal_alpha", 0.0)
+        if alpha > 0.0:
+            painter.save()
+            painter.resetTransform()  # device coords: cubre el viewport entero
+            veil = QColor("#E6DFCD")  # pergamino del lienzo
+            veil.setAlphaF(max(0.0, min(1.0, alpha)))
+            painter.fillRect(self.viewport().rect(), veil)
+            painter.restore()
+
+    def paintEvent(self, event):  # noqa: N802 (Qt API)
+        if not _PERF_LOG:
+            super().paintEvent(event)
+            return
+        t0 = time.perf_counter()
+        super().paintEvent(event)
+        dt = (time.perf_counter() - t0) * 1000.0
+        self._perf_n = getattr(self, "_perf_n", 0) + 1
+        self._perf_sum = getattr(self, "_perf_sum", 0.0) + dt
+        self._perf_max = max(getattr(self, "_perf_max", 0.0), dt)
+        now = time.perf_counter()
+        last = getattr(self, "_perf_last", None)
+        if last is None:
+            self._perf_last = now
+        elif now - last >= 1.0:
+            n = self._perf_n
+            avg = self._perf_sum / max(1, n)
+            bg = getattr(self, "_perf_bg", 0.0) / max(1, n)
+            gl = type(self.viewport()).__name__
+            phys = "ON" if self._physics_timer.isActive() else "off"
+            dpr = self.devicePixelRatioF()
+            vp = self.viewport()
+            print(
+                f"[PERF] paints/s={n} avg={avg:.1f}ms "
+                f"(fondo={bg:.1f}ms items={avg - bg:.1f}ms) max={self._perf_max:.1f}ms "
+                f"viewport={gl} {vp.width()}x{vp.height()} dpr={dpr:.2f} "
+                f"fisica={phys} nodos={len(self._nodes)}",
+                flush=True,
+            )
+            self._perf_n = 0
+            self._perf_sum = 0.0
+            self._perf_max = 0.0
+            self._perf_bg = 0.0
+            self._perf_last = now
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
         super().showEvent(event)
-        self._atmosphere.start()
+        self._apply_atmosphere_budget()
 
     def hideEvent(self, event):  # noqa: N802 (Qt API)
         self._atmosphere.stop()
         super().hideEvent(event)
+
+    def _apply_atmosphere_budget(self) -> None:
+        """BETA1-L01: pausa la brisa de fondo en grafos grandes. Su timer fuerza
+        un repintado COMPLETO del viewport ~18 veces/seg; con cientos de nodos eso
+        redibuja todo el grafo de forma continua (causa de lentitud permanente,
+        independiente de la física). Decorativa → se sacrifica a partir del umbral."""
+        if not self.isVisible():
+            return
+        if len(self._nodes) + len(self._trees) > ATMOSPHERE_MAX_ITEMS:
+            self._atmosphere.stop()
+        else:
+            self._atmosphere.start()
 
     def selected_entity_ids(self) -> list[str]:
         return list(self._selected_entity_ids)
@@ -1884,25 +2142,58 @@ class GraphCanvasView(QGraphicsView):
         if emit:
             self._emit_selection_changed()
 
-    def wheelEvent(self, event):
-        """Smooth bounded zoom under mouse.
+    def _fit_scale(self) -> float:
+        """Escala que enmarca TODO el contenido en el viewport (con un poco de
+        aire). Base del suelo de zoom-out adaptativo y de 'ver todo'."""
+        rect = self.scene_obj.itemsBoundingRect()
+        vp = self.viewport()
+        if rect.isEmpty() or vp.width() < 8 or vp.height() < 8:
+            return _ZOOM_OUT_FLOOR
+        sx = vp.width() / (rect.width() * 1.15)
+        sy = vp.height() / (rect.height() * 1.15)
+        return max(0.002, min(sx, sy))
 
-        Keeps camera movement predictable: small steps, no accidental infinite zoom,
-        and immediate feedback on every wheel gesture.
-        """
+    def _min_zoom(self) -> float:
+        """Suelo de alejamiento: nunca más restrictivo que el histórico (0.22),
+        pero en grafos enormes baja hasta poder enmarcar el conjunto."""
+        return min(_ZOOM_OUT_FLOOR, self._fit_scale() * 0.9)
+
+    def wheelEvent(self, event):
+        """Smooth bounded zoom under mouse. BETA1-L02: el suelo de alejamiento es
+        dinámico, así que en grafos grandes se puede volver al panorama."""
         current = self.transform().m11()
         if event.angleDelta().y() > 0:
-            factor = 1.08
-            if current >= 3.0:
+            if current >= _ZOOM_MAX:
                 event.accept()
                 return
+            factor = _ZOOM_STEP
         else:
-            factor = 1 / 1.08
-            if current <= 0.22:
+            if current <= self._min_zoom():
                 event.accept()
                 return
+            factor = 1 / _ZOOM_STEP
         self.scale(factor, factor)
         event.accept()
+
+    def _zoom_by(self, factor: float) -> None:
+        """Zoom anclado al CENTRO del viewport (para botones/atajos), acotado."""
+        current = self.transform().m11()
+        target = max(self._min_zoom(), min(_ZOOM_MAX, current * factor))
+        if abs(target - current) < 1e-6:
+            return
+        anchor = self.transformationAnchor()
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.scale(target / current, target / current)
+        self.setTransformationAnchor(anchor)
+
+    def zoom_in(self) -> None:
+        self._zoom_by(_ZOOM_STEP)
+
+    def zoom_out(self) -> None:
+        self._zoom_by(1 / _ZOOM_STEP)
+
+    # 'Ver todo' (fit_all) y reset_view ya existen más abajo en esta clase; los
+    # atajos de teclado y los botones flotantes (L02) los reutilizan.
 
     def _item_node_at(self, view_pos) -> GraphNodeItem | GraphTreeItem | None:
         """Find a GraphNodeItem or GraphTreeItem under *view_pos*, ignoring drag overlays."""
@@ -2044,7 +2335,9 @@ class GraphCanvasView(QGraphicsView):
         item = self._nodes.get(entity_id) or self._trees.get(entity_id)
         if item is None:
             return None
-        while item.parentItem() is not None and isinstance(item.parentItem(), (GraphNodeItem, GraphTreeItem)):
+        while item.parentItem() is not None and isinstance(
+            item.parentItem(), (GraphNodeItem, GraphTreeItem)
+        ):
             item = item.parentItem()
         return item
 
@@ -2054,7 +2347,8 @@ class GraphCanvasView(QGraphicsView):
         Capas explícitas reales desde _node_ring_ids (excluyendo la
         asignación sintética a 'Sin clasificar') y herencia por _membership."""
         explicit = {
-            eid: rid for eid, rid in self._node_ring_ids.items()
+            eid: rid
+            for eid, rid in self._node_ring_ids.items()
             if rid and rid != UNCLASSIFIED_RING_ID
         }
         return resolve_effective_ring_id(
@@ -2102,16 +2396,18 @@ class GraphCanvasView(QGraphicsView):
                     band_inner = inner + min(extent, (outer - inner) / 2.0 - 1.0)
                     band_outer = max(band_inner, outer - min(extent, (outer - inner) / 2.0 - 1.0))
             child_count = len(getattr(item, "_child_nodes", []) or [])
-            bodies.append(Body(
-                body_id=entity_id,
-                x=center.x(),
-                y=center.y(),
-                mass=1.0 + 0.2 * child_count,
-                radius=extent + 18.0,
-                target_radius=target,
-                band_inner=band_inner,
-                band_outer=band_outer,
-            ))
+            bodies.append(
+                Body(
+                    body_id=entity_id,
+                    x=center.x(),
+                    y=center.y(),
+                    mass=1.0 + 0.2 * child_count,
+                    radius=extent + 18.0,
+                    target_radius=target,
+                    band_inner=band_inner,
+                    band_outer=band_outer,
+                )
+            )
         # SEM04: semillas-job vivas como cuerpos orbitadores (solo concéntrico).
         # Mantienen velocidad tangencial (orbit_speed) → orbitan su corona y su
         # repulsión empuja a los vecinos (grafo vivo) sin asentarse.
@@ -2170,20 +2466,29 @@ class GraphCanvasView(QGraphicsView):
                 )
                 cid = child.node.entity_id
                 child_ids[cid] = child
-                center_x = child.pos().x() + (child.boundingRect().center().x() if isinstance(child, GraphTreeItem) else 0.0)
-                center_y = child.pos().y() + (child.boundingRect().center().y() if isinstance(child, GraphTreeItem) else 0.0)
-                bodies.append(Body(
-                    body_id=cid,
-                    x=center_x,
-                    y=center_y,
-                    radius=extent + 12.0,
-                    bounds=(
-                        rect.left() + extent + 10.0,
-                        rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0,
-                        max(rect.left() + extent + 10.0, rect.right() - extent - 10.0),
-                        max(rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0, rect.bottom() - extent - 10.0),
-                    ),
-                ))
+                center_x = child.pos().x() + (
+                    child.boundingRect().center().x() if isinstance(child, GraphTreeItem) else 0.0
+                )
+                center_y = child.pos().y() + (
+                    child.boundingRect().center().y() if isinstance(child, GraphTreeItem) else 0.0
+                )
+                bodies.append(
+                    Body(
+                        body_id=cid,
+                        x=center_x,
+                        y=center_y,
+                        radius=extent + 12.0,
+                        bounds=(
+                            rect.left() + extent + 10.0,
+                            rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0,
+                            max(rect.left() + extent + 10.0, rect.right() - extent - 10.0),
+                            max(
+                                rect.top() + _CONTAINER_HEADER_HEIGHT + extent + 10.0,
+                                rect.bottom() - extent - 10.0,
+                            ),
+                        ),
+                    )
+                )
             springs: list[Spring] = []
             for edge_item in self._edges:
                 a = edge_item.edge.source_id
@@ -2202,9 +2507,7 @@ class GraphCanvasView(QGraphicsView):
         for body_id, body in engine.bodies.items():
             if body.pinned:
                 continue  # el hijo arrastrado lo lleva el usuario
-            child = next(
-                (c for c in tree._child_nodes if c.node.entity_id == body_id), None
-            )
+            child = next((c for c in tree._child_nodes if c.node.entity_id == body_id), None)
             if child is None or not child.isVisible():
                 continue
             if isinstance(child, GraphTreeItem):
@@ -2262,7 +2565,11 @@ class GraphCanvasView(QGraphicsView):
             current = item.sceneBoundingRect().center()
             dx = body.x - current.x()
             dy = body.y - current.y()
-            if abs(dx) > 0.01 or abs(dy) > 0.01:
+            # BETA1-L01: deadband de 0.5px (antes 0.01). Cada moveBy dispara
+            # itemChange en cascada + recálculo de las aristas conectadas; mover por
+            # desplazamientos sub-píxel (cola del asentamiento) es coste Qt puro
+            # imperceptible. Cortarlo reduce drásticamente el trabajo por frame.
+            if abs(dx) > 0.5 or abs(dy) > 0.5:
                 item.moveBy(dx, dy)
         # SEM04: sincronizar TODAS las semillas vivas (job + candidatos) con su
         # cuerpo orbitador (items top-level, no van por moveBy/_nodes).
@@ -2272,12 +2579,30 @@ class GraphCanvasView(QGraphicsView):
             energy += self._apply_local_physics(tree_id, local_engine)
         # BETA1-UX feedback: los anillos se reajustan EN VIVO (fluido, como la
         # física), no al soltar. Guardado por delta + sin rebuild de física.
-        if self._layout_mode_active == "concentric_rings":
+        # BETA1-L01: "modo rendimiento" en grafos grandes. El recálculo de
+        # spans por frame es O(n); por encima del umbral se omite (los anillos
+        # se reajustan solo al asentarse, abajo) y la física hace una ráfaga
+        # ACOTADA en vez de correr en vivo indefinidamente tras cada cambio.
+        large = len(self._physics_engine.bodies) > PHYSICS_LIVE_MAX_BODIES
+        if self._layout_mode_active == "concentric_rings" and not large:
             self._maybe_live_refresh_spans()
-        if energy < self._physics_engine.min_energy and moving is None and not self._has_live_seed():
-            # Auto-stop: converged (nunca durante un drag — el elemento en
-            # mano debe seguir provocando reacción; ni mientras haya semilla
-            # viva orbitando — job o candidato en revisión: el grafo respira).
+        # Mientras se arrastra, recargar el presupuesto: tras soltar, el grafo
+        # dispone de una ráfaga completa para reacomodarse antes de congelarse.
+        budget_exhausted = False
+        if moving is not None:
+            self._physics_frames_left = PHYSICS_SETTLE_FRAME_BUDGET
+        elif large and not self._has_live_seed():
+            self._physics_frames_left -= 1
+            budget_exhausted = self._physics_frames_left <= 0
+        settled = (
+            energy < self._physics_engine.min_energy
+            and moving is None
+            and not self._has_live_seed()
+        )
+        if settled or budget_exhausted:
+            # Auto-stop: convergencia por energía o fin del presupuesto (nunca
+            # durante un drag — el elemento en mano debe seguir provocando
+            # reacción; ni mientras haya semilla viva orbitando).
             self._physics_timer.stop()
             # BETA1-C03: con el grafo en reposo, los anillos se re-ajustan
             # alrededor del contenido (throttled: solo al estabilizarse,
@@ -2295,6 +2620,9 @@ class GraphCanvasView(QGraphicsView):
         self._physics_engine.reheat()
         for local_engine in self._physics_local.values():
             local_engine.reheat()
+        # BETA1-L01: recargar el presupuesto de asentamiento. En grafos grandes
+        # acota la ráfaga (autofreeze); en pequeños es irrelevante (paran por energía).
+        self._physics_frames_left = PHYSICS_SETTLE_FRAME_BUDGET
         if not self._physics_timer.isActive():
             self._physics_timer.start()
 
@@ -2331,6 +2659,45 @@ class GraphCanvasView(QGraphicsView):
             self._handle_escape()
             event.accept()
             return
+        # BETA1-L02: navegación por teclado. +/= acercar, -/_ alejar, F/Inicio ver todo.
+        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self.zoom_in()
+            event.accept()
+            return
+        if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+            self.zoom_out()
+            event.accept()
+            return
+        if key in (Qt.Key.Key_F, Qt.Key.Key_Home):
+            self.reset_to_panorama()  # BETA1-L02c: F SIEMPRE restaura (quita foco + encuadra)
+            event.accept()
+            return
+        # BETA1-L02b: barra de búsqueda flotante (no abre el drawer); el workspace
+        # la muestra y le da el foco. Funciona en cualquier vista.
+        if key == Qt.Key.Key_D:
+            self.searchRequested.emit()
+            event.accept()
+            return
+        # BETA1-L02: saltar entre anillos contiguos (solo en vista concéntrica).
+        # [ = hacia dentro (anterior), ] = hacia fuera (siguiente).
+        if self._layout_mode_active == "concentric_rings":
+            if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BraceLeft):
+                self.focus_adjacent_ring(-1)
+                event.accept()
+                return
+            if key in (Qt.Key.Key_BracketRight, Qt.Key.Key_BraceRight):
+                self.focus_adjacent_ring(1)
+                event.accept()
+                return
+            # BETA1-L02b: teclas 1…9 → anillo 1..9 (índice 0..8); 0 → anillo 10º.
+            if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+                if self.focus_ring_by_index(key - Qt.Key.Key_1):
+                    event.accept()
+                    return
+            elif key == Qt.Key.Key_0:
+                if self.focus_ring_by_index(9):
+                    event.accept()
+                    return
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event):
@@ -2364,10 +2731,7 @@ class GraphCanvasView(QGraphicsView):
             parts.append(f"{len(entity_ids)} elemento(s)")
         if relation_ids:
             parts.append(f"{len(relation_ids)} relación(es)")
-        message = (
-            f"¿Eliminar {' y '.join(parts)}?\n"
-            "Esta acción no se puede deshacer."
-        )
+        message = f"¿Eliminar {' y '.join(parts)}?\nEsta acción no se puede deshacer."
         result = QMessageBox.question(
             self,
             "Confirmar eliminación",
@@ -2447,10 +2811,18 @@ class GraphCanvasView(QGraphicsView):
         menu.addSeparator()
         ai_menu = QMenu("IA sobre seleccion", menu)
         menu.addMenu(ai_menu)
-        ai_menu.addAction("Sugerir hojas", lambda: self.contextAIActionRequested.emit("suggest_nodes"))
-        ai_menu.addAction("Sugerir ramas", lambda: self.contextAIActionRequested.emit("suggest_branches"))
-        ai_menu.addAction("Sugerir relaciones", lambda: self.contextAIActionRequested.emit("suggest_relations"))
-        ai_menu.addAction("Analizar coherencia", lambda: self.contextAIActionRequested.emit("analyze_coherence"))
+        ai_menu.addAction(
+            "Sugerir hojas", lambda: self.contextAIActionRequested.emit("suggest_nodes")
+        )
+        ai_menu.addAction(
+            "Sugerir ramas", lambda: self.contextAIActionRequested.emit("suggest_branches")
+        )
+        ai_menu.addAction(
+            "Sugerir relaciones", lambda: self.contextAIActionRequested.emit("suggest_relations")
+        )
+        ai_menu.addAction(
+            "Analizar coherencia", lambda: self.contextAIActionRequested.emit("analyze_coherence")
+        )
 
     def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
         entity_id = item.node.entity_id
@@ -2471,7 +2843,9 @@ class GraphCanvasView(QGraphicsView):
             for tree_id, tree_name in targets:
                 move_menu.addAction(
                     tree_name,
-                    lambda _=False, tid=tree_id: self.nodeAssignToTreeRequested.emit(entity_id, tid),
+                    lambda _=False, tid=tree_id: self.nodeAssignToTreeRequested.emit(
+                        entity_id, tid
+                    ),
                 )
         else:
             empty = move_menu.addAction("Sin ramas disponibles")
@@ -2484,7 +2858,9 @@ class GraphCanvasView(QGraphicsView):
             for ring_id, ring_name in ring_targets:
                 ring_menu.addAction(
                     ring_name,
-                    lambda _=False, rid=ring_id: self.nodeAssignToRingRequested.emit(entity_id, rid),
+                    lambda _=False, rid=ring_id: self.nodeAssignToRingRequested.emit(
+                        entity_id, rid
+                    ),
                 )
         else:
             ring_action = menu.addAction("Mover a anillo")
@@ -2605,6 +2981,10 @@ class GraphCanvasView(QGraphicsView):
         self._start_relation_drag(source)
 
     def mousePressEvent(self, event):
+        # BETA1-L02c: cualquier clic en el lienzo reclama el foco de teclado, para
+        # que los atajos (1…0, F, [ ], d) funcionen también desde la panorámica sin
+        # tener que enfocar un anillo antes.
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         # BETA1-B02: in space-pan mode the view is non-interactive and the
         # native ScrollHandDrag must receive the press untouched (no
         # selection, no relation logic).
@@ -2627,7 +3007,9 @@ class GraphCanvasView(QGraphicsView):
                 if target is None:
                     self.relationCreateRejected.emit("Relación cancelada")
                 elif target is source:
-                    self.relationCreateRejected.emit("No se puede crear una relación sobre el mismo elemento")
+                    self.relationCreateRejected.emit(
+                        "No se puede crear una relación sobre el mismo elemento"
+                    )
                 else:
                     self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
                 event.accept()
@@ -2815,7 +3197,9 @@ class GraphCanvasView(QGraphicsView):
             self._finish_relation_drag(target)
             if target is not None:
                 if target is source:
-                    self.relationCreateRejected.emit("No se puede crear una relación sobre el mismo elemento")
+                    self.relationCreateRejected.emit(
+                        "No se puede crear una relación sobre el mismo elemento"
+                    )
                 else:
                     self.relationCreateRequested.emit(source.node.entity_id, target.node.entity_id)
             else:
@@ -2834,19 +3218,21 @@ class GraphCanvasView(QGraphicsView):
             self._drop_highlight_tree = None
         if moving is not None and event.button() == Qt.MouseButton.LeftButton:
             super().mouseReleaseEvent(event)  # let Qt close the move grab
+            # BETA1-K01: _handle_move_drop puede emitir una señal que reconstruye
+            # la escena (refresh → set_graph) y destruir `moving`; capturamos id y
+            # posición ANTES de soltar para no tocar un objeto C++ ya borrado.
+            moved_entity_id = moving.node.entity_id
             if moving.scenePos() != self._move_origin_scene:
+                center = moving.sceneBoundingRect().center()
                 self._handle_move_drop(moving, event.position())
                 # BETA1-C02: adopt the user's placement and wake physics
                 if self._physics_enabled:
-                    center = moving.sceneBoundingRect().center()
-                    self._physics_engine.sync_position(
-                        moving.node.entity_id, center.x(), center.y()
-                    )
+                    self._physics_engine.sync_position(moved_entity_id, center.x(), center.y())
                     self._physics_reheat()
             elif not self._suppress_release_click:
                 # BETA1-G06: no se movió → fue un click. Abre el panel de
                 # detalle de la hoja/rama (el doble click suprime esta rama).
-                self.entitySelected.emit(moving.node.entity_id)
+                self.entitySelected.emit(moved_entity_id)
             self._suppress_release_click = False
             self._pressed_edge_id = ""
             return
@@ -2909,7 +3295,11 @@ class GraphCanvasView(QGraphicsView):
         for item in self.items(view_pos.toPoint()):
             check = item
             while check is not None:
-                if isinstance(check, GraphTreeItem) and check is not moved and check not in ancestors:
+                if (
+                    isinstance(check, GraphTreeItem)
+                    and check is not moved
+                    and check not in ancestors
+                ):
                     return check
                 check = check.parentItem()
         return None
@@ -2927,7 +3317,9 @@ class GraphCanvasView(QGraphicsView):
         self.scene_obj.addItem(line)
         source.set_drag_highlight(True)
 
-    def _update_relation_drag(self, scene_pos: QPointF, target: GraphNodeItem | GraphTreeItem | None):
+    def _update_relation_drag(
+        self, scene_pos: QPointF, target: GraphNodeItem | GraphTreeItem | None
+    ):
         if self._drag_source is None or self._drag_line is None:
             return
         start = self._drag_source.scenePos()
@@ -3069,7 +3461,9 @@ class GraphCanvasView(QGraphicsView):
         parent_node = next((node for node in self._all_nodes if node.entity_id == parent_id), None)
         parent_name = parent_node.name if parent_node is not None else "Árbol"
         parent_item = self._trees.get(parent_id)
-        collapsed = bool(getattr(parent_item, "_collapsed", False)) if parent_item is not None else False
+        collapsed = (
+            bool(getattr(parent_item, "_collapsed", False)) if parent_item is not None else False
+        )
         return parent_id, parent_name, collapsed
 
     def _node_exists_at_view_year(self, node: _NodeView) -> bool:
@@ -3088,7 +3482,9 @@ class GraphCanvasView(QGraphicsView):
             return True
         return interval_contains_year(edge.birth_year, edge.death_year, self._view_year)
 
-    def _temporal_snapshot(self, nodes: list[_NodeView], edges: list[_EdgeView]) -> tuple[list[_NodeView], list[_EdgeView]]:
+    def _temporal_snapshot(
+        self, nodes: list[_NodeView], edges: list[_EdgeView]
+    ) -> tuple[list[_NodeView], list[_EdgeView]]:
         """BETA1-G06: aplica SOLO la cámara temporal (sin filtros visuales).
 
         Se usa en la rama de foco de anillo, que omite ``_filtered_graph``."""
@@ -3097,8 +3493,11 @@ class GraphCanvasView(QGraphicsView):
         fnodes = [node for node in nodes if self._node_exists_at_view_year(node)]
         visible = {node.entity_id for node in fnodes}
         fedges = [
-            edge for edge in edges
-            if edge.source_id in visible and edge.target_id in visible and self._edge_exists_at_view_year(edge)
+            edge
+            for edge in edges
+            if edge.source_id in visible
+            and edge.target_id in visible
+            and self._edge_exists_at_view_year(edge)
         ]
         return fnodes, fedges
 
@@ -3119,7 +3518,9 @@ class GraphCanvasView(QGraphicsView):
     def view_year(self) -> int | None:
         return self._view_year
 
-    def _node_passes_filter(self, node: _NodeView, allowed_tree_ids: set[str] | None = None) -> bool:
+    def _node_passes_filter(
+        self, node: _NodeView, allowed_tree_ids: set[str] | None = None
+    ) -> bool:
         vf = self._visual_filter
         if not self._node_exists_at_view_year(node):
             return False
@@ -3153,15 +3554,23 @@ class GraphCanvasView(QGraphicsView):
             return False
         return True
 
-    def _filtered_graph(self, nodes: list[_NodeView], edges: list[_EdgeView]) -> tuple[list[_NodeView], list[_EdgeView]]:
+    def _filtered_graph(
+        self, nodes: list[_NodeView], edges: list[_EdgeView]
+    ) -> tuple[list[_NodeView], list[_EdgeView]]:
         # Build membership from the full edge set before applying visual filters.
-        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        self._membership = {
+            edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"
+        }
         tree_scope: set[str] | None = None
         if self._visual_filter.tree_id:
-            tree_scope = {self._visual_filter.tree_id} | self._descendant_ids_for_tree(self._visual_filter.tree_id)
+            tree_scope = {self._visual_filter.tree_id} | self._descendant_ids_for_tree(
+                self._visual_filter.tree_id
+            )
         filtered_nodes = [node for node in nodes if self._node_passes_filter(node, tree_scope)]
         visible_node_ids = {node.entity_id for node in filtered_nodes}
-        filtered_edges = [edge for edge in edges if self._edge_passes_filter(edge, visible_node_ids)]
+        filtered_edges = [
+            edge for edge in edges if self._edge_passes_filter(edge, visible_node_ids)
+        ]
         return filtered_nodes, filtered_edges
 
     def clear_graph(self):
@@ -3218,11 +3627,19 @@ class GraphCanvasView(QGraphicsView):
         job y las candidatas en revisión. El candidato orbita igual que la
         semilla que lo engendró (no queda estático)."""
         for job_id, data in self._job_seeds.items():
-            yield f"__seed__{job_id}", data.get("ring_id", ""), self._seed_items.get(f"job:{job_id}")
+            yield (
+                f"__seed__{job_id}",
+                data.get("ring_id", ""),
+                self._seed_items.get(f"job:{job_id}"),
+            )
         for cid, data in self._candidate_seed_data.items():
             if data.get("mode") != "candidate":
                 continue
-            yield f"__seed__cand__{cid}", data.get("ring_id", ""), self._seed_items.get(f"cand:{cid}")
+            yield (
+                f"__seed__cand__{cid}",
+                data.get("ring_id", ""),
+                self._seed_items.get(f"cand:{cid}"),
+            )
 
     def _build_seed_body(self, body_id, ring_id, item, ring_bands):
         """Construye el cuerpo orbitador de una semilla en la banda de su anillo
@@ -3354,9 +3771,7 @@ class GraphCanvasView(QGraphicsView):
             anchor = self._seed_anchor(ring_id)
             radius = None
             angle = (
-                math.atan2(anchor.y(), anchor.x())
-                if (anchor.x() or anchor.y())
-                else math.pi / 2.0
+                math.atan2(anchor.y(), anchor.x()) if (anchor.x() or anchor.y()) else math.pi / 2.0
             )
             rid = ""
         self._job_seeds[job_id] = {
@@ -3519,11 +3934,17 @@ class GraphCanvasView(QGraphicsView):
     def _layer_for_node(self, node: _NodeView, layers_by_id: dict[str, Any]):
         return layers_by_id.get(node.layer_id or "")
 
-    def _set_graph_by_layers(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]):
+    def _set_graph_by_layers(
+        self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]
+    ):
         self.clear_graph()
         if not nodes:
             return
-        visible_layers = [layer for layer in sort_layers_by_causal_rank(layers or []) if getattr(layer, "is_visible", True) and get_causal_rank(layer) is not None]
+        visible_layers = [
+            layer
+            for layer in sort_layers_by_causal_rank(layers or [])
+            if getattr(layer, "is_visible", True) and get_causal_rank(layer) is not None
+        ]
         layers_by_id = {str(getattr(layer, "id", "")): layer for layer in visible_layers}
         layer_ids_with_nodes = {n.layer_id for n in nodes if n.layer_id}
         if not visible_layers:
@@ -3545,7 +3966,9 @@ class GraphCanvasView(QGraphicsView):
             self.scene_obj.addItem(rect)
             label = QGraphicsSimpleTextItem(str(getattr(layer, "name", "Capa")))
             label.setBrush(QBrush(QColor("#6F6A42")))
-            font = QFont(); font.setBold(True); font.setPointSize(10)
+            font = QFont()
+            font.setBold(True)
+            font.setPointSize(10)
             label.setFont(font)
             label.setPos(x0 + 18, y - band_h / 2 + 18)
             label.setZValue(-49)
@@ -3583,7 +4006,9 @@ class GraphCanvasView(QGraphicsView):
                     item = GraphNodeItem(node, x=x, y=y)
                 self.scene_obj.addItem(item)
                 self._nodes[node.entity_id] = item  # type: ignore[assignment]
-        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        self._membership = {
+            edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"
+        }
         seen_edge_ids: set[str] = set()
         for edge in edges:
             edge_id = getattr(edge, "relation_id", "")
@@ -3628,7 +4053,12 @@ class GraphCanvasView(QGraphicsView):
         if child_count <= 0:
             # Fallback for callers without containment info
             entity = getattr(node, "entity", None)
-            child_ids = list(getattr(entity, "child_entity_ids", []) or getattr(entity, "children_ids", []) or getattr(entity, "entity_ids", []) or [])
+            child_ids = list(
+                getattr(entity, "child_entity_ids", [])
+                or getattr(entity, "children_ids", [])
+                or getattr(entity, "entity_ids", [])
+                or []
+            )
             child_count = len(child_ids)
         if child_count <= 0:
             return _CONTAINER_MIN_WIDTH
@@ -3636,8 +4066,14 @@ class GraphCanvasView(QGraphicsView):
         # therefore its ring) must reserve room for them with slack.
         cols = max(1, min(4, math.ceil(math.sqrt(child_count))))
         rows = math.ceil(child_count / cols)
-        estimated_width = max(_CONTAINER_MIN_WIDTH, cols * 152.0 + (cols - 1) * _CONTAINER_CHILD_SPACING + _CONTAINER_PADDING * 2)
-        estimated_height = max(_CONTAINER_MIN_HEIGHT, _CONTAINER_HEADER_HEIGHT + rows * 132.0 + (rows - 1) * 32.0 + _CONTAINER_PADDING)
+        estimated_width = max(
+            _CONTAINER_MIN_WIDTH,
+            cols * 152.0 + (cols - 1) * _CONTAINER_CHILD_SPACING + _CONTAINER_PADDING * 2,
+        )
+        estimated_height = max(
+            _CONTAINER_MIN_HEIGHT,
+            _CONTAINER_HEADER_HEIGHT + rows * 132.0 + (rows - 1) * 32.0 + _CONTAINER_PADDING,
+        )
         return max(estimated_width, estimated_height)
 
     def _build_concentric_ring_visuals(
@@ -3652,9 +4088,21 @@ class GraphCanvasView(QGraphicsView):
         Uses WorldLayer/Anillo instances already present in the project. No
         persistence or canon mutation is performed here.
         """
-        visible_layers = [layer for layer in sort_layers_by_causal_rank(layers or []) if getattr(layer, "is_visible", True)]
-        layer_by_id = {str(getattr(layer, "id", "")): layer for layer in visible_layers if str(getattr(layer, "id", ""))}
-        ordered_ring_ids = [str(getattr(layer, "id", "")) for layer in visible_layers if str(getattr(layer, "id", ""))]
+        visible_layers = [
+            layer
+            for layer in sort_layers_by_causal_rank(layers or [])
+            if getattr(layer, "is_visible", True)
+        ]
+        layer_by_id = {
+            str(getattr(layer, "id", "")): layer
+            for layer in visible_layers
+            if str(getattr(layer, "id", ""))
+        }
+        ordered_ring_ids = [
+            str(getattr(layer, "id", ""))
+            for layer in visible_layers
+            if str(getattr(layer, "id", ""))
+        ]
 
         node_ring_ids: dict[str, str] = {}
         node_ids_by_ring: dict[str, list[str]] = {ring_id: [] for ring_id in ordered_ring_ids}
@@ -3743,25 +4191,35 @@ class GraphCanvasView(QGraphicsView):
 
             relation_count = len(relation_ids)
             count_label = f"{leaf_count} hojas · {branch_count} ramas · {relation_count} relaciones"
-            state = "focused" if self._focused_ring_id and ring_id == self._focused_ring_id else "normal"
-            visuals.append(_RingVisual(
-                ring_id=ring_id,
-                display_name=display_name,
-                causal_rank=rank,
-                color=color,
-                inner_radius=inner,
-                outer_radius=outer,
-                item_ids=item_ids,
-                relation_ids=relation_ids,
-                count_label=count_label,
-                state=state,
-            ))
+            state = (
+                "focused"
+                if self._focused_ring_id and ring_id == self._focused_ring_id
+                else "normal"
+            )
+            visuals.append(
+                _RingVisual(
+                    ring_id=ring_id,
+                    display_name=display_name,
+                    causal_rank=rank,
+                    color=color,
+                    inner_radius=inner,
+                    outer_radius=outer,
+                    item_ids=item_ids,
+                    relation_ids=relation_ids,
+                    count_label=count_label,
+                    state=state,
+                )
+            )
             previous_outer = outer
         return visuals, node_ring_ids
 
     def _draw_ring_background(self, ring: _RingVisual):
-        outer_rect = QRectF(-ring.outer_radius, -ring.outer_radius, ring.outer_radius * 2, ring.outer_radius * 2)
-        inner_rect = QRectF(-ring.inner_radius, -ring.inner_radius, ring.inner_radius * 2, ring.inner_radius * 2)
+        outer_rect = QRectF(
+            -ring.outer_radius, -ring.outer_radius, ring.outer_radius * 2, ring.outer_radius * 2
+        )
+        inner_rect = QRectF(
+            -ring.inner_radius, -ring.inner_radius, ring.inner_radius * 2, ring.inner_radius * 2
+        )
         outer_path = QPainterPath()
         outer_path.addEllipse(outer_rect)
         inner_path = QPainterPath()
@@ -3818,7 +4276,9 @@ class GraphCanvasView(QGraphicsView):
         label = QGraphicsSimpleTextItem(_fit_text(label_text, 48), item)
         label.setBrush(QBrush(QColor("#5F5A3D")))
         label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        font = QFont(); font.setBold(True); font.setPointSize(10)
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(10)
         label.setFont(font)
         lrect = label.boundingRect()
         pad_x, pad_y = 11.0, 4.0
@@ -3828,7 +4288,8 @@ class GraphCanvasView(QGraphicsView):
         pill_path = QPainterPath()
         pill_path.addRoundedRect(QRectF(-pill_w / 2, top_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
         pill = QGraphicsPathItem(pill_path, item)
-        pill_fill = QColor("#FBF8EF"); pill_fill.setAlpha(236)
+        pill_fill = QColor("#FBF8EF")
+        pill_fill.setAlpha(236)
         pill.setBrush(QBrush(pill_fill))
         pill.setPen(QPen(QColor("#D2CAB1"), 1.0))
         pill.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
@@ -3837,7 +4298,9 @@ class GraphCanvasView(QGraphicsView):
         label.setPos(-lrect.width() / 2, top_y + pad_y)
         label.setZValue(10)
 
-    def _layout_concentric_rings(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]) -> bool:
+    def _layout_concentric_rings(
+        self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]
+    ) -> bool:
         """BETA1-B03: (re)compute ring visuals from the REAL current item
         sizes, draw the ring backgrounds and place top-level items in their
         slots. Reused by the initial build and by reactive re-layouts
@@ -3869,7 +4332,9 @@ class GraphCanvasView(QGraphicsView):
         contained_set = {edge.target_id for edge in edges if edge.kind.lower() == "contiene"}
         nodes_by_id = {node.entity_id: node for node in nodes}
         for ring in self._ring_visuals:
-            ring_nodes = [nodes_by_id[item_id] for item_id in ring.item_ids if item_id in nodes_by_id]
+            ring_nodes = [
+                nodes_by_id[item_id] for item_id in ring.item_ids if item_id in nodes_by_id
+            ]
             slotted = [node for node in ring_nodes if node.entity_id not in contained_set]
             for idx, node in enumerate(slotted):
                 item = self._nodes.get(node.entity_id)
@@ -3984,7 +4449,11 @@ class GraphCanvasView(QGraphicsView):
         if not outers:
             return
         prev = getattr(self, "_last_span_outers", None)
-        if prev and len(prev) == len(outers) and all(abs(a - b) < 1.5 for a, b in zip(outers, prev)):
+        if (
+            prev
+            and len(prev) == len(outers)
+            and all(abs(a - b) < 1.5 for a, b in zip(outers, prev))
+        ):
             return  # estable: nada que redibujar
         self._refresh_ring_spans(rebuild_physics=False)
 
@@ -4024,7 +4493,9 @@ class GraphCanvasView(QGraphicsView):
                 continue
             child_ids = contains_map.get(container_id, set())
             leaf_ids = [eid for eid in child_ids if eid in self._nodes and eid not in self._trees]
-            nested_tree_ids = [eid for eid in child_ids if eid in self._trees and eid != container_id]
+            nested_tree_ids = [
+                eid for eid in child_ids if eid in self._trees and eid != container_id
+            ]
             tree_cx = tree._width / 2
             tree_cy = tree._height / 2
             child_radius = max(70, min(160, 50 * len(leaf_ids))) if leaf_ids else 70.0
@@ -4036,16 +4507,25 @@ class GraphCanvasView(QGraphicsView):
                 else:
                     angle = (2 * math.pi * index) / count
                     cx = tree_cx + math.cos(angle) * child_radius
-                    cy = tree_cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(angle) * child_radius * 0.5
+                    cy = (
+                        tree_cy
+                        + _CONTAINER_HEADER_HEIGHT
+                        + 60
+                        + math.sin(angle) * child_radius * 0.5
+                    )
                 item.setPos(cx, cy)
                 tree.add_child_node(item)  # type: ignore[arg-type]
             if nested_tree_ids:
-                nested_y = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if leaf_ids else 0)
+                nested_y = (
+                    _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if leaf_ids else 0)
+                )
                 for index, entity_id in enumerate(nested_tree_ids):
                     nested = self._trees[entity_id]
                     spread = max(1, len(nested_tree_ids))
                     width = nested._width
-                    nested.setPos(tree_cx + (index - (spread - 1) / 2) * (width + 30), tree_cy + nested_y)
+                    nested.setPos(
+                        tree_cx + (index - (spread - 1) / 2) * (width + 30), tree_cy + nested_y
+                    )
                     tree.add_child_node(nested)  # type: ignore[arg-type]
             if tree._child_nodes:
                 tree.resize_to_fit_children()
@@ -4060,7 +4540,9 @@ class GraphCanvasView(QGraphicsView):
             angle = -math.pi / 2 + reserved + (span * index / max(1, count - 1))
         return QPointF(math.cos(angle) * mid_radius, math.sin(angle) * mid_radius)
 
-    def _set_graph_by_concentric_rings(self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]):
+    def _set_graph_by_concentric_rings(
+        self, nodes: list[_NodeView], edges: list[_EdgeView], layers: list[Any]
+    ):
         _b44trace(
             "concentric_enter "
             f"nodes={len(nodes or [])} edges={len(edges or [])} layers={len(layers or [])} "
@@ -4069,16 +4551,32 @@ class GraphCanvasView(QGraphicsView):
         )
         self.clear_graph()
         if self._focused_ring_id:
-            all_visuals, all_node_ring_ids = self._build_concentric_ring_visuals(nodes, edges, layers or [])
-            focused = next((ring for ring in all_visuals if ring.ring_id == self._focused_ring_id), None)
+            all_visuals, all_node_ring_ids = self._build_concentric_ring_visuals(
+                nodes, edges, layers or []
+            )
+            focused = next(
+                (ring for ring in all_visuals if ring.ring_id == self._focused_ring_id), None
+            )
             if focused is None:
                 self._focused_ring_id = ""
             else:
-                focused_node_ids = {entity_id for entity_id, ring_id in all_node_ring_ids.items() if ring_id == focused.ring_id}
+                focused_node_ids = {
+                    entity_id
+                    for entity_id, ring_id in all_node_ring_ids.items()
+                    if ring_id == focused.ring_id
+                }
                 nodes = [node for node in nodes if node.entity_id in focused_node_ids]
-                edges = [edge for edge in edges if edge.source_id in focused_node_ids and edge.target_id in focused_node_ids]
+                edges = [
+                    edge
+                    for edge in edges
+                    if edge.source_id in focused_node_ids and edge.target_id in focused_node_ids
+                ]
                 if focused.ring_id != "__unclassified__":
-                    layers = [layer for layer in (layers or []) if str(getattr(layer, "id", "")) == focused.ring_id]
+                    layers = [
+                        layer
+                        for layer in (layers or [])
+                        if str(getattr(layer, "id", "")) == focused.ring_id
+                    ]
                 else:
                     layers = []
         # BETA1-B03 (reactive rings): create ALL items first at a provisional
@@ -4119,7 +4617,9 @@ class GraphCanvasView(QGraphicsView):
                 self.set_graph(nodes, edges, layout_mode="free", layers=layers)
             return
 
-        self._membership = {edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"}
+        self._membership = {
+            edge.target_id: edge.source_id for edge in edges if edge.kind.lower() == "contiene"
+        }
         seen_edge_ids: set[str] = set()
         for edge in edges:
             edge_id = getattr(edge, "relation_id", "")
@@ -4160,6 +4660,101 @@ class GraphCanvasView(QGraphicsView):
             f"nodes_drawn={len(self._nodes)} trees_drawn={len(self._trees)} edges_drawn={len(self._edges)} "
             f"scene_rect_valid={rect.isValid()} scene_rect_empty={rect.isEmpty()}"
         )
+
+    def try_incremental_refresh(
+        self,
+        nodes: list[_NodeView],
+        edges: list[_EdgeView],
+        *,
+        layer_mode: bool = False,
+        layout_mode: str | None = None,
+        layers: list[Any] | None = None,
+    ) -> bool:
+        """BETA1-L01: si el cambio es SOLO edición de atributos de hojas (mismos
+        ids, misma contención, mismas capas, sin filtros/focus/cámara temporal),
+        actualiza esos items in situ y devuelve True — evitando el rebuild total
+        O(N) de ``set_graph`` (~270ms con 1000 nodos). En CUALQUIER otro caso
+        (altas, bajas, cambio de layout/contención/contenedor, filtros activos)
+        devuelve False y el llamante hace ``set_graph`` completo. Conservador por
+        diseño: ante la duda, no toma el atajo."""
+        nodes = list(nodes or [])
+        edges = list(edges or [])
+        layers = list(layers or [])
+        if layout_mode is None:
+            layout_mode = "layered" if layer_mode else "free"
+        if layout_mode not in {"free", "layered", "concentric_rings"}:
+            layout_mode = "free"
+        # 1. Mismo layout activo y con algo ya dibujado.
+        if layout_mode != self._layout_mode_active or (not self._nodes and not self._trees):
+            return False
+        # 2. Sin filtros / focus de anillo / cámara temporal: lo dibujado == todo.
+        if self._view_year is not None or self._focused_ring_id:
+            return False
+        vf = self._visual_filter
+        if getattr(vf, "layer_ids", None) or getattr(vf, "focus_entity_ids", None):
+            return False
+
+        # 3. Mismas capas (afectan a bandas/anillos).
+        def _layer_ids(seq):
+            return [str(getattr(layer, "id", "")) for layer in seq]
+
+        if _layer_ids(layers) != _layer_ids(self._all_layers):
+            return False
+        # 4. Mismo conjunto de ids (altas/bajas → rebuild completo).
+        old_nodes = {n.entity_id: n for n in self._all_nodes}
+        new_nodes = {n.entity_id: n for n in nodes}
+        if set(old_nodes) != set(new_nodes):
+            return False
+        old_edges = {e.relation_id: e for e in self._all_edges}
+        new_edges = {e.relation_id: e for e in edges}
+        if set(old_edges) != set(new_edges):
+            return False
+
+        # 5. Contención sin cambios (afecta anidamiento/árboles).
+        def _contains(seq):
+            return {(e.source_id, e.target_id) for e in seq if e.kind.lower() == "contiene"}
+
+        if _contains(edges) != _contains(self._all_edges):
+            return False
+        # 6. Las aristas no cambian de atributos (no las reconstruimos in situ).
+        for rid, new_e in new_edges.items():
+            old_e = old_edges[rid]
+            if (
+                new_e.kind,
+                new_e.label,
+                new_e.direction,
+                new_e.color,
+                new_e.source_id,
+                new_e.target_id,
+            ) != (
+                old_e.kind,
+                old_e.label,
+                old_e.direction,
+                old_e.color,
+                old_e.source_id,
+                old_e.target_id,
+            ):
+                return False
+        # 7. Recoger hojas con atributos cambiados; contenedores → rebuild.
+        changed_leaves: list[tuple[Any, _NodeView]] = []
+        for eid, new_n in new_nodes.items():
+            old_n = old_nodes[eid]
+            if new_n == old_n:
+                continue  # _NodeView es frozen: igualdad por valor
+            if old_n.kind.lower() == "contenedor" or new_n.kind.lower() == "contenedor":
+                return False  # contenedores: estructura/encabezado → set_graph
+            item = self._nodes.get(eid)
+            if item is None:
+                return False  # debería ser una hoja dibujada; por seguridad, fallback
+            changed_leaves.append((item, new_n))
+
+        # Verificado: aplicar in situ y sincronizar el estado renderizado.
+        for item, new_n in changed_leaves:
+            item.apply_view_update(new_n)
+        self._all_nodes = nodes
+        self._all_edges = edges
+        self._all_layers = layers
+        return True
 
     def set_graph(
         self,
@@ -4260,13 +4855,17 @@ class GraphCanvasView(QGraphicsView):
         container_child_map: dict[str, list[str]] = {}  # parent_id -> [child_container_ids]
         for idx, cnode in enumerate(container_nodes):
             child_ids = contains_map.get(cnode.entity_id, set())
-            c_children = [n.entity_id for n in container_nodes
-                          if n.entity_id in child_ids and n.entity_id != cnode.entity_id]
+            c_children = [
+                n.entity_id
+                for n in container_nodes
+                if n.entity_id in child_ids and n.entity_id != cnode.entity_id
+            ]
             container_child_map[cnode.entity_id] = c_children
 
         # Topological sort: leaves first, parents later
         sorted_container_ids: list[str] = []
         visited: set[str] = set()
+
         def _visit(cid: str):
             if cid in visited:
                 return
@@ -4274,6 +4873,7 @@ class GraphCanvasView(QGraphicsView):
             for child_cid in container_child_map.get(cid, []):
                 _visit(child_cid)
             sorted_container_ids.append(cid)
+
         for cn in container_nodes:
             _visit(cn.entity_id)
         # sorted_container_ids is now leaves-first
@@ -4289,7 +4889,9 @@ class GraphCanvasView(QGraphicsView):
 
         # Position containers in outer ring
         for idx, cnode in enumerate(container_nodes):
-            c_angle = (2 * math.pi * idx) / max(1, len(container_nodes)) + math.pi / len(container_nodes)
+            c_angle = (2 * math.pi * idx) / max(1, len(container_nodes)) + math.pi / len(
+                container_nodes
+            )
             c_ring = radius * 1.6 if len(container_nodes) > 1 else 0
             cx = center.x() + math.cos(c_angle) * c_ring
             cy = center.y() + math.sin(c_angle) * c_ring * 0.72
@@ -4309,8 +4911,11 @@ class GraphCanvasView(QGraphicsView):
             if cnode is None:
                 continue
             child_ids = contains_map.get(cnode_id, set())
-            all_children = [n for n in (regular_nodes + container_nodes)
-                            if n.entity_id in child_ids and n.entity_id != cnode_id]
+            all_children = [
+                n
+                for n in (regular_nodes + container_nodes)
+                if n.entity_id in child_ids and n.entity_id != cnode_id
+            ]
             child_nodes = [n for n in all_children if n.kind.lower() != "contenedor"]
             container_children = [n for n in all_children if n.kind.lower() == "contenedor"]
 
@@ -4333,20 +4938,31 @@ class GraphCanvasView(QGraphicsView):
                     else:
                         ca = (2 * math.pi * ci) / n_children
                         child_x = tree_cx + math.cos(ca) * child_radius
-                        child_y = tree_cy + _CONTAINER_HEADER_HEIGHT + 60 + math.sin(ca) * child_radius * 0.5
+                        child_y = (
+                            tree_cy
+                            + _CONTAINER_HEADER_HEIGHT
+                            + 60
+                            + math.sin(ca) * child_radius * 0.5
+                        )
                     # setPos before add_child_node because add_child_node changes parent
                     child_item.setPos(child_x, child_y)
                     tree.add_child_node(child_item)  # type: ignore[arg-type]
 
             # Layout nested containers below regular children (in parent-local coords)
             if container_children:
-                nested_y_offset = _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if child_nodes else 0)
+                nested_y_offset = (
+                    _CONTAINER_HEADER_HEIGHT + 60 + (child_radius * 2 + 40 if child_nodes else 0)
+                )
                 for nci, nc in enumerate(container_children):
                     nc_item = self._trees.get(nc.entity_id) or self._nodes.get(nc.entity_id)
                     if nc_item is None:
                         continue
                     spread = max(1, len(container_children))
-                    nc_w = nc_item._width if isinstance(nc_item, GraphTreeItem) else _CONTAINER_MIN_WIDTH
+                    nc_w = (
+                        nc_item._width
+                        if isinstance(nc_item, GraphTreeItem)
+                        else _CONTAINER_MIN_WIDTH
+                    )
                     nc_x = tree_cx + (nci - (spread - 1) / 2) * (nc_w + 30)
                     nc_y = tree_cy + nested_y_offset
                     # Convert from parent-scene to parent-local coords
@@ -4413,12 +5029,18 @@ class GraphCanvasView(QGraphicsView):
         self.scale(scale, scale)
         self.centerOn(center)
 
-    def _animate_camera_fit(self, rect: QRectF) -> None:
+    def _animate_camera_fit(
+        self, rect: QRectF, *, duration_ms: int | None = None, easing=None
+    ) -> None:
         """BETA1-UX06: desliza la cámara hasta encajar *rect* (en vez de saltar).
 
         Se desactiva (instantáneo) si MOTION_ENABLED es False, si la vista no es
         visible o si el viewport aún no tiene tamaño — así tests y capturas
         llegan al encuadre final sin depender del bucle de eventos.
+
+        BETA1-L02c: ``duration_ms``/``easing`` opcionales permiten una transición
+        más larga e inmersiva para el foco de anillo, sin tocar el resto de cámaras
+        (por defecto ``_CAM_MS`` + ``OutQuint``).
         """
         if not rect.isValid() or rect.isEmpty():
             return
@@ -4430,10 +5052,10 @@ class GraphCanvasView(QGraphicsView):
         start_s = self.transform().m11() or 0.0001
         start_c = self.mapToScene(vp.rect().center())
         anim = QVariantAnimation(self)
-        anim.setDuration(_CAM_MS)
+        anim.setDuration(_CAM_MS if duration_ms is None else int(duration_ms))
         anim.setStartValue(0.0)
         anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutQuint)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuint if easing is None else easing)
 
         def _step(value) -> None:
             try:
@@ -4446,7 +5068,9 @@ class GraphCanvasView(QGraphicsView):
                 pass
 
         anim.valueChanged.connect(_step)
-        anim.finished.connect(lambda: self._apply_camera(target_s, target_c))
+        anim.finished.connect(
+            lambda: self._apply_camera(target_s, target_c) if _qt_alive(self) else None
+        )
         self._camera_anim = anim  # mantener referencia viva
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
@@ -4504,7 +5128,12 @@ class GraphCanvasView(QGraphicsView):
 
     def apply_visual_filter(self, filter_state: VisualFilterState):
         self._visual_filter = filter_state
-        self.set_graph(self._all_nodes, self._all_edges, layout_mode=self._layout_mode_active, layers=self._all_layers)
+        self.set_graph(
+            self._all_nodes,
+            self._all_edges,
+            layout_mode=self._layout_mode_active,
+            layers=self._all_layers,
+        )
 
     def clear_visual_filters(self):
         self.apply_visual_filter(VisualFilterState())
@@ -4514,7 +5143,21 @@ class GraphCanvasView(QGraphicsView):
 
     def active_filter_count(self) -> int:
         vf = self._visual_filter
-        return sum(1 for active in [vf.entity_types, vf.relation_types, vf.relation_families, vf.tree_id, vf.layer_ids, vf.focus_entity_ids, vf.canon_states, vf.visibility_states, not vf.show_relations] if active)
+        return sum(
+            1
+            for active in [
+                vf.entity_types,
+                vf.relation_types,
+                vf.relation_families,
+                vf.tree_id,
+                vf.layer_ids,
+                vf.focus_entity_ids,
+                vf.canon_states,
+                vf.visibility_states,
+                not vf.show_relations,
+            ]
+            if active
+        )
 
     def center_on_item(self, item: QGraphicsItem):
         rect = item.sceneBoundingRect().adjusted(-180, -160, 180, 160)
@@ -4629,7 +5272,10 @@ class GraphCanvasView(QGraphicsView):
         terms = [term for term in str(query or "").lower().split() if term]
         if not terms:
             return []
-        layer_names = {str(getattr(layer, "id", "")): str(getattr(layer, "name", "")) for layer in self._all_layers}
+        layer_names = {
+            str(getattr(layer, "id", "")): str(getattr(layer, "name", ""))
+            for layer in self._all_layers
+        }
         results: list[GraphSearchResult] = []
         for node in self._all_nodes:
             layer_name = layer_names.get(node.layer_id, "") if worldbuilding_active else ""
@@ -4637,34 +5283,51 @@ class GraphCanvasView(QGraphicsView):
             if all(term in haystack for term in terms):
                 parent_id, parent_name, collapsed = self._parent_tree_info(node.entity_id)
                 item_kind = "tree" if node.kind.lower() == "contenedor" else "entity"
-                results.append(GraphSearchResult(
-                    item_id=node.entity_id,
-                    item_kind=item_kind,
-                    title=node.name,
-                    type_label=enum_human(node.kind),
-                    category="Rama" if item_kind == "tree" else "Entidad",
-                    summary=_fit_text(node.subtitle, 90),
-                    parent_tree_name=parent_name,
-                    parent_tree_id=parent_id,
-                    is_inside_collapsed_tree=collapsed,
-                ))
+                results.append(
+                    GraphSearchResult(
+                        item_id=node.entity_id,
+                        item_kind=item_kind,
+                        title=node.name,
+                        type_label=enum_human(node.kind),
+                        category="Rama" if item_kind == "tree" else "Entidad",
+                        summary=_fit_text(node.subtitle, 90),
+                        parent_tree_name=parent_name,
+                        parent_tree_id=parent_id,
+                        is_inside_collapsed_tree=collapsed,
+                    )
+                )
         for edge in self._all_edges:
             if edge.kind.lower() == "contiene":
                 continue
-            source = next((node for node in self._all_nodes if node.entity_id == edge.source_id), None)
-            target = next((node for node in self._all_nodes if node.entity_id == edge.target_id), None)
+            source = next(
+                (node for node in self._all_nodes if node.entity_id == edge.source_id), None
+            )
+            target = next(
+                (node for node in self._all_nodes if node.entity_id == edge.target_id), None
+            )
             title = edge.label or enum_human(edge.kind)
-            haystack = " ".join([title, edge.kind, source.name if source else "", target.name if target else ""]).lower()
+            haystack = " ".join(
+                [title, edge.kind, source.name if source else "", target.name if target else ""]
+            ).lower()
             if all(term in haystack for term in terms):
-                summary = " → ".join(part for part in [source.name if source else "Origen", target.name if target else "Destino"] if part)
-                results.append(GraphSearchResult(
-                    item_id=edge.relation_id,
-                    item_kind="relation",
-                    title=title,
-                    type_label=enum_human(edge.kind),
-                    category="Relación",
-                    summary=summary,
-                ))
+                summary = " → ".join(
+                    part
+                    for part in [
+                        source.name if source else "Origen",
+                        target.name if target else "Destino",
+                    ]
+                    if part
+                )
+                results.append(
+                    GraphSearchResult(
+                        item_id=edge.relation_id,
+                        item_kind="relation",
+                        title=title,
+                        type_label=enum_human(edge.kind),
+                        category="Relación",
+                        summary=summary,
+                    )
+                )
         return results[:40]
 
     def _ring_display_name(self, ring_id: str) -> str:
@@ -4673,7 +5336,9 @@ class GraphCanvasView(QGraphicsView):
             return ring.display_name
         if ring_id == "__unclassified__":
             return "Sin clasificar"
-        layer = next((layer for layer in self._all_layers if str(getattr(layer, "id", "")) == ring_id), None)
+        layer = next(
+            (layer for layer in self._all_layers if str(getattr(layer, "id", "")) == ring_id), None
+        )
         return str(getattr(layer, "name", "Anillo")) if layer is not None else "Anillo"
 
     def active_ring_id(self) -> str:
@@ -4687,7 +5352,9 @@ class GraphCanvasView(QGraphicsView):
         return str(self._focused_ring_id or "")
 
     def select_ring(self, ring_id: str) -> bool:
-        _b44trace(f"select_ring_request ring_id={ring_id!r} available={[ring.ring_id for ring in self._ring_visuals]!r}")
+        _b44trace(
+            f"select_ring_request ring_id={ring_id!r} available={[ring.ring_id for ring in self._ring_visuals]!r}"
+        )
         if not ring_id:
             _b44trace("select_ring_result ok=False reason=empty_ring_id")
             return False
@@ -4726,7 +5393,9 @@ class GraphCanvasView(QGraphicsView):
         if not ring_id:
             _b44trace("focus_ring_result ok=False reason=empty_ring_id")
             return False
-        visuals, node_ring_ids = self._build_concentric_ring_visuals(self._all_nodes, self._all_edges, self._all_layers)
+        visuals, node_ring_ids = self._build_concentric_ring_visuals(
+            self._all_nodes, self._all_edges, self._all_layers
+        )
         _b44trace(
             "focus_ring_visuals "
             f"available={[ring.ring_id for ring in visuals]!r} node_ring_ids={node_ring_ids!r}"
@@ -4739,8 +5408,19 @@ class GraphCanvasView(QGraphicsView):
         # Ring focus is not a generic visual layer filter. Keep independent
         # filter dimensions, but clear stale scope filters that hide nodes after
         # ring reassignment.
-        self._visual_filter = replace(self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id="")
-        self.set_graph(self._all_nodes, self._all_edges, layout_mode="concentric_rings", layers=self._all_layers)
+        self._visual_filter = replace(
+            self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id=""
+        )
+        self.set_graph(
+            self._all_nodes,
+            self._all_edges,
+            layout_mode="concentric_rings",
+            layers=self._all_layers,
+        )
+        # BETA1-L02: 'un anillo a la vez' — atenuar el resto (contexto translúcido
+        # detrás) y enmarcar la cámara al anillo enfocado.
+        self._apply_ring_attenuation(ring_id)
+        self._frame_ring(ring)
         self.ringFocused.emit(ring_id, ring.display_name)
         _b44trace(
             "focus_ring_result "
@@ -4754,9 +5434,97 @@ class GraphCanvasView(QGraphicsView):
     def clear_ring_focus(self):
         self._focused_ring_id = ""
         self._selected_ring_id = ""
-        self._visual_filter = replace(self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id="")
+        self._visual_filter = replace(
+            self._visual_filter, layer_ids=(), focus_entity_ids=(), tree_id=""
+        )
         if self._layout_mode_active == "concentric_rings":
-            self.set_graph(self._all_nodes, self._all_edges, layout_mode="concentric_rings", layers=self._all_layers)
+            self.set_graph(
+                self._all_nodes,
+                self._all_edges,
+                layout_mode="concentric_rings",
+                layers=self._all_layers,
+            )
+        self._apply_ring_attenuation("")  # BETA1-L02: restaura opacidad plena
+        self.ringFocusCleared.emit()
+
+    # ── BETA1-L02: selector de anillos + navegación 'un anillo a la vez' ──────
+
+    def ring_summaries(self) -> list[dict]:
+        """Resumen de anillos para el selector lateral, ordenados de dentro a
+        fuera (rango causal). Cada anillo: ring_id, name, count, inner, outer,
+        focused. Datos efímeros derivados; nunca canon."""
+        if not self._all_layers:
+            return []
+        visuals, _ = self._build_concentric_ring_visuals(
+            self._all_nodes, self._all_edges, self._all_layers
+        )
+        return [
+            {
+                "ring_id": ring.ring_id,
+                "name": ring.display_name,
+                "count": len(ring.item_ids),
+                "inner": ring.inner_radius,
+                "outer": ring.outer_radius,
+                "focused": ring.ring_id == self._focused_ring_id,
+            }
+            for ring in visuals
+        ]
+
+    def _apply_ring_attenuation(self, focused_ring_id: str) -> None:
+        """BETA1-L02c: 'un anillo a la vez' con contexto. Atenúa (translúcido) los
+        nodos Y los círculos/etiquetas de anillo que NO están en el anillo enfocado
+        — los vecinos de dentro y de fuera quedan tenues pero visibles. Sin anillo
+        enfocado ('') → todo a opacidad plena."""
+        for entity_id, item in {**self._nodes, **self._trees}.items():
+            if not focused_ring_id or self._node_ring_ids.get(entity_id, "") == focused_ring_id:
+                item.setOpacity(1.0)
+            else:
+                item.setOpacity(_RING_NEIGHBOR_OPACITY)
+        for ring_id, ring_item in self._ring_items.items():
+            if not focused_ring_id or ring_id == focused_ring_id:
+                ring_item.setOpacity(1.0)
+            else:
+                ring_item.setOpacity(_RING_NEIGHBOR_OPACITY)
+
+    def _frame_ring(self, ring: _RingVisual) -> None:
+        """BETA1-L02c: enmarca la cámara al anillo con una transición inmersiva
+        (~600ms, desaceleración profunda) y un margen algo más amplio (proporcional
+        a la banda del anillo) para que asomen el vecino de dentro (hacia el centro)
+        y el de fuera (por los bordes)."""
+        outer = max(float(ring.outer_radius), 80.0)
+        band = max(float(ring.outer_radius) - float(ring.inner_radius), 0.0)
+        pad = max(60.0, band * _RING_FRAME_PAD_FACTOR)
+        edge = outer + pad
+        rect = QRectF(-edge, -edge, 2.0 * edge, 2.0 * edge)
+        self._animate_camera_fit(
+            rect, duration_ms=_RING_FOCUS_CAM_MS, easing=QEasingCurve.Type.OutExpo
+        )
+
+    def focus_adjacent_ring(self, step: int) -> bool:
+        """Salta al anillo contiguo (siguiente=+1 hacia fuera, anterior=−1 hacia
+        dentro) en orden causal. Hace clamp en los extremos. Si no hay foco
+        activo, entra por el anillo más interno (siguiente) o el externo (anterior)."""
+        summaries = self.ring_summaries()
+        if not summaries:
+            return False
+        order = [s["ring_id"] for s in summaries]
+        if self._focused_ring_id in order:
+            idx = order.index(self._focused_ring_id)
+            target = max(0, min(len(order) - 1, idx + step))
+        else:
+            target = 0 if step >= 0 else len(order) - 1
+        return self.focus_ring_scope(order[target])
+
+    def focus_ring_by_index(self, index: int) -> bool:
+        """BETA1-L02b: enfoca el anillo i-ésimo por orden causal (0 = más interno).
+        Lo usan las teclas 1…0. Reutiliza focus_ring_scope (cámara + atenuación +
+        breadcrumb + resaltado del panel). Fuera de rango o sin anillos → no-op."""
+        if self._layout_mode_active != "concentric_rings":
+            return False
+        summaries = self.ring_summaries()
+        if index < 0 or index >= len(summaries):
+            return False
+        return self.focus_ring_scope(summaries[index]["ring_id"])
 
     def focus_tree_scope(self, tree_id: str) -> bool:
         ids = {tree_id} | self._descendant_ids_for_tree(tree_id)
@@ -4797,15 +5565,29 @@ class GraphCanvasView(QGraphicsView):
         if rect.isValid() and not rect.isEmpty():
             self._animate_camera_fit(rect.adjusted(-140, -140, 140, 140))
 
+    def reset_to_panorama(self) -> None:
+        """BETA1-L02c: 'volver al todo' (tecla F). SIEMPRE restaura: quita el foco de
+        anillo (devuelve opacidad plena a nodos y anillos, resetea el foco y emite
+        ringFocusCleared) y reencuadra el grafo entero. No toca los filtros visuales
+        del usuario."""
+        self.clear_ring_focus()
+        self.fit_all()
+
     def reset_view(self):
         self.resetTransform()
         self.centerOn(0, 0)
 
     def center_selection(self) -> bool:
         selected_items = []
-        selected_items.extend(item for eid, item in self._nodes.items() if eid in self._selected_entity_ids)
-        selected_items.extend(item for eid, item in self._trees.items() if eid in self._selected_entity_ids)
-        selected_items.extend(edge for edge in self._edges if edge.edge.relation_id in self._selected_relation_ids)
+        selected_items.extend(
+            item for eid, item in self._nodes.items() if eid in self._selected_entity_ids
+        )
+        selected_items.extend(
+            item for eid, item in self._trees.items() if eid in self._selected_entity_ids
+        )
+        selected_items.extend(
+            edge for edge in self._edges if edge.edge.relation_id in self._selected_relation_ids
+        )
         if not selected_items:
             return False
         rect = selected_items[0].sceneBoundingRect()
@@ -4892,6 +5674,8 @@ class GraphCanvasWidget(QWidget):
     relationCreateRejected = Signal(str)
     ringSelected = Signal(str, str)
     ringFocused = Signal(str, str)
+    ringFocusCleared = Signal()  # BETA1-L02
+    searchRequested = Signal()  # BETA1-L02b: tecla 'd' → barra de búsqueda flotante
     candidateClicked = Signal(str)  # SEM04: semilla germinante pulsada en el grafo
     # BETA1-B01: context-menu intents re-exposed from GraphCanvasView
     contextCreateEntityRequested = Signal()
@@ -4915,7 +5699,9 @@ class GraphCanvasWidget(QWidget):
         self._advanced_mode = bool(ctx.advanced_mode)
         self.ai_controller = None
         stored_mode = str(getattr(ctx, "creation_layout_mode", "free") or "free")
-        self._layout_mode = stored_mode if stored_mode in {"free", "layered", "concentric_rings"} else "free"
+        self._layout_mode = (
+            stored_mode if stored_mode in {"free", "layered", "concentric_rings"} else "free"
+        )
         self._layer_mode = self._layout_mode == "layered"
         self._build()
 
@@ -4926,9 +5712,57 @@ class GraphCanvasWidget(QWidget):
 
         # No header — the graph takes all available space
 
-        self.empty = EmptyState("Grafo narrativo", "Abre un proyecto o crea entidades para ver el lienzo.")
-        self.empty.setStyleSheet("background: #F7F1E8;")
-        layout.addWidget(self.empty)
+        # UX24: el vacío GUÍA — una acción crea la primera entidad (misma vía que el
+        # menú contextual "crear entidad"), en vez de dejar el lienzo en blanco.
+        self.empty = EmptyState(
+            "Tu lienzo está por sembrar",
+            "Aún no hay entidades en este proyecto. Crea la primera —un personaje, "
+            "un lugar, una idea— y el grafo empezará a crecer.",
+            action_text="Crear primera entidad",
+            on_action=self.contextCreateEntityRequested.emit,
+        )
+        # UX34: tarjeta sólida contenida (no full-bleed con borde de puntos), para que
+        # respire y se lea como una pieza "de producto" centrada en el lienzo.
+        self.empty.setMaximumWidth(460)
+        self.empty.setStyleSheet(
+            f"QFrame#card {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
+            f"border-radius: {RADIUS_LG}px; }}"
+        )
+        # UX34: glifo botánico cálido por encima del título.
+        glyph = QLabel()
+        glyph.setPixmap(icons.pixmap("creation", size=44, color=GOLD_DEEP))
+        glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        glyph.setStyleSheet("background: transparent; border: none;")
+        self.empty.layout.insertWidget(0, glyph)
+        # UX34: título + mensaje centrados (presentación tipo "hero" del vacío).
+        if getattr(self.empty, "title", None) is not None:
+            self.empty.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if getattr(self.empty, "subtitle", None) is not None:
+            self.empty.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.empty.subtitle.setStyleSheet(
+                f"color: {INK_MUTED}; background: transparent; border: none;"
+            )
+        # UX34: el botón NO se reestiliza — usa el estilo global #primaryButton (marrón/oro,
+        # esquinas redondeadas RADIUS_MD, texto legible), igual que el resto de botones.
+
+        # UX34: la invitación es un OVERLAY flotante (hijo del widget, no del layout),
+        # como `_time_bar`. Así puede superponerse sobre el canvas con anillos en modo
+        # concéntrico ("anillos + invitación encima") o cubrir el lienzo en otros modos.
+        # Mouse-transparente para que los clics en las zonas vacías lleguen al canvas
+        # detrás; la tarjeta y su botón sí reciben sus propios clics.
+        self._empty_host = QWidget(self)
+        self._empty_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._empty_host.setStyleSheet("background: transparent;")
+        _eh = QVBoxLayout(self._empty_host)
+        _eh.setContentsMargins(SPACE_2XL, SPACE_2XL, SPACE_2XL, SPACE_2XL)
+        _eh.addStretch(1)
+        _erow = QHBoxLayout()
+        _erow.addStretch(1)
+        _erow.addWidget(self.empty)
+        _erow.addStretch(1)
+        _eh.addLayout(_erow)
+        _eh.addStretch(1)
+        self._empty_host.hide()
 
         self.canvas = GraphCanvasView()
         self.canvas._atmosphere.set_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
@@ -4940,11 +5774,15 @@ class GraphCanvasWidget(QWidget):
         self.canvas.nodeAssignToTreeRequested.connect(self.nodeAssignToTreeRequested.emit)
         self.canvas.ringSelected.connect(self.ringSelected.emit)
         self.canvas.ringFocused.connect(self.ringFocused.emit)
+        self.canvas.ringFocusCleared.connect(self.ringFocusCleared.emit)
+        self.canvas.searchRequested.connect(self.searchRequested.emit)  # BETA1-L02b
         self.canvas.seedClicked.connect(self.candidateClicked.emit)  # SEM04
         # BETA1-B01: context-menu intents
         self.canvas.contextCreateEntityRequested.connect(self.contextCreateEntityRequested.emit)
         self.canvas.contextCreateTreeRequested.connect(self.contextCreateTreeRequested.emit)
-        self.canvas.contextCreateEntityInTreeRequested.connect(self.contextCreateEntityInTreeRequested.emit)
+        self.canvas.contextCreateEntityInTreeRequested.connect(
+            self.contextCreateEntityInTreeRequested.emit
+        )
         self.canvas.contextCreateSubtreeRequested.connect(self.contextCreateSubtreeRequested.emit)
         self.canvas.contextDeleteRequested.connect(self.contextDeleteRequested.emit)
         self.canvas.contextAIActionRequested.connect(self.contextAIActionRequested.emit)
@@ -5149,6 +5987,8 @@ class GraphCanvasWidget(QWidget):
 
     def resizeEvent(self, event):  # noqa: N802 (Qt API)
         super().resizeEvent(event)
+        if getattr(self, "_empty_host", None) is not None and self._empty_host.isVisible():
+            self._position_empty_overlay()
         self._position_time_bar()
 
     def _project(self):
@@ -5178,7 +6018,9 @@ class GraphCanvasWidget(QWidget):
         project = self._project()
         return self.canvas.search(
             query,
-            worldbuilding_active=bool(getattr(project, "worldbuilding_active", False)) if project is not None else False,
+            worldbuilding_active=bool(getattr(project, "worldbuilding_active", False))
+            if project is not None
+            else False,
         )
 
     def focus_node(self, entity_id: str) -> bool:
@@ -5246,6 +6088,10 @@ class GraphCanvasWidget(QWidget):
     def wither_seed(self, key: str) -> None:
         self.canvas.wither_seed(key)
 
+    def play_reveal(self, *, duration_ms: int = 220) -> None:
+        # UX31: delega el revelado de transición en la vista (dentro del viewport GPU).
+        self.canvas.play_reveal(duration_ms=duration_ms)
+
     def rehydrate_candidate_seeds(
         self, candidate_ids: list[str], ring_ids: dict[str, str] | None = None
     ) -> None:
@@ -5293,6 +6139,23 @@ class GraphCanvasWidget(QWidget):
             self.ctx.save_preferences()
         return ok
 
+    def ring_summaries(self) -> list[dict]:
+        return self.canvas.ring_summaries()
+
+    def focus_adjacent_ring(self, step: int) -> bool:
+        ok = self.canvas.focus_adjacent_ring(step)
+        if ok:
+            self._layout_mode = "concentric_rings"
+            self._layer_mode = False
+            self.ctx.creation_layout_mode = "concentric_rings"
+            self.ctx.save_preferences()
+        return ok
+
+    def focus_canvas(self) -> None:
+        """BETA1-L02c: da el foco de teclado a la VISTA interna (no al wrapper), para
+        que los atajos del lienzo respondan sin que el usuario tenga que clicar."""
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def focused_ring_id(self) -> str:
         return str(getattr(self.canvas, "_focused_ring_id", ""))
 
@@ -5300,7 +6163,10 @@ class GraphCanvasWidget(QWidget):
         return self.canvas.active_ring_id() if hasattr(self.canvas, "active_ring_id") else ""
 
     def ring_visual_by_id(self, ring_id: str):
-        return next((ring for ring in getattr(self.canvas, "_ring_visuals", []) if ring.ring_id == ring_id), None)
+        return next(
+            (ring for ring in getattr(self.canvas, "_ring_visuals", []) if ring.ring_id == ring_id),
+            None,
+        )
 
     def focus_neighborhood(self, item_id: str) -> bool:
         ok = self.canvas.focus_neighborhood(item_id)
@@ -5319,6 +6185,12 @@ class GraphCanvasWidget(QWidget):
     def fit_all(self):
         self.canvas.fit_all()
 
+    def zoom_in(self):
+        self.canvas.zoom_in()
+
+    def zoom_out(self):
+        self.canvas.zoom_out()
+
     def reset_view(self):
         self.canvas.reset_view()
 
@@ -5329,9 +6201,19 @@ class GraphCanvasWidget(QWidget):
         if self.ai_controller is None:
             return
         project = self._project()
-        entity_ids = [getattr(entity, "id", "") for entity in getattr(project, "entities", []) or [] if getattr(entity, "id", "")]
-        relation_ids = [getattr(relation, "id", "") for relation in getattr(project, "relations", []) or [] if getattr(relation, "id", "")]
-        self.ai_controller.graph_action(action_type, entity_ids=entity_ids, relation_ids=relation_ids)
+        entity_ids = [
+            getattr(entity, "id", "")
+            for entity in getattr(project, "entities", []) or []
+            if getattr(entity, "id", "")
+        ]
+        relation_ids = [
+            getattr(relation, "id", "")
+            for relation in getattr(project, "relations", []) or []
+            if getattr(relation, "id", "")
+        ]
+        self.ai_controller.graph_action(
+            action_type, entity_ids=entity_ids, relation_ids=relation_ids
+        )
         self.refresh()
 
     def _entity_selected(self, entity_id: str):
@@ -5353,7 +6235,9 @@ class GraphCanvasWidget(QWidget):
     def _fit_all(self):
         rect = self.canvas.scene_obj.itemsBoundingRect()
         if rect.isValid() and not rect.isEmpty():
-            self.canvas.fitInView(rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio)
+            self.canvas.fitInView(
+                rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio
+            )
 
     def _effective_world_layers(self, project) -> list[Any]:
         """Return visual-only layers for anillo layouts without mutating canon.
@@ -5372,7 +6256,11 @@ class GraphCanvasWidget(QWidget):
         for layer in project_layers:
             layer_id = str(getattr(layer, "id", ""))
             default = default_by_id.get(layer_id)
-            if default is not None and get_causal_rank(layer) is None and get_causal_rank(default) is not None:
+            if (
+                default is not None
+                and get_causal_rank(layer) is None
+                and get_causal_rank(default) is not None
+            ):
                 metadata = dict(getattr(default, "metadata", {}) or {})
                 metadata.update(dict(getattr(layer, "metadata", {}) or {}))
                 effective.append(replace(layer, metadata=metadata))
@@ -5380,18 +6268,36 @@ class GraphCanvasWidget(QWidget):
                 effective.append(layer)
         return effective
 
+    def _position_empty_overlay(self) -> None:
+        """Cubre todo el widget con el overlay de la invitación y lo eleva sobre el
+        canvas (la tarjeta queda centrada por sus stretches)."""
+        host = getattr(self, "_empty_host", None)
+        if host is None:
+            return
+        host.setGeometry(self.rect())
+        host.raise_()
+
+    def _set_empty_visible(self, visible: bool) -> None:
+        """Muestra/oculta la invitación de estado vacío. Alterna el overlay flotante
+        (que se eleva sobre el canvas) y la propia tarjeta (para que
+        ``self.empty.isHidden()`` siga reflejando el estado — contrato de tests)."""
+        self.empty.setVisible(visible)
+        self._empty_host.setVisible(visible)
+        if visible:
+            self._position_empty_overlay()
+
     def refresh(self):
         project = self._project()
         if project is None:
             _b44trace(f"widget_refresh project=None layout={self._layout_mode!r}")
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
-            self.empty.setVisible(True)
+            self._set_empty_visible(True)
             self._time_bar.setVisible(False)
             return
         entities = []
         seen_entity_ids: set[str] = set()
-        for entity in (getattr(project, "entities", []) or []):
+        for entity in getattr(project, "entities", []) or []:
             entity_id = getattr(entity, "id", "")
             if not entity_id or entity_id in seen_entity_ids:
                 continue
@@ -5399,7 +6305,7 @@ class GraphCanvasWidget(QWidget):
             entities.append(_entity_view(entity))
         relations = []
         seen_relation_ids: set[str] = set()
-        for relation in (getattr(project, "relations", []) or []):
+        for relation in getattr(project, "relations", []) or []:
             relation_id = getattr(relation, "id", "")
             if not relation_id or relation_id in seen_relation_ids:
                 continue
@@ -5417,23 +6323,49 @@ class GraphCanvasWidget(QWidget):
             f"project_layers={len(getattr(project, 'world_layers', []) or [])} "
             f"canvas_visible_before={self.canvas.isVisible()} empty_visible_before={self.empty.isVisible()}"
         )
-        if not entities and self._layout_mode != "concentric_rings":
+        # UX34: sin entidades, la invitación ("Crear primera entidad") SIEMPRE aparece,
+        # pero el modo concéntrico muestra además los ANILLOS detrás (decisión del
+        # usuario: "anillos + invitación encima"). En los demás modos no hay nada que
+        # dibujar, así que la invitación ocupa el lienzo entero.
+        if not entities and self._layout_mode == "concentric_rings":
+            layers = self._effective_world_layers(project)
+            self.canvas.set_graph([], [], layout_mode=self._layout_mode, layers=layers)
+            self.canvas.setVisible(True)
+            self._sync_time_bar()
+            self._time_bar.setVisible(True)
+            self._position_time_bar()
+            self._set_empty_visible(True)  # overlay sobre los anillos
+            self._position_time_bar()  # la barra superior queda por encima del overlay
+            return
+        if not entities:
             self.canvas.clear_graph()
             self.canvas.setVisible(False)
-            self.empty.setVisible(True)
+            self._set_empty_visible(True)
             self._time_bar.setVisible(False)
             return
-        self.empty.setVisible(False)
+        self._set_empty_visible(False)
         self.canvas.setVisible(True)
         # _layer_mode is controlled only by explicit user action (Anillos button).
         # Do NOT derive it from project.worldbuilding_active here — that flag
         # means "worldbuilding feature is available", not "show layer bands".
-        layers = self._effective_world_layers(project) if self._layout_mode in {"layered", "concentric_rings"} else []
+        layers = (
+            self._effective_world_layers(project)
+            if self._layout_mode in {"layered", "concentric_rings"}
+            else []
+        )
         _b44trace(
             "widget_refresh_before_set_graph "
             f"layout={self._layout_mode!r} effective_layers={len(layers)} layer_ids={[str(getattr(layer, 'id', '')) for layer in layers]!r}"
         )
-        self.canvas.set_graph(entities, relations, layout_mode=self._layout_mode, layers=layers)
+        # BETA1-L01: atajo incremental para ediciones de atributos (mismos ids,
+        # misma estructura) — actualiza items in situ y evita el rebuild O(N).
+        # Si no aplica, cae al set_graph completo de siempre.
+        if not self.canvas.try_incremental_refresh(
+            entities, relations, layout_mode=self._layout_mode, layers=layers
+        ):
+            self.canvas.set_graph(entities, relations, layout_mode=self._layout_mode, layers=layers)
+        # BETA1-L01: ajustar la brisa de fondo al tamaño del grafo recién pintado.
+        self.canvas._apply_atmosphere_budget()
         # BETA1-G06: el scrubber refleja el calendario actual y se muestra
         # sobre el lienzo concéntrico (se oculta con él en la vista cronológica).
         self._sync_time_bar()

@@ -1,20 +1,32 @@
 """Tests for B10-T03: Domain and layer assignment on entities and relations,
-plus AdvancedConfigService and QueryService domain_id/layer_id filters."""
+plus QueryService domain_id/layer_id filters.
 
-from packages.application.advanced_config_service import AdvancedConfigService
+PA04 eliminó ``AdvancedConfigService`` (Gen B); sus tests se retiraron. La
+asignación de dominios/capas y los filtros de QueryService siguen vivos.
+"""
+
 from packages.application.entity_service import EntityService
 from packages.application.project_service import ProjectService
 from packages.application.query_service import QueryService
 from packages.application.relation_service import RelationService
-from packages.domain.entity import EntityType
 from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok
 
 
 def _setup():
-    """Create a project with entity service, relation service, and query service."""
+    """Create a project with entity service, relation service, and query service.
+
+    Siembra las 16 capas por defecto: ``ProjectService.create`` construye un
+    ``Project`` con ``world_layers=[]`` (las capas estándar solo las añade la
+    migración v6→v7 al cargar proyectos viejos), y estos tests asignan capas por
+    su id estándar (``layer_geografia``…). Sin sembrarlas, ``assign_layer``
+    fallaría con "world layer not found".
+    """
+    from packages.domain.world_layer import default_world_layers
+
     ps = ProjectService()
     ps.create("Test World")
+    ps.active_project.world_layers = default_world_layers()
     es = EntityService(ps, ps.store)
     rs = RelationService(ps, ps.store)
     qs = QueryService(es, rs, None)  # source_service not needed for these tests
@@ -290,85 +302,3 @@ class TestQueryDomainLayerFilters:
         result = qs.query(layer="geografia")
         assert isinstance(result, Ok)
         assert len(result.value) == 1
-
-
-# ══════════════════════════════════════════════════════════════════
-# AdvancedConfigService
-# ══════════════════════════════════════════════════════════════════
-
-class TestAdvancedConfigService:
-    def test_get_config_returns_defaults(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.get_config()
-        assert isinstance(result, Ok)
-        cfg = result.value
-        assert cfg.primary_genre == ""
-        assert cfg.global_tone == "neutral"
-        assert cfg.realism_level == "medium"
-        assert cfg.contradiction_tolerance == "media"
-        assert cfg.naming_conventions == ""
-        assert cfg.measurement_units == ""
-        assert cfg.subgenres == []
-        assert cfg.secondary_tones == []
-
-    def test_get_value(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.get_value("primary_genre")
-        assert isinstance(result, Ok)
-        assert result.value == ""
-
-    def test_set_value(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.set_value("primary_genre", "fantasía épica")
-        assert isinstance(result, Ok)
-
-        result2 = svc.get_value("primary_genre")
-        assert isinstance(result2, Ok)
-        assert result2.value == "fantasía épica"
-
-    def test_set_value_invalid_path(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.set_value("ruta_invalida", "x")
-        assert isinstance(result, Error)
-        assert "Invalid config path" in result.error
-
-    def test_set_value_array(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.set_value("subgenres", ["alta fantasía", "espada y brujería"])
-        assert isinstance(result, Ok)
-
-        result2 = svc.get_value("subgenres")
-        assert isinstance(result2, Ok)
-        assert "alta fantasía" in result2.value
-
-    def test_set_value_array_bad_type(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.set_value("subgenres", "not_a_list")
-        assert isinstance(result, Error)
-
-    def test_update_config_multiple(self):
-        ps, es, rs, qs = _setup()
-        svc = AdvancedConfigService(ps)
-        result = svc.update_config(
-            primary_genre="ciencia ficción",
-            global_tone="oscuro",
-            realism_level="alto",
-        )
-        assert isinstance(result, Ok)
-        cfg = result.value
-        assert cfg.primary_genre == "ciencia ficción"
-        assert cfg.global_tone == "oscuro"
-        assert cfg.realism_level == "alto"
-
-    def test_no_project_error(self):
-        ps = ProjectService()
-        svc = AdvancedConfigService(ps)
-        assert isinstance(svc.get_config(), Error)
-        assert isinstance(svc.get_value("primary_genre"), Error)
-        assert isinstance(svc.set_value("primary_genre", "x"), Error)

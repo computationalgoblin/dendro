@@ -21,6 +21,7 @@ from packages.application.ai_request_gateway import AIRequestGateway, GatewayReq
 from packages.application.import_ai_extraction_service import resolve_configured_provider
 from packages.domain.import_models import ImportBasket
 from packages.domain.result import Error, Ok, Result
+from packages.domain.world_layer import default_world_layers
 from packages.infrastructure.ai_provider import AIProvider
 
 IMPORT_PROJECT_CONFIG_INTENT = "import_project_config"
@@ -29,8 +30,8 @@ _MAX_CHARS = 12000  # cota del material enviado al proveedor
 
 _SYSTEM_PROMPT = (
     "Eres un asistente de worldbuilding. A partir de un documento narrativo propones "
-    "una CONFIGURACIÓN DE PROYECTO revisable, nunca canon. Devuelve SOLO un objeto JSON "
-    "con esta forma:\n"
+    "el ANDAMIAJE del mundo (configuración + calendario + anillos causales + hitos), "
+    "revisable y nunca canon. Devuelve SOLO un objeto JSON con esta forma:\n"
     "{\n"
     '  "chronology": {"mode": "none|vague_periods|full_calendar", '
     '"calendar_name": str, "present_year": int, '
@@ -38,13 +39,29 @@ _SYSTEM_PROMPT = (
     '"eras": [{"name": str, "start_year": int, "end_year": int|null, "description": str}]},\n'
     '  "entity_temporal": [{"name": str, "birth_year": int|null, "death_year": int|null, '
     '"nature": "mortal|inmortal|eterno|atemporal", "note": str}],\n'
-    '  "config": {"tone": str, "genre": str, '
-    '"taxonomy": {"allowed_entity_types": [str], "allowed_branch_types": [str], '
-    '"extraction_guidance": str}}\n'
+    '  "config": {"tone": str, "genre": str},\n'
+    '  "world_layers": {"activate_default_layer_ids": [str], '
+    '"custom_layers": [{"name": str, "description": str, "causal_role": str, '
+    '"causal_parent_layer_ids": [str]}]},\n'
+    '  "milestones": [{"title": str, "description": str, '
+    '"milestone_type": "origen|fundacion|ruptura|guerra|pacto|traicion|descubrimiento|'
+    'catastrofe|migracion|reforma|ascenso|caida|revelacion|consecuencia|otro", '
+    '"year": int|null, "date_label": str, "affected_layer_ids": [str], "tags": [str], '
+    '"rationale": str}]\n'
     "}\n"
-    "Reglas: NO inventes IDs. Usa 'mode' vago si el documento no da fechas exactas. "
-    "Los años son enteros en el eje del mundo (pueden ser negativos). Solo incluye "
-    "entity_temporal para entidades realmente datables en el texto."
+    "ANILLOS (world_layers): un anillo es un estrato CAUSAL del mundo (capa), no temporal. "
+    "Recibes en 'available_layers' el catálogo de capas predefinidas (con id y rol causal). "
+    "En 'activate_default_layer_ids' incluye SOLO los ids de ese catálogo que sean relevantes "
+    "para este mundo. En 'custom_layers' añade anillos a medida solo si el mundo necesita una "
+    "capa causal que el catálogo no cubre; 'causal_parent_layer_ids' referencia ids del "
+    "catálogo o nombres de otras custom_layers.\n"
+    "HITOS (milestones): eventos causales fundacionales que explican cómo el mundo llegó a su "
+    "estado (origen, fundación, guerra, ruptura...). Data cada hito con 'year' (eje del mundo) "
+    "cuando el texto lo permita; 'affected_layer_ids' referencia ids del catálogo o nombres de "
+    "custom_layers. No inventes hitos triviales: solo los estructurales.\n"
+    "Reglas: NO inventes IDs de capa fuera del catálogo o de tus custom_layers. Usa 'mode' "
+    "vago si el documento no da fechas exactas. Los años son enteros en el eje del mundo "
+    "(pueden ser negativos). Solo incluye entity_temporal para entidades realmente datables."
 )
 
 
@@ -118,17 +135,78 @@ def _norm_entity_temporal(value: Any) -> list[dict[str, Any]]:
 
 
 def _norm_config(value: Any) -> dict[str, Any]:
+    # PA04: la taxonomía de importación se eliminó; la propuesta solo lleva tono/género.
     value = value if isinstance(value, dict) else {}
-    taxonomy = value.get("taxonomy") if isinstance(value.get("taxonomy"), dict) else {}
     return {
         "tone": _as_text(value.get("tone")),
         "genre": _as_text(value.get("genre")),
-        "taxonomy": {
-            "allowed_entity_types": _str_list(taxonomy.get("allowed_entity_types")),
-            "allowed_branch_types": _str_list(taxonomy.get("allowed_branch_types")),
-            "extraction_guidance": _as_text(taxonomy.get("extraction_guidance")),
-        },
     }
+
+
+_MILESTONE_TYPES = {
+    "origen", "fundacion", "ruptura", "guerra", "pacto", "traicion",
+    "descubrimiento", "catastrofe", "migracion", "reforma", "ascenso",
+    "caida", "revelacion", "consecuencia", "otro",
+}
+
+
+def _valid_default_layer_ids() -> set[str]:
+    return {wl.id for wl in default_world_layers()}
+
+
+def _norm_world_layers(value: Any) -> dict[str, Any]:
+    """Normaliza la propuesta de anillos (capas causales).
+
+    ``activate_default_layer_ids`` se filtra contra el catálogo predefinido para
+    no materializar ids inventados; ``custom_layers`` conserva los anillos a medida.
+    """
+    value = value if isinstance(value, dict) else {}
+    valid_ids = _valid_default_layer_ids()
+    activate: list[str] = []
+    for raw in _str_list(value.get("activate_default_layer_ids")):
+        if raw in valid_ids and raw not in activate:
+            activate.append(raw)
+    custom: list[dict[str, Any]] = []
+    for item in value.get("custom_layers") or []:
+        if not isinstance(item, dict):
+            continue
+        name = _as_text(item.get("name"))
+        if not name:
+            continue
+        custom.append({
+            "name": name,
+            "description": _as_text(item.get("description")),
+            "causal_role": _as_text(item.get("causal_role")),
+            "causal_parent_layer_ids": _str_list(item.get("causal_parent_layer_ids")),
+        })
+    return {"activate_default_layer_ids": activate, "custom_layers": custom}
+
+
+def _norm_milestones(value: Any) -> list[dict[str, Any]]:
+    """Normaliza la propuesta de hitos causales (datados, con capas afectadas)."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return out
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = _as_text(item.get("title")) or _as_text(item.get("name"))
+        if not title:
+            continue
+        mtype = _as_text(item.get("milestone_type")).lower()
+        if mtype not in _MILESTONE_TYPES:
+            mtype = "otro"
+        out.append({
+            "title": title,
+            "description": _as_text(item.get("description")),
+            "milestone_type": mtype,
+            "year": _int_or_none(item.get("year")),
+            "date_label": _as_text(item.get("date_label")),
+            "affected_layer_ids": _str_list(item.get("affected_layer_ids")),
+            "tags": _str_list(item.get("tags")),
+            "rationale": _as_text(item.get("rationale")),
+        })
+    return out
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -187,14 +265,23 @@ class ImportProjectConfigService:
             return Error("La cesta no tiene texto para configurar el proyecto")
 
         project_context = project_context or {}
+        available_layers = [
+            {
+                "id": wl.id,
+                "name": wl.name,
+                "causal_role": wl.metadata.get("causal_role", ""),
+            }
+            for wl in default_world_layers()
+        ]
         gateway = AIRequestGateway(provider=self.provider)
         request = GatewayRequest(
             intent=IMPORT_PROJECT_CONFIG_INTENT,
             user_prompt=json.dumps(
                 {
-                    "task": "propose_project_configuration",
+                    "task": "propose_world_scaffolding",
                     "document": document_text,
                     "known_entities": list(entity_names or []),
+                    "available_layers": available_layers,
                 },
                 ensure_ascii=False,
                 default=str,
@@ -219,6 +306,8 @@ class ImportProjectConfigService:
             "chronology": _norm_chronology(parsed.get("chronology")),
             "entity_temporal": _norm_entity_temporal(parsed.get("entity_temporal")),
             "config": _norm_config(parsed.get("config")),
+            "world_layers": _norm_world_layers(parsed.get("world_layers")),
+            "milestones": _norm_milestones(parsed.get("milestones")),
             "generated_at": _now_iso(),
             "provider": str(getattr(self.provider, "provider_name", "ai")),
             "applied": False,

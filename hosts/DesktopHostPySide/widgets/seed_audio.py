@@ -32,10 +32,11 @@ except Exception:  # noqa: BLE001 — sin audio, las semillas siguen funcionando
 
 # Re# menor natural: D# E#(F) F# G# A# B C# → semitonos 0 2 3 5 7 8 10.
 D_SHARP_MINOR_SEMITONES: tuple[int, ...] = (0, 2, 3, 5, 7, 8, 10)
-# Registro de campana: D#5 como raíz (brillante pero no estridente).
+# Registro de campana: D#5 (UX33: más agudo que D#4 — el usuario lo pidió más
+# brillante, manteniendo el procesado cálido). La escala sigue siendo Re# menor.
 _ROOT_MIDI = 39 + 24  # D#5
 _RATE = 16000
-_BELL_SECONDS = 2.6
+_BELL_SECONDS = 3.2  # cola larga (zen)
 
 
 def is_in_d_sharp_minor(midi: int) -> bool:
@@ -52,7 +53,7 @@ def random_bell_midi(rng: random.Random | None = None) -> int:
 class ZenBell:
     """Reproductor de campanas zen, cacheado y seguro sin audio."""
 
-    def __init__(self, *, volume: float = 0.14) -> None:
+    def __init__(self, *, volume: float = 0.12) -> None:
         self._volume = float(volume)
         self._rng = random.Random()
         self._effects: dict[int, object] = {}  # midi → QSoundEffect
@@ -108,17 +109,18 @@ def _render_bell(midi: int) -> str:
     - soft-clip (tanh) en vez de recorte duro.
     El nombre de caché lleva versión (``v2``) para no reusar los WAV ásperos viejos.
     """
-    path = Path(tempfile.gettempdir()) / f"dendro_bell_v2_{midi}.wav"
+    path = Path(tempfile.gettempdir()) / f"dendro_bell_v4_{midi}.wav"
     if path.exists():
         return str(path)
     rate = _RATE
     total = int(_BELL_SECONDS * rate)
     freq = 440.0 * (2.0 ** ((midi - 69) / 12.0))
     two_pi = 2.0 * math.pi
-    attack = max(1, int(0.030 * rate))  # ataque suave (~30 ms): sin golpe áspero
-    tau = 1.2  # s — decay exponencial largo (cola zen)
-    # Parciales inarmónicos de campana, NORMALIZADOS para que sumen 1.0.
-    raw_partials = ((1.0, 0.55), (2.01, 0.30), (2.78, 0.18), (4.07, 0.10), (5.43, 0.06))
+    attack = max(1, int(0.045 * rate))  # UX27: ataque más suave (~45 ms)
+    tau = 1.9  # s — UX27: decay exponencial más largo (cola zen)
+    # Parciales inarmónicos de campana, NORMALIZADOS. UX27: menos peso en los
+    # parciales agudos → timbre más redondo y menos "digital".
+    raw_partials = ((1.0, 0.62), (2.01, 0.26), (2.78, 0.13), (4.07, 0.06), (5.43, 0.03))
     amp_sum = sum(amp for _, amp in raw_partials)
     partials = tuple((ratio, amp / amp_sum) for ratio, amp in raw_partials)
     dry = [0.0] * total
@@ -127,14 +129,21 @@ def _render_bell(midi: int) -> str:
         for n in range(total):
             env = (n / attack) if n < attack else math.exp(-(n - attack) / (tau * rate))
             dry[n] += amp * env * math.sin(w * n)
-    # Reverb: combs con retroalimentación suave (cola zen, sin acumular energía).
-    for delay_s, feedback in ((0.137, 0.18), (0.211, 0.14)):
+    # UX27: reverb más densa (más taps) con realimentación suave, sin acumular energía.
+    for delay_s, feedback in ((0.113, 0.16), (0.171, 0.13), (0.237, 0.10), (0.311, 0.07)):
         d = int(delay_s * rate)
         for n in range(d, total):
             dry[n] += feedback * dry[n - d]
-    # Normalizar tras la reverb y soft-clip (tanh) para un timbre cálido sin recorte.
+    # UX27/UX33: paso-bajo de un polo → quita el filo sintético. Más abierto que en
+    # UX27 para dejar pasar el brillo del registro agudo sin volverse áspero.
+    lp_alpha = 0.42  # cuanto menor, más oscuro/procesado
+    prev = 0.0
+    for n in range(total):
+        prev += lp_alpha * (dry[n] - prev)
+        dry[n] = prev
+    # Normalizar tras el procesado y soft-clip (tanh) para un timbre cálido sin recorte.
     peak = max(0.0001, max(abs(s) for s in dry))
-    scale = 0.85 / peak
+    scale = 0.82 / peak
     frames = bytearray()
     for sample in dry:
         shaped = math.tanh(sample * scale * 1.1)  # soft-clip suave

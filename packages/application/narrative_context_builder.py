@@ -40,6 +40,42 @@ def _list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
 
+def _genre_from_brief(project: Any) -> dict[str, Any]:
+    """PA04: género derivado de creative_config.identidad (compat downstream)."""
+    cc = getattr(project, "creative_config", None)
+    ident = getattr(cc, "identidad", None)
+    out: dict[str, Any] = {}
+    primary = getattr(ident, "genero_principal", "") or ""
+    subs = list(getattr(ident, "subgeneros", []) or [])
+    if primary:
+        out["primary_genre"] = primary
+    if subs:
+        out["subgeneros"] = subs
+    return out
+
+
+def _tone_from_brief(project: Any) -> dict[str, Any]:
+    """PA04: tono derivado de creative_config.estilo (compat downstream)."""
+    cc = getattr(project, "creative_config", None)
+    estilo = getattr(cc, "estilo", None)
+    tono = getattr(estilo, "tono", "") or ""
+    return {"narrative_tone": tono} if tono else {}
+
+
+def _realism_from_brief(project: Any) -> dict[str, Any]:
+    """PA04: realismo/grado especulativo derivados de creative_config.estilo."""
+    cc = getattr(project, "creative_config", None)
+    estilo = getattr(cc, "estilo", None)
+    out: dict[str, Any] = {}
+    realismo = getattr(estilo, "realismo", "") or ""
+    grado = getattr(estilo, "grado_especulativo", "") or ""
+    if realismo:
+        out["realism_level"] = realismo
+    if grado:
+        out["grado_especulativo"] = grado
+    return out
+
+
 # Tipos que el modelo de dominio considera "Rama" (contenedoras); el resto son "Hoja".
 _BRANCH_DISPLAY_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
 
@@ -317,17 +353,15 @@ class NarrativeContextBuilder:
                 "name": getattr(project, "name", ""),
                 "description": getattr(project, "description", ""),
                 "primary_language": getattr(project, "primary_language", "es"),
-                "tone": _safe_obj(getattr(project, "tone", None)),
-                "genre": _safe_obj(getattr(project, "genre", None)),
-                "realism": _safe_obj(getattr(project, "realism", None)),
+                # PA04: la config creativa canónica vive en creative_config; el brief
+                # es la fuente para el modelo. genre/tone se derivan de él para los
+                # consumidores que aún esperan esos sub-bloques (ai_context_actions).
+                "genre": _genre_from_brief(project),
+                "tone": _tone_from_brief(project),
+                "realism": _realism_from_brief(project),
                 "creative_config": _safe_obj(getattr(project, "creative_config", None)),
-                "creative_project_config": _safe_obj(getattr(project, "creative_project_config", None)),
                 "creative_brief": project_creative_brief(project),
-                "ai": _safe_obj(getattr(project, "ai", None)),
                 "project_type": getattr(project, "project_type", ""),
-                "narrative_style": getattr(project, "narrative_style", ""),
-                "creative_rules": getattr(project, "creative_rules", ""),
-                "general": _safe_obj(getattr(project, "general", None)),
                 "worldbuilding_active": bool(getattr(project, "worldbuilding_active", False)),
                 "world_layers": [self._layer_summary(layer) for layer in _list(getattr(project, "world_layers", []))],
                 "domains": list(getattr(project, "domains", []) or []),

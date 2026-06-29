@@ -33,6 +33,7 @@ from packages.application.prompt_assembler import (
     PromptAssembler,
     build_context_preview,
     build_model_user_message,
+    build_model_user_message_with_warnings,
 )
 
 
@@ -1272,39 +1273,32 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
 
 
 def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
-    """Derive model-facing behaviour instructions from B40 creative config."""
-    ctx = dict(context or {})
-    brief = ctx.get("creative_brief") or {}
+    """Instrucciones de comportamiento para el modelo (PA04).
+
+    El comportamiento del asistente (rol, nº de opciones, etc.) son constantes
+    fijas (``ai_defaults``), ya no config de proyecto. Las reglas duras y el
+    espacio negativo se leen de ``creative_brief.reglas`` (modelo canónico).
+    """
+    from packages.domain import ai_defaults as aidef
+
+    brief = (context or {}).get("creative_brief") or {}
     if not isinstance(brief, dict):
         brief = {}
-    canon_raw = brief.get("canon")
-    negative_raw = brief.get("negative_space")
-    memory_raw = brief.get("taste_memory")
-    ai_raw = brief.get("ai_preferences")
-    canon = canon_raw if isinstance(canon_raw, dict) else {}
-    negative = negative_raw if isinstance(negative_raw, dict) else {}
-    memory = memory_raw if isinstance(memory_raw, dict) else {}
-    ai = ai_raw if isinstance(ai_raw, dict) else {}
+    reglas = brief.get("reglas") if isinstance(brief.get("reglas"), dict) else {}
     return {
-        "role": ai.get("default_role", "coauthor"),
-        "strategy": ai.get("default_strategy", "profundizar"),
-        "output_mode": ai.get("output_mode", "contrastive_options"),
-        "default_num_options": ai.get("default_num_options", 3),
-        "change_aggressiveness": ai.get("change_aggressiveness", 5),
-        "uncertainty_policy": ai.get("uncertainty_policy", "conservative_proposal"),
-        "context_depth": ai.get("context_depth", "balanced"),
-        "hard_rules": canon.get("hard_rules", []),
-        "soft_preferences": canon.get("soft_preferences", []),
-        "continuity_strictness": canon.get("continuity_strictness", 5),
-        "avoid": negative,
-        "taste_memory": memory,
-        "selected_effective_configs": ctx.get("creative_context", []),
-        "selected_branch_overrides": ctx.get("branch_creative_context", []),
+        "role": aidef.DEFAULT_ROLE,
+        "strategy": aidef.DEFAULT_STRATEGY,
+        "output_mode": aidef.DEFAULT_OUTPUT_MODE,
+        "default_num_options": aidef.DEFAULT_NUM_OPTIONS,
+        "change_aggressiveness": aidef.DEFAULT_CHANGE_AGGRESSIVENESS,
+        "uncertainty_policy": aidef.DEFAULT_UNCERTAINTY_POLICY,
+        "context_depth": aidef.DEFAULT_CONTEXT_DEPTH,
+        "reglas_canon": reglas.get("reglas_canon", []),
+        "evitar": reglas.get("evitar", []),
         "instructions": [
-            "Respeta canon duro y continuidad configurada; si el usuario pide algo incompatible, proponlo como problema/reparación, no como canon.",
-            "Evita tropos, soluciones, tonos y frases listados en negative_space.",
-            "Usa taste_memory para aproximarte al gusto aceptado y evitar patrones rechazados.",
-            "Si hay branch_creative_context, prioriza esos overrides locales sobre el perfil global.",
+            "Respeta reglas.reglas_canon (canon duro); si el usuario pide algo incompatible, "
+            "proponlo como problema/reparación, no como canon.",
+            "Evita lo listado en reglas.evitar (tropos, soluciones, tonos, frases, tics).",
             "Toda salida estructural debe ser candidato revisable; nunca asumas canon automático.",
         ],
     }
@@ -1475,6 +1469,12 @@ class AIJobService:
         if job is None:
             return Error("Job IA no encontrado")
         return Ok(job)
+
+    def provider_unconfigured(self) -> bool:
+        """True si no hay un proveedor IA real (solo el simulado, no permitido).
+        La UI lo usa para mostrar instrucciones de configuración accionables."""
+        provider_name = str(getattr(self._provider, "provider_name", "ai"))
+        return provider_name == "simulated" and not self.allow_simulated
 
     def update_status(
         self,
@@ -1659,7 +1659,11 @@ class AIJobService:
             return Error("Job IA cancelado")
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         if provider_name == "simulated" and not self.allow_simulated:
-            msg = "Configura un proveedor IA real para la command bar; no se generará contenido simulado."
+            msg = (
+                "IA no configurada: define las variables de entorno NARRATIVE_AI_PROVIDER, "
+                "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
+                "la app). No se genera contenido simulado."
+            )
             self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
             return Error(msg)
 
@@ -1740,7 +1744,11 @@ class AIJobService:
             return Error("Job IA cancelado")
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         if provider_name == "simulated" and not self.allow_simulated:
-            msg = "Configura un proveedor IA real para la command bar; no se generara contenido simulado."
+            msg = (
+                "IA no configurada: define las variables de entorno NARRATIVE_AI_PROVIDER, "
+                "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
+                "la app). No se genera contenido simulado."
+            )
             self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
             self._record_observability(job, status="error", error_type="provider_unconfigured")
             return Error(msg)
@@ -1783,7 +1791,13 @@ class AIJobService:
         if cancelled:
             return cancelled
 
-        model_user_message = build_model_user_message(plan)
+        model_user_message, budget_warnings = build_model_user_message_with_warnings(plan)
+        # fila 34: si el presupuesto recortó secciones (canon/candidatos/imports…),
+        # anexamos el aviso al rag_context_pack (mismo canal que ya muestra la UI; el
+        # context es copia shallow en job.plan, así que comparte este dict).
+        if budget_warnings and isinstance(plan.context.get("rag_context_pack"), dict):
+            pack = plan.context["rag_context_pack"]
+            pack["warnings"] = list(pack.get("warnings") or []) + budget_warnings
         # Per-function system prompt: each intent asks only for its own output.
         system_prompt = system_prompt_for_intent(plan.intent.intent_type.value)
         self._trace_prompt_request(

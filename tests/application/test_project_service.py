@@ -11,13 +11,11 @@ Covers:
 - get_schema_version
 """
 
-import json
 from pathlib import Path
 
 from packages.application.project_service import ProjectService
 from packages.domain.result import Error, Ok
 from packages.persistence.store import ProjectStore
-
 
 # ---------------------------------------------------------------------------
 # create
@@ -48,6 +46,8 @@ class TestCreate:
         assert svc.active_project.name == "Test"
 
     def test_create_with_config_overrides(self):
+        # PA04: la config editable vive en creative_config (5 secciones); get/update
+        # siguen siendo genéricos por dotted-path sobre dataclasses.
         svc = ProjectService()
         result = svc.create(
             name="Overridden",
@@ -55,9 +55,9 @@ class TestCreate:
                 "description": "A test world",
                 "primary_language": "en",
                 "secondary_languages": ["fr"],
-                "general.theme": "cyberpunk",
-                "tone.narrative_tone": "dark",
-                "ai.enabled": True,
+                "creative_config.identidad.genero_principal": "cyberpunk",
+                "creative_config.estilo.tono": "dark",
+                "creative_config.identidad.premisa": "Un mundo en ruinas",
             },
         )
         assert isinstance(result, Ok)
@@ -65,9 +65,9 @@ class TestCreate:
         assert p.description == "A test world"
         assert p.primary_language == "en"
         assert p.secondary_languages == ["fr"]
-        assert p.general.theme == "cyberpunk"
-        assert p.tone.narrative_tone == "dark"
-        assert p.ai.enabled is True
+        assert p.creative_config.identidad.genero_principal == "cyberpunk"
+        assert p.creative_config.estilo.tono == "dark"
+        assert p.creative_config.identidad.premisa == "Un mundo en ruinas"
 
     def test_create_with_invalid_config_path(self):
         svc = ProjectService()
@@ -245,17 +245,18 @@ class TestGetConfig:
     def test_get_nested_one_level(self):
         svc = ProjectService()
         svc.create()
-        result = svc.get_config("general.theme")
+        result = svc.get_config("creative_config.identidad")
         assert isinstance(result, Ok)
-        assert result.value == ""
+        from packages.domain.creative_config import Identidad
+        assert isinstance(result.value, Identidad)
 
     def test_get_nested_two_levels(self):
         svc = ProjectService()
         svc.create()
-        # ai is a dataclass with boolean enabled field
-        result = svc.get_config("ai.enabled")
+        # creative_config.estilo.tono es un str vacío por defecto.
+        result = svc.get_config("creative_config.estilo.tono")
         assert isinstance(result, Ok)
-        assert result.value is False
+        assert result.value == ""
 
     def test_get_invalid_path(self):
         svc = ProjectService()
@@ -295,9 +296,9 @@ class TestUpdateConfig:
     def test_update_nested(self):
         svc = ProjectService()
         svc.create()
-        result = svc.update_config("general.theme", "steampunk")
+        result = svc.update_config("creative_config.identidad.genero_principal", "steampunk")
         assert isinstance(result, Ok)
-        assert svc.active_project.general.theme == "steampunk"
+        assert svc.active_project.creative_config.identidad.genero_principal == "steampunk"
 
     def test_update_invalid_path(self):
         svc = ProjectService()
@@ -312,14 +313,14 @@ class TestUpdateConfig:
         path = tmp_path / "persist.json"
 
         result = svc.update_config(
-            "general.theme", "horror", path=path
+            "creative_config.estilo.tono", "horror", path=path
         )
         assert isinstance(result, Ok)
 
         # Verify persisted
         loaded = store.load(path)
         assert isinstance(loaded, Ok)
-        assert loaded.value.general.theme == "horror"
+        assert loaded.value.creative_config.estilo.tono == "horror"
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +334,11 @@ class TestModifySaveReloadRoundtrip:
         svc = ProjectService(store=store)
         svc.create(name="CycleTest")
 
-        # Modify multiple configs
-        svc.update_config("general.theme", "dark fantasy")
-        svc.update_config("genre.primary_genre", "Fantasy")
-        svc.update_config("ai.enabled", True)
-        svc.update_config("project_metadata.author", "Tolkien")
+        # Modify multiple configs (PA04: todo vive en creative_config)
+        svc.update_config("creative_config.estilo.tono", "dark fantasy")
+        svc.update_config("creative_config.identidad.genero_principal", "Fantasy")
+        svc.update_config("creative_config.identidad.subgeneros", ["épica", "oscura"])
+        svc.update_config("creative_config.reglas.reglas_canon", ["Sin resurrecciones"])
         svc.update_config("description", "Middle Earth")
 
         # Save, close, open, verify
@@ -350,10 +351,10 @@ class TestModifySaveReloadRoundtrip:
         p = result.value
         assert p.name == "CycleTest"
         assert p.description == "Middle Earth"
-        assert p.general.theme == "dark fantasy"
-        assert p.genre.primary_genre == "Fantasy"
-        assert p.ai.enabled is True
-        assert p.project_metadata.author == "Tolkien"
+        assert p.creative_config.estilo.tono == "dark fantasy"
+        assert p.creative_config.identidad.genero_principal == "Fantasy"
+        assert p.creative_config.identidad.subgeneros == ["épica", "oscura"]
+        assert p.creative_config.reglas.reglas_canon == ["Sin resurrecciones"]
 
 
 # ---------------------------------------------------------------------------

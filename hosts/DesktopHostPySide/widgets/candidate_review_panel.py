@@ -24,7 +24,6 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -33,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
 from packages.domain.result import Error
 
 # Campos de texto del candidato por orden de preferencia para el cuerpo legible.
@@ -162,6 +162,25 @@ def dating_badge_label(entity: Any) -> str:
     }.get(precision, "Datado")
 
 
+def source_badge_text(candidate: Any) -> str:
+    """fila 33: etiqueta legible del origen del candidato (usuario vs IA) y, si
+    aplica, su confianza. La revisión distingue de un vistazo qué propuso la IA."""
+    source = str(getattr(candidate, "source", "") or "").lower()
+    if source.startswith("ai") or source == "ia":
+        origin = "🤖 IA"
+    elif "import" in source:
+        origin = "📄 Importación"
+    elif source in ("manual", "usuario", "user"):
+        origin = "🧑 Usuario"
+    else:
+        origin = source or "origen desconocido"
+    parts = [f"Origen: {origin}"]
+    confidence = getattr(candidate, "confidence", None)
+    if isinstance(confidence, (int, float)) and 0 < float(confidence) <= 1:
+        parts.append(f"confianza {int(round(float(confidence) * 100))}%")
+    return " · ".join(parts)
+
+
 class CandidateReviewPanel(QWidget):
     """Revisión ligera de un candidato: encabezado + texto editable + decisión."""
 
@@ -197,14 +216,20 @@ class CandidateReviewPanel(QWidget):
     # ── construcción ──────────────────────────────────────────────────────
 
     def _build(self, proposed: dict[str, Any]) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
+        # UX22: estructura unificada sobre PanelScaffold (cabecera + cuerpo + acciones).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
         kind = getattr(getattr(self._candidate, "candidate_type", None), "value", "")
-        tag = QLabel(str(kind).replace("_", " ").upper() or "CANDIDATO")
-        tag.setObjectName("badge")
-        layout.addWidget(tag)
+        badge_text = str(kind).replace("_", " ").upper() or "CANDIDATO"
+        scaffold = PanelScaffold("Revisión de candidato", badge=badge_text, badge_tone="gold")
+        outer.addWidget(scaffold)
+        layout = scaffold.body  # las _build_* añaden el contenido aquí
+
+        # fila 33: badge de fuente (usuario/IA) + confianza, para no confundir lo
+        # propuesto por la IA con lo introducido por el usuario.
+        source_label = QLabel(source_badge_text(self._candidate))
+        source_label.setObjectName("muted")
+        layout.addWidget(source_label)
 
         # UX5b: para candidatos de entidad el campo editable ES el nombre real
         # (`proposed_data["name"]`), no la etiqueta "Hoja candidata: …" — así el
@@ -231,7 +256,9 @@ class CandidateReviewPanel(QWidget):
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
-        row = QHBoxLayout()
+        # UX22: barra de acciones del scaffold (secundarios a la izquierda, primario
+        # a la derecha).
+        row = scaffold.add_action_bar()
         # SEM04: cerrar SIN decidir — revisar sin compromiso; la semilla sigue
         # pendiente y se puede volver a abrir más tarde.
         close = QPushButton("Cerrar")
@@ -246,7 +273,6 @@ class CandidateReviewPanel(QWidget):
         row.addStretch(1)
         row.addWidget(reject)
         row.addWidget(accept)
-        layout.addLayout(row)
 
     def _build_edit(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
         """Candidato de EDICIÓN: objetivo editable + texto propuesto editable."""
@@ -269,6 +295,17 @@ class CandidateReviewPanel(QWidget):
             field_label = QLabel(f"Campo: {field}")
             field_label.setObjectName("muted")
             layout.addWidget(field_label)
+            # fila 33: diff antes/después — muestra el valor actual de canon (solo
+            # lectura) para comparar con la propuesta antes de aplicar.
+            before = self._current_target_value(proposed)
+            if before:
+                layout.addWidget(QLabel("Antes (canon actual):"))
+                before_box = QTextEdit()
+                before_box.setReadOnly(True)
+                before_box.setObjectName("muted")
+                before_box.setPlainText(before)
+                before_box.setMaximumHeight(140)
+                layout.addWidget(before_box)
             layout.addWidget(QLabel("Texto propuesto (editable antes de aplicar):"))
 
         self._body_edit = QTextEdit()
@@ -276,6 +313,37 @@ class CandidateReviewPanel(QWidget):
         self._body_edit.setPlainText(candidate_body_text(proposed))
         self._body_edit.setMinimumHeight(220)
         layout.addWidget(self._body_edit, 1)
+
+    def _current_target_value(self, proposed: dict[str, Any]) -> str:
+        """fila 33: valor actual en canon del campo que la edición pretende cambiar
+        (para el diff antes/después). Solo lectura del dominio vía el controller; ""
+        si no se puede resolver el objetivo."""
+        ctrl = self._controller
+        ps = getattr(ctrl, "ps", None)
+        project = getattr(ps, "active_project", None) if ps is not None else None
+        if project is None:
+            return ""
+        target_id = str(proposed.get("edit_target_id") or "")
+        target_name = str(proposed.get("edit_target_name") or "").strip()
+        entity = None
+        for e in getattr(project, "entities", []) or []:
+            if target_id and str(getattr(e, "id", "")) == target_id:
+                entity = e
+                break
+            if not target_id and target_name and str(getattr(e, "name", "")).strip() == target_name:
+                entity = e
+                break
+        if entity is None:
+            return ""
+        field = str(proposed.get("edit_field") or "body")
+        attr = "extended_description" if field == "body" else field
+        value = getattr(entity, attr, None)
+        if not value:
+            for fallback in _BODY_FIELDS:
+                value = getattr(entity, fallback, None)
+                if value:
+                    break
+        return str(value or "")
 
     def _build_analysis(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
         """Candidato de ANÁLISIS: informe legible (solo lectura) + reparar canon."""
@@ -363,6 +431,8 @@ class CandidateReviewPanel(QWidget):
                 self._log("warning", warnings)
         elif self._log:
             self._log("info", "Semilla aceptada")
+        if not warnings:
+            self._status.setText("Aceptado ✓")  # UX17: acuse breve antes de cerrar
         if self._on_decision:
             self._on_decision(self._candidate_id(), "accept")
 
@@ -375,6 +445,7 @@ class CandidateReviewPanel(QWidget):
             return
         if self._log:
             self._log("info", "Semilla rechazada")
+        self._status.setText("Descartado")  # UX17: acuse breve antes de cerrar
         if self._on_decision:
             self._on_decision(self._candidate_id(), "reject")
 

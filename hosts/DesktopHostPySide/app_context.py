@@ -30,11 +30,25 @@ class AppContext:
     current_audience: str = "gm"
     log_messages: list[str] = field(default_factory=list)
     log_sink: Callable[[str], None] | None = None
+    # UX13: salida de avisos transitorios (toasts). La fija MainWindow; si no hay
+    # sink, notify() degrada a log y la UI no se rompe (CLI/tests).
+    notify_sink: Callable[[str, str], None] | None = None
     advanced_mode: bool = False
     drawer: Any = None  # RightDrawer reference (set by MainWindow)
     left_drawer: Any = None  # LeftDrawer reference (set by MainWindow)
     rag_service: Any = None
     ai_prompt_trace_store: Any = None
+    # UX33: runner persistente de los jobs de importación (lo fija MainWindow). La
+    # extracción vive aquí, no en la vista, así que sobrevive al cierre del cajón.
+    import_jobs: Any = None
+    # UX33: guardado SIN UI ruidosa (sin toast/refresh/cierre de cajón ni diálogo),
+    # para autoguardar al terminar un job de importación. Lo fija MainWindow.
+    request_save_silent: Callable[[], bool] | None = None
+    # I23/UX33-fix: reabrir el menú de importación (vista fresca en el cajón). Lo fija
+    # MainWindow = _import_document. Permite VOLVER al menú tras revisar el andamiaje
+    # en el panel de configuración (el cajón no apila contenido: set_content destruye
+    # la vista anterior, así que sin esto no había forma de regresar a aceptar/descartar).
+    reopen_import: Callable[[], None] | None = None
 
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large
@@ -53,6 +67,9 @@ class AppContext:
     recent_projects: list[str] = field(default_factory=list)
     creation_layout_mode: str = "concentric_rings"
     creation_focused_ring_id: str = ""
+    # BETA1-UX36: contenedores que el usuario expandió en la cronología (el resto
+    # arranca colapsado). Estado de UI, no de proyecto → vive aquí, sin migración.
+    creation_chrono_expanded_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.load_preferences()
@@ -114,6 +131,9 @@ class AppContext:
             # those are session choices, not the app default.
             self.creation_layout_mode = "concentric_rings"
             self.creation_focused_ring_id = str(data.get("creation_focused_ring_id", self.creation_focused_ring_id)) or ""
+            self.creation_chrono_expanded_ids = [
+                str(i) for i in (data.get("creation_chrono_expanded_ids", []) or []) if str(i)
+            ]
             self._apply_ai_environment()
         except Exception:
             # UI preferences are non-critical; keep defaults if unreadable.
@@ -140,6 +160,7 @@ class AppContext:
                 "recent_projects": list(self.recent_projects or [])[:8],
                 "creation_layout_mode": self.creation_layout_mode,
                 "creation_focused_ring_id": self.creation_focused_ring_id,
+                "creation_chrono_expanded_ids": list(self.creation_chrono_expanded_ids or []),
             }
             self._apply_ai_environment()
             PREFERENCES_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -167,3 +188,16 @@ class AppContext:
             self.log_messages = self.log_messages[-100:]
         if self.log_sink is not None:
             self.log_sink(entry)
+
+    def notify(self, message: str, kind: str = "info") -> None:
+        """UX13: aviso transitorio (toast) además de registrarlo en el log.
+
+        kind ∈ {success, info, error}. Fail-soft: sin sink (CLI/tests) solo loguea.
+        """
+        level = {"success": "info", "error": "error"}.get(kind, "info")
+        self.log(level, message)
+        if self.notify_sink is not None:
+            try:
+                self.notify_sink(message, kind)
+            except Exception:  # noqa: BLE001 - el aviso nunca rompe el flujo
+                pass

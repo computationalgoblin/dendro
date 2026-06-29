@@ -1,10 +1,12 @@
-"""I11 — Extracción dirigida por taxonomía + Ring end-to-end.
+"""I11 — Extracción IA del Modo Canon + Ring end-to-end.
 
-La extracción IA del Modo Canon recibe la taxonomía del proyecto (qué
-entity_type/branch_type/anillos son válidos) y un resumen del canon. Valida los
-candidatos contra la taxonomía (strict → RECHAZADO, permisivo → incidencia
-PENDIENTE). ring_suggestion se mapea a CandidateType.ANILLO y se materializa
-como WorldLayer al aceptar.
+ring_suggestion se mapea a CandidateType.ANILLO y se materializa como WorldLayer
+al aceptar.
+
+PA04 eliminó la extracción DIRIGIDA por taxonomía (``ProjectTaxonomy`` ya no
+existe); sus tests (inyección de taxonomía en el prompt, validación strict /
+permisiva contra la taxonomía) se retiraron. La extracción base y el flujo de
+anillos siguen vivos.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from packages.domain.import_models import (
     ImportBasket,
     ImportReviewState,
 )
-from packages.domain.project import Project, ProjectTaxonomy
+from packages.domain.project import Project
 from packages.domain.result import is_ok, unwrap
 from packages.infrastructure.ai_provider import AIProvider
 
@@ -47,10 +49,8 @@ class FakeProjectService:
         self._current_path = current_path or Path("/tmp/i11.json")
 
 
-def _project_with_basket(taxonomy: ProjectTaxonomy | None = None) -> tuple[Project, str]:
+def _project_with_basket() -> tuple[Project, str]:
     proj = Project(name="I11")
-    if taxonomy is not None:
-        proj.import_taxonomy = taxonomy
     seg = DocumentSegment(id="seg-1", source_id="src-1", section="Lore", raw_text="texto")
     basket = ImportBasket(id="bsk-1", source_id="src-1", segments=[seg], import_candidates=[])
     proj.import_baskets = [basket]
@@ -69,18 +69,6 @@ def test_prompt_lives_in_registry():
 
 
 @pytest.mark.application
-def test_taxonomy_injected_into_system_prompt():
-    tax = ProjectTaxonomy(allowed_entity_types=["personaje"], extraction_guidance="solo el núcleo")
-    proj, bid = _project_with_basket(tax)
-    provider = FixedProvider([{"kind": "entity", "name": "Eldrin", "entity_type": "personaje"}])
-    _extract(proj, bid, provider)
-    system_prompt = provider.calls[0][0]
-    assert "TAXONOMIA DEL PROYECTO" in system_prompt
-    assert "personaje" in system_prompt
-    assert "solo el núcleo" in system_prompt
-
-
-@pytest.mark.application
 def test_ring_suggestion_maps_to_anillo():
     proj, bid = _project_with_basket()
     provider = FixedProvider([
@@ -93,33 +81,11 @@ def test_ring_suggestion_maps_to_anillo():
 
 
 @pytest.mark.application
-def test_out_of_taxonomy_strict_is_rejected():
-    tax = ProjectTaxonomy(allowed_entity_types=["personaje"], strict=True)
-    proj, bid = _project_with_basket(tax)
-    provider = FixedProvider([{"kind": "entity", "name": "Dragón", "entity_type": "criatura"}])
-    cands = unwrap(_extract(proj, bid, provider))
-    assert len(cands) == 1
-    assert cands[0].review_state == ImportReviewState.RECHAZADO
-    assert cands[0].candidate_type == CandidateType.INCIDENCIA.value
-
-
-@pytest.mark.application
-def test_out_of_taxonomy_permissive_is_pending_issue():
-    tax = ProjectTaxonomy(allowed_entity_types=["personaje"], strict=False)
-    proj, bid = _project_with_basket(tax)
-    provider = FixedProvider([{"kind": "entity", "name": "Dragón", "entity_type": "criatura"}])
-    cands = unwrap(_extract(proj, bid, provider))
-    assert len(cands) == 1
-    assert cands[0].review_state == ImportReviewState.PENDIENTE
-    assert cands[0].candidate_type == CandidateType.INCIDENCIA.value
-
-
-@pytest.mark.application
-def test_in_taxonomy_candidate_passes():
-    tax = ProjectTaxonomy(allowed_entity_types=["personaje"], strict=True)
-    proj, bid = _project_with_basket(tax)
+def test_entity_candidate_is_pending_entity():
+    proj, bid = _project_with_basket()
     provider = FixedProvider([{"kind": "entity", "name": "Eldrin", "entity_type": "personaje"}])
     cands = unwrap(_extract(proj, bid, provider))
+    assert len(cands) == 1
     assert cands[0].review_state == ImportReviewState.PENDIENTE
     assert cands[0].candidate_type == CandidateType.ENTIDAD.value
 

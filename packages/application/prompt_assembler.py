@@ -22,7 +22,7 @@ import logging
 from typing import Any
 
 from packages.application.context_budget import ContextBudgetManager
-from packages.application.prompt_budget import _estimate_tokens, enforce_budget
+from packages.application.prompt_budget import _estimate_tokens, enforce_budget_report
 
 logger = logging.getLogger("narrative.prompt_assembler")
 
@@ -100,11 +100,15 @@ def _configuracion_creativa(context: dict[str, Any]) -> dict[str, Any]:
     brief = context.get("creative_brief") or {}
     if not isinstance(brief, dict) or not brief:
         return {}
+    # PA04 forward-compat: aquí se inyectará en el futuro `resumen_proyecto` —
+    # un resumen periódico del contenido actual del proyecto (regenerado fuera de
+    # línea) que viajará en cada prompt. Punto de inserción reservado; sin job/UI aún.
     section: dict[str, Any] = {
         "instruccion": (
-            "Configuración creativa COMPLETA del proyecto. canon.hard_rules = canon duro "
-            "(no lo contradigas; si la petición choca, devuélvelo como issue/proposal). "
-            "negative_space = lo que debes evitar. taste_memory = gustos del usuario."
+            "Configuración creativa COMPLETA del proyecto (5 secciones). "
+            "reglas.reglas_canon = canon duro (no lo contradigas; si la petición choca, "
+            "devuélvelo como issue/proposal). reglas.evitar = lo que debes evitar. "
+            "identidad/direccion/motor/estilo guían tono, género y rumbo narrativo."
         ),
     }
     section.update(brief)
@@ -488,6 +492,7 @@ def build_context_preview(preview: dict[str, Any]) -> dict[str, Any]:
         "input_budget": preview.get("input_budget"),
         "total_tokens": sum(s["est_tokens"] for s in sections_out),
         "sections": sections_out,
+        "warnings": list(preview.get("warnings") or []),
     }
 
 
@@ -505,6 +510,12 @@ class PromptAssembler:
 
     def assemble(self, plan: Any) -> str:
         """Construye el mensaje, aplica presupuesto por tier y devuelve JSON."""
+        return self.assemble_with_warnings(plan)[0]
+
+    def assemble_with_warnings(self, plan: Any) -> tuple[str, list[str]]:
+        """Como ``assemble`` pero devuelve también los avisos de truncado por
+        presupuesto (para que el job los registre y la UI no presente un recorte
+        silencioso)."""
         pv = self.preview(plan)
         self._log_debug(
             intent=pv["intent"],
@@ -514,7 +525,9 @@ class PromptAssembler:
             after=pv["trimmed"],
             context=pv["context"],
         )
-        return json.dumps(pv["trimmed"], ensure_ascii=False, indent=2)
+        return json.dumps(pv["trimmed"], ensure_ascii=False, indent=2), list(
+            pv.get("warnings") or []
+        )
 
     def preview(self, plan: Any) -> dict[str, Any]:
         """Igual que ``assemble`` pero SIN serializar: devuelve las secciones antes
@@ -534,7 +547,9 @@ class PromptAssembler:
         override = context.get("prompt_budget_tokens")
         budget = self._budget.input_budget(intent, override_tokens=override)
         percentages = self._budget.section_percentages(intent)
-        trimmed = enforce_budget(sections, budget, section_percentages=percentages)
+        trimmed, warnings = enforce_budget_report(
+            sections, budget, section_percentages=percentages
+        )
         return {
             "intent": intent,
             "tier": self._budget.tier_for(intent).value,
@@ -543,6 +558,7 @@ class PromptAssembler:
             "percentages": percentages,
             "sections": sections,
             "trimmed": trimmed,
+            "warnings": warnings,
             "context": context,
         }
 
@@ -668,3 +684,9 @@ _DEFAULT_ASSEMBLER = PromptAssembler()
 def build_model_user_message(plan: Any) -> str:
     """Shim de compatibilidad: delega en el PromptAssembler por defecto."""
     return _DEFAULT_ASSEMBLER.assemble(plan)
+
+
+def build_model_user_message_with_warnings(plan: Any) -> tuple[str, list[str]]:
+    """Como ``build_model_user_message`` pero devuelve también los avisos de
+    truncado por presupuesto."""
+    return _DEFAULT_ASSEMBLER.assemble_with_warnings(plan)

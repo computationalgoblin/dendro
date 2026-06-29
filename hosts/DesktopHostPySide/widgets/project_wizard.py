@@ -1,16 +1,17 @@
-"""Project creation wizard — custom, fluid, design-system styled (BETA1-G09).
+"""Asistente de creación de proyecto — custom, fluido, con el design-system (PA04).
 
-Reemplaza el QWizard nativo (genérico y plano) por un asistente propio con el
-lenguaje visual de Dendro: un RAIL de pasos con progreso a la izquierda, una
-cabecera con micro-ayuda por paso, campos agrupados y con ejemplos, transición
-suave entre pasos y botones de oro. Cubre TODO el contenido de la configuración
-del proyecto (paridad con CreativeConfigPanel), guiando al usuario en vez de
-abrumarle: casi todo es opcional y editable después.
+Reemplaza el QWizard nativo por un asistente propio con el lenguaje visual de
+Dendro: un RAIL de pasos a la izquierda, cabecera con micro-ayuda, transición
+fluida y botones de oro.
 
-API pública para `main_window._new_project` (PA02: ya no es QDialog del SO, sino
-un QFrame embebible que se muestra en un ModalOverlay centrado dentro de la app):
-- señales ``accepted`` / ``cancelled`` (sustituyen a ``exec()`` Accepted/Rejected)
-- ``collect_config()`` → dict de overrides
+PA04: el wizard solo pide el **subset esencial de Identidad** (premisa, resumen,
+género, subgéneros, formato, público, idioma, estado) más la cronología. El
+resto de los 30 campos canónicos se completan luego en el panel de configuración
+(``CreativeConfigPanel``). Un preset opcional rellena las 5 secciones.
+
+API pública para ``main_window``:
+- señales ``accepted`` / ``cancelled``
+- ``collect_config()`` → dict (incluye ``name`` y la cronología)
 - ``apply_to_project(project)`` → vuelca al proyecto recién creado
 """
 
@@ -19,6 +20,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -36,33 +38,13 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
 from hosts.DesktopHostPySide.widgets.creative_config_panel import (
-    AI_DEPTH_OPTIONS,
-    AI_OUTPUT_OPTIONS,
-    AI_ROLE_KEYS,
-    AI_ROLE_OPTIONS,
-    AI_STRATEGY_KEYS,
-    AI_STRATEGY_OPTIONS,
-    AI_UNCERTAINTY_OPTIONS,
-    AUDIENCE_OPTIONS,
-    CHANGE_OPTIONS,
-    CONFLICT_OPTIONS,
-    CONTRADICTION_OPTIONS,
-    DIALOGUE_OPTIONS,
-    DISTANCE_OPTIONS,
-    EMOTION_OPTIONS,
-    ESCALATION_OPTIONS,
-    EXPOSITION_OPTIONS,
-    FORMAT_OPTIONS,
-    GENRE_OPTIONS,
-    IMPACT_OPTIONS,
-    PROGRESSION_OPTIONS,
-    STATUS_OPTIONS,
-    TENSION_OPTIONS,
-    ListEditor,
+    FORMATO_SUGERENCIAS,
+    GENERO_SUGERENCIAS,
+    PUBLICO_SUGERENCIAS,
+    CreativeConfigPanel,
     TagInput,
-    _make_combo,
+    _make_combo_editable,
     _make_combo_keyed,
-    _make_slider,
     _make_textarea,
 )
 from hosts.DesktopHostPySide.widgets.design_system import (
@@ -77,6 +59,8 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE,
     SURFACE_HI,
 )
+from hosts.DesktopHostPySide.widgets.field_help import FieldHelp
+from packages.domain.creative_config import ESTADO_OPCIONES
 from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
 from packages.domain.project import Project
 from packages.domain.project_chronology import ProjectChronology
@@ -100,18 +84,26 @@ def _names_from_length_text(text: str) -> list[str]:
 # ── piezas visuales ────────────────────────────────────────────────────────
 
 
-def _field_block(label: str, widget: QWidget, hint: str = "") -> QWidget:
-    """Bloque de campo vertical: etiqueta + (ayuda) + widget. Más aire y
-    legibilidad que un QFormLayout a dos columnas."""
+def _field_block(label: str, widget: QWidget, hint: str = "", help_key: str = "") -> QWidget:
+    """Bloque de campo vertical: etiqueta (+ icono ⓘ) + (ayuda) + widget."""
     block = QWidget()
     box = QVBoxLayout(block)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(5)
+
+    head = QHBoxLayout()
+    head.setContentsMargins(0, 0, 0, 0)
+    head.setSpacing(6)
     lab = QLabel(label)
     lab.setStyleSheet(
         f"color: {INK_STRONG}; font-size: 13px; font-weight: 700; background: transparent; border: none;"
     )
-    box.addWidget(lab)
+    head.addWidget(lab)
+    if help_key:
+        head.addWidget(FieldHelp(help_key))
+    head.addStretch(1)
+    box.addLayout(head)
+
     if hint:
         hl = QLabel(hint)
         hl.setWordWrap(True)
@@ -121,23 +113,6 @@ def _field_block(label: str, widget: QWidget, hint: str = "") -> QWidget:
         box.addWidget(hl)
     box.addWidget(widget)
     return block
-
-
-def _slider_row(value: int = 5) -> tuple[QWidget, object]:
-    """Slider + etiqueta de valor en una fila; devuelve (contenedor, slider)."""
-    slider, lbl = _make_slider(value)
-    row = QWidget()
-    h = QHBoxLayout(row)
-    h.setContentsMargins(0, 0, 0, 0)
-    h.setSpacing(10)
-    h.addWidget(slider, 1)
-    lbl.setStyleSheet(
-        f"color: {GOLD_DEEP}; font-size: 13px; font-weight: 700; min-width: 18px; "
-        f"background: transparent; border: none;"
-    )
-    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    h.addWidget(lbl)
-    return row, slider
 
 
 class _RailItem(QPushButton):
@@ -164,7 +139,7 @@ class _RailItem(QPushButton):
 
 
 class ProjectWizard(QFrame):
-    """Asistente de creación de proyecto (custom, BETA1-G09; embebible PA02)."""
+    """Asistente de creación de proyecto (custom; embebible en overlay modal)."""
 
     accepted = Signal()
     cancelled = Signal()
@@ -172,19 +147,12 @@ class ProjectWizard(QFrame):
     # (clave, título, micro-ayuda)
     STEPS = [
         ("essentials", "Tu proyecto", "Lo esencial para empezar. Solo el nombre es obligatorio."),
-        ("genre", "Género y formato", "¿Qué clase de obra es y para quién?"),
+        ("identidad", "Identidad", "Qué clase de obra es y para quién. El resto se afina luego."),
         ("chronology", "Cronología", "¿Cómo mide el tiempo tu mundo? Puedes no usar calendario."),
-        ("intent", "Intención y emoción", "Qué prometes al lector y qué quieres que sienta."),
-        ("engine", "Motor narrativo", "De dónde nace la tensión y cómo avanza la historia."),
-        ("style", "Estilo y voz", "El tono, la distancia y la textura de la prosa."),
-        ("rules", "Reglas y límites", "Lo inviolable para la IA y lo que prefieres evitar."),
-        ("ai", "Inteligencia artificial", "Cómo quieres que colabore Dendro contigo."),
     ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # PA02: tarjeta centrada en un overlay, no ventana del SO. Tamaño acotado
-        # para que se vea como panel modal dentro de la app.
         self.setObjectName("projectWizard")
         self.setMinimumSize(960, 640)
         self.setMaximumSize(1040, 720)
@@ -196,6 +164,7 @@ class ProjectWizard(QFrame):
         self._steps: list[QWidget] = []
         self._rail_items: list[_RailItem] = []
         self._current = 0
+        self._advanced = False  # modo avanzado: rellenar las 5 secciones en el wizard
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -214,12 +183,7 @@ class ProjectWizard(QFrame):
         col.addWidget(self._build_footer())
         root.addWidget(content, 1)
 
-        # construir pasos
-        for builder in (
-            self._step_essentials, self._step_genre, self._step_chronology,
-            self._step_intent, self._step_engine, self._step_style,
-            self._step_rules, self._step_ai,
-        ):
+        for builder in (self._step_essentials, self._step_identidad, self._step_chronology):
             page = self._scroll(builder())
             self._steps.append(page)
             self._stack.addWidget(page)
@@ -375,17 +339,24 @@ class ProjectWizard(QFrame):
         self._stack.setCurrentIndex(index)
         if not self._rail_items[index].isChecked():
             self._rail_items[index].setChecked(True)
-        key, title, hint = self.STEPS[index]
-        self._step_title.setText(title)
-        self._step_hint.setText(hint)
+        self._step_title.setText(self._step_title_for(index))
+        self._step_hint.setText(self._step_hint_for(index))
         self._step_counter.setText(f"Paso {index + 1} de {len(self.STEPS)}")
         self._progress.setValue(index + 1)
-        # BETA1-G09: cambio de paso INSTANTÁNEO. Nada de QGraphicsOpacityEffect
-        # aquí: una animación DeleteWhenStopped sobre el efecto quedaba colgando
-        # tras destruir el wizard y provocaba un access violation entre tests.
-        # El rail + la barra de progreso ya transmiten fluidez. Ver memoria
+        # Cambio de paso INSTANTÁNEO: nada de QGraphicsOpacityEffect aquí (provoca
+        # access violations al destruir el wizard). Ver memoria
         # [[qt-avoid-graphics-effects-on-dynamic-widgets]].
         self._refresh_nav()
+
+    def _step_title_for(self, index: int) -> str:
+        if index == 1 and getattr(self, "_advanced", False):
+            return "Configuración completa"
+        return self.STEPS[index][1]
+
+    def _step_hint_for(self, index: int) -> str:
+        if index == 1 and getattr(self, "_advanced", False):
+            return "Rellena las 5 secciones creativas ahora. Todo sigue editable luego."
+        return self.STEPS[index][2]
 
     def _refresh_nav(self):
         last = self._current == len(self.STEPS) - 1
@@ -429,35 +400,85 @@ class ProjectWizard(QFrame):
             "Una plantilla creativa que rellena valores razonables. Opcional.",
         ))
 
+        self.advanced_check = QCheckBox(
+            "Configuración avanzada: rellenar todas las secciones ahora"
+        )
+        self.advanced_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.advanced_check.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: 13px; font-weight: 600; "
+            f"background: transparent; border: none;"
+        )
+        self.advanced_check.toggled.connect(self._on_advanced_toggled)
+        box.addWidget(self.advanced_check)
+        adv_hint = QLabel(
+            "Si no, solo se pide lo esencial; el resto se completa luego en Configuración."
+        )
+        adv_hint.setWordWrap(True)
+        adv_hint.setStyleSheet(
+            f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;"
+        )
+        box.addWidget(adv_hint)
+
         self.premise_edit = _make_textarea("", 70)
         self.premise_edit.setPlaceholderText("Ej: En un mundo donde los sueños son territorio compartido…")
-        box.addWidget(_field_block("Premisa central", self.premise_edit, "La idea-semilla, en una o dos frases."))
+        box.addWidget(_field_block(
+            "Premisa", self.premise_edit, "La idea-semilla, en una o dos frases.", help_key="premisa"))
 
-        self.summary_edit = _make_textarea("", 60)
-        self.summary_edit.setPlaceholderText("Un resumen de una o dos líneas para ti.")
-        box.addWidget(_field_block("Resumen corto", self.summary_edit))
+        self.summary_edit = _make_textarea("", 70)
+        self.summary_edit.setPlaceholderText("1–3 párrafos de contexto global para la IA.")
+        box.addWidget(_field_block(
+            "Resumen corto", self.summary_edit, help_key="resumen_corto"))
         box.addStretch(1)
         return page
 
-    def _step_genre(self) -> QWidget:
+    def _step_identidad(self) -> QWidget:
         page, box = self._page()
-        self.genre_combo = _make_combo(GENRE_OPTIONS)
-        box.addWidget(_field_block("Género principal", self.genre_combo))
+        # El paso 2 alterna entre el formulario esencial (modo básico) y el panel
+        # creativo completo de 30 campos (modo avanzado), según el checkbox del paso 1.
+        self._identidad_stack = QStackedWidget()
+        self._identidad_stack.addWidget(self._build_identidad_simple())
+        # Modo avanzado: panel completo sobre un Project "scratch"; al crear, se
+        # vuelca con panel.apply_to_project(project_real). Reutiliza toda la UI/lógica.
+        self._adv_scratch = Project()
+        self._adv_panel = CreativeConfigPanel(self._adv_scratch)
+        self._identidad_stack.addWidget(self._adv_panel)
+        box.addWidget(self._identidad_stack, 1)
+        return page
+
+    def _build_identidad_simple(self) -> QWidget:
+        simple = QWidget()
+        simple.setStyleSheet("background: transparent;")
+        box = QVBoxLayout(simple)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(15)
+        self.genre_combo = _make_combo_editable(GENERO_SUGERENCIAS)
+        box.addWidget(_field_block("Género principal", self.genre_combo, help_key="genero_principal"))
         self.subgenres = TagInput()
-        box.addWidget(_field_block("Subgéneros", self.subgenres, "Escribe y pulsa Enter para añadir."))
-        self.audience_combo = _make_combo(AUDIENCE_OPTIONS)
-        box.addWidget(_field_block("Público objetivo", self.audience_combo))
-        self.format_combo = _make_combo(FORMAT_OPTIONS)
-        box.addWidget(_field_block("Formato narrativo", self.format_combo, "Novela, campaña de rol, serie…"))
-        self.status_combo = _make_combo(STATUS_OPTIONS)
-        box.addWidget(_field_block("Estado de desarrollo", self.status_combo))
+        box.addWidget(_field_block(
+            "Subgéneros", self.subgenres, "Escribe y pulsa Enter para añadir.", help_key="subgeneros"))
+        self.format_combo = _make_combo_editable(FORMATO_SUGERENCIAS)
+        box.addWidget(_field_block(
+            "Formato", self.format_combo, "Novela, campaña de rol, videojuego…", help_key="formato"))
+        self.audience_combo = _make_combo_editable(PUBLICO_SUGERENCIAS)
+        box.addWidget(_field_block("Público", self.audience_combo, help_key="publico"))
         self.language_edit = QLineEdit("es")
         self.language_edit.setPlaceholderText("es, en, fr…")
-        box.addWidget(_field_block("Idioma principal", self.language_edit))
-        # PA02: el worldbuilding por capas causales está siempre activo; ya no se
-        # ofrece como opción en el wizard.
+        box.addWidget(_field_block("Idioma principal", self.language_edit, help_key="idioma"))
+        self.status_combo = _make_combo_keyed(ESTADO_OPCIONES)
+        box.addWidget(_field_block("Estado", self.status_combo, help_key="estado"))
         box.addStretch(1)
-        return page
+        return simple
+
+    def _on_advanced_toggled(self, checked: bool) -> None:
+        self._advanced = bool(checked)
+        if hasattr(self, "_identidad_stack"):
+            self._identidad_stack.setCurrentIndex(1 if checked else 0)
+        title = "Configuración completa" if checked else self.STEPS[1][1]
+        if len(self._rail_items) > 1:
+            self._rail_items[1].setText(f"  2   {title}")
+        if self._current == 1:
+            self._step_title.setText(title)
+            self._step_hint.setText(self._step_hint_for(1))
 
     def _step_chronology(self) -> QWidget:
         page, box = self._page()
@@ -558,163 +579,6 @@ class ProjectWizard(QFrame):
         })
         self.chrono_date.set_date(current)
 
-    def _step_intent(self) -> QWidget:
-        page, box = self._page()
-        self.reader_promise = _make_textarea("", 56)
-        self.reader_promise.setPlaceholderText("Ej: Descubrirás que la realidad es una ilusión compartida…")
-        box.addWidget(_field_block("Promesa al lector", self.reader_promise, "¿Qué experiencia garantizas?"))
-        self.central_question = _make_textarea("", 56)
-        self.central_question.setPlaceholderText("Ej: ¿Puede uno ser libre si recuerda cada error?")
-        box.addWidget(_field_block("Pregunta dramática central", self.central_question))
-        self.desired_emotions = TagInput()
-        box.addWidget(_field_block(
-            "Emociones que buscas provocar", self.desired_emotions,
-            "Ej: " + ", ".join(EMOTION_OPTIONS[:6]) + "…",
-        ))
-        self.aftertaste = _make_textarea("", 48)
-        self.aftertaste.setPlaceholderText("Ej: Una mezcla de melancolía y extrañeza…")
-        box.addWidget(_field_block("Sensación final (aftertaste)", self.aftertaste))
-        row_o, self.originality = _slider_row(5)
-        box.addWidget(_field_block("Originalidad", row_o, "0 = convencional · 10 = experimental"))
-        row_a, self.ambiguity = _slider_row(5)
-        box.addWidget(_field_block("Ambigüedad", row_a, "0 = explícito · 10 = enigmático"))
-        self.impact_types = TagInput()
-        box.addWidget(_field_block(
-            "Tipos de impacto", self.impact_types,
-            "Ej: " + ", ".join(IMPACT_OPTIONS[:6]) + "…",
-        ))
-        box.addStretch(1)
-        return page
-
-    def _step_engine(self) -> QWidget:
-        page, box = self._page()
-        self.conflict_sources = TagInput()
-        box.addWidget(_field_block(
-            "Fuentes de conflicto", self.conflict_sources,
-            "Ej: " + ", ".join(CONFLICT_OPTIONS[:6]) + "…",
-        ))
-        self.tension_combo = _make_combo(TENSION_OPTIONS)
-        box.addWidget(_field_block("Tensión dominante", self.tension_combo))
-        self.progression_combo = _make_combo(PROGRESSION_OPTIONS)
-        box.addWidget(_field_block("Mecanismo de avance", self.progression_combo))
-        self.change_combo = _make_combo(CHANGE_OPTIONS)
-        box.addWidget(_field_block("Cómo cambian los personajes", self.change_combo))
-        self.escalation_combo = _make_combo(ESCALATION_OPTIONS)
-        box.addWidget(_field_block("Escalada", self.escalation_combo))
-        row_ag, self.agency = _slider_row(5)
-        box.addWidget(_field_block("Agencia de personajes", row_ag, "0 = arrastrados · 10 = deciden su destino"))
-        row_ca, self.causality = _slider_row(5)
-        box.addWidget(_field_block("Causalidad", row_ca, "0 = flexible · 10 = estricta (todo tiene consecuencia)"))
-        box.addStretch(1)
-        return page
-
-    def _step_style(self) -> QWidget:
-        page, box = self._page()
-        self.style_edit = _make_textarea("", 56)
-        self.style_edit.setPlaceholderText("Ej: prosa sobria con destellos líricos…")
-        box.addWidget(_field_block("Estilo narrativo", self.style_edit))
-        self.tone_edit = _make_textarea("", 48)
-        self.tone_edit.setPlaceholderText("Ej: melancólico pero con humor seco…")
-        box.addWidget(_field_block("Tono general", self.tone_edit))
-        self.distance_combo = _make_combo(DISTANCE_OPTIONS)
-        box.addWidget(_field_block("Distancia narrativa", self.distance_combo))
-        row_dd, self.desc_density = _slider_row(5)
-        box.addWidget(_field_block("Densidad descriptiva", row_dd, "0 = seca · 10 = sensorial"))
-        row_cd, self.conc_density = _slider_row(5)
-        box.addWidget(_field_block("Densidad conceptual", row_cd, "0 = ligera · 10 = reflexiva"))
-        row_st, self.subtext = _slider_row(5)
-        box.addWidget(_field_block("Subtexto", row_st, "0 = directo · 10 = muy implícito"))
-        self.dialogue_styles = TagInput()
-        box.addWidget(_field_block("Tipos de diálogo", self.dialogue_styles, "Ej: " + ", ".join(DIALOGUE_OPTIONS[:5]) + "…"))
-        self.exposition_modes = TagInput()
-        box.addWidget(_field_block("Modos de exposición", self.exposition_modes, "Ej: " + ", ".join(EXPOSITION_OPTIONS[:5]) + "…"))
-        self.recurring_imagery = TagInput()
-        box.addWidget(_field_block("Imágenes / motivos recurrentes", self.recurring_imagery))
-        self.forbidden_style = ListEditor()
-        box.addWidget(_field_block("Prohibiciones de estilo", self.forbidden_style))
-        box.addStretch(1)
-        return page
-
-    def _step_rules(self) -> QWidget:
-        page, box = self._page()
-        box.addWidget(self._section("Canon", "Lo que la IA debe respetar."))
-        self.hard_rules = ListEditor()
-        box.addWidget(_field_block("Reglas duras (inviolables)", self.hard_rules))
-        self.soft_rules = ListEditor()
-        box.addWidget(_field_block("Preferencias blandas", self.soft_rules))
-        row_cs, self.continuity = _slider_row(7)
-        box.addWidget(_field_block("Continuidad", row_cs, "0 = flexible · 10 = estricta"))
-        self.contradiction_combo = _make_combo(CONTRADICTION_OPTIONS)
-        box.addWidget(_field_block("Política de contradicciones", self.contradiction_combo))
-        self.world_rules = ListEditor()
-        box.addWidget(_field_block("Reglas de mundo", self.world_rules))
-        self.character_rules = ListEditor()
-        box.addWidget(_field_block("Reglas de personajes", self.character_rules))
-        self.timeline_rules = ListEditor()
-        box.addWidget(_field_block("Reglas de cronología", self.timeline_rules))
-
-        box.addWidget(self._section("Evitar", "Lo que NO quieres ver en la obra."))
-        self.avoid_tropes = ListEditor()
-        box.addWidget(_field_block("Tropos a evitar", self.avoid_tropes))
-        self.avoid_solutions = ListEditor()
-        box.addWidget(_field_block("Soluciones a evitar", self.avoid_solutions))
-        self.avoid_style = ListEditor()
-        box.addWidget(_field_block("Tics de estilo a evitar", self.avoid_style))
-        self.avoid_tones = ListEditor()
-        box.addWidget(_field_block("Tonos prohibidos", self.avoid_tones))
-        self.avoid_phrases = ListEditor()
-        box.addWidget(_field_block("Frases o gestos prohibidos", self.avoid_phrases))
-        box.addStretch(1)
-        return page
-
-    def _step_ai(self) -> QWidget:
-        page, box = self._page()
-        self.ai_role = _make_combo_keyed(AI_ROLE_KEYS, AI_ROLE_OPTIONS, "coauthor")
-        box.addWidget(_field_block("Rol por defecto", self.ai_role, "Cómo se comporta la IA al colaborar."))
-        row_ag, self.ai_aggression = _slider_row(5)
-        box.addWidget(_field_block("Agresividad creativa", row_ag, "0 = mínima · 10 = radical"))
-        self.ai_num = QSpinBox()
-        self.ai_num.setRange(1, 5)
-        self.ai_num.setValue(3)
-        box.addWidget(_field_block("Propuestas por defecto", self.ai_num))
-        self.ai_output = _make_combo_keyed(
-            [v for _, v in AI_OUTPUT_OPTIONS], [l for l, _ in AI_OUTPUT_OPTIONS], "contrastive_options",
-        )
-        box.addWidget(_field_block("Tipo de respuesta", self.ai_output))
-        self.ai_uncertainty = _make_combo_keyed(
-            [v for _, v in AI_UNCERTAINTY_OPTIONS], [l for l, _ in AI_UNCERTAINTY_OPTIONS], "conservative_proposal",
-        )
-        box.addWidget(_field_block("Cuando falte contexto", self.ai_uncertainty))
-        self.ai_strategy = _make_combo_keyed(AI_STRATEGY_KEYS, AI_STRATEGY_OPTIONS, "profundizar")
-        box.addWidget(_field_block("Estrategia creativa", self.ai_strategy))
-        self.ai_depth = _make_combo_keyed(
-            [v for _, v in AI_DEPTH_OPTIONS], [l for l, _ in AI_DEPTH_OPTIONS], "balanced",
-        )
-        box.addWidget(_field_block("Profundidad de contexto", self.ai_depth))
-        box.addStretch(1)
-        return page
-
-    def _section(self, title: str, subtitle: str = "") -> QWidget:
-        wrap = QWidget()
-        v = QVBoxLayout(wrap)
-        v.setContentsMargins(0, 6, 0, 0)
-        v.setSpacing(2)
-        t = QLabel(title.upper())
-        t.setStyleSheet(
-            f"color: {GOLD_DEEP}; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; "
-            f"background: transparent; border: none;"
-        )
-        v.addWidget(t)
-        if subtitle:
-            s = QLabel(subtitle)
-            s.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;")
-            v.addWidget(s)
-        line = QFrame()
-        line.setFixedHeight(1)
-        line.setStyleSheet(f"background: {LINE}; border: none;")
-        v.addWidget(line)
-        return wrap
-
     # ── recogida de datos ─────────────────────────────────────────────────
 
     @staticmethod
@@ -724,85 +588,28 @@ class ProjectWizard(QFrame):
         return widget.text().strip()
 
     def collect_config(self) -> dict:
-        """Devuelve el dict de overrides para ProjectService.create()."""
+        """Devuelve el dict con el nombre, la identidad esencial y la cronología."""
         chronology = self._collect_chronology()
         return {
             "name": self._t(self.name_edit),
             "preset": self.preset_combo.currentData() or "",
-            "creative_config": {
-                "core_premise": self._t(self.premise_edit),
-                "short_summary": self._t(self.summary_edit),
-                "narrative_style": self._t(self.style_edit),
-                "target_audience": self.audience_combo.currentText(),
-                "format": self.format_combo.currentText(),
-                "development_status": self.status_combo.currentText() or "Idea inicial",
-                "creative_intent": {
-                    "reader_promise": self._t(self.reader_promise),
-                    "central_question": self._t(self.central_question),
-                    "desired_emotions": self.desired_emotions.value(),
-                    "aftertaste": self._t(self.aftertaste),
-                    "originality": self.originality.value(),
-                    "ambiguity": self.ambiguity.value(),
-                    "impact_types": self.impact_types.value(),
-                },
-                "narrative_engine": {
-                    "conflict_sources": self.conflict_sources.value(),
-                    "dominant_tension": self.tension_combo.currentText(),
-                    "progression_mechanism": self.progression_combo.currentText(),
-                    "character_change": self.change_combo.currentText(),
-                    "escalation": self.escalation_combo.currentText(),
-                    "character_agency": self.agency.value(),
-                    "causality": self.causality.value(),
-                },
-                "poetics": {
-                    "narrative_distance": self.distance_combo.currentText(),
-                    "description_density": self.desc_density.value(),
-                    "conceptual_density": self.conc_density.value(),
-                    "subtext_level": self.subtext.value(),
-                    "dialogue_styles": self.dialogue_styles.value(),
-                    "exposition_modes": self.exposition_modes.value(),
-                    "recurring_imagery": self.recurring_imagery.value(),
-                    "forbidden_style_habits": self.forbidden_style.value(),
-                },
-                "canon": {
-                    "hard_rules": self.hard_rules.value(),
-                    "soft_preferences": self.soft_rules.value(),
-                    "continuity_strictness": self.continuity.value(),
-                    "contradiction_policy": self.contradiction_combo.currentText(),
-                    "world_rules": self.world_rules.value(),
-                    "character_rules": self.character_rules.value(),
-                    "timeline_rules": self.timeline_rules.value(),
-                },
-                "negative_space": {
-                    "avoid_tropes": self.avoid_tropes.value(),
-                    "avoid_solutions": self.avoid_solutions.value(),
-                    "avoid_style_habits": self.avoid_style.value(),
-                    "avoid_tones": self.avoid_tones.value(),
-                    "avoid_phrases": self.avoid_phrases.value(),
-                },
-            },
-            "genre": {
-                "primary_genre": self.genre_combo.currentText(),
-                "subgenres": self.subgenres.value(),
-            },
-            "tone": {"narrative_tone": self._t(self.tone_edit)},
-            "ai": {
-                "default_role": self.ai_role.currentData() or "coauthor",
-                "change_aggressiveness": self.ai_aggression.value(),
-                "default_num_options": self.ai_num.value(),
-                "output_mode": self.ai_output.currentData() or "contrastive_options",
-                "uncertainty_policy": self.ai_uncertainty.currentData() or "conservative_proposal",
-                "default_strategy": self.ai_strategy.currentData() or "profundizar",
-                "context_depth": self.ai_depth.currentData() or "balanced",
-            },
             "primary_language": self._t(self.language_edit) or "es",
             "worldbuilding_active": True,  # PA02: siempre activo
+            "identidad": {
+                "premisa": self._t(self.premise_edit),
+                "resumen_corto": self._t(self.summary_edit),
+                "genero_principal": self.genre_combo.currentText().strip(),
+                "subgeneros": self.subgenres.value(),
+                "formato": self.format_combo.currentText().strip(),
+                "publico": self.audience_combo.currentText().strip(),
+                "estado": self.status_combo.currentData() or "",
+            },
             "project_chronology": chronology,
         }
 
     def _collect_chronology(self) -> dict:
         mode = str(self.chrono_mode.currentData() or "none")
-        periods = [l.strip() for l in self.chrono_periods.toPlainText().splitlines() if l.strip()]
+        periods = [line.strip() for line in self.chrono_periods.toPlainText().splitlines() if line.strip()]
         eras = _names_from_length_text(self.chrono_eras.toPlainText())
         months = _names_from_length_text(self.chrono_months.toPlainText())
         weekdays = _names_from_length_text(self.chrono_weekdays.toPlainText())
@@ -835,52 +642,32 @@ class ProjectWizard(QFrame):
         cfg = self.collect_config()
 
         project.name = cfg.get("name", project.name)
-        project.primary_language = cfg.get("primary_language", project.primary_language)
         project.worldbuilding_active = cfg.get("worldbuilding_active", project.worldbuilding_active)
 
         self._apply_chronology(project, cfg.get("project_chronology", {}))
 
-        cc = project.creative_config
-        cc_data = cfg.get("creative_config", {})
-        cc.core_premise = cc_data.get("core_premise", "")
-        cc.short_summary = cc_data.get("short_summary", "")
-        cc.narrative_style = cc_data.get("narrative_style", "")
-        cc.target_audience = cc_data.get("target_audience", "")
-        cc.format = cc_data.get("format", "")
-        cc.development_status = cc_data.get("development_status", "")
+        advanced = bool(getattr(self, "advanced_check", None) and self.advanced_check.isChecked())
+        if advanced and getattr(self, "_adv_panel", None) is not None:
+            # Modo avanzado: el panel escribe las 5 secciones + idioma + worldbuilding.
+            self._adv_panel.apply_to_project(project)
+        else:
+            project.primary_language = cfg.get("primary_language", project.primary_language)
+            # Subset de Identidad → creative_config.identidad (solo si la config
+            # expone esa sección; los tests de cronología usan un mock plano).
+            identidad = getattr(getattr(project, "creative_config", None), "identidad", None)
+            if identidad is not None:
+                for key, value in cfg.get("identidad", {}).items():
+                    if self._truthy(value):
+                        setattr(identidad, key, value)
 
-        for attr in ("creative_intent", "narrative_engine", "poetics", "canon", "negative_space"):
-            incoming = cc_data.get(attr, {})
-            if any(self._truthy(v) for v in incoming.values()):
-                existing = dict(getattr(cc, attr, {}) or {})
-                existing.update({k: v for k, v in incoming.items() if self._truthy(v)})
-                setattr(cc, attr, existing)
-
-        genre_data = cfg.get("genre", {})
-        project.genre.primary_genre = genre_data.get("primary_genre", "")
-        project.genre.subgenres = genre_data.get("subgenres", [])
-
-        project.tone.narrative_tone = cfg.get("tone", {}).get("narrative_tone", "")
-
-        ai_data = cfg.get("ai", {})
-        project.ai.default_role = ai_data.get("default_role", "coauthor")
-        project.ai.change_aggressiveness = ai_data.get("change_aggressiveness", 5)
-        project.ai.default_num_options = ai_data.get("default_num_options", 3)
-        project.ai.output_mode = ai_data.get("output_mode", "contrastive_options")
-        if hasattr(project.ai, "uncertainty_policy"):
-            project.ai.uncertainty_policy = ai_data.get("uncertainty_policy", "conservative_proposal")
-        project.ai.default_strategy = ai_data.get("default_strategy", "profundizar")
-        if hasattr(project.ai, "context_depth"):
-            project.ai.context_depth = ai_data.get("context_depth", "balanced")
-
+        # Preset opcional: rellena las 5 secciones (solo campos vacíos; no pisa
+        # lo que el usuario ya escribió, ni en modo básico ni avanzado).
         preset = cfg.get("preset", "")
         if preset:
             apply_preset_to_project(project, preset)
 
     @staticmethod
     def _truthy(value) -> bool:
-        if isinstance(value, (int, float)):
-            return True  # sliders 0..10 son significativos aunque sean 0
         return bool(value)
 
     def _apply_chronology(self, project: Project, chronology_data: dict) -> None:

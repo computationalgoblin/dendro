@@ -32,11 +32,14 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import (
+    ENTITY_KIND_PALETTE,
     GOLD,
     INK,
     INPUT_BG,
     LINE,
     LINE_STRONG,
+    SPACE_LG,
+    SPACE_MD,
     AdvancedSection,
     Badge,
     enum_human,
@@ -69,18 +72,8 @@ _SUGGESTION_BG = "#FFFDF7"
 # B39 terminology: branch types show as "Rama", all others as "Hoja"
 BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
 
-_NODE_COLORS: dict[str, str] = {
-    "personaje": "#C07B53",
-    "lugar": "#7E9568",
-    "localizacion": "#7E9568",
-    "organizacion": "#B28A3C",
-    "faccion": "#A65C54",
-    "objeto": "#937083",
-    "evento": "#C8A24C",
-    "concepto": "#8E8A6A",
-    "contenedor": "#A89878",
-    "nota": "#9A8E72",
-}
+# UX15: paleta cálida por tipo centralizada en el design system (antes duplicada).
+_NODE_COLORS: dict[str, str] = ENTITY_KIND_PALETTE
 
 # Simplified canon options for normal mode
 _SIMPLE_CANON = ["borrador", "canonico"]
@@ -283,8 +276,8 @@ class NodeDetailPanel(QWidget):
 
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)  # UX23: ritmo del scaffold
+        root.setSpacing(SPACE_MD)
 
         # -- Header --
         head = QHBoxLayout()
@@ -342,11 +335,14 @@ class NodeDetailPanel(QWidget):
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("— Sin anillo —", "")
         first_row.addWidget(self.layer_combo, 2)
+        # UX28: el color del nodo lo decide el TIPO de entidad (paleta de Dendro),
+        # no un selector manual. Se conserva el objeto para refs internas, pero NO
+        # se añade al layout (el canvas ya colorea el contorno por tipo).
         self.color_btn = QPushButton()
         self.color_btn.setFixedSize(28, 28)
         self.color_btn.setToolTip("Color del nodo")
         self.color_btn.clicked.connect(self._pick_color)
-        first_row.addWidget(self.color_btn)
+        self.color_btn.setVisible(False)
         form_layout.addRow(first_row)
 
         # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo

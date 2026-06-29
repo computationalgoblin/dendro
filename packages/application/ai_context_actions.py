@@ -132,13 +132,29 @@ def _compact_for_prompt(value: Any, limit: int = 1600) -> str:
     return raw if len(raw) <= limit else raw[:limit].rstrip() + "…"
 
 
+def _legacy_creative(project: dict[str, Any]) -> dict[str, Any]:
+    """PA04: vista compat del creative_config nuevo para estos prompts.
+
+    Mapea estilo.estilo_narrativo→narrative_style, reglas.reglas_canon→creative_rules
+    y estilo.realismo→realism, para no reescribir cada plantilla bilingüe.
+    """
+    cc = project.get("creative_config") or {}
+    estilo = cc.get("estilo") if isinstance(cc.get("estilo"), dict) else {}
+    reglas = cc.get("reglas") if isinstance(cc.get("reglas"), dict) else {}
+    return {
+        "narrative_style": estilo.get("estilo_narrativo") or "",
+        "creative_rules": reglas.get("reglas_canon") or [],
+        "realism": estilo.get("realismo") or "",
+    }
+
+
 def _entity_text_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
     target = context.get("target") or {}
     project = context.get("project") or {}
-    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    creative = _legacy_creative(project)
     genre = project.get("genre") or {}
     tone = project.get("tone") or {}
-    realism = project.get("realism") or {}
+    realism = creative["realism"]
     instruction = (prompt_hint or "").strip()
     if language == "en":
         no_instruction = "No extra instruction: improve or complete the existing text coherently."
@@ -182,7 +198,7 @@ def _entity_text_user_prompt(context: dict[str, Any], prompt_hint: str, language
 def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
     project = context.get("project") or {}
     selection = context.get("selection") or {}
-    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    creative = _legacy_creative(project)
     instruction = (prompt_hint or "").strip()
     if language == "en":
         return (
@@ -190,7 +206,7 @@ def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, 
             f"Language: {project.get('primary_language') or 'en'}\n"
             f"Genre: {_compact_for_prompt(project.get('genre') or {}, 700)}\n"
             f"Tone: {_compact_for_prompt(project.get('tone') or {}, 700)}\n"
-            f"Realism: {_compact_for_prompt(project.get('realism') or {}, 700)}\n"
+            f"Realism: {_compact_for_prompt(creative['realism'], 700)}\n"
             f"Style: {creative.get('narrative_style') or '—'}\n"
             f"Selected entities:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
             f"Selected relationships:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
@@ -203,7 +219,7 @@ def _selection_coherence_user_prompt(context: dict[str, Any], prompt_hint: str, 
         f"Idioma: {project.get('primary_language') or 'es'}\n"
         f"Género: {_compact_for_prompt(project.get('genre') or {}, 700)}\n"
         f"Tono: {_compact_for_prompt(project.get('tone') or {}, 700)}\n"
-        f"Realismo: {_compact_for_prompt(project.get('realism') or {}, 700)}\n"
+        f"Realismo: {_compact_for_prompt(creative['realism'], 700)}\n"
         f"Estilo: {creative.get('narrative_style') or '—'}\n"
         f"Entidades seleccionadas:\n{_compact_for_prompt(selection.get('entities') or [], 5000)}\n\n"
         f"Relaciones seleccionadas:\n{_compact_for_prompt(selection.get('relations') or [], 5000)}\n\n"
@@ -223,18 +239,18 @@ def _selection_repair_user_prompt(context: dict[str, Any], proposal: str, prompt
 def _relation_text_user_prompt(context: dict[str, Any], prompt_hint: str, language: str) -> str:
     target = context.get("target") or {}
     project = context.get("project") or {}
-    creative = project.get("creative_config") or project.get("creative_project_config") or {}
+    creative = _legacy_creative(project)
     genre = project.get("genre") or {}
     tone = project.get("tone") or {}
-    realism = project.get("realism") or {}
+    realism = creative["realism"]
     instruction = (prompt_hint or "").strip()
 
     source = target.get("source") or {}
     target_node = target.get("target_node") or target.get("target") or {}
     source_full = target.get("source_full") or source
     target_full = target.get("target_full") or target_node
-    narrative_style = creative.get("narrative_style") or project.get("narrative_style") or "—"
-    creative_rules = creative.get("creative_rules") or project.get("creative_rules") or "—"
+    narrative_style = creative.get("narrative_style") or "—"
+    creative_rules = creative.get("creative_rules") or "—"
 
     if language == "en":
         no_instruction = "No extra instruction: improve or complete the existing text coherently."

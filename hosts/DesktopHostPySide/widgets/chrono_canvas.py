@@ -67,6 +67,9 @@ _MILESTONE_ID_ROLE = 1
 # abra la era (antes solo respondía el fondo de la banda). En calendario completo
 # el id es "" → el workspace lo enruta a la configuración del calendario.
 _ERA_ID_ROLE = 2
+# BETA1-UX36: la cabecera/caja de un contenedor lleva su branch_id para que clicarla
+# ALTERNE colapso/expansión (no abrir la rama — eso es por su línea/nombre de vida).
+_BRANCH_BOX_ROLE = 3
 # BETA1-HITO-MULTI: holgura (px) para atribuir un clic sobre la franja al carril
 # de entidad más cercano. < media de LANE_WIDTH (92) → zonas de carril sin solape.
 BAND_LANE_TOL = 40.0
@@ -332,6 +335,7 @@ class BranchBox:
     y0: float           # time = y_birth de la rama
     y1: float           # time = y_end de la rama
     member_count: int   # descendientes (directos + anidados) para la píldora
+    collapsed: bool = False  # BETA1-UX36: caja plegada (miembros ocultos)
 
 
 @dataclass
@@ -386,6 +390,39 @@ class ChronoLayout:
     scale: Any = None
     # BETA1-UX9: recuadros de rama (contenedores) que encierran a sus miembros.
     boxes: list[BranchBox] = field(default_factory=list)
+    # BETA1-UX39: entidades SUELTAS agregadas por anillo (cuando lod aleja): ring_id
+    # → nº de sueltas no dibujadas como carril, para pintar una píldora "N sueltas".
+    loose_counts: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ChronoScope:
+    """Acotación de la vista cronológica (BETA1-UX36..39). Pura, sin Qt.
+
+    Default = comportamiento histórico (todo visible y expandido). Cada campo acota
+    QUÉ se emite, sin tocar el dominio.
+
+    - Colapso (UX36): por "ids EXPANDIDOS" — con ``collapse_default`` se colapsa TODO
+      contenedor salvo ``expanded_ids`` (vacío ⇒ todo colapsado, default de arranque).
+    - Filtros (UX37): ``entity_types``/``ring_ids``/``canon_states`` (vacío = todos),
+      ``focused_ring_id`` (solo ese anillo), ``hide_secret`` (oculta secretos).
+    - Ventana temporal (UX38): ``year_min``/``year_max`` (None = sin recorte); una
+      entidad se muestra si su lapso solapa el rango.
+    - LOD (UX39): ``lod_level`` (0 lejos … 2 cerca, 2 = todo); ``aggregate_loose``
+      saca las entidades sueltas de los carriles y las cuenta por anillo.
+    """
+
+    collapse_default: bool = False
+    expanded_ids: frozenset = frozenset()
+    entity_types: frozenset = frozenset()
+    ring_ids: frozenset = frozenset()
+    focused_ring_id: str = ""
+    canon_states: frozenset = frozenset()
+    hide_secret: bool = False
+    year_min: int | None = None
+    year_max: int | None = None
+    lod_level: int = 2
+    aggregate_loose: bool = False
 
 
 # ── Construcción (pura, sin Qt) ───────────────────────────────────────────
@@ -475,24 +512,39 @@ def _assign_branch_lanes(
     roots: list[str],
     children: dict[str, list[str]],
     trees: set[str],
-) -> tuple[list[str], list[tuple[str, int, int, int]]]:
+    collapsed: set[str] | None = None,
+) -> tuple[list[str], list[tuple[str, int, int, int, bool, int]]]:
     """BETA1-UX9: asigna carriles por CONTENCIÓN dentro de un anillo. ``roots`` y
     cada lista de ``children`` vienen ya ordenadas. Devuelve:
     - el orden de carriles (lista de entity_id; el carril i es la posición i),
       con la cabecera de cada rama PRIMERO y sus descendientes en profundidad;
-    - los spans de caja ``(branch_id, depth, first_lane, last_lane)`` por rama.
-    Puro y determinista (sin Qt)."""
+    - los spans de caja ``(branch_id, depth, first_lane, last_lane, collapsed,
+      hidden_count)`` por rama.
+    BETA1-UX36: un contenedor en ``collapsed`` NO reparte carriles a sus
+    descendientes (queda como 1 solo carril) y registra cuántos oculta. Expandir =
+    quitarlo de ``collapsed`` (revela un nivel; los nietos siguen colapsados si lo
+    están). Puro y determinista (sin Qt)."""
+    collapsed = collapsed or set()
     ordered: list[str] = []
-    boxes: list[tuple[str, int, int, int]] = []
+    boxes: list[tuple[str, int, int, int, bool, int]] = []
+
+    def count_descendants(node_id: str) -> int:
+        total = 0
+        for kid in children.get(node_id, []):
+            total += 1 + count_descendants(kid)
+        return total
 
     def walk(node_id: str, depth: int) -> int:
         my_lane = len(ordered)
         ordered.append(node_id)
         last = my_lane
-        for kid in children.get(node_id, []):
-            last = walk(kid, depth + 1)
+        is_collapsed = node_id in collapsed and node_id in trees
+        if not is_collapsed:
+            for kid in children.get(node_id, []):
+                last = walk(kid, depth + 1)
         if node_id in trees:
-            boxes.append((node_id, depth, my_lane, last))
+            hidden = count_descendants(node_id) if is_collapsed else 0
+            boxes.append((node_id, depth, my_lane, last, is_collapsed, hidden))
         return last
 
     for root in roots:
@@ -500,11 +552,53 @@ def _assign_branch_lanes(
     return ordered, boxes
 
 
+def _is_secret_entity(entity: Any) -> bool:
+    """BETA1-UX37: ¿la entidad es secreta/privada? (respeta visibilidad y canon)."""
+    vis = _enum_value(getattr(entity, "visibility_state", "")).lower()
+    canon = _enum_value(getattr(entity, "canon_state", "")).lower()
+    return "secreto" in vis or vis == "privado_autor" or "secreto" in canon
+
+
+def _entity_in_window(entity: Any, scope: "ChronoScope", present_year: int) -> bool:
+    """BETA1-UX38: ¿el lapso de la entidad solapa [year_min, year_max]? Las vivas
+    (sin muerte) se extienden indefinidamente (siempre pasan el límite inferior)."""
+    if scope.year_min is None and scope.year_max is None:
+        return True
+    birth = getattr(entity, "birth_year", None)
+    birth = int(birth) if birth is not None else present_year
+    death = getattr(entity, "death_year", None)
+    end = int(death) if death is not None else 10**9  # viva → no acota por arriba
+    if scope.year_min is not None and end < scope.year_min:
+        return False
+    if scope.year_max is not None and birth > scope.year_max:
+        return False
+    return True
+
+
+def _entity_passes(entity: Any, scope: "ChronoScope", present_year: int) -> bool:
+    """BETA1-UX37/38: filtro por tipo, canon, secreto y ventana temporal. Los
+    conjuntos del scope se comparan en minúsculas; vacío = sin filtro."""
+    if scope.entity_types:
+        kind = _enum_value(getattr(entity, "entity_type", "")).lower()
+        if kind not in scope.entity_types:
+            return False
+    if scope.canon_states:
+        canon = _enum_value(getattr(entity, "canon_state", "")).lower()
+        if canon not in scope.canon_states:
+            return False
+    if scope.hide_secret and _is_secret_entity(entity):
+        return False
+    if not _entity_in_window(entity, scope, present_year):
+        return False
+    return True
+
+
 def build_chrono_layout(
     project: Any,
     *,
     lane_width: float = LANE_WIDTH,
     milestone_min_gaps: dict[int, float] | None = None,
+    scope: ChronoScope = ChronoScope(),
 ) -> ChronoLayout:
     """Layout determinista de la vista cronológica (contrato G01 §7).
 
@@ -550,16 +644,28 @@ def build_chrono_layout(
     #    (cabecera de la rama primero, descendientes en profundidad) para poder
     #    enmarcarlos; las entidades sin rama del anillo quedan como carriles sueltos.
     effective, trees, membership = _effective_rings(project)
+    # BETA1-UX36: contenedores a colapsar = todos salvo los expandidos (cuando
+    # ``collapse_default`` está activo). Vacío ⇒ todo colapsado (default de arranque).
+    collapsed_trees = {
+        t for t in trees if scope.collapse_default and t not in scope.expanded_ids
+    }
     ring_ids_used = {effective.get(str(getattr(e, "id", "")), UNCLASSIFIED_RING_ID) for e in entities}
     columns: list[RingColumn] = []
     lanes_by_ring: dict[str, list[Any]] = {}
-    # (ring_id, branch_id, depth, first_lane, last_lane)
-    pending_boxes: list[tuple[str, str, int, int, int]] = []
+    loose_counts: dict[str, int] = {}  # BETA1-UX39: sueltas agregadas por anillo
+    # (ring_id, branch_id, depth, first_lane, last_lane, collapsed, hidden_count)
+    pending_boxes: list[tuple[str, str, int, int, int, bool, int]] = []
     x_cursor = LEFT_MARGIN + COLUMN_GAP
     for ring_id, ring_name in _ring_order(project):
+        # BETA1-UX37: filtro/foco de anillo (vacío = todos los anillos).
+        if scope.focused_ring_id and ring_id != scope.focused_ring_id:
+            continue
+        if scope.ring_ids and ring_id not in scope.ring_ids:
+            continue
         members = [
             entity for entity in entities
             if effective.get(str(getattr(entity, "id", "")), UNCLASSIFIED_RING_ID) == ring_id
+            and _entity_passes(entity, scope, present_year)  # BETA1-UX37/38
         ]
         if not members:
             continue
@@ -579,15 +685,28 @@ def build_chrono_layout(
             if parent in trees and parent in member_ids:
                 children[parent].append(child_id)
                 has_parent.add(child_id)
+        # BETA1-UX39: agregación de SUELTAS — una entidad sin contenedor (sin padre y
+        # que no es contenedor) no ocupa carril al alejar; se cuenta por anillo y la
+        # vista pinta una píldora "N sueltas". Al acercar (sin aggregate_loose) vuelven.
+        if scope.aggregate_loose:
+            loose_ids = {mid for mid in member_ids if mid not in has_parent and mid not in trees}
+            if loose_ids:
+                loose_counts[ring_id] = loose_counts.get(ring_id, 0) + len(loose_ids)
+                member_ids -= loose_ids
+                for lid in loose_ids:
+                    children.pop(lid, None)
+                    ent_by_id.pop(lid, None)
         for kids in children.values():
             kids.sort(key=sort_key.__getitem__)
         roots = sorted((mid for mid in member_ids if mid not in has_parent), key=sort_key.__getitem__)
 
-        ordered_ids, box_spans = _assign_branch_lanes(roots, children, trees)
+        ordered_ids, box_spans = _assign_branch_lanes(roots, children, trees, collapsed_trees)
         ordered = [ent_by_id[mid] for mid in ordered_ids]
         lanes_by_ring[ring_id] = ordered
-        for branch_id, depth, first_lane, last_lane in box_spans:
-            pending_boxes.append((ring_id, branch_id, depth, first_lane, last_lane))
+        for branch_id, depth, first_lane, last_lane, is_collapsed, hidden in box_spans:
+            pending_boxes.append(
+                (ring_id, branch_id, depth, first_lane, last_lane, is_collapsed, hidden)
+            )
 
         lane_count = len(ordered)
         width = max(lane_count - 1, 0) * lane_width
@@ -609,6 +728,12 @@ def build_chrono_layout(
     for index, era in enumerate(sorted_eras):
         start = int(getattr(era, "start_year", 0) or 0)
         end = getattr(era, "end_year", None)
+        end_i = int(end) if end is not None else None
+        # BETA1-UX38: ocultar eras que quedan completamente fuera de la ventana.
+        if scope.year_min is not None and end_i is not None and end_i < scope.year_min:
+            continue
+        if scope.year_max is not None and start > scope.year_max:
+            continue
         era_bands.append(EraBand(
             era_id=str(getattr(era, "id", "")),
             name=str(getattr(era, "name", "Era")),
@@ -687,7 +812,7 @@ def build_chrono_layout(
     #    (decisión #5); cada nivel de anidamiento mete el borde hacia dentro.
     ent_by_id_all = {str(getattr(e, "id", "")): e for e in entities}
     boxes: list[BranchBox] = []
-    for ring_id, branch_id, depth, first_lane, last_lane in pending_boxes:
+    for ring_id, branch_id, depth, first_lane, last_lane, is_collapsed, hidden in pending_boxes:
         branch_x = x_by_entity.get(branch_id)
         if branch_x is None:
             continue
@@ -716,7 +841,8 @@ def build_chrono_layout(
             x_right=max(x_left, x_right),
             y0=y0,
             y1=y1,
-            member_count=span,
+            member_count=hidden if is_collapsed else span,
+            collapsed=is_collapsed,
         ))
 
     height = scale.bottom + 80.0
@@ -731,6 +857,7 @@ def build_chrono_layout(
         y_present=scale.y(present_year),
         boxes=boxes,
         scale=scale,
+        loose_counts=loose_counts,
     )
 
 
@@ -790,6 +917,20 @@ if HAS_QT:
     # (oro · salvia · terracota · ciruela · musgo). Mismos que el slider de la
     # concéntrica, para que las dos vistas hablen el mismo idioma de color.
     _ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
+    # BETA1-UX35: tintes por ANILLO (world layer) para las columnas de la
+    # cronología. Cálidos y distintos entre sí, pero deliberadamente SEPARADOS de
+    # los de era (que tiñen el fondo por TIEMPO) para que era×anillo no colisionen
+    # en tono. Se asignan por orden de columna (rango causal). El anillo "Sin
+    # anillo" usa un neutro fijo, no de la paleta.
+    _RING_TINTS = ("#B0794A", "#6F8A5E", "#A05C6E", "#8C7BA0", "#B79A46", "#7E8A74")
+    _RING_UNCLASSIFIED_TINT = "#9A927C"  # gris cálido neutro
+
+    def _ring_tint(index: int, ring_id: str) -> QColor:
+        """Color base (saturado) del anillo en la columna ``index``. El anillo sin
+        clasificar usa un neutro cálido fijo (no entra en la rueda de la paleta)."""
+        if ring_id == UNCLASSIFIED_RING_ID:
+            return QColor(_RING_UNCLASSIFIED_TINT)
+        return QColor(_RING_TINTS[index % len(_RING_TINTS)])
     # BETA1-UX9: estilo de las cajas de rama (contenedores).
     _BOX_FILL_ALPHA = 42       # relleno cálido translúcido (deja ver la era debajo)
     _BOX_HEADER_ALPHA = 92     # franja de cabecera, algo más opaca
@@ -991,14 +1132,21 @@ if HAS_QT:
         clicar el marco/cabecera/interior vacío abra la rama (las vidas/nombres de
         los miembros, en z superior, ganan sobre su propio carril)."""
 
-        def __init__(self, branch_id, color, depth, header_px, horizontal, *args):
+        def __init__(self, branch_id, color, depth, header_px, horizontal, *args, collapsed=False):
             super().__init__(*args)
             self.branch_id = str(branch_id)
             self._color = QColor(color) if color else QColor("#A89878")
             self._depth = int(depth)
             self._header_px = float(header_px)
             self._horizontal = bool(horizontal)
-            self.setData(_ENTITY_ID_ROLE, self.branch_id)
+            self._collapsed = bool(collapsed)
+            # BETA1-UX36: clicar la caja ALTERNA colapso (no abre la rama; abrir es
+            # por la línea/nombre del contenedor). Marca con el rol de toggle.
+            self.setData(_BRANCH_BOX_ROLE, self.branch_id)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip(
+                "Clic: expandir miembros" if self._collapsed else "Clic: colapsar miembros"
+            )
             # z entre la banda de era (-30) y las vidas (10); subcajas más arriba.
             self.setZValue(-28 + self._depth)
             self.setPen(QPen(Qt.PenStyle.NoPen))  # el borde lo pinta paint()
@@ -1012,7 +1160,10 @@ if HAS_QT:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             path = QPainterPath()
             path.addRoundedRect(r, radius, radius)
-            fill = QColor(self._color); fill.setAlpha(_BOX_FILL_ALPHA)
+            # BETA1-UX36: la caja PLEGADA se ve como una "carpeta" algo más sólida
+            # (invita a abrirla); la expandida queda translúcida como hasta ahora.
+            fill = QColor(self._color)
+            fill.setAlpha(_BOX_FILL_ALPHA + 34 if self._collapsed else _BOX_FILL_ALPHA)
             painter.fillPath(path, QBrush(fill))
             # Franja de cabecera (tinte más opaco) en el INICIO del tiempo: en
             # horizontal el borde izquierdo, en vertical el borde superior.
@@ -1024,10 +1175,22 @@ if HAS_QT:
             hpath = QPainterPath()
             hpath.addRoundedRect(hr, radius, radius)
             painter.fillPath(hpath.intersected(path), QBrush(header))
-            border = QColor(self._color); border.setAlpha(175)
-            painter.setPen(QPen(border, 1.4))
+            border = QColor(self._color); border.setAlpha(210 if self._collapsed else 175)
+            painter.setPen(QPen(border, 1.6 if self._collapsed else 1.4))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
+            # BETA1-UX36: afordance "+" en la cabecera de una caja plegada (señala
+            # que se puede expandir). Pequeño, dentro de la franja de cabecera.
+            if self._collapsed:
+                m = 6.0
+                s = min(8.0, max(4.0, self._header_px - 2 * m))
+                cx = hr.left() + m + s / 2.0
+                cy = hr.top() + m + s / 2.0
+                if hr.width() >= s + 2 * m and hr.height() >= s + 2 * m:
+                    plus = QColor("#FCF8EE"); plus.setAlpha(230)
+                    painter.setPen(QPen(plus, 1.8))
+                    painter.drawLine(QPointF(cx - s / 2.0, cy), QPointF(cx + s / 2.0, cy))
+                    painter.drawLine(QPointF(cx, cy - s / 2.0), QPointF(cx, cy + s / 2.0))
 
     class _GhostNode(QGraphicsEllipseItem):
         """BETA1-HITO-MULTI: marcador TENUE en el cruce franja↔carril de una
@@ -1188,6 +1351,132 @@ if HAS_QT:
                 data["metadata"] = {"exact_date": exact}
             return data
 
+    class _TimeRangeScrubber(QWidget):
+        """BETA1-UX38: scrubber de INTERVALO (dos mangos) con el mismo lenguaje visual
+        que la barra de tiempo del grafo (pista oro sobre pergamino). Arrastra los
+        mangos para acotar [a, b]; aplica al SOLTAR (no reconstruye por píxel). "Todo"
+        quita la ventana. Pinta a mano (canvas-safe, sin graphics effects)."""
+
+        rangeChanged = Signal(int, int)
+        cleared = Signal()
+
+        _GOLD = "#C8A24C"
+        _GOLD_DEEP = "#8A7A33"
+        _SURFACE_HI = "#FBF8EF"
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setObjectName("timeRange")
+            self._lo, self._hi = 0, 100
+            self._a, self._b = 0, 100
+            self._active = False
+            self._drag: str | None = None
+            self.setMinimumWidth(360)
+            self.setFixedHeight(44)
+            self.setMouseTracking(True)
+
+        def set_bounds(self, lo: int, hi: int) -> None:
+            self._lo, self._hi = int(lo), int(max(hi, lo + 1))
+            if not self._active:
+                self._a, self._b = self._lo, self._hi
+            self._a = max(self._lo, min(self._a, self._hi))
+            self._b = max(self._lo, min(self._b, self._hi))
+            self.update()
+
+        def set_selection(self, a, b) -> None:
+            self._active = a is not None and b is not None
+            if self._active:
+                self._a, self._b = int(a), int(b)
+            else:
+                self._a, self._b = self._lo, self._hi
+            self.update()
+
+        def _track(self):
+            return QRectF(58, self.height() / 2.0 - 2, max(40, self.width() - 200), 4)
+
+        def _x_for(self, year):
+            tr = self._track()
+            if self._hi == self._lo:
+                return tr.left()
+            return tr.left() + (year - self._lo) / (self._hi - self._lo) * tr.width()
+
+        def _year_for(self, x):
+            tr = self._track()
+            if tr.width() <= 0:
+                return self._lo
+            f = (x - tr.left()) / tr.width()
+            return int(round(self._lo + max(0.0, min(1.0, f)) * (self._hi - self._lo)))
+
+        def _reset_rect(self):
+            return QRectF(self.width() - 52, self.height() / 2.0 - 11, 44, 22)
+
+        def paintEvent(self, _event):  # noqa: N802
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            full = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+            path = QPainterPath(); path.addRoundedRect(full, 16, 16)
+            p.setPen(QPen(_PILL_LINE, 1.0)); p.setBrush(QBrush(QColor(self._SURFACE_HI)))
+            p.drawPath(path)
+            lab = QFont("Georgia"); lab.setPointSize(9); p.setFont(lab)
+            p.setPen(QPen(_MUTED))
+            p.drawText(QRectF(12, 0, 44, self.height()),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "Años")
+            tr = self._track()
+            p.setPen(QPen(Qt.PenStyle.NoPen)); p.setBrush(QBrush(_LINE))
+            p.drawRoundedRect(tr, 2, 2)
+            xa, xb = self._x_for(self._a), self._x_for(self._b)
+            sub = QRectF(xa, tr.top(), max(0.0, xb - xa), tr.height())
+            p.setBrush(QBrush(QColor(self._GOLD if self._active else _PILL_LINE)))
+            p.drawRoundedRect(sub, 2, 2)
+            for x in (xa, xb):
+                hr = QRectF(x - 7, self.height() / 2.0 - 7, 14, 14)
+                p.setPen(QPen(QColor(self._SURFACE_HI), 2))
+                p.setBrush(QBrush(QColor(self._GOLD if self._active else _MUTED)))
+                p.drawEllipse(hr)
+            ro = QFont("Georgia"); ro.setPointSize(9); ro.setItalic(not self._active)
+            p.setFont(ro); p.setPen(QPen(_INK if self._active else _MUTED))
+            txt = f"{self._a} – {self._b}" if self._active else "Todo el tiempo"
+            p.drawText(QRectF(tr.right() + 8, 0, self.width() - tr.right() - 60, self.height()),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, txt)
+            rr = self._reset_rect()
+            p.setPen(QPen(_PILL_LINE, 1.0)); p.setBrush(QBrush(QColor(self._SURFACE_HI)))
+            p.drawRoundedRect(rr, 9, 9)
+            small = QFont("Georgia"); small.setPointSize(8); p.setFont(small)
+            p.setPen(QPen(QColor(self._GOLD_DEEP)))
+            p.drawText(rr, Qt.AlignmentFlag.AlignCenter, "Todo")
+            p.end()
+
+        def mousePressEvent(self, event):  # noqa: N802
+            pos = event.position()
+            if self._reset_rect().contains(pos):
+                self._active = False
+                self._a, self._b = self._lo, self._hi
+                self.update()
+                self.cleared.emit()
+                return
+            xa, xb = self._x_for(self._a), self._x_for(self._b)
+            self._drag = "a" if abs(pos.x() - xa) <= abs(pos.x() - xb) else "b"
+            self._move_to(pos.x())
+
+        def mouseMoveEvent(self, event):  # noqa: N802
+            if self._drag:
+                self._move_to(event.position().x())
+
+        def mouseReleaseEvent(self, event):  # noqa: N802
+            if self._drag:
+                self._drag = None
+                self._active = True
+                self.rangeChanged.emit(int(self._a), int(self._b))
+
+        def _move_to(self, x):
+            y = self._year_for(x)
+            if self._drag == "a":
+                self._a = min(y, self._b)
+            else:
+                self._b = max(y, self._a)
+            self._active = True
+            self.update()
+
     class ChronoCanvasView(QGraphicsView):
         """Vista cronológica del proyecto. Determinista, SIN física."""
 
@@ -1244,6 +1533,39 @@ if HAS_QT:
             self._handle_moved = False
             self._project = None  # BETA1-UX2D: último proyecto (para reconstruir bajo demanda)
             self._rebuild_pending = False  # evita reconstrucciones diferidas duplicadas
+            # BETA1-UX36: scope de la cronología. A escala (1000+), los contenedores
+            # arrancan COLAPSADOS; ``_expanded_ids`` recuerda lo que el usuario abrió.
+            self._ctx = None
+            self._collapse_default = True
+            self._expanded_ids: set[str] = set()
+            # BETA1-UX37/38/39: resto del scope (filtros/ventana/LOD) vive en la vista.
+            self._focused_ring_id = ""          # UX37: foco de anillo (vía leyenda)
+            self._year_min: int | None = None   # UX38: ventana temporal
+            self._year_max: int | None = None
+            self._lod_level = 2                  # UX39: 0 lejos … 2 cerca (se deriva del zoom)
+            self._legend_hit_rects: list = []    # UX39/41: filas de la leyenda (rect, kind, id)
+            # BETA1-UX41: navegación por teclado + filtro de era + edge-pan.
+            self._focused_era_id = ""            # era acotada (solo para resaltar)
+            self._nav_entity_id = ""             # entidad resaltada por ↑/↓
+            self._nav_milestone_id = ""          # hito resaltado por ←/→
+            self._nav_kind = ""                  # 'entity' | 'milestone' (qué abre Enter)
+            self._all_rings: list = []           # (ring_id, name) completos (sin filtro)
+            self._all_eras: list = []            # (era_id, name, start, end, index) completos
+            self._edge_pan = (0.0, 0.0)          # velocidad de auto-scroll por bordes
+            self._edge_pan_timer = QTimer(self)
+            self._edge_pan_timer.setInterval(40)
+            self._edge_pan_timer.timeout.connect(self._edge_pan_tick)
+            # BETA1-UX41: animación de zoom fluido al navegar a una entidad.
+            self._focus_anim: dict | None = None
+            self._focus_anim_timer = QTimer(self)
+            self._focus_anim_timer.setInterval(16)
+            self._focus_anim_timer.timeout.connect(self._focus_anim_tick)
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # recibir teclado (Tab incl.)
+            # BETA1-UX41: en un QGraphicsView los eventos de ratón llegan por el
+            # VIEWPORT; sin mouse-tracking en él, mouseMoveEvent NO se dispara sin
+            # botón pulsado y el edge-pan no funcionaría. Hay que activarlo ahí.
+            self.setMouseTracking(True)
+            self.viewport().setMouseTracking(True)
             # BETA1-UX2D: la cronología corre en RASTER (no GPU). Es una vista
             # ESTÁTICA (sin física) y, al ser un QGraphicsView GL hermano del grafo
             # alternado por setVisible y que reconstruye su escena (scene.clear) en
@@ -1286,9 +1608,320 @@ if HAS_QT:
             # BETA1-G08: misma atmósfera sutil de hojas que la concéntrica.
             from hosts.DesktopHostPySide.widgets.canvas_atmosphere import CanvasAtmosphere
             self._atmosphere = CanvasAtmosphere(self, ctx=None, count=11)
+            # BETA1-UX38: control de ventana temporal (scrubber de intervalo, overlay).
+            self._time_window_bar = self._build_time_window_bar()
+            self._time_window_bar.hide()
 
         def set_atmosphere_context(self, ctx) -> None:
+            self._ctx = ctx
             self._atmosphere.set_context(ctx)
+            # BETA1-UX36: rehidrata el scope recordado (qué contenedores expandió el
+            # usuario). Vacío ⇒ todo colapsado (default de primer arranque).
+            ids = getattr(ctx, "creation_chrono_expanded_ids", None)
+            if ids:
+                self._expanded_ids = {str(i) for i in ids if str(i)}
+
+        def _current_scope(self) -> "ChronoScope":
+            return ChronoScope(
+                collapse_default=self._collapse_default,
+                expanded_ids=frozenset(self._expanded_ids),
+                focused_ring_id=self._focused_ring_id,
+                year_min=self._year_min,
+                year_max=self._year_max,
+                lod_level=self._lod_level,
+                # UX39: al alejar (lod < 2) agregamos las sueltas en bandas-recuento.
+                aggregate_loose=self._lod_level < 2,
+            )
+
+        def _lod_for_scale(self, m11: float, current: int | None = None) -> int:
+            """BETA1-UX39: nivel de detalle según el zoom (escala horizontal).
+            Lejos = 0 (solo estructura), medio = 1 (+ramas), cerca = 2 (+todo).
+
+            Con HISTÉRESIS (zona muerta ±``margin``) alrededor de cada umbral para
+            que el nivel no parpadee al hacer zoom fino junto al borde."""
+            b01, b12, margin = 0.16, 0.42, 0.035
+            if current is None:
+                return 0 if m11 < b01 else (1 if m11 < b12 else 2)
+            lod = current
+            if lod <= 0 and m11 > b01 + margin:
+                lod = 1
+            if lod <= 1 and m11 > b12 + margin:
+                lod = 2
+            if lod >= 2 and m11 < b12 - margin:
+                lod = 1
+            if lod >= 1 and m11 < b01 - margin:
+                lod = 0
+            return lod
+
+        def set_time_window(self, year_min: int | None, year_max: int | None) -> None:
+            """BETA1-UX38: fija la ventana temporal y reconstruye."""
+            self._year_min = year_min
+            self._year_max = year_max
+            if self._project is not None:
+                self.set_project(self._project)
+
+        def focus_ring(self, ring_id: str) -> None:
+            """BETA1-UX37: alterna el foco de un anillo (clic en la leyenda / nº)."""
+            rid = str(ring_id or "")
+            self._focused_ring_id = "" if rid == self._focused_ring_id else rid
+            if self._project is not None:
+                self.set_project(self._project)
+
+        # ── BETA1-UX41: filtro de era + navegación por teclado ────────────────
+        def focus_era(self, era_id: str) -> None:
+            """Acota la ventana temporal a [inicio, fin] de la era (o la quita si se
+            re-selecciona). El filtrado real es vía year_min/max; aquí solo se marca.
+            Busca en la lista COMPLETA de eras (no en layout.eras, que puede estar ya
+            recortado por una ventana previa)."""
+            eid = str(era_id or "")
+            present = int(getattr(self._layout, "present_year", 0) or 0)
+            # _all_eras = (era_id, name, start, end, index)
+            era = next((e for e in self._all_eras if str(e[0]) == eid), None)
+            if era is None or eid == self._focused_era_id:
+                self._focused_era_id = ""
+                self._year_min = None
+                self._year_max = None
+            else:
+                self._focused_era_id = eid
+                self._year_min = int(era[2])
+                self._year_max = int(era[3]) if era[3] is not None else present
+            if self._project is not None:
+                self.set_project(self._project)
+
+        def _cycle_era(self, step: int) -> None:
+            """Tab/Shift+Tab: acota a la era siguiente/anterior (con wrap), sobre la
+            lista completa ordenada por año de inicio."""
+            eras = sorted(self._all_eras, key=lambda e: e[2])
+            if not eras:
+                return
+            ids = [str(e[0]) for e in eras]
+            if self._focused_era_id in ids:
+                idx = (ids.index(self._focused_era_id) + step) % len(ids)
+            else:
+                idx = 0 if step > 0 else len(ids) - 1
+            self.focus_era(ids[idx])
+
+        def _focus_ring_by_index(self, index: int) -> None:
+            """Números 1-0: enfoca el anillo n.º (orden causal, lista completa de
+            anillos — no la filtrada, que con un anillo enfocado tiene solo uno)."""
+            if 0 <= index < len(self._all_rings):
+                self.focus_ring(self._all_rings[index][0])
+
+        def _ensure_detail(self) -> None:
+            """Sube a LOD 2 (todo visible en su posición final) antes de navegar, para
+            poder acercarse a un elemento concreto aunque se viniera de lejos."""
+            if self._lod_level < 2:
+                self._lod_level = 2
+                if self._project is not None:
+                    self.set_project(self._project)
+
+        def _nav_entity(self, step: int) -> None:
+            """↑/↓: resalta la entidad visible anterior/siguiente (orden de arriba-abajo
+            = por cross ``x``) y hace ZOOM FLUIDO hacia ella. Enter abre la actual."""
+            self._ensure_detail()
+            lifelines = sorted(
+                getattr(self._layout, "lifelines", []) or [], key=lambda ln: ln.x
+            )
+            if not lifelines:
+                return
+            ids = [ln.entity_id for ln in lifelines]
+            if self._nav_entity_id in ids:
+                idx = (ids.index(self._nav_entity_id) + step) % len(ids)
+            else:
+                idx = 0 if step >= 0 else len(ids) - 1
+            ln = lifelines[idx]
+            self._nav_entity_id = ln.entity_id
+            self._nav_kind = "entity"
+            self._animate_focus(self._pt(ln.x, ln.y_birth))
+            self.viewport().update()
+
+        def _nav_milestone(self, step: int) -> None:
+            """←/→: resalta el hito anterior/siguiente (por año) y hace zoom fluido
+            hacia él. Reutiliza el resaltado/germinación del recorrido."""
+            self._ensure_detail()
+            marks = sorted(
+                getattr(self._layout, "milestones", []) or [], key=lambda m: m.year
+            )
+            if not marks:
+                return
+            ids = [m.milestone_id for m in marks]
+            if self._nav_milestone_id in ids:
+                idx = (ids.index(self._nav_milestone_id) + step) % len(ids)
+            else:
+                idx = 0 if step >= 0 else len(ids) - 1
+            mid = ids[idx]
+            self._nav_milestone_id = mid
+            self._nav_kind = "milestone"
+            self.center_on_milestone(mid, highlight=True)  # resalte + bloom
+            items = self._milestone_items.get(mid) or []
+            if items:
+                self._animate_focus(items[0].scenePos())
+
+        def _animate_focus(self, point, *, target_scale: float = 0.62) -> None:
+            """BETA1-UX41: zoom + paneo SUAVE hacia un punto de escena (OutCubic).
+            Solo acerca (nunca aleja); centra el punto al terminar."""
+            cur = self.transform().m11()
+            start = self.mapToScene(self.viewport().rect().center())
+            self._focus_anim = {
+                "p0x": start.x(), "p0y": start.y(),
+                "p1x": float(point.x()), "p1y": float(point.y()),
+                "s0": cur, "s1": max(cur, target_scale), "i": 0, "n": 12,
+            }
+            if not self._focus_anim_timer.isActive():
+                self._focus_anim_timer.start()
+
+        def _focus_anim_tick(self) -> None:
+            a = self._focus_anim
+            if not a:
+                self._focus_anim_timer.stop()
+                return
+            a["i"] += 1
+            t = min(1.0, a["i"] / a["n"])
+            e = 1.0 - (1.0 - t) ** 3  # OutCubic
+            target_m11 = a["s0"] + (a["s1"] - a["s0"]) * e
+            cur = self.transform().m11()
+            if cur > 0 and abs(target_m11 - cur) > 1e-6:
+                self.scale(target_m11 / cur, target_m11 / cur)
+            cx = a["p0x"] + (a["p1x"] - a["p0x"]) * e
+            cy = a["p0y"] + (a["p1y"] - a["p0y"]) * e
+            self.centerOn(cx, cy)
+            if t >= 1.0:
+                self._focus_anim = None
+                self._focus_anim_timer.stop()
+
+        def _open_nav_current(self) -> None:
+            """Enter: abre el panel del último elemento navegado (entidad o hito)."""
+            if self._nav_kind == "entity" and self._nav_entity_id:
+                self.entityActivated.emit(self._nav_entity_id)
+            elif self._nav_kind == "milestone" and self._nav_milestone_id:
+                self.milestoneActivated.emit(self._nav_milestone_id)
+
+        def _reset_navigation(self) -> None:
+            """Esc: limpia foco de anillo, ventana/era y resaltado de navegación."""
+            self._focused_ring_id = ""
+            self._focused_era_id = ""
+            self._year_min = None
+            self._year_max = None
+            self._nav_entity_id = ""
+            self._nav_milestone_id = ""
+            self._nav_kind = ""
+            if self._project is not None:
+                self.set_project(self._project)
+
+        # ── BETA1-UX41: edge-pan (auto-scroll al rozar los bordes) ────────────
+        @staticmethod
+        def _edge_pan_velocity(pos, size, *, zone: float = 48.0, max_pan: float = 26.0):
+            """Vector (dx, dy) px/tick según la cercanía del cursor a cada borde.
+            0 fuera de la franja ``zone``; crece linealmente hacia el borde. Puro."""
+            w = float(size.width()); h = float(size.height())
+            x = float(pos.x()); y = float(pos.y())
+            dx = dy = 0.0
+            if x < zone:
+                dx = -max_pan * (zone - x) / zone
+            elif x > w - zone:
+                dx = max_pan * (x - (w - zone)) / zone
+            if y < zone:
+                dy = -max_pan * (zone - y) / zone
+            elif y > h - zone:
+                dy = max_pan * (y - (h - zone)) / zone
+            return dx, dy
+
+        def _edge_pan_tick(self) -> None:
+            dx, dy = self._edge_pan
+            if dx == 0.0 and dy == 0.0:
+                self._edge_pan_timer.stop()
+                return
+            hbar = self.horizontalScrollBar()
+            vbar = self.verticalScrollBar()
+            if dx:
+                hbar.setValue(int(hbar.value() + dx))
+            if dy:
+                vbar.setValue(int(vbar.value() + dy))
+
+        def _update_edge_pan(self, pos) -> None:
+            # No interferir con paneo manual ni con el arrastre de mangos.
+            if self._space_panning or self._press_handle is not None or self._project is None:
+                self._edge_pan = (0.0, 0.0)
+                self._edge_pan_timer.stop()
+                return
+            self._edge_pan = self._edge_pan_velocity(pos, self.viewport().rect().size())
+            if self._edge_pan != (0.0, 0.0):
+                if not self._edge_pan_timer.isActive():
+                    self._edge_pan_timer.start()
+            else:
+                self._edge_pan_timer.stop()
+
+        def leaveEvent(self, event):  # noqa: N802 (Qt API)
+            self._edge_pan = (0.0, 0.0)
+            self._edge_pan_timer.stop()
+            super().leaveEvent(event)
+
+        # ── BETA1-UX38: control de ventana temporal (scrubber de intervalo) ───
+        def _build_time_window_bar(self):
+            bar = _TimeRangeScrubber(self)
+            bar.rangeChanged.connect(self._on_time_range_changed)
+            bar.cleared.connect(self._reset_time_window)
+            return bar
+
+        def _on_time_range_changed(self, year_min: int, year_max: int):
+            self.set_time_window(int(year_min), int(year_max))
+
+        def _reset_time_window(self):
+            self._year_min = None
+            self._year_max = None
+            if self._project is not None:
+                self.set_project(self._project)
+
+        def _sync_time_window_bounds(self, reset: bool = False):
+            """Ajusta los límites del scrubber al rango del proyecto y refleja la
+            selección actual (sin disparar rebuilds: el widget solo se repinta)."""
+            layout = self._layout
+            bar = getattr(self, "_time_window_bar", None)
+            if layout is None or bar is None:
+                return
+            years = [b.start_year for b in layout.eras]
+            years += [b.end_year for b in layout.eras if b.end_year is not None]
+            years += [ln.birth_year for ln in layout.lifelines]
+            years += [ln.death_year for ln in layout.lifelines if ln.death_year is not None]
+            years.append(layout.present_year)
+            if not years:
+                return
+            bar.set_bounds(min(years), max(years))
+            bar.set_selection(self._year_min, self._year_max)
+
+        def _position_time_window_bar(self):
+            bar = getattr(self, "_time_window_bar", None)
+            if bar is None:
+                return
+            bar.adjustSize()
+            bar.move(max(8, (self.width() - bar.width()) // 2), 10)
+            bar.raise_()
+            has_content = self._layout is not None and bool(
+                getattr(self._layout, "lifelines", None) or getattr(self._layout, "columns", None)
+            )
+            bar.setVisible(has_content)
+
+        def _toggle_collapse(self, branch_id: str) -> None:
+            """BETA1-UX36: alterna el colapso de un contenedor (clic en su caja).
+            Recuerda el estado, lo persiste vía ctx y reconstruye la escena."""
+            bid = str(branch_id)
+            if not bid:
+                return
+            if bid in self._expanded_ids:
+                self._expanded_ids.discard(bid)
+            else:
+                self._expanded_ids.add(bid)
+            ctx = self._ctx
+            if ctx is not None:
+                try:
+                    ctx.creation_chrono_expanded_ids = sorted(self._expanded_ids)
+                    save = getattr(ctx, "save_preferences", None)
+                    if callable(save):
+                        save()
+                except Exception:  # noqa: BLE001 — la persistencia nunca rompe la UI
+                    pass
+            if self._project is not None:
+                self.set_project(self._project)
 
         # ── BETA1-UX7: transposición logical(cross, time) ↔ escena ────────────
         # El layout puro razona en (cross = eje-anillo, time = eje-tiempo). En
@@ -1350,9 +1983,206 @@ if HAS_QT:
             super().drawBackground(painter, rect)  # viñeta radial (backgroundBrush)
             self._atmosphere.paint(painter)
 
+        # UX31: revelado de transición DENTRO del viewport (como en la concéntrica).
+        def play_reveal(self, *, duration_ms: int = 220) -> None:
+            try:
+                self._reveal_alpha = 1.0
+                self._reveal_step = 40.0 / max(1, int(duration_ms))
+                timer = getattr(self, "_reveal_timer", None)
+                if timer is None:
+                    timer = QTimer(self)
+                    timer.setInterval(40)
+                    timer.timeout.connect(self._reveal_tick)
+                    self._reveal_timer = timer
+                if not timer.isActive():
+                    timer.start()
+                self.viewport().update()
+            except Exception:  # noqa: BLE001 — el pulido nunca rompe el cambio de vista
+                self._reveal_alpha = 0.0
+
+        def _reveal_tick(self) -> None:
+            self._reveal_alpha = getattr(self, "_reveal_alpha", 0.0) - getattr(
+                self, "_reveal_step", 0.2
+            )
+            if self._reveal_alpha <= 0.0:
+                self._reveal_alpha = 0.0
+                timer = getattr(self, "_reveal_timer", None)
+                if timer is not None:
+                    timer.stop()
+            self.viewport().update()
+
+        def drawForeground(self, painter, rect):  # noqa: N802 (Qt API)
+            super().drawForeground(painter, rect)
+            # BETA1-UX39: etiquetas pegajosas (era arriba, anillo izquierda) + leyenda,
+            # SIEMPRE legibles porque se pintan en coords de viewport (no escalan).
+            try:
+                self._draw_sticky_overlays(painter)
+                self._draw_nav_highlight(painter)  # BETA1-UX41: aro de la entidad navegada
+            except Exception:  # noqa: BLE001 — el pulido nunca rompe el render
+                pass
+            alpha = getattr(self, "_reveal_alpha", 0.0)
+            if alpha > 0.0:
+                painter.save()
+                painter.resetTransform()  # device coords: cubre el viewport entero
+                veil = QColor(_BG)
+                veil.setAlphaF(max(0.0, min(1.0, alpha)))
+                painter.fillRect(self.viewport().rect(), veil)
+                painter.restore()
+
+        # ── BETA1-UX39: etiquetas pegajosas + leyenda (coords de viewport) ────
+        def _paint_sticky_pill(self, painter, text, x, y, *, tint, fg=None):
+            """Píldora pequeña con swatch de color, anclada al borde del viewport."""
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(text)
+            sw = 8  # swatch
+            pad = 6
+            h = fm.height() + 4
+            w = sw + 5 + tw + 2 * pad
+            rect = QRectF(x, y, w, h)
+            path = QPainterPath(); path.addRoundedRect(rect, h / 2.0, h / 2.0)
+            painter.setPen(QPen(_PILL_LINE, 1.0))
+            painter.setBrush(QBrush(_PILL_FILL))
+            painter.drawPath(path)
+            swr = QRectF(x + pad, y + (h - sw) / 2.0, sw, sw)
+            painter.setPen(QPen(QColor(tint), 1.0))
+            painter.setBrush(QBrush(QColor(tint)))
+            painter.drawEllipse(swr)
+            painter.setPen(QPen(fg or _INK))
+            painter.drawText(
+                QRectF(x + pad + sw + 5, y, tw + 4, h),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text,
+            )
+            return rect
+
+        def _draw_sticky_overlays(self, painter):
+            layout = self._layout
+            if layout is None:
+                return
+            painter.save()
+            painter.resetTransform()  # device coords
+            vp = self.viewport().rect()
+            # BETA1-UX39 (fix): SOLO anillos pegajosos al borde IZQUIERDO, a su
+            # Y-carril (siempre legibles). Las eras NO se rotulan aquí — ya llevan su
+            # nombre in-scene arriba de cada banda y, además, en la leyenda; duplicarlas
+            # producía solapes (feedback). Anti-solape por distancia + elisión.
+            rfont = QFont("Georgia"); rfont.setPointSize(8); rfont.setBold(True)
+            painter.setFont(rfont)
+            fm = painter.fontMetrics()
+            placed_y: list[float] = []
+            for idx, col in enumerate(layout.columns):
+                vpt = self.mapFromScene(self._pt(col.x_center, 0.0))
+                y = float(vpt.y())
+                if y < 2 or y > vp.height() - 22:
+                    continue
+                if any(abs(y - py) < 22 for py in placed_y):
+                    continue
+                placed_y.append(y)
+                label = fm.elidedText(col.name, Qt.TextElideMode.ElideRight, 150)
+                self._paint_sticky_pill(
+                    painter, label, 4.0, y - 9.0, tint=_ring_tint(idx, col.ring_id),
+                )
+            self._draw_legend(painter, vp, layout)
+            painter.restore()
+
+        def _draw_legend(self, painter, vp, layout):
+            """Leyenda anclada al borde DERECHO, centrada verticalmente (zona libre:
+            no la tapan los botones de la izquierda ni el guardar de abajo-derecha).
+            Filas de ANILLO (swatch + nombre, clic = foco) y, debajo, las ERAS."""
+            self._legend_hit_rects = []
+            # BETA1-UX41 (fix): listas COMPLETAS (no las filtradas) → siempre se pueden
+            # ofrecer todos los anillos/eras aunque haya uno enfocado.
+            all_rings = self._all_rings or [(c.ring_id, c.name) for c in layout.columns]
+            all_eras = self._all_eras or [
+                (b.era_id, b.name, b.start_year, b.end_year, b.index) for b in layout.eras
+            ]
+            rings = list(enumerate(all_rings))   # (idx, (ring_id, name))
+            eras = list(all_eras)                 # (era_id, name, start, end, index)
+            if not rings and not eras:
+                return
+            lfont = QFont("Georgia"); lfont.setPointSize(8)
+            painter.setFont(lfont)
+            fm = painter.fontMetrics()
+            row_h = fm.height() + 6
+            pad = 8
+            names = [r[1][1] for r in rings] + [e[1] for e in eras]
+            tw = min(160, max((fm.horizontalAdvance(n) for n in names), default=40))
+            w = pad + 10 + 6 + tw + pad
+            n_rows = len(rings) + ((1 + len(eras)) if eras else 0)
+            h = pad + row_h * n_rows + pad
+            x0 = vp.width() - w - 10.0
+            y0 = max(10.0, (vp.height() - h) / 2.0)
+            panel = QRectF(x0, y0, w, h)
+            ppath = QPainterPath(); ppath.addRoundedRect(panel, 8, 8)
+            painter.setPen(QPen(_PILL_LINE, 1.0))
+            bg = QColor(_PILL_FILL); bg.setAlpha(244)
+            painter.setBrush(QBrush(bg))
+            painter.drawPath(ppath)
+
+            def _swatch_row(ry, tint, name, *, focused, clickable=None):
+                # clickable = (kind, id) | None. BETA1-UX41: anillos Y eras clicables.
+                row = QRectF(x0 + 3, ry, w - 6, row_h)
+                if focused:
+                    hl = QColor(tint); hl.setAlpha(60)
+                    painter.setPen(QPen(Qt.PenStyle.NoPen)); painter.setBrush(QBrush(hl))
+                    painter.drawRoundedRect(row, 5, 5)
+                sw = QRectF(x0 + pad, ry + (row_h - 9) / 2.0, 9, 9)
+                painter.setPen(QPen(QColor(tint), 1.0)); painter.setBrush(QBrush(QColor(tint)))
+                painter.drawEllipse(sw)
+                painter.setPen(QPen(_INK if focused else _MUTED))
+                shown = fm.elidedText(name, Qt.TextElideMode.ElideRight, tw)
+                painter.drawText(
+                    QRectF(x0 + pad + 10 + 6, ry, tw + 4, row_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, shown,
+                )
+                if clickable is not None:
+                    self._legend_hit_rects.append((QRectF(row), clickable[0], clickable[1]))
+
+            yc = y0 + pad
+            for idx, (ring_id, rname) in rings:
+                focused = bool(self._focused_ring_id) and ring_id == self._focused_ring_id
+                _swatch_row(yc, _ring_tint(idx, ring_id), rname,
+                            focused=focused, clickable=("ring", ring_id))
+                yc += row_h
+            if eras:
+                painter.setPen(QPen(_MUTED))
+                hf = QFont("Georgia"); hf.setPointSize(7); hf.setBold(True)
+                painter.setFont(hf)
+                painter.drawText(QRectF(x0 + pad, yc, w - 2 * pad, row_h),
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "ERAS")
+                painter.setFont(lfont)
+                yc += row_h
+                for era_id, ename, _s, _e, eindex in eras:
+                    tint = QColor(_ERA_TINTS[eindex % len(_ERA_TINTS)])
+                    focused = bool(self._focused_era_id) and str(era_id) == self._focused_era_id
+                    _swatch_row(yc, tint, ename, focused=focused,
+                                clickable=("era", str(era_id)))
+                    yc += row_h
+
+        def _draw_nav_highlight(self, painter):
+            """BETA1-UX41: aro dorado sobre la cabeza de la entidad navegada (↑/↓),
+            en coords de viewport (siempre visible, sin escalar)."""
+            if self._nav_kind != "entity" or not self._nav_entity_id:
+                return
+            layout = self._layout
+            if layout is None:
+                return
+            ln = next(
+                (x for x in layout.lifelines if x.entity_id == self._nav_entity_id), None
+            )
+            if ln is None:
+                return
+            vpt = self.mapFromScene(self._pt(ln.x, ln.y_birth))
+            painter.save()
+            painter.resetTransform()
+            painter.setPen(QPen(QColor("#C8A24C"), 2.4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(float(vpt.x()), float(vpt.y())), 13.0, 13.0)
+            painter.restore()
+
         def showEvent(self, event):  # noqa: N802 (Qt API)
             super().showEvent(event)
             self._atmosphere.start()
+            self.setFocus(Qt.FocusReason.OtherFocusReason)  # BETA1-UX41: teclado activo
 
         def hideEvent(self, event):  # noqa: N802 (Qt API)
             self._atmosphere.stop()
@@ -1374,6 +2204,9 @@ if HAS_QT:
             # de Qt aborta el proceso). El traceback queda para diagnosticar.
             try:
                 self._rebuild_scene(project)
+                # BETA1-UX38: ajusta y reposiciona el control de ventana temporal.
+                self._sync_time_window_bounds()
+                self._position_time_window_bar()
             except Exception:  # noqa: BLE001 — robustez de UI por encima de todo
                 import traceback
                 traceback.print_exc()
@@ -1387,6 +2220,10 @@ if HAS_QT:
                 self._bloom_items = {}
                 self._handle_drag = None
                 self._press_handle = None
+
+        def resizeEvent(self, event):  # noqa: N802 (Qt API)
+            super().resizeEvent(event)
+            self._position_time_window_bar()
 
         def _rebuild_scene(self, project: Any) -> None:
             scene = self.scene()
@@ -1415,7 +2252,8 @@ if HAS_QT:
                 adv = (fm_bold if is_tree else fm_plain).horizontalAdvance(ename)
                 widest = max(widest, min(float(adv), NAME_MAX_PX))
             lane_width = max(LANE_WIDTH, widest + NAME_LANE_PAD)
-            layout = build_chrono_layout(project, lane_width=lane_width)
+            scope = self._current_scope()  # BETA1-UX36
+            layout = build_chrono_layout(project, lane_width=lane_width, scope=scope)
             # BETA1-UX10: reservar hueco en el TIEMPO para el NOMBRE de cada hito
             # → dos hitos de años cercanos no solapan sus títulos. Se mide el ancho
             # real del título (en horizontal el footprint es el ancho; en vertical
@@ -1432,9 +2270,20 @@ if HAS_QT:
                         foot = fm_title.height() + 12.0
                     min_gaps[m.year] = max(min_gaps.get(m.year, 0.0), foot)
                 layout = build_chrono_layout(
-                    project, lane_width=lane_width, milestone_min_gaps=min_gaps
+                    project, lane_width=lane_width, milestone_min_gaps=min_gaps, scope=scope
                 )
             self._layout = layout
+            # BETA1-UX41 (fix): listas COMPLETAS de anillos/eras, independientes del
+            # filtro actual, para que la leyenda y los atajos sigan ofreciéndolos todos
+            # aunque haya un anillo enfocado (que reduce layout.columns a uno) o una
+            # ventana temporal (que recorta layout.eras). Se refrescan solo cuando ese
+            # eje NO está filtrado.
+            if not self._focused_ring_id:
+                self._all_rings = [(c.ring_id, c.name) for c in layout.columns]
+            if self._year_min is None and self._year_max is None:
+                self._all_eras = [
+                    (b.era_id, b.name, b.start_year, b.end_year, b.index) for b in layout.eras
+                ]
             self._apply_vignette(layout)  # halo centrado en el contenido temporal
 
             # BETA1-UX: estratos de era con BISEL cálido (borde superior
@@ -1490,16 +2339,23 @@ if HAS_QT:
                     # altura (mismo cross) con distinto tiempo se solaparían —el bug
                     # de la captura—; aquí el tiempo (X) los ancla al inicio de la
                     # era y el cross (Y) los separa en dos renglones.
-                    label_x = self._pt(0, band.y0).x() + 10
-                    name_max = max(80.0, min(band.y1 - band.y0 - 16.0, 360.0))
-                    _add_pill_label(
-                        scene, band.name, label_x, 10,
-                        font=era_font, fg=_INK, z=8, max_w=name_max, tag=era_tag,
-                    )
-                    _add_pill_label(
-                        scene, years_text, label_x, 32,
-                        font=yr_font, fg=_MUTED, z=8, max_w=name_max, tag=era_tag,
-                    )
+                    # BETA1-UX39 (fix solape): el nombre se elide al ancho REAL de la
+                    # banda (sin suelo de 80px, que hacía desbordar a las eras
+                    # vecinas en eras estrechas) y se OMITE si la banda es demasiado
+                    # angosta — esas eras se leen en la leyenda (a la derecha). Así
+                    # dos eras contiguas nunca pisan sus etiquetas.
+                    band_w = band.y1 - band.y0
+                    if band_w >= 34.0:
+                        label_x = self._pt(0, band.y0).x() + 8
+                        name_max = max(24.0, min(band_w - 14.0, 360.0))
+                        _add_pill_label(
+                            scene, band.name, label_x, 10,
+                            font=era_font, fg=_INK, z=8, max_w=name_max, tag=era_tag,
+                        )
+                        _add_pill_label(
+                            scene, years_text, label_x, 32,
+                            font=yr_font, fg=_MUTED, z=8, max_w=name_max, tag=era_tag,
+                        )
                 else:
                     name_at = self._pt(14, band.y0 + 8)
                     _add_pill_label(
@@ -1523,34 +2379,113 @@ if HAS_QT:
                 box_item = _BranchBoxItem(
                     box.branch_id, box.color, box.depth, BOX_HEADER_PX, self._horizontal,
                     box_rect.x(), box_rect.y(), box_rect.width(), box_rect.height(),
+                    collapsed=box.collapsed,
                 )
                 scene.addItem(box_item)
-                # Etiqueta nombre (+ recuento) en la cabecera; clic → abrir la rama.
+                # Etiqueta nombre (+ recuento) en la cabecera. BETA1-UX36: clic →
+                # expandir/colapsar (rol de toggle), no abrir la rama (eso es por la
+                # línea/nombre del contenedor). Una caja plegada muestra el recuento
+                # de miembros ocultos para invitar a abrirla.
                 box_label = box.name if box.member_count <= 0 else f"{box.name}  ·  {box.member_count}"
                 box_font = QFont("Georgia"); box_font.setPointSize(9); box_font.setBold(True)
                 box_anchor = self._pt(box.x_left + BOX_LABEL_PAD, box.y0 + 6.0)
                 _add_pill_label(
                     scene, box_label, box_anchor.x(), box_anchor.y(),
                     font=box_font, fg=_INK, z=9, max_w=240,
-                    tag=(_ENTITY_ID_ROLE, box.branch_id),
+                    tag=(_BRANCH_BOX_ROLE, box.branch_id),
                 )
 
             # Cabeceras de columna (anillos — el lector conserva el mapa mental).
-            # BETA1-UX7: en horizontal pasan al margen izquierdo, centradas en su
-            # carril; en vertical quedan arriba, centradas en su columna.
-            for column in layout.columns:
-                header = QGraphicsSimpleTextItem(column.name)
-                header.setBrush(QBrush(_MUTED))
+            # BETA1-UX35: cada columna de ANILLO recibe identidad visual cálida y
+            # coherente con las eras: velo de color a toda altura (alpha bajo), un
+            # separador con relieve (filo+sombra) en su borde, una regla de acento y
+            # una cabecera con swatch del color del anillo. Sin interacción nueva.
+            # BETA1-UX7: en horizontal el helper transpone (la "columna" se ve como
+            # banda); la cabecera pasa al margen izquierdo, en vertical queda arriba.
+            for col_index, column in enumerate(layout.columns):
+                base_tint = _ring_tint(col_index, column.ring_id)
+                # Velo de columna a toda altura (z sobre eras -30/-29, bajo cajas/vidas).
+                veil = QColor(base_tint)
+                veil.setAlpha(18)
+                veil_rect = QGraphicsRectItem(
+                    self._logical_rect(column.x_left, 0.0, column.x_right, layout.height)
+                )
+                veil_rect.setBrush(QBrush(veil))
+                veil_rect.setPen(QPen(Qt.PenStyle.NoPen))
+                veil_rect.setZValue(-28)
+                scene.addItem(veil_rect)
+                # Separador con relieve (filo iluminado + sombra fina) en el borde
+                # izquierdo de la columna — el mismo lenguaje que los estratos de era.
+                hi_sep = QColor("#FCF8EE")
+                hi_sep.setAlpha(150)
+                sh_sep = QColor(52, 47, 28)
+                sh_sep.setAlpha(40)
+                self._add_line(
+                    scene, column.x_left, 0.0, column.x_left, layout.height, QPen(hi_sep, 1.4)
+                ).setZValue(-27)
+                self._add_line(
+                    scene, column.x_left + 1.5, 0.0, column.x_left + 1.5, layout.height,
+                    QPen(sh_sep, 1.0),
+                ).setZValue(-27)
+                # Regla de acento (tinte saturado) bajo la cabecera, a lo ancho de la columna.
+                accent = QColor(base_tint)
+                accent.setAlpha(205)
+                self._add_line(
+                    scene, column.x_left + 8.0, TOP_MARGIN - 28.0,
+                    column.x_right - 8.0, TOP_MARGIN - 28.0, QPen(accent, 2.2),
+                ).setZValue(7)
+                # Cabecera: nombre en píldora (INK, bold) + swatch del color del anillo
+                # a su izquierda. El swatch se ancla al rect REAL del texto → correcto
+                # en ambas orientaciones.
                 font = QFont("Georgia")
                 font.setPointSize(9)
-                header.setFont(font)
-                r = header.boundingRect()
-                base = self._pt(column.x_center, TOP_MARGIN - 46)
-                if self._horizontal:
-                    header.setPos(base.x() - r.width(), base.y() - r.height() / 2.0)
-                else:
-                    header.setPos(base.x() - r.width() / 2.0, base.y())
-                scene.addItem(header)
+                font.setBold(True)
+                base = self._pt(column.x_center, TOP_MARGIN - 46.0)
+                # En horizontal la cabecera va al margen izquierdo CENTRADA en el
+                # carril (eje cross = Y); el pill ancla el texto por su parte
+                # superior, así que compensamos media altura para centrar.
+                header_y = (
+                    base.y() - QFontMetrics(font).height() / 2.0
+                    if self._horizontal
+                    else base.y()
+                )
+                header = _add_pill_label(
+                    scene, column.name, base.x(), header_y,
+                    font=font, fg=_INK, z=8, max_w=220,
+                    align_right=self._horizontal, center=not self._horizontal,
+                )
+                lr = header.sceneBoundingRect()
+                sw = 9.0
+                swatch = QGraphicsEllipseItem(0.0, 0.0, sw, sw)
+                swatch.setBrush(QBrush(QColor(base_tint)))
+                swatch.setPen(QPen(QColor(_PILL_LINE), 1.0))
+                swatch.setZValue(8.1)
+                swatch.setPos(lr.left() - sw - 5.0, lr.center().y() - sw / 2.0)
+                scene.addItem(swatch)
+
+            # Cierre: filo en el borde derecho de la última columna.
+            if layout.columns:
+                last = layout.columns[-1]
+                hi_edge = QColor("#FCF8EE")
+                hi_edge.setAlpha(150)
+                self._add_line(
+                    scene, last.x_right, 0.0, last.x_right, layout.height, QPen(hi_edge, 1.4)
+                ).setZValue(-27)
+
+            # BETA1-UX39: píldora "N sueltas" por anillo (cuando el LOD agregó las
+            # entidades sueltas). Bajo la cabecera de la columna, invita a acercar.
+            if layout.loose_counts:
+                col_by_ring = {c.ring_id: c for c in layout.columns}
+                loose_font = QFont("Georgia"); loose_font.setPointSize(8); loose_font.setItalic(True)
+                for ring_id, count in layout.loose_counts.items():
+                    col = col_by_ring.get(ring_id)
+                    if col is None or count <= 0:
+                        continue
+                    at = self._pt(col.x_center, TOP_MARGIN - 10.0)
+                    _add_pill_label(
+                        scene, f"+{count} sueltas", at.x(), at.y(),
+                        font=loose_font, fg=_MUTED, z=9, max_w=160, center=True,
+                    )
 
             # Línea del presente (cruza todo el eje anillo a la posición de tiempo
             # del presente: horizontal → línea vertical; vertical → horizontal).
@@ -1618,6 +2553,11 @@ if HAS_QT:
                     "birth": lifeline.birth_year,
                     "death": lifeline.death_year,
                 }
+                # BETA1-UX39: nivel de detalle — al alejar se ocultan nombres para
+                # des-saturar la vista. lod 0 = ninguno; lod 1 = solo ramas/contenedores;
+                # lod 2 = todos. (Es lo último del bucle, así que continue es seguro.)
+                if scope.lod_level == 0 or (scope.lod_level == 1 and not lifeline.is_tree):
+                    continue
                 # BETA1-HITO-MULTI: nombre CENTRADO sobre su línea, SIN recuadro
                 # (texto suelto), y POR ENCIMA del nodo para no taparlo (el nodo
                 # marca el origen y debe quedar libre para arrastrar el lapso).
@@ -1838,20 +2778,69 @@ if HAS_QT:
             factor = zoom_step(self.transform().m11(), event.angleDelta().y() > 0)
             if factor is not None:
                 self.scale(factor, factor)
+            # BETA1-UX39: al cruzar un umbral de zoom (con histéresis), cambia el
+            # nivel de detalle y reconstruye una vez, suavizado por un breve crossfade
+            # (velo que se desvanece) para que el salto no sea brusco.
+            new_lod = self._lod_for_scale(self.transform().m11(), self._lod_level)
+            if new_lod != self._lod_level and self._project is not None:
+                self._lod_level = new_lod
+                self.set_project(self._project)
+                self.play_reveal(duration_ms=220)
             event.accept()
 
         def keyPressEvent(self, event):  # noqa: N802
-            if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            key = event.key()
+            if key == Qt.Key.Key_Space and not event.isAutoRepeat():
                 self._space_panning = True
                 self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
                 event.accept()
                 return
-            if event.key() == Qt.Key.Key_Escape:
+            if key == Qt.Key.Key_Escape:
                 self.scene().clearSelection()
+                self._reset_navigation()  # BETA1-UX41: limpia foco/ventana/resaltado
                 self.escapePressed.emit()
                 event.accept()
                 return
+            if key == Qt.Key.Key_F:  # BETA1-UX41: F → volver a la vista general
+                self._reset_navigation()
+                self.fit_all()
+                event.accept()
+                return
+            # BETA1-UX41: Tab/Shift+Tab recorren las ERAS (acotando a cada una).
+            if key == Qt.Key.Key_Tab:
+                self._cycle_era(1)
+                event.accept()
+                return
+            if key == Qt.Key.Key_Backtab:  # Shift+Tab
+                self._cycle_era(-1)
+                event.accept()
+                return
+            # Números 1-9, 0 → enfocar el anillo n.º (orden causal; 0 = décimo).
+            if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+                self._focus_ring_by_index(key - Qt.Key.Key_1)
+                event.accept()
+                return
+            if key == Qt.Key.Key_0:
+                self._focus_ring_by_index(9)
+                event.accept()
+                return
+            # ↑/↓ entidades, ←/→ hitos (resaltar + centrar); Enter abre el actual.
+            if key == Qt.Key.Key_Up:
+                self._nav_entity(-1); event.accept(); return
+            if key == Qt.Key.Key_Down:
+                self._nav_entity(1); event.accept(); return
+            if key == Qt.Key.Key_Left:
+                self._nav_milestone(-1); event.accept(); return
+            if key == Qt.Key.Key_Right:
+                self._nav_milestone(1); event.accept(); return
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._open_nav_current(); event.accept(); return
             super().keyPressEvent(event)
+
+        def focusNextPrevChild(self, _next):  # noqa: N802 (Qt API)
+            # BETA1-UX41: que Tab/Shift+Tab lleguen a keyPressEvent (recorrer eras)
+            # en vez de mover el foco entre widgets.
+            return False
 
         def keyReleaseEvent(self, event):  # noqa: N802
             if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
@@ -1945,8 +2934,20 @@ if HAS_QT:
             return drag["entity_id"], birth, death
 
         def mousePressEvent(self, event):  # noqa: N802
+            self.setFocus(Qt.FocusReason.MouseFocusReason)  # BETA1-UX41: captar teclado
             if event.button() == Qt.MouseButton.LeftButton and not self._space_panning:
-                self._press_pos = event.position()  # ancla clic/arrastre (mangos)
+                # BETA1-UX39/41: clic en una fila de la leyenda → foco de anillo o
+                # acotar a la era (según el tipo de fila).
+                pos = event.position()
+                for rect, kind, item_id in getattr(self, "_legend_hit_rects", []):
+                    if rect.contains(pos):
+                        if kind == "era":
+                            self.focus_era(item_id)
+                        else:
+                            self.focus_ring(item_id)
+                        event.accept()
+                        return
+                self._press_pos = pos  # ancla clic/arrastre (mangos)
                 hit = self._handle_at(event.position().toPoint())
                 if hit is not None:
                     self._press_handle = hit
@@ -1993,8 +2994,16 @@ if HAS_QT:
                 if isinstance(item, _LifelineHead):
                     self.entityActivated.emit(item.entity_id)
                     return True
+                if isinstance(item, _BranchBoxItem):
+                    # BETA1-UX36: clic en la caja del contenedor → expandir/colapsar.
+                    self._toggle_collapse(item.branch_id)
+                    return True
                 if isinstance(item, _EraBandItem):
                     self.eraActivated.emit(item.era_id)
+                    return True
+                bbox = item.data(_BRANCH_BOX_ROLE)  # cabecera de caja → expandir/colapsar
+                if bbox:
+                    self._toggle_collapse(str(bbox))
                     return True
                 mid = item.data(_MILESTONE_ID_ROLE)  # título del hito → abrir hito
                 if mid:
@@ -2042,6 +3051,7 @@ if HAS_QT:
             return True
 
         def mouseMoveEvent(self, event):  # noqa: N802
+            self._update_edge_pan(event.position())  # BETA1-UX41: auto-scroll por bordes
             if self._press_handle is not None:
                 # BETA1-UX2D: hasta superar el umbral, es un CLIC (no relocaliza
                 # el mango). Solo a partir de ahí empieza el arrastre real.

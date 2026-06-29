@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hosts.DesktopHostPySide.widgets.design_system import Card, SectionHeader
+from hosts.DesktopHostPySide.widgets.design_system import Card, PanelScaffold, SectionHeader
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────
@@ -81,13 +81,16 @@ class _AIChatWorker(QThread):
             self.finished.emit("", str(exc))
 
 
-class _PanelBase(QWidget):
+class _PanelBase(PanelScaffold):
+    """Base de los paneles de settings, ahora sobre PanelScaffold (UX14).
+
+    Mantiene la API previa: ``self.layout`` es el cuerpo del scaffold (las
+    subclases añaden contenido ahí) y la cabecera la pone PanelScaffold."""
+
     def __init__(self, title: str, subtitle: str = "", parent: QWidget | None = None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(18, 16, 18, 18)
-        self.layout.setSpacing(12)
-        self.layout.addWidget(SectionHeader(title, subtitle))
+        super().__init__(title, subtitle, parent=parent)
+        # compat: las subclases montan su contenido en self.layout (= body).
+        self.layout = self.body
 
     def _action_button(self, text: str, callback: Callable, *, primary: bool = False) -> QPushButton:
         btn = QPushButton(text)
@@ -359,44 +362,6 @@ class ProjectPanel(QWidget):
 
         self.campaign_card.layout.addLayout(form)
         self.root_layout.addWidget(self.campaign_card)
-
-    def _build_novela_config_section(self):
-        self.novela_card = self._make_card("Configuración de novela / relato")
-        form = QFormLayout()
-        form.setSpacing(10)
-
-        nc = getattr(self.project, "novela_config", None)
-
-        self.novela_format_combo = QComboBox()
-        self.novela_format_combo.addItems(["Novela", "Relato", "Saga", "Antología"])
-        fmt_val = self._safe(nc, "format", "")
-        fmt_map = {"novela": 0, "relato": 1, "saga": 2, "antologia": 3}
-        self.novela_format_combo.setCurrentIndex(fmt_map.get(fmt_val, 0))
-        form.addRow("Formato", self.novela_format_combo)
-
-        self.novela_pov_combo = QComboBox()
-        self.novela_pov_combo.addItems(["Primera persona", "Tercera persona", "Omnisciente"])
-        pov_val = self._safe(nc, "point_of_view", "")
-        pov_map = {"primera_persona": 0, "tercera_persona": 1, "omnisciente": 2}
-        self.novela_pov_combo.setCurrentIndex(pov_map.get(pov_val, 0))
-        form.addRow("Punto de vista", self.novela_pov_combo)
-
-        self.novela_tense_combo = QComboBox()
-        self.novela_tense_combo.addItems(["Pasado", "Presente"])
-        tense_val = self._safe(nc, "tense", "")
-        tense_map = {"pasado": 0, "presente": 1}
-        self.novela_tense_combo.setCurrentIndex(tense_map.get(tense_val, 0))
-        form.addRow("Tiempo verbal", self.novela_tense_combo)
-
-        self.novela_length_combo = QComboBox()
-        self.novela_length_combo.addItems(["Corto", "Medio", "Largo"])
-        length_val = self._safe(nc, "target_length", "")
-        length_map = {"corto": 0, "medio": 1, "largo": 2}
-        self.novela_length_combo.setCurrentIndex(length_map.get(length_val, 0))
-        form.addRow("Longitud", self.novela_length_combo)
-
-        self.novela_card.layout.addLayout(form)
-        self.root_layout.addWidget(self.novela_card)
 
     # ── Visibility logic ──
 

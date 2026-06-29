@@ -1,11 +1,8 @@
 """ImportExportView — visual import cards + advanced export/debug (B27.5-T07)."""
 from __future__ import annotations
 
-import json
 from enum import Enum
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -15,8 +12,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -25,10 +20,10 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.controllers.import_controller import ImportController
 from hosts.DesktopHostPySide.widgets.design_system import (
-    AdvancedSection,
     Badge,
     Card,
     EmptyState,
+    FlowLayout,
     SectionHeader,
     enum_human,
     make_scroll_area,
@@ -144,44 +139,6 @@ def _candidate_visible_text(candidate) -> str:
     return next((str(value).strip() for value in fields if str(value or "").strip()), "")
 
 
-class _ImportExtractionWorker(QThread):
-    """Ejecuta la extracción IA de candidatos en segundo plano (I17).
-
-    Emite ``progress(done, total, label)`` por segmento y ``finishedOk(list)`` /
-    ``failed(str)`` al terminar. ``cancel()`` corta entre segmentos.
-    """
-
-    progress = Signal(int, int, str)
-    finishedOk = Signal(list)
-    failed = Signal(str)
-
-    def __init__(self, controller, basket_id: str, parent=None):
-        super().__init__(parent)
-        self._controller = controller
-        self._basket_id = basket_id
-        self._cancel = False
-
-    def cancel(self):
-        self._cancel = True
-
-    def run(self):
-        try:
-            result = self._controller.extract_ai_candidates(
-                self._basket_id,
-                progress_callback=lambda done, total, label: self.progress.emit(
-                    int(done), int(total), str(label)
-                ),
-                should_cancel=lambda: self._cancel,
-            )
-        except Exception as exc:  # noqa: BLE001 — frontera de hilo
-            self.failed.emit(str(exc))
-            return
-        if isinstance(result, Error):
-            self.failed.emit(str(result.error))
-        else:
-            self.finishedOk.emit(list(getattr(result, "value", None) or []))
-
-
 class ImportExportView(QWidget):
     def __init__(self, ctx: AppContext, controller, export_service: ExportService | None = None):
         super().__init__()
@@ -194,7 +151,16 @@ class ImportExportView(QWidget):
         self.selected_candidate_id: str | None = None
         self.kind_filter: QComboBox | None = None
         self.progress_row: QWidget | None = None
-        self._extraction_worker: _ImportExtractionWorker | None = None
+        # UX33: los jobs ya NO cuelgan de la vista. Corren en el runner persistente
+        # (ctx.import_jobs); la vista solo dispara y escucha sus señales. Conexión con
+        # métodos ligados → Qt las auto-desconecta al destruirse la vista.
+        self.jobs = getattr(ctx, "import_jobs", None)
+        self._active_job_basket: str | None = None
+        if self.jobs is not None:
+            self.jobs.scaffoldingDone.connect(self._on_runner_scaffolding_done)
+            self.jobs.extractionStarted.connect(self._on_runner_extraction_started)
+            self.jobs.extractionProgress.connect(self._on_runner_extraction_progress)
+            self.jobs.extractionDone.connect(self._on_runner_extraction_done)
         self._build()
 
     def _build(self):
@@ -206,7 +172,9 @@ class ImportExportView(QWidget):
             "Revisa semillas como tarjetas. IDs, segmentos y JSON quedan en Datos técnicos."
         ))
 
-        act = QHBoxLayout()
+        # FlowLayout: en el cajón estrecho (≤680px, sin scroll horizontal) una fila
+        # plana de combo + 7 botones se recorta; aquí envuelve a la siguiente línea.
+        act = FlowLayout(spacing=8)
         act.addWidget(QLabel("Modo:"))
         self.mode_selector = QComboBox()
         for label, value in [
@@ -232,7 +200,6 @@ class ImportExportView(QWidget):
                 btn.setObjectName("primaryButton")
             btn.clicked.connect(handler)
             act.addWidget(btn)
-        act.addStretch()
         layout.addLayout(act)
 
         # Fila de progreso de la extracción IA (oculta salvo durante el análisis).
@@ -253,7 +220,7 @@ class ImportExportView(QWidget):
         self.progress_row.setVisible(False)
         layout.addWidget(self.progress_row)
 
-        filter_row = QHBoxLayout()
+        filter_row = FlowLayout(spacing=8)
         filter_row.addWidget(QLabel("Vista:"))
         self.kind_filter = QComboBox()
         for label, value in [
@@ -268,7 +235,6 @@ class ImportExportView(QWidget):
             self.kind_filter.addItem(label, value)
         self.kind_filter.currentIndexChanged.connect(self.refresh)
         filter_row.addWidget(self.kind_filter)
-        filter_row.addStretch()
         self.summary_label = QLabel("")
         self.summary_label.setObjectName("mutedLabel")
         filter_row.addWidget(self.summary_label)
@@ -285,33 +251,18 @@ class ImportExportView(QWidget):
         self.detail.setMaximumHeight(150)
         layout.addWidget(self.detail)
 
-        self.advanced = AdvancedSection("Datos técnicos / export")
-        layout.addWidget(self.advanced)
-        adv_actions = QHBoxLayout()
-        for label, handler in [
-            ("Exportar GM", lambda: self._export_all("gm")),
-            ("Exportar jugadores", lambda: self._export_all("player")),
-            ("Exportar público", lambda: self._export_all("public")),
-            ("Exportar elemento", self._export_single),
-        ]:
-            btn = QPushButton(label)
-            btn.clicked.connect(handler)
-            adv_actions.addWidget(btn)
-        self.advanced.body_layout.addLayout(adv_actions)
-        self.table = QTableWidget()
-        self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels([
-            "Basket", "Source", "Segments", "Candidate", "Segment", "Type",
-            "State", "Confidence", "Dup/Contr"
-        ])
-        self.table.itemSelectionChanged.connect(self._show_detail_from_table)
-        self.advanced.body_layout.addWidget(self.table)
-        self.set_advanced_mode(self.ctx.advanced_mode)
+        # UX33: la vista se reconstruye en cada apertura del cajón. Refrescar AQUÍ
+        # (no solo en showEvent, que no llega de forma fiable al montarse dentro del
+        # cajón animado) garantiza que al reabrir se vea el estado actual: la
+        # propuesta de andamiaje pendiente de aceptar/rechazar, los candidatos ya
+        # extraídos, o el progreso de un job en curso.
+        self._safe_refresh()
 
     def set_advanced_mode(self, enabled: bool):
-        self.advanced.setVisible(bool(enabled))
-        if not enabled and self.detail.toPlainText().startswith("Datos técnicos"):
-            self.detail.clear()
+        # El desplegable de datos técnicos / export se retiró: el modo avanzado ya
+        # no añade nada en esta vista. Se conserva el método por compatibilidad de
+        # API (lo invoca el host al alternar el modo).
+        return None
 
     def _project(self):
         return self.controller.ps.active_project
@@ -351,51 +302,107 @@ class ImportExportView(QWidget):
             )
             return
 
-        # Canon: la extracción rica corre en IA, en segundo plano (no congela UI).
+        # Canon (I22): primero la IA propone el ANDAMIAJE del mundo (Fase 1). El
+        # usuario lo revisa y aplica en bloque; aplicarlo dispara la extracción de
+        # entidades (Fase 2), ya datadas contra el marco.
         if n_segs == 0:
             self.detail.setPlainText("El documento importado no tiene texto extraíble.")
             return
-        self._start_extraction(basket.id)
+        self._start_scaffolding(basket.id)
 
-    # ── Extracción IA en segundo plano (I17) ─────────────────────────────
+    # ── Andamiaje y extracción (UX33: corren en ctx.import_jobs) ─────────
 
-    def _start_extraction(self, basket_id: str):
-        worker = getattr(self, "_extraction_worker", None)
-        if worker is not None and worker.isRunning():
-            self.detail.setPlainText("Ya hay un análisis IA en curso.")
+    def _start_scaffolding(self, basket_id: str):
+        if self.jobs is None:
+            self.detail.setPlainText("El servicio de importación no está disponible.")
+            return
+        if self.jobs.is_running(basket_id):
+            self.detail.setPlainText("Ya hay un análisis IA en curso para este documento.")
             return
         self._set_extraction_busy(True)
-        self.detail.setPlainText("Analizando documento con IA…")
-        worker = _ImportExtractionWorker(self.ic, basket_id, self)
-        self._extraction_worker = worker
-        worker.progress.connect(self._on_extract_progress)
-        worker.finishedOk.connect(self._on_extract_done)
-        worker.failed.connect(self._on_extract_failed)
-        worker.start()
+        self.progress_bar.setRange(0, 0)  # indeterminado: una sola llamada IA
+        self.progress_label.setText("Proponiendo el andamiaje del mundo…")
+        self.detail.setPlainText(
+            "La IA propone el andamiaje (calendario, anillos e hitos) antes de extraer "
+            "entidades. Revísalo y aplícalo para situar las entidades en el mundo."
+        )
+        self._active_job_basket = basket_id
+        self.jobs.start_scaffolding(basket_id)
 
-    def _on_extract_progress(self, done: int, total: int, label: str):
+    def _start_extraction(self, basket_id: str):
+        if self.jobs is None:
+            self.detail.setPlainText("El servicio de importación no está disponible.")
+            return
+        if self.jobs.is_running(basket_id):
+            self.detail.setPlainText("Ya hay un análisis IA en curso para este documento.")
+            return
+        self._set_extraction_busy(True)
+        self.progress_bar.setRange(0, 1)
+        self.detail.setPlainText("Analizando documento con IA…")
+        self._active_job_basket = basket_id
+        self.jobs.start_extraction(basket_id)
+
+    # ── Señales del runner (UX33) ────────────────────────────────────────
+
+    def _on_runner_scaffolding_done(self, _basket_id: str, ok: bool, error: str):
+        self._set_extraction_busy(False)
+        if ok:
+            self.detail.setPlainText(
+                "Andamiaje propuesto. Revísalo y pulsa «Aplicar» para situar las entidades; "
+                "la extracción arrancará tras aplicarlo."
+            )
+        else:
+            self.ctx.log("error", f"Andamiaje IA: {error}")
+            self.detail.setPlainText(f"No se pudo proponer el andamiaje: {error}")
+        self._safe_refresh()
+
+    def _on_runner_extraction_started(self, basket_id: str):
+        self._active_job_basket = basket_id
+        self._set_extraction_busy(True)
+        self.progress_bar.setRange(0, 1)
+        self.progress_label.setText("Analizando documento con IA…")
+
+    def _on_runner_extraction_progress(self, _basket_id: str, done: int, total: int, label: str):
+        self._set_extraction_busy(True)
         self.progress_bar.setRange(0, max(1, total))
         self.progress_bar.setValue(done)
         shown = min(done + 1, total) if total else 0
         self.progress_label.setText(f"Analizando {shown}/{total} · {label}")
 
-    def _on_extract_done(self, candidates: list):
+    def _on_runner_extraction_done(self, basket_id: str, count: int, error: str):
         self._set_extraction_busy(False)
-        self.detail.setPlainText(
-            f"Análisis IA completado: {len(candidates)} candidato(s) para revisar."
-        )
-        self._safe_refresh()
-
-    def _on_extract_failed(self, error: str):
-        self._set_extraction_busy(False)
-        self.ctx.log("error", f"Extracción IA: {error}")
-        self.detail.setPlainText(f"No se pudo analizar con IA: {error}")
+        if error:
+            # I24: error de arranque (proveedor no configurado). Los fallos a media
+            # extracción ya NO llegan por aquí: la extracción devuelve parcial y el
+            # desenlace vive en la metadata del basket (ver abajo).
+            self.ctx.log("error", f"Extracción IA: {error}")
+            self.detail.setPlainText(f"No se pudo analizar con IA: {error}")
+            self._safe_refresh()
+            return
+        basket = self._basket_by_id(basket_id)
+        meta = self._extraction_meta(basket) if basket else {}
+        if meta.get("aborted"):
+            pending = int(meta.get("pending_sections") or 0)
+            self.detail.setPlainText(
+                f"Análisis interrumpido: {meta.get('abort_reason', '')}\n"
+                f"Progreso guardado: {count} candidato(s). Usa «Reanudar análisis IA» "
+                f"({pending} pendientes) cuando el proveedor esté disponible."
+            )
+        elif int(meta.get("skipped_sections") or 0):
+            self.detail.setPlainText(
+                f"Análisis IA completado (parcial): {count} candidato(s); "
+                f"{meta['skipped_sections']} sección(es) omitida(s) por el filtro del proveedor "
+                "(revísalas en «Dudas y conflictos»)."
+            )
+        else:
+            self.detail.setPlainText(
+                f"Análisis IA completado: {count} candidato(s) para revisar."
+            )
         self._safe_refresh()
 
     def _cancel_extraction(self):
-        worker = getattr(self, "_extraction_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.cancel()
+        if self.jobs is not None and self._active_job_basket:
+            self.jobs.cancel_extraction(self._active_job_basket)
             self.progress_label.setText("Cancelando…")
 
     def _set_extraction_busy(self, busy: bool):
@@ -450,11 +457,42 @@ class ImportExportView(QWidget):
             if widget:
                 widget.deleteLater()
 
+    def showEvent(self, event):  # noqa: N802 (Qt API)
+        # UX33: la vista se recrea cada vez que se abre el cajón. Al mostrarse,
+        # refresca para reflejar el estado ACTUAL del proyecto activo: candidatos
+        # ya extraídos, propuesta de andamiaje pendiente de aceptar, o un job en
+        # curso (progreso). Sin esto, al reabrir no se veía ni el progreso ni la
+        # propuesta (que el usuario debe poder aceptar/rechazar).
+        super().showEvent(event)
+        self._safe_refresh()
+
     def refresh(self):
         rows = self._rows()
         self._update_summary(rows)
         self._refresh_cards(self._filtered_rows(rows))
-        self._refresh_table(rows)
+        self._reflect_running_jobs(rows)
+
+    def _reflect_running_jobs(self, rows):
+        """UX33: al (re)abrir, refleja si hay un job en curso en el runner.
+
+        Como el job vive fuera de la vista, una vista recién montada puede
+        encontrarse una extracción ya en marcha: muestra la barra de progreso
+        (indeterminada) en vez de aparentar que no pasa nada."""
+        if self.jobs is None:
+            return
+        running = next(
+            (getattr(b, "id", "") for b, _ in rows if self.jobs.is_running(getattr(b, "id", ""))),
+            None,
+        )
+        if running:
+            self._active_job_basket = running
+            self._set_extraction_busy(True)
+            self.progress_bar.setRange(0, 0)  # indeterminado: no conocemos el avance
+            kind = self.jobs.running_kind(running)
+            self.progress_label.setText(
+                "Proponiendo el andamiaje…" if kind == "scaffolding"
+                else "Analizando documento con IA…"
+            )
 
     def _update_summary(self, rows):
         baskets = {getattr(b, "id", "") for b, _ in rows}
@@ -478,6 +516,7 @@ class ImportExportView(QWidget):
         grid_col = 0
         last_group = ""
         seen_config: set[str] = set()
+        seen_resume: set[str] = set()
         for basket, candidate in rows:
             bid = getattr(basket, "id", "")
             if bid not in seen_config and self._has_config_suggestion(basket):
@@ -486,6 +525,15 @@ class ImportExportView(QWidget):
                     grid_col = 0
                     grid_row += 1
                 self.cards_grid.addWidget(self._make_config_card(basket), grid_row, 0, 1, _CARDS_COLUMNS)
+                grid_row += 1
+            # I24: si la extracción quedó a medias (interrumpida o con secciones
+            # pendientes), ofrecer reanudarla sin repetir lo ya hecho.
+            if bid not in seen_resume and self._needs_resume(basket):
+                seen_resume.add(bid)
+                if grid_col:
+                    grid_col = 0
+                    grid_row += 1
+                self.cards_grid.addWidget(self._make_resume_card(basket), grid_row, 0, 1, _CARDS_COLUMNS)
                 grid_row += 1
             if candidate is None:
                 if str(getattr(basket, "import_mode", "canon")) == "contexto":
@@ -528,7 +576,7 @@ class ImportExportView(QWidget):
             state_text = enum_human(getattr(candidate, "review_state", "pendiente"))
             confidence = float(getattr(candidate, "confidence", 0.0) or 0.0)
             payload = getattr(candidate, "proposed_data", {}) or {}
-            row = card.add_row()
+            row = card.add_flow_row()
             row.addWidget(Badge(group, "neutral"))
             row.addWidget(Badge(state_text, "info"))
             row.addWidget(Badge(f"Confianza {confidence:.0%}", "success" if confidence >= 0.7 else "warning"))
@@ -537,11 +585,10 @@ class ImportExportView(QWidget):
                 if len(target) > 24:
                     target = target[:23] + "…"
                 row.addWidget(Badge(f"Enriquece a {target}", "gold"))
-            row.addStretch()
             source = _source_reference_text(candidate)
             if source:
                 card.add_text(f"Fuente: {source}", muted=True)
-            actions = card.add_row()
+            actions = card.add_flow_row()
             btn_select = QPushButton("Ver")
             btn_select.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._select_card(b, c))
             btn_edit = QPushButton("Revisar")
@@ -552,36 +599,11 @@ class ImportExportView(QWidget):
             btn_reject.clicked.connect(lambda _=False, b=basket.id, c=candidate.id: self._reject_ids(b, c))
             for btn in [btn_select, btn_edit, btn_accept, btn_reject]:
                 actions.addWidget(btn)
-            actions.addStretch()
             self.cards_grid.addWidget(card, grid_row, grid_col)
             grid_col += 1
             if grid_col >= _CARDS_COLUMNS:
                 grid_col = 0
                 grid_row += 1
-
-    def _refresh_table(self, rows):
-        real_rows = [(b, c) for b, c in rows if c is not None]
-        self.table.setRowCount(len(real_rows))
-        for i, (basket, candidate) in enumerate(real_rows):
-            basket_item = QTableWidgetItem(basket.id[:12])
-            basket_item.setData(Qt.ItemDataRole.UserRole, basket.id)
-            cand_item = QTableWidgetItem(candidate.id[:12])
-            cand_item.setData(Qt.ItemDataRole.UserRole, candidate.id)
-            segment_id = getattr(candidate, "segment_id", "") or ""
-            review_state = getattr(candidate, "review_state", "")
-            state_text = _enum_text(review_state)
-            dup_count = len(getattr(candidate, "possible_duplicates", []) or [])
-            contradiction_count = len(getattr(candidate, "possible_contradictions", []) or [])
-            self.table.setItem(i, 0, basket_item)
-            self.table.setItem(i, 1, QTableWidgetItem(str(getattr(basket, "source_id", "") or "")))
-            self.table.setItem(i, 2, QTableWidgetItem(str(len(getattr(basket, "segments", []) or []))))
-            self.table.setItem(i, 3, cand_item)
-            self.table.setItem(i, 4, QTableWidgetItem(segment_id))
-            self.table.setItem(i, 5, QTableWidgetItem(enum_human(getattr(candidate, "candidate_type", ""))))
-            self.table.setItem(i, 6, QTableWidgetItem(state_text))
-            self.table.setItem(i, 7, QTableWidgetItem(f"{float(getattr(candidate, 'confidence', 0.0) or 0.0):.2f}"))
-            self.table.setItem(i, 8, QTableWidgetItem(f"D:{dup_count} C:{contradiction_count}"))
-        self.table.resizeColumnsToContents()
 
     def _select_card(self, basket_id: str, candidate_id: str):
         self.selected_basket_id = basket_id
@@ -593,12 +615,7 @@ class ImportExportView(QWidget):
     def _selected_ids(self):
         if self.selected_basket_id and self.selected_candidate_id:
             return self.selected_basket_id, self.selected_candidate_id
-        row = self.table.currentRow()
-        if row < 0:
-            return None, None
-        basket_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        candidate_id = self.table.item(row, 3).data(Qt.ItemDataRole.UserRole)
-        return basket_id, candidate_id
+        return None, None
 
     def _selected_candidate(self):
         basket_id, candidate_id = self._selected_ids()
@@ -628,38 +645,15 @@ class ImportExportView(QWidget):
             "",
             f"Fuente: {source}",
             "",
-            "Usa Editar, Aceptar o Descartar. Los datos técnicos están ocultos salvo en Modo avanzado.",
+            "Usa Revisar, Aceptar o Descartar.",
         ]
         self.detail.setPlainText("\n".join(lines))
 
     def _show_detail(self):
-        """Backward-compatible hook used by desktop contract tests."""
-        self._show_detail_from_table()
-
-    def _show_detail_from_table(self):
-        basket_id, candidate_id, candidate = self._selected_candidate()
-        if not candidate:
-            return
-        if not self.ctx.advanced_mode:
+        """Muestra el resumen legible del candidato seleccionado (sin tabla)."""
+        _basket_id, _candidate_id, candidate = self._selected_candidate()
+        if candidate:
             self._show_clean_detail(candidate)
-            return
-        review_state = getattr(candidate, "review_state", "")
-        state_text = _enum_text(review_state)
-        payload = getattr(candidate, "proposed_data", {}) or {}
-        lines = [
-            "Datos técnicos — Modo avanzado",
-            f"Basket: {basket_id}",
-            f"Candidate: {candidate_id}",
-            f"Type: {getattr(candidate, 'candidate_type', '')}",
-            f"State: {state_text}",
-            f"Source segment: {getattr(candidate, 'segment_id', '')}",
-            f"Confidence: {getattr(candidate, 'confidence', '')}",
-            f"Duplicates: {getattr(candidate, 'possible_duplicates', [])}",
-            f"Contradictions: {getattr(candidate, 'possible_contradictions', [])}",
-            "Payload:",
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        ]
-        self.detail.setPlainText("\n".join(lines))
 
     def _accept(self):
         basket_id, candidate_id, _ = self._selected_candidate()
@@ -668,8 +662,20 @@ class ImportExportView(QWidget):
             return
         self._accept_ids(basket_id, candidate_id)
 
+    @staticmethod
+    def _is_relation_candidate(candidate) -> bool:
+        """True si el candidato crea una relación (debe aplicarse DESPUÉS de las
+        entidades/ramas: I23, las relaciones ``contiene`` resuelven sus extremos por
+        nombre contra canon, así que la rama/entidad debe existir ya)."""
+        ctype = str(getattr(candidate, "candidate_type", "") or "").lower()
+        kind = str((getattr(candidate, "proposed_data", {}) or {}).get("kind") or "").lower()
+        return ctype == "relacion" or kind == "relation"
+
     def _accept_filtered(self):
         rows = [(b, c) for b, c in self._filtered_rows(self._rows()) if c is not None]
+        # I23: aceptar primero entidades/ramas y después las relaciones, para que la
+        # `contiene` encuentre ya en canon a la rama y al miembro (resolución por nombre).
+        rows.sort(key=lambda bc: self._is_relation_candidate(bc[1]))
         accepted = 0
         errors = []
         for basket, candidate in rows:
@@ -764,24 +770,64 @@ class ImportExportView(QWidget):
         proposal = self._config_suggestion(basket)
         return bool(proposal) and not proposal.get("applied")
 
+    @staticmethod
+    def _extraction_meta(basket) -> dict:
+        meta = (getattr(basket, "metadata", {}) or {}).get("ai_extraction")
+        return meta if isinstance(meta, dict) else {}
+
+    def _needs_resume(self, basket) -> bool:
+        """I24: True si la extracción quedó interrumpida o con secciones pendientes."""
+        meta = self._extraction_meta(basket)
+        if not meta:
+            return False
+        return bool(meta.get("aborted")) or int(meta.get("pending_sections") or 0) > 0
+
+    def _make_resume_card(self, basket):
+        meta = self._extraction_meta(basket)
+        pending = int(meta.get("pending_sections") or 0)
+        aborted = bool(meta.get("aborted"))
+        reason = str(meta.get("abort_reason") or "").strip()
+        subtitle = (
+            f"La extracción se interrumpió ({reason[:80]})." if aborted
+            else "Quedaron secciones por analizar."
+        )
+        card = Card("⏸ Análisis IA incompleto", subtitle)
+        card.add_text(
+            f"{pending} sección(es) pendiente(s). Reanuda cuando el proveedor esté "
+            "disponible: continúa donde se quedó, sin repetir lo ya analizado.",
+            muted=True,
+        )
+        actions = card.add_flow_row()
+        bid = getattr(basket, "id", "")
+        resume_btn = QPushButton(f"Reanudar análisis IA ({pending} pendientes)")
+        resume_btn.setObjectName("primaryButton")
+        resume_btn.clicked.connect(lambda _=False, b=bid: self._start_extraction(b))
+        actions.addWidget(resume_btn)
+        return card
+
     def _make_config_card(self, basket):
         proposal = self._config_suggestion(basket) or {}
         chron = proposal.get("chronology") or {}
         n_eras = len([e for e in (chron.get("eras") or []) if isinstance(e, dict)])
         n_ent = len([p for p in (proposal.get("entity_temporal") or []) if isinstance(p, dict)])
+        wl = proposal.get("world_layers") or {}
+        n_rings = len(wl.get("activate_default_layer_ids") or []) + len(wl.get("custom_layers") or [])
+        n_milestones = len([m for m in (proposal.get("milestones") or []) if isinstance(m, dict)])
         mode_label = {
             "none": "sin calendario", "vague_periods": "periodos vagos",
             "full_calendar": "calendario completo",
         }.get(str(chron.get("mode") or ""), "calendario")
         card = Card(
-            "⚙ Configuración propuesta del documento",
-            f"Calendario ({mode_label}) · {n_eras} era(s) · {n_ent} entidad(es) ubicada(s).",
+            "⚙ Andamiaje propuesto del documento",
+            f"Calendario ({mode_label}) · {n_eras} era(s) · {n_rings} anillo(s) · "
+            f"{n_milestones} hito(s) · {n_ent} entidad(es) ubicada(s).",
         )
         card.add_text(
-            "La IA propone esta configuración a partir del documento. Revísala antes de aplicarla.",
+            "La IA propone el andamiaje del mundo (calendario, anillos e hitos) a partir del "
+            "documento. Revísalo y aplícalo en bloque; al aplicarlo se extraen las entidades.",
             muted=True,
         )
-        actions = card.add_row()
+        actions = card.add_flow_row()
         bid = getattr(basket, "id", "")
         review_btn = QPushButton("Revisar")
         review_btn.clicked.connect(lambda _=False, b=bid: self._open_config_panel(b))
@@ -791,7 +837,6 @@ class ImportExportView(QWidget):
         discard_btn.clicked.connect(lambda _=False, b=bid: self._discard_config(b))
         for btn in (review_btn, accept_btn, discard_btn):
             actions.addWidget(btn)
-        actions.addStretch()
         return card
 
     def _basket_by_id(self, basket_id: str):
@@ -815,11 +860,32 @@ class ImportExportView(QWidget):
             ImportProjectConfigPanel,
         )
 
-        def _on_decision(_decision):
-            drawer = self.ctx.drawer
-            if drawer is not None and hasattr(drawer, "close"):
+        # IMPORTANTE: ``set_content(panel)`` DESTRUYE esta vista (el cajón no apila
+        # contenido). El callback corre más tarde, cuando ``self`` ya está borrado,
+        # así que NO debe tocar ``self``: capturamos lo necesario en locales.
+        ctx = self.ctx
+        reopen = getattr(ctx, "reopen_import", None)
+
+        def _on_decision(decision):
+            drawer = ctx.drawer
+            if decision == "accept":
+                # Andamiaje aplicado desde el panel → arrancar Fase 2 (corre en el
+                # runner persistente) y cerrar el cajón: el usuario sigue trabajando
+                # y un toast avisa al terminar (UX33).
+                jobs = getattr(ctx, "import_jobs", None)
+                if jobs is not None:
+                    jobs.start_extraction(basket_id)
+                if drawer is not None and hasattr(drawer, "close"):
+                    drawer.close()
+                return
+            # close/discard: VOLVER al menú de importación (no dejar al usuario sin
+            # forma de aceptar/descartar un andamiaje aún pendiente). Reabrir monta
+            # una vista fresca que refleja el estado actual (tarjeta de andamiaje si
+            # sigue pendiente; candidatos si se descartó).
+            if callable(reopen):
+                reopen()
+            elif drawer is not None and hasattr(drawer, "close"):
                 drawer.close()
-            self._safe_refresh()
 
         panel = ImportProjectConfigPanel(
             proposal, self.ic, basket_id=basket_id, on_decision=_on_decision
@@ -834,8 +900,12 @@ class ImportExportView(QWidget):
             self.detail.setPlainText(f"No se pudo aplicar la configuración: {result.error}")
         else:
             self.ctx.log("info", "Configuración de proyecto aplicada")
-            self.detail.setPlainText("Configuración aplicada al proyecto.")
-            self._safe_refresh()
+            # Fase 2 gateada: la extracción corre en el runner persistente, así que
+            # podemos cerrar el cajón y seguir trabajando; un toast avisará al acabar.
+            self._start_extraction(basket_id)
+            drawer = self.ctx.drawer
+            if drawer is not None and hasattr(drawer, "close"):
+                drawer.close()
 
     def _discard_config(self, basket_id: str):
         result = self.ic.discard_project_config_suggestion(basket_id)
@@ -926,67 +996,3 @@ class ImportExportView(QWidget):
                 total += len(result.value if hasattr(result, "value") else result)
         self.detail.setPlainText(f"Semillas de fusión detectadas: {total}")
         self.refresh()
-
-    def _export_all(self, audience):
-        if self.export is None:
-            self.detail.setPlainText("Exportación no disponible en este contexto.")
-            return
-        result = self.export.export_all(audience)
-        if isinstance(result, Error):
-            self.detail.setPlainText(f"Error: {result.error}")
-        else:
-            self.detail.setPlainText(str(result.value))
-
-    def _export_single(self):
-        project = self._project()
-        drawer = self.ctx.drawer
-        if project is None:
-            self.detail.setPlainText("No hay proyecto activo")
-            return
-        if self.export is None:
-            self.detail.setPlainText("Exportación no disponible en este contexto.")
-            return
-        if drawer is None:
-            return
-
-        view = self
-
-        class _ExportSingleForm(DrawerForm):
-            def __init__(self, ctx):
-                super().__init__(ctx, title="Exportar elemento")
-                self.kind = QComboBox()
-                self.kind.addItems(["entity"])
-                self.audience = QComboBox()
-                self.audience.addItems(["gm", "player", "public"])
-                self.item = QComboBox()
-                self.kind.currentTextChanged.connect(self._reload_items)
-                self.form_layout.addRow("Tipo:", self.kind)
-                self.form_layout.addRow("Audiencia:", self.audience)
-                self.form_layout.addRow("Elemento:", self.item)
-                self._reload_items()
-
-            def _reload_items(self):
-                self.item.clear()
-                kind = self.kind.currentText()
-                if kind == "entity":
-                    for entity in project.entities:
-                        self.item.addItem(entity.name, entity.id)
-
-            def _on_accept(self):
-                kind = self.kind.currentText()
-                audience = self.audience.currentText()
-                item_id = self.item.currentData()
-                if not item_id:
-                    view.detail.setPlainText("No hay elemento seleccionable")
-                    self._close_drawer()
-                    return
-                result = view.export.export_entity_profile(item_id, audience)
-                if isinstance(result, Error):
-                    view.detail.setPlainText(f"Error: {result.error}")
-                else:
-                    view.detail.setPlainText(str(result.value))
-                self._close_drawer()
-
-        form = _ExportSingleForm(self.ctx)
-        drawer.set_content(form, title="Exportar elemento")
-        drawer.open()

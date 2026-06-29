@@ -67,7 +67,6 @@ def test_import_export_rows_use_import_candidates_not_legacy_candidates(qapp):
         ],
     )
     ctx = AppContext()
-    ctx.set_advanced_mode(False)
     view = ImportExportView(ctx, FakeController())
     view.ic = FakeImportController(basket)
 
@@ -76,27 +75,15 @@ def test_import_export_rows_use_import_candidates_not_legacy_candidates(qapp):
     assert rows[0][0].id == basket.id
     assert rows[0][1].id == "candidate-full-id-999"
 
+    # Render por tarjetas (ya no hay tabla técnica): refrescar no rompe y hay tarjeta.
     view.refresh()
-    assert view.table.rowCount() == 1
-    assert view.table.item(0, 1).text() == "source-full-id-456"
-    assert view.table.item(0, 2).text() == "1"
-    assert view.table.item(0, 4).text() == "segment-full-id-789"
-    assert view.table.item(0, 7).text() == "0.73"
-    assert view.table.item(0, 8).text() == "D:1 C:1"
+    assert view.cards_grid.count() >= 1
 
-    # Normal mode keeps technical ids hidden.
-    view.table.selectRow(0)
+    # Detalle limpio del candidato seleccionado: muestra el nombre, NO ids crudos.
+    view.selected_basket_id = basket.id
+    view.selected_candidate_id = "candidate-full-id-999"
     view._show_detail()
     clean_detail = view.detail.toPlainText()
-    assert "Source segment: segment-full-id-789" not in clean_detail
-    assert "datos técnicos" in clean_detail.lower()
-
-    # Advanced mode exposes real B17 field names.
-    ctx.set_advanced_mode(True)
-    view.set_advanced_mode(True)
-    view._show_detail()
-    detail = view.detail.toPlainText()
-    assert "Source segment: segment-full-id-789" in detail
-    assert "candidate-full-id-999" in detail
-    assert "entity-1" in detail
-    assert "issue-1" in detail
+    assert "Aria" in clean_detail
+    assert "candidate-full-id-999" not in clean_detail
+    assert "segment-full-id-789" not in clean_detail

@@ -38,6 +38,8 @@ def resolve_configured_provider() -> AIProvider:
 
 
 IMPORT_EXTRACTION_INTENT = "import_extraction"
+# I23 Fase 3: agrupacion estructural a nivel documento (ramas + membresia + anidamiento).
+IMPORT_GROUPING_INTENT = "import_grouping"
 IMPORT_EXTRACTION_TIMEOUT_SECONDS = 300
 
 # Objetivo de caracteres por *ventana* de extracción. Los chunkers de I02
@@ -294,12 +296,83 @@ def _taxonomy_prompt_block(taxonomy: dict[str, Any], canon_digest: dict[str, Any
     return ("\n".join(block)).strip()
 
 
-def _build_import_system_prompt(taxonomy: dict[str, Any], canon_digest: dict[str, Any], lang: str = "es") -> str:
+def _framework_prompt_block(
+    chronology_applied: dict[str, Any], world_layers: list[dict[str, Any]]
+) -> str:
+    """Bloque con el marco ya aplicado (calendario + anillos) para Fase 2.
+
+    Permite a la IA datar el span existencial y asignar layer_ids contra estructuras
+    reales. Devuelve "" si no hay marco (comportamiento histórico, sin datación dirigida).
+    """
+    chronology_applied = _as_dict(chronology_applied)
+    block: list[str] = []
+    present = chronology_applied.get("present_year")
+    eras = _as_list(chronology_applied.get("eras"))
+    if present is not None or eras:
+        lines: list[str] = ["MARCO TEMPORAL (data las entidades contra este calendario):"]
+        cal = _as_text(chronology_applied.get("calendar_name"))
+        if cal:
+            lines.append(f"- calendario: {cal}")
+        if present is not None:
+            lines.append(f"- año presente: {present}")
+        for era in eras:
+            era = _as_dict(era)
+            name = _as_text(era.get("name"))
+            if not name:
+                continue
+            start, end = era.get("start_year"), era.get("end_year")
+            lines.append(f"- era '{name}': {start}..{end if end is not None else 'abierta'}")
+        block.extend(lines)
+    rings = [r for r in (world_layers or []) if isinstance(r, dict) and _as_text(r.get("id"))]
+    if rings:
+        block.append("ANILLOS DISPONIBLES (asigna layer_ids eligiendo de estos ids):")
+        for ring in rings:
+            rid = _as_text(ring.get("id"))
+            name = _as_text(ring.get("name"))
+            role = _as_text(ring.get("causal_role"))
+            label = f"- {rid} ({name})"
+            if role:
+                label += f" — {role}"
+            block.append(label)
+    return ("\n".join(block)).strip()
+
+
+def _build_import_system_prompt(
+    taxonomy: dict[str, Any],
+    canon_digest: dict[str, Any],
+    lang: str = "es",
+    *,
+    chronology_applied: dict[str, Any] | None = None,
+    world_layers: list[dict[str, Any]] | None = None,
+) -> str:
     base = get_prompt(IMPORT_EXTRACTION_INTENT, lang) or ""
+    parts = [base]
     block = _taxonomy_prompt_block(taxonomy, canon_digest)
     if block:
-        return f"{base}\n\n{block}"
-    return base
+        parts.append(block)
+    framework = _framework_prompt_block(chronology_applied or {}, world_layers or [])
+    if framework:
+        parts.append(framework)
+    return "\n\n".join(parts)
+
+
+def _build_grouping_system_prompt(
+    world_layers: list[dict[str, Any]] | None = None, lang: str = "es"
+) -> str:
+    """System prompt de la pasada de agrupación (I23 Fase 3).
+
+    Reusa el bloque ANILLOS DISPONIBLES de ``_framework_prompt_block`` (sin marco
+    temporal: a la rama solo le interesan los anillos para clasificarla).
+    """
+    base = get_prompt(IMPORT_GROUPING_INTENT, lang) or ""
+    parts = [base]
+    rings = _framework_prompt_block({}, world_layers or [])
+    if rings:
+        parts.append(rings)
+    return "\n\n".join(parts)
+
+
+_KNOWN_BRANCH_TYPES = {"faccion", "cultura", "religion", "institucion", "trama", "contenedor"}
 
 
 def _taxonomy_violation(kind: str, payload: dict[str, Any], taxonomy: dict[str, Any]) -> str | None:
@@ -336,16 +409,51 @@ def _title_for_payload(kind: str, payload: dict[str, Any]) -> str:
     )
 
 
-def _issue_candidate(segment: DocumentSegment, message: str, *, review_state: ImportReviewState) -> ImportCandidate:
+# I24: marcadores de un rechazo POR CONTENIDO del proveedor (filtro de seguridad).
+# Un 400 con estos términos NO es sistémico: solo afecta a esa sección (ficción de
+# tono oscuro, etc.). Se omite la sección y se sigue; cualquier otro error de proveedor
+# (auth, max_tokens, conexión, 429, modelo…) se considera sistémico y corta con progreso.
+_CONTENT_REJECTION_MARKERS = (
+    "unsafe", "sensitive content", "potentially unsafe", "content policy",
+    "content_filter", "content filter", "contenido sensible", "safety",
+)
+
+
+def _is_content_rejection(error: str) -> bool:
+    low = str(error or "").lower()
+    return any(marker in low for marker in _CONTENT_REJECTION_MARKERS)
+
+
+def _window_key(window: DocumentSegment) -> str:
+    """Clave estable de una ventana para reanudar sin repetir trabajo.
+
+    Las ventanas se recomputan de ``basket.segments`` (que no cambian tras importar),
+    así que esta clave es estable entre ejecuciones. Para ventanas fundidas usa los ids
+    de sus segmentos constituyentes; para una sola, su id."""
+    metadata = getattr(window, "metadata", {}) or {}
+    ids = metadata.get("window_segment_ids")
+    if isinstance(ids, list) and ids:
+        return ",".join(str(i) for i in ids)
+    return str(getattr(window, "id", "") or "")
+
+
+def _issue_candidate(
+    segment: DocumentSegment,
+    message: str,
+    *,
+    review_state: ImportReviewState,
+    issue_type: str = "ai_import_extraction",
+    suggested_fix: str = "Reintentar la extraccion IA o revisar manualmente el chunk.",
+) -> ImportCandidate:
     source_references = [_source_reference(segment)]
     payload = {
         "kind": "import_issue",
-        "issue_type": "ai_import_extraction",
+        "issue_type": issue_type,
         "severity": "media",
         "message": message,
         "affected_source_references": source_references,
         "source_references": source_references,
-        "suggested_fix": "Reintentar la extraccion IA o revisar manualmente el chunk.",
+        "suggested_fix": suggested_fix,
     }
     return ImportCandidate(
         id=_new_id(),
@@ -383,12 +491,22 @@ class ImportAIExtractionService:
         project_context: dict[str, Any] | None = None,
         progress_callback: Any = None,
         should_cancel: Any = None,
+        completed_keys: set[str] | None = None,
+        state: dict[str, Any] | None = None,
     ) -> Result[list[ImportCandidate], str]:
         """Analyze chunks and return reviewable import candidates.
 
         ``progress_callback(done, total, label)`` se invoca por segmento para dar
         feedback ("Analizando 3/12"). ``should_cancel()`` permite cancelar entre
         segmentos: se devuelve lo acumulado hasta el corte.
+
+        I24 (resiliente + reanudable):
+        - ``completed_keys`` (claves de ventana ya procesadas en ejecuciones previas)
+          se SALTAN: sus candidatos ya están en el basket.
+        - ``state`` (dict mutable de salida) recoge ``completed_keys`` (las terminadas
+          ahora), ``aborted``/``abort_reason`` (si un error sistémico cortó) y
+          ``total_windows``. Un error de proveedor NO sistémico ya llega como incidencia
+          (no aborta); uno sistémico corta pero conserva el progreso parcial.
         """
 
         unavailable = self._provider_unconfigured_error()
@@ -401,17 +519,24 @@ class ImportAIExtractionService:
         # de por párrafo. El progreso se reporta sobre ventanas (lo que el usuario
         # espera de verdad).
         windows = _window_segments(list(segments), self.window_chars)
-        if self.max_workers and self.max_workers > 1 and len(windows) > 1:
+        if state is not None:
+            state["total_windows"] = len(windows)
+        already = set(completed_keys or ())
+        pending = [w for w in windows if _window_key(w) not in already]
+        if not pending:
+            return Ok([])
+        if self.max_workers and self.max_workers > 1 and len(pending) > 1:
             return self._extract_windows_concurrent(
-                windows,
+                pending,
                 project_context=project_context or {},
                 progress_callback=progress_callback,
                 should_cancel=should_cancel,
+                state=state,
             )
 
         candidates: list[ImportCandidate] = []
-        total = len(windows)
-        for index, segment in enumerate(windows):
+        total = len(pending)
+        for index, segment in enumerate(pending):
             if should_cancel is not None and should_cancel():
                 break
             if progress_callback is not None:
@@ -419,8 +544,15 @@ class ImportAIExtractionService:
                 progress_callback(index, total, label)
             result = self._extract_segment(segment, project_context=project_context or {})
             if isinstance(result, Error):
-                return result
+                # Sistémico: corta pero conserva lo acumulado (reanudable). La ventana
+                # NO se marca completada → se reintentará al reanudar.
+                if state is not None:
+                    state["aborted"] = True
+                    state["abort_reason"] = str(result.error)
+                break
             candidates.extend(result.value)
+            if state is not None:
+                state.setdefault("completed_keys", set()).add(_window_key(segment))
         if progress_callback is not None:
             progress_callback(total, total, "completado")
         return Ok(candidates)
@@ -432,22 +564,23 @@ class ImportAIExtractionService:
         project_context: dict[str, Any],
         progress_callback: Any = None,
         should_cancel: Any = None,
+        state: dict[str, Any] | None = None,
     ) -> Result[list[ImportCandidate], str]:
         """Extrae varias ventanas en paralelo conservando el orden de salida.
 
         Las llamadas al proveedor corren en un pool de hilos; el consumo de
         resultados (``progress_callback``/``should_cancel``) ocurre en este hilo,
         así que no necesitan ser thread-safe. La salida se reordena por índice de
-        ventana → determinista pese al orden de finalización. Ante un error duro o
-        cancelación se cancelan las ventanas pendientes y se devuelve lo acumulado
-        (cancelación) o el error.
+        ventana → determinista pese al orden de finalización. I24: ante un error
+        SISTÉMICO se cancelan las pendientes pero se CONSERVA lo ya obtenido (parcial
+        reanudable); las ventanas Ok se marcan completadas en ``state``.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         total = len(windows)
         slices: list[list[ImportCandidate] | None] = [None] * total
         executor = ThreadPoolExecutor(max_workers=self.max_workers)
-        error: Error | None = None
+        abort_reason: str | None = None
         try:
             future_to_index = {
                 executor.submit(
@@ -463,10 +596,12 @@ class ImportAIExtractionService:
                 index = future_to_index[future]
                 result = future.result()
                 if isinstance(result, Error):
-                    error = result
+                    abort_reason = str(result.error)
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
                 slices[index] = result.value
+                if state is not None:
+                    state.setdefault("completed_keys", set()).add(_window_key(windows[index]))
                 done += 1
                 if progress_callback is not None:
                     label = _as_text(getattr(windows[index], "section", "")) or f"ventana {index + 1}"
@@ -474,13 +609,15 @@ class ImportAIExtractionService:
         finally:
             executor.shutdown(wait=True)
 
-        if error is not None:
-            return error
         candidates: list[ImportCandidate] = []
         for chunk in slices:
             if chunk:
                 candidates.extend(chunk)
-        if progress_callback is not None:
+        if abort_reason is not None:
+            if state is not None:
+                state["aborted"] = True
+                state["abort_reason"] = abort_reason
+        elif progress_callback is not None:
             progress_callback(total, total, "completado")
         return Ok(candidates)
 
@@ -493,25 +630,55 @@ class ImportAIExtractionService:
         progress_callback: Any = None,
         should_cancel: Any = None,
     ) -> Result[list[ImportCandidate], str]:
-        """Analyze a basket and append reviewable candidates to it."""
+        """Analyze a basket and append reviewable candidates to it.
+
+        I24: resiliente + reanudable. Salta las ventanas ya completadas en
+        ejecuciones previas (``basket.metadata['ai_extraction']['completed_window_keys']``)
+        y registra el progreso para poder reanudar. Un error sistémico corta pero
+        conserva (y persiste) lo extraído hasta ese punto.
+        """
+        prior = _as_dict(getattr(basket, "metadata", {}).get("ai_extraction"))
+        completed_keys = {str(k) for k in (prior.get("completed_window_keys") or [])}
+        state: dict[str, Any] = {"completed_keys": set(completed_keys)}
 
         result = self.extract_from_segments(
             list(getattr(basket, "segments", []) or []),
             project_context=project_context,
             progress_callback=progress_callback,
             should_cancel=should_cancel,
+            completed_keys=completed_keys,
+            state=state,
         )
         if isinstance(result, Error):
+            # Solo errores de arranque (proveedor no configurado): nada que persistir.
             return result
-        if replace_existing:
-            basket.import_candidates = list(result.value)
+
+        new_candidates = list(result.value)
+        # Al REANUDAR (hay ventanas completadas previas) SIEMPRE se hace append: nunca
+        # se pisa el progreso, aunque el llamante pida replace_existing.
+        if replace_existing and not completed_keys:
+            basket.import_candidates = new_candidates
         else:
-            basket.import_candidates.extend(result.value)
+            basket.import_candidates.extend(new_candidates)
+
         basket.updated_at = _now_iso()
-        basket.metadata.setdefault("ai_extraction", {})
-        basket.metadata["ai_extraction"].update({
+        all_completed = sorted(str(k) for k in (state.get("completed_keys") or set()))
+        total_windows = int(state.get("total_windows") or len(all_completed))
+        skipped_sections = sum(
+            1 for c in basket.import_candidates
+            if _as_dict(getattr(c, "proposed_data", {})).get("issue_type") == "ai_content_rejected"
+        )
+        meta = basket.metadata.setdefault("ai_extraction", {})
+        meta.update({
             "provider": str(getattr(self.provider, "provider_name", "ai")),
-            "candidate_count": len(result.value),
+            "candidate_count": len(basket.import_candidates),
+            "completed_window_keys": all_completed,
+            "total_windows": total_windows,
+            "pending_sections": max(0, total_windows - len(all_completed)),
+            "extracted_last_run": len(new_candidates),
+            "skipped_sections": skipped_sections,
+            "aborted": bool(state.get("aborted")),
+            "abort_reason": str(state.get("abort_reason") or ""),
             "updated_at": basket.updated_at,
         })
         return result
@@ -524,6 +691,8 @@ class ImportAIExtractionService:
     ) -> Result[list[ImportCandidate], str]:
         taxonomy = _as_dict(project_context.get("import_taxonomy"))
         canon_digest = _as_dict(project_context.get("canon_digest"))
+        chronology_applied = _as_dict(project_context.get("chronology_applied"))
+        world_layers = _as_list(project_context.get("world_layers"))
         lang = _as_text(project_context.get("language")) or "es"
         gateway = AIRequestGateway(provider=self.provider)
         request = GatewayRequest(
@@ -539,7 +708,13 @@ class ImportAIExtractionService:
                 "import_scope": "review_candidates_only",
                 "import_taxonomy": taxonomy,
             },
-            system_prompt_override=_build_import_system_prompt(taxonomy, canon_digest, lang),
+            system_prompt_override=_build_import_system_prompt(
+                taxonomy,
+                canon_digest,
+                lang,
+                chronology_applied=chronology_applied,
+                world_layers=world_layers,
+            ),
             timeout=max(1, int(self.timeout_seconds or IMPORT_EXTRACTION_TIMEOUT_SECONDS)),
         )
         response = gateway.execute(request)
@@ -551,6 +726,21 @@ class ImportAIExtractionService:
                     f"Output IA malformado rechazado: {response.error}",
                     review_state=ImportReviewState.RECHAZADO,
                 )])
+            # I24: un rechazo POR CONTENIDO (filtro del proveedor) afecta solo a esta
+            # sección → incidencia revisable y SE SIGUE con el resto del documento.
+            if _is_content_rejection(response.error):
+                return Ok([_issue_candidate(
+                    segment,
+                    "El proveedor rechazó esta sección por su filtro de contenido: "
+                    f"{response.error}",
+                    review_state=ImportReviewState.PENDIENTE,
+                    issue_type="ai_content_rejected",
+                    suggested_fix=(
+                        "Revisa la sección manualmente o reanaliza con un proveedor sin "
+                        "filtro de contenido."
+                    ),
+                )])
+            # Cualquier otro error de proveedor es sistémico → corta (con progreso).
             return Error(response.error)
 
         parsed = response.parsed_json
@@ -650,6 +840,204 @@ class ImportAIExtractionService:
             confidence=_confidence(normalized.get("confidence"), 0.5),
             possible_duplicates=[],
             possible_contradictions=[],
+            review_state=ImportReviewState.PENDIENTE,
+        )
+
+    # ── I23 Fase 3: agrupación estructural en ramas ──────────────────────────
+    def propose_branches_for_basket(
+        self,
+        basket: ImportBasket,
+        *,
+        project_context: dict[str, Any] | None = None,
+    ) -> Result[list[ImportCandidate], str]:
+        """Agrupa las entidades ya extraídas en ramas y AÑADE candidatos al basket.
+
+        Una sola llamada IA a nivel documento sobre el conjunto de hojas/ramas
+        extraídas. La respuesta se EXPANDE en candidatos revisables: una entidad
+        contenedora por rama + una relación ``contiene`` por miembro y por
+        anidamiento (rama→subrama). Reutiliza el pipeline de relaciones (la
+        ``contiene`` resuelve sus extremos por nombre al aceptar). Degrada con
+        claridad si no hay proveedor; si no hay entidades agrupables, no añade nada.
+        """
+        unavailable = self._provider_unconfigured_error()
+        if unavailable:
+            return unavailable
+        project_context = _as_dict(project_context)
+
+        entities = self._grouping_inputs(basket)
+        if not entities:
+            return Ok([])
+
+        world_layers = _as_list(project_context.get("world_layers"))
+        gateway = AIRequestGateway(provider=self.provider)
+        request = GatewayRequest(
+            intent=IMPORT_GROUPING_INTENT,
+            user_prompt=json.dumps({
+                "task": "group_entities_into_branches",
+                "entities": entities,
+            }, ensure_ascii=False, default=str),
+            context={
+                "project_name": project_context.get("project_name", ""),
+                "import_scope": "review_candidates_only",
+            },
+            system_prompt_override=_build_grouping_system_prompt(world_layers),
+            timeout=max(1, int(self.timeout_seconds or IMPORT_EXTRACTION_TIMEOUT_SECONDS)),
+        )
+        response = gateway.execute(request)
+        if response.error:
+            return Error(response.error)
+        parsed = response.parsed_json
+        if not isinstance(parsed, dict):
+            return Error("Output IA de agrupación malformado: se esperaba un objeto JSON.")
+
+        source_ref = {
+            "source_id": getattr(basket, "source_id", ""),
+            "extraction_method": IMPORT_GROUPING_INTENT,
+        }
+        new_candidates = self._expand_branches(
+            _as_list(parsed.get("branches")), world_layers, source_ref
+        )
+        if new_candidates:
+            basket.import_candidates.extend(new_candidates)
+            basket.updated_at = _now_iso()
+            basket.metadata.setdefault("ai_grouping", {})
+            basket.metadata["ai_grouping"].update({
+                "provider": str(getattr(self.provider, "provider_name", "ai")),
+                "branch_candidate_count": sum(
+                    1 for c in new_candidates
+                    if c.candidate_type == CandidateType.ENTIDAD.value
+                ),
+                "updated_at": basket.updated_at,
+            })
+        return Ok(new_candidates)
+
+    def _grouping_inputs(self, basket: ImportBasket) -> list[dict[str, Any]]:
+        """Resumen compacto de las hojas/ramas ya extraídas (insumo de la pasada).
+
+        Excluye incidencias y candidatos descartados/fusionados; expone solo lo que
+        el agrupador necesita para decidir membresía (nombre/tipo/brief/body)."""
+        out: list[dict[str, Any]] = []
+        for cand in list(getattr(basket, "import_candidates", []) or []):
+            data = _as_dict(getattr(cand, "proposed_data", {}))
+            kind = _as_text(data.get("kind")).lower()
+            if kind not in {"entity", "branch"}:
+                continue
+            state = getattr(cand, "review_state", None)
+            if state in (ImportReviewState.RECHAZADO, ImportReviewState.FUSIONADO):
+                continue
+            name = _as_text(data.get("name") or data.get("title"))
+            if not name:
+                continue
+            out.append({
+                "name": name,
+                "type": _as_text(data.get("entity_type") or data.get("branch_type")),
+                "is_branch": kind == "branch",
+                "brief": _as_text(data.get("summary") or data.get("brief_description")),
+                "body": _as_text(data.get("body") or data.get("description"))[:600],
+            })
+        return out
+
+    def _expand_branches(
+        self,
+        branches: list[Any],
+        world_layers: list[dict[str, Any]],
+        source_ref: dict[str, Any],
+    ) -> list[ImportCandidate]:
+        """Expande la salida de agrupación en candidatos branch + relaciones contiene."""
+        valid_layer_ids = {
+            _as_text(r.get("id"))
+            for r in world_layers
+            if isinstance(r, dict) and _as_text(r.get("id"))
+        }
+        out: list[ImportCandidate] = []
+        seen_contiene: set[tuple[str, str]] = set()
+
+        def _add_contiene(container: str, member: str) -> None:
+            if not container or not member or container.strip().lower() == member.strip().lower():
+                return
+            key = (container.strip().lower(), member.strip().lower())
+            if key in seen_contiene:
+                return
+            seen_contiene.add(key)
+            out.append(self._make_contiene_candidate(container, member, source_ref))
+
+        for raw in branches:
+            b = _as_dict(raw)
+            name = _as_text(b.get("name"))
+            if not name:
+                continue
+            btype = _as_text(b.get("branch_type")).lower() or "contenedor"
+            if btype not in _KNOWN_BRANCH_TYPES:
+                btype = "contenedor"
+            layer_ids = [
+                lid for lid in (_as_text(x) for x in _as_list(b.get("layer_ids"))) if lid
+                and (not valid_layer_ids or lid in valid_layer_ids)
+            ]
+            out.append(self._make_branch_candidate(
+                name, btype, _as_text(b.get("body")), layer_ids, source_ref
+            ))
+            for member in _as_list(b.get("members")):
+                _add_contiene(name, _as_text(member))
+            parent = _as_text(b.get("parent"))
+            if parent and parent.lower() != "null":
+                _add_contiene(parent, name)
+        return out
+
+    def _make_branch_candidate(
+        self,
+        name: str,
+        branch_type: str,
+        body: str,
+        layer_ids: list[str],
+        source_ref: dict[str, Any],
+    ) -> ImportCandidate:
+        summary = (body.split(".", 1)[0][:200] if body else "")
+        normalized = {
+            "kind": "branch",
+            "name": name,
+            "title": name,
+            "branch_type": branch_type,
+            "entity_type": branch_type,
+            "summary": summary,
+            "body": body,
+            "layer_ids": list(layer_ids),
+            "source_references": [source_ref],
+            "ai_extraction": {
+                "provider": str(getattr(self.provider, "provider_name", "ai")),
+                "intent": IMPORT_GROUPING_INTENT,
+            },
+        }
+        return ImportCandidate(
+            id=_new_id(),
+            segment_id="",
+            candidate_type=CandidateType.ENTIDAD.value,
+            proposed_data=normalized,
+            confidence=0.6,
+            review_state=ImportReviewState.PENDIENTE,
+        )
+
+    def _make_contiene_candidate(
+        self, container_name: str, member_name: str, source_ref: dict[str, Any]
+    ) -> ImportCandidate:
+        normalized = {
+            "kind": "relation",
+            "title": f"{container_name} contiene {member_name}",
+            "relation_type": "contiene",
+            "source_name": container_name,
+            "target_name": member_name,
+            "summary": f"{container_name} contiene a {member_name}",
+            "source_references": [source_ref],
+            "ai_extraction": {
+                "provider": str(getattr(self.provider, "provider_name", "ai")),
+                "intent": IMPORT_GROUPING_INTENT,
+            },
+        }
+        return ImportCandidate(
+            id=_new_id(),
+            segment_id="",
+            candidate_type=CandidateType.RELACION.value,
+            proposed_data=normalized,
+            confidence=0.6,
             review_state=ImportReviewState.PENDIENTE,
         )
 

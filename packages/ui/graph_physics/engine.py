@@ -94,6 +94,22 @@ class PhysicsEngine:
     min_energy: float = 0.35
     bodies: dict[str, Body] = field(default_factory=dict)
     springs: list[Spring] = field(default_factory=list)
+    # BETA1-L01: escalabilidad de la repulsión. El cálculo todos-contra-todos
+    # es O(n²) — aceptable hasta ~decenas de cuerpos, ruinoso con cientos. Por
+    # encima de ``repulsion_bruteforce_max`` se usa una rejilla espacial uniforme
+    # (spatial hashing): cada cuerpo solo repele contra los de su celda y las 8
+    # vecinas → O(n) en grafos dispersos. La FÓRMULA de fuerza es idéntica; solo
+    # cambia el CONJUNTO de pares evaluado (se omite el campo lejano, cuya
+    # contribución 1/d² individual es despreciable). ``repulsion_cell`` es el lado
+    # de la celda en px: define el alcance (celda + vecinas ≈ 2·celda). Si todos
+    # los cuerpos caben en una vecindad, la rejilla coincide EXACTAMENTE con el
+    # cálculo bruto (invariante verificado en tests).
+    # Medido: cell=260 (≈2× la separación de equilibrio min_sep~124) escala
+    # linealmente (~0.04 ms/cuerpo/frame); una celda grande (p.ej. 700) hace que
+    # la vecindad 3×3 abarque casi todo el lienzo y degenere a O(n²). Grafos ≤90
+    # cuerpos usan el bruto exacto (feel idéntico al histórico).
+    repulsion_bruteforce_max: int = 90
+    repulsion_cell: float = 260.0
 
     # ── carga ────────────────────────────────────────────────────────────
 
@@ -144,28 +160,15 @@ class PhysicsEngine:
                 body.orbit_cx = body.orbit_drift * math.cos(body.orbit_t)
                 body.orbit_cy = body.orbit_drift * math.sin(body.orbit_t)
 
-        # 1. Repulsión entre pares (O(n²); presupuesto C05: ≤50 cuerpos)
-        for i in range(len(bodies)):
-            for j in range(i + 1, len(bodies)):
-                a, b = bodies[i], bodies[j]
-                dx = b.x - a.x
-                dy = b.y - a.y
-                dist_sq = dx * dx + dy * dy
-                min_sep = a.radius + b.radius
-                if dist_sq < 1e-6:
-                    # Coincidentes: separar de forma determinista
-                    dx, dy, dist_sq = 1.0, 0.5, 1.25
-                dist = math.sqrt(dist_sq)
-                # Repulsión 1/d², reforzada si se solapan
-                magnitude = self.repulsion / dist_sq
-                if dist < min_sep:
-                    magnitude += (min_sep - dist) * 2.0
-                fx = (dx / dist) * magnitude
-                fy = (dy / dist) * magnitude
-                forces[a.body_id][0] -= fx
-                forces[a.body_id][1] -= fy
-                forces[b.body_id][0] += fx
-                forces[b.body_id][1] += fy
+        # 1. Repulsión entre pares. BETA1-L01: bruto O(n²) en grafos pequeños
+        #    (idéntico al comportamiento histórico), rejilla espacial O(n) por
+        #    encima del umbral. Ambos caminos usan _apply_pair_repulsion.
+        if len(bodies) <= self.repulsion_bruteforce_max:
+            for i in range(len(bodies)):
+                for j in range(i + 1, len(bodies)):
+                    self._apply_pair_repulsion(bodies[i], bodies[j], forces)
+        else:
+            self._apply_grid_repulsion(bodies, forces)
 
         # 2. Muelles de relación
         for spring in self.springs:
@@ -294,6 +297,67 @@ class PhysicsEngine:
                     body.y, body.vy = ymax, min(0.0, body.vy)
             energy += 0.5 * body.mass * (body.vx * body.vx + body.vy * body.vy)
         return energy
+
+    # ── repulsión: pares y rejilla espacial (BETA1-L01) ──────────────────
+
+    def _apply_pair_repulsion(
+        self, a: Body, b: Body, forces: dict[str, list[float]]
+    ) -> None:
+        """Repulsión entre dos cuerpos (1/d², reforzada si se solapan).
+
+        Fórmula histórica intacta; extraída para que el camino bruto y el de
+        rejilla compartan exactamente el mismo cálculo de fuerza."""
+        dx = b.x - a.x
+        dy = b.y - a.y
+        dist_sq = dx * dx + dy * dy
+        min_sep = a.radius + b.radius
+        if dist_sq < 1e-6:
+            # Coincidentes: separar de forma determinista
+            dx, dy, dist_sq = 1.0, 0.5, 1.25
+        dist = math.sqrt(dist_sq)
+        magnitude = self.repulsion / dist_sq
+        if dist < min_sep:
+            magnitude += (min_sep - dist) * 2.0
+        fx = (dx / dist) * magnitude
+        fy = (dy / dist) * magnitude
+        forces[a.body_id][0] -= fx
+        forces[a.body_id][1] -= fy
+        forces[b.body_id][0] += fx
+        forces[b.body_id][1] += fy
+
+    def _apply_grid_repulsion(
+        self, bodies: list[Body], forces: dict[str, list[float]]
+    ) -> None:
+        """Repulsión O(n) por rejilla espacial uniforme (spatial hashing).
+
+        Cada cuerpo se asigna a una celda de lado ``repulsion_cell``; solo se
+        evalúan pares dentro de la misma celda o de las 8 vecinas. El orden de
+        índice global deduplica cada par no ordenado (se aplica una sola vez).
+        El campo lejano (más allá de ~2·celda) se omite: su contribución 1/d²
+        individual es despreciable y la suma se compensa con el clamp y el
+        damping. Determinista: sin aleatoriedad ni dependencia del tiempo."""
+        cell = self.repulsion_cell if self.repulsion_cell > 1e-6 else 700.0
+        grid: dict[tuple[int, int], list[int]] = {}
+        cells: list[tuple[int, int]] = []
+        for idx, body in enumerate(bodies):
+            if math.isfinite(body.x) and math.isfinite(body.y):
+                key = (int(body.x // cell), int(body.y // cell))
+            else:
+                key = (0, 0)
+            grid.setdefault(key, []).append(idx)
+            cells.append(key)
+        neighborhood = (-1, 0, 1)
+        for idx, body in enumerate(bodies):
+            cx, cy = cells[idx]
+            for dx in neighborhood:
+                for dy in neighborhood:
+                    bucket = grid.get((cx + dx, cy + dy))
+                    if not bucket:
+                        continue
+                    for jdx in bucket:
+                        if jdx <= idx:
+                            continue  # cada par no ordenado, una sola vez
+                        self._apply_pair_repulsion(body, bodies[jdx], forces)
 
     def is_settled(self) -> bool:
         """True si la energía actual está por debajo del umbral de reposo."""

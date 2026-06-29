@@ -1,24 +1,18 @@
 """
-Tests for B10-T01 domain models: NarrativeDomain, WorldLayer,
-AdvancedProjectConfig, and extensions to NarrativeEntity,
-NarrativeRelation, and Project.
+Tests for B10-T01 domain models: NarrativeDomain, WorldLayer, and extensions to
+NarrativeEntity, NarrativeRelation, and Project.
+
+PA04 eliminó ``AdvancedProjectConfig`` (Gen B); sus tests se retiraron de aquí.
+La cobertura de domains/world_layers sigue viva.
 """
 
 from __future__ import annotations
 
-import pytest
-
-from packages.domain.narrative_domain import NarrativeDomain, NARRATIVE_DOMAIN_ORDER
-from packages.domain.world_layer import WorldLayer, default_world_layers
-from packages.domain.advanced_config import (
-    AdvancedProjectConfig,
-    CONFIG_PATH_WHITELIST,
-    CONFIG_ARRAY_PATHS,
-)
-from packages.domain.entity import NarrativeEntity, EntityType
-from packages.domain.relation import NarrativeRelation
+from packages.domain.entity import EntityType, NarrativeEntity
+from packages.domain.narrative_domain import NARRATIVE_DOMAIN_ORDER, NarrativeDomain
 from packages.domain.project import Project
-
+from packages.domain.relation import NarrativeRelation
+from packages.domain.world_layer import WorldLayer, default_world_layers
 
 # ═══════════════════════════════════════════════════════════════════════
 # NarrativeDomain
@@ -131,83 +125,6 @@ class TestDefaultWorldLayers:
         for layer in default_world_layers():
             assert layer.name
             assert len(layer.name) > 2
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# AdvancedProjectConfig
-# ═══════════════════════════════════════════════════════════════════════
-
-
-class TestAdvancedProjectConfig:
-    def test_defaults(self) -> None:
-        cfg = AdvancedProjectConfig()
-        assert cfg.primary_genre == ""
-        assert cfg.subgenres == []
-        assert cfg.global_tone == "neutral"
-        assert cfg.secondary_tones == []
-        assert cfg.realism_level == "medium"
-        assert cfg.contradiction_tolerance == "media"
-        assert cfg.naming_conventions == ""
-        assert cfg.internal_languages == []
-        assert cfg.internal_calendar == ""
-        assert cfg.measurement_units == ""
-        assert cfg.visibility_rules == ""
-        assert cfg.creative_restrictions == []
-        assert cfg.future_ai_preferences == []
-
-    def test_to_dict_roundtrip(self) -> None:
-        cfg = AdvancedProjectConfig(
-            primary_genre="fantasía",
-            subgenres=["épica", "oscura"],
-            global_tone="serio",
-            secondary_tones=["irónico"],
-            realism_level="alto",
-            contradiction_tolerance="baja",
-            naming_conventions="nombres élficos",
-            internal_languages=["quenya", "sindarin"],
-            internal_calendar="calendario imperial",
-            measurement_units="leguas",
-            visibility_rules="secretos solo DM",
-            creative_restrictions=["sin pistolas"],
-            future_ai_preferences=["evitar clichés"],
-            metadata={"version": "1"},
-        )
-        d = cfg.to_dict()
-        assert d["primary_genre"] == "fantasía"
-        assert d["subgenres"] == ["épica", "oscura"]
-        assert d["internal_languages"] == ["quenya", "sindarin"]
-        assert d["metadata"] == {"version": "1"}
-
-        restored = AdvancedProjectConfig.from_dict(d)
-        assert restored.primary_genre == cfg.primary_genre
-        assert restored.subgenres == cfg.subgenres
-        assert restored.global_tone == cfg.global_tone
-        assert restored.internal_languages == cfg.internal_languages
-
-    def test_from_dict_partial(self) -> None:
-        cfg = AdvancedProjectConfig.from_dict({"primary_genre": "ciencia ficción"})
-        assert cfg.primary_genre == "ciencia ficción"
-        assert cfg.global_tone == "neutral"  # default
-
-    def test_from_dict_empty(self) -> None:
-        cfg = AdvancedProjectConfig.from_dict({})
-        assert cfg.primary_genre == ""
-        assert cfg.subgenres == []
-
-    def test_from_dict_coerces_non_list(self) -> None:
-        cfg = AdvancedProjectConfig.from_dict({"subgenres": "not_a_list"})
-        assert cfg.subgenres == []
-
-    def test_whitelist_has_expected_paths(self) -> None:
-        assert len(CONFIG_PATH_WHITELIST) == 13
-        assert "primary_genre" in CONFIG_PATH_WHITELIST
-        assert "future_ai_preferences" in CONFIG_PATH_WHITELIST
-
-    def test_array_paths_match_contract(self) -> None:
-        assert CONFIG_ARRAY_PATHS == {
-            "subgenres", "secondary_tones", "internal_languages",
-            "creative_restrictions", "future_ai_preferences",
-        }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -344,17 +261,13 @@ class TestProjectExtensions:
         p = Project()
         assert p.world_layers == []
 
-    def test_advanced_config_is_present(self) -> None:
-        p = Project()
-        assert isinstance(p.advanced_config, AdvancedProjectConfig)
-        assert p.advanced_config.primary_genre == ""
-
     def test_project_to_dict_includes_new_fields(self) -> None:
         p = Project()
         d = p.to_dict()
         assert "domains" in d
         assert "world_layers" in d
-        assert "advanced_config" in d
+        # PA04: advanced_config se eliminó del modelo y de to_dict.
+        assert "advanced_config" not in d
         assert len(d["domains"]) == 5
         assert d["world_layers"] == []
 
@@ -376,22 +289,12 @@ class TestProjectExtensions:
         assert p2.world_layers[0].id == "custom_1"
         assert p2.world_layers[0].is_default is False
 
-    def test_project_roundtrip_preserves_advanced_config(self) -> None:
-        p = Project()
-        p.advanced_config.primary_genre = "fantasía oscura"
-        d = p.to_dict()
-        p2 = Project.from_dict(d)
-        assert p2.advanced_config.primary_genre == "fantasía oscura"
-
     def test_from_dict_without_new_fields_keeps_world_layers_empty(self) -> None:
-        """Old projects without domains/world_layers/advanced_config
-        should load with defaults."""
+        """Old projects without domains/world_layers should load with defaults."""
         p = Project()
         d = p.to_dict()
         del d["domains"]
         del d["world_layers"]
-        del d["advanced_config"]
         p2 = Project.from_dict(d)
         assert p2.domains == ["mundo", "historia", "campaña", "compartido", "sin_asignar"]
         assert p2.world_layers == []
-        assert isinstance(p2.advanced_config, AdvancedProjectConfig)

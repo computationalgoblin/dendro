@@ -236,6 +236,9 @@ def test_milestone_ghosts_for_unlinked_entities_within_lifespan(world):
 
     _ = QApplication.instance() or QApplication([])
     view = ChronoCanvasView()
+    # BETA1-UX36: la vista colapsa contenedores por defecto; este test verifica la
+    # lógica de nodos sólidos/fantasma sobre el layout COMPLETO (c vive en una rama).
+    view._collapse_default = False
     view.set_project(world.project)
     items = view.scene().items()
     solid_ids = {n.entity_id for n in items if isinstance(n, _MilestoneNode)}

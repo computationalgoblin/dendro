@@ -4,6 +4,37 @@ from __future__ import annotations
 import json, os, urllib.request, urllib.error
 from packages.infrastructure.ai_provider import AIProvider
 
+
+def _http_error_detail(http_err: urllib.error.HTTPError) -> str:
+    """Mensaje de error legible que INCLUYE el cuerpo de la respuesta.
+
+    Un 400 de un endpoint compatible con OpenAI casi siempre trae un cuerpo JSON
+    (``{"error": {"message": ...}}``) explicando la causa real (longitud de
+    contexto excedida, parámetro no soportado, max_tokens demasiado alto, …). Sin
+    leerlo, el usuario solo veía "HTTP Error 400: Bad Request", inservible para
+    diagnosticar. El cuerpo de un ``HTTPError`` solo puede leerse UNA vez."""
+    base = f"HTTP {http_err.code}: {http_err.reason}"
+    try:
+        raw = http_err.read().decode("utf-8", "replace").strip()
+    except Exception:  # noqa: BLE001 — el detalle es best-effort
+        return base
+    if not raw:
+        return base
+    try:
+        data = json.loads(raw)
+        err = data.get("error") if isinstance(data, dict) else None
+        if isinstance(err, dict):
+            message = err.get("message") or err.get("code") or ""
+        elif isinstance(err, str):
+            message = err
+        else:
+            message = data.get("message") if isinstance(data, dict) else ""
+        if message:
+            return f"{base} — {message}"
+    except Exception:  # noqa: BLE001 — cuerpo no-JSON: recorta el texto crudo
+        pass
+    return f"{base} — {raw[:500]}"
+
 class OpenAICompatibleProvider(AIProvider):
     provider_name = "openai_compatible"
     supports_command_bar_planner = True
@@ -57,11 +88,16 @@ class OpenAICompatibleProvider(AIProvider):
                 text = _send(json_mode)
             except urllib.error.HTTPError as http_err:
                 # Endpoint may not support response_format → retry as plain text.
+                # OJO: no leer el cuerpo aquí (read() lo consume); si el reintento
+                # también falla, su HTTPError se formatea abajo con su cuerpo intacto.
                 if json_mode and http_err.code == 400:
                     text = _send(False)
                 else:
                     raise
             return text, None
+        except urllib.error.HTTPError as http_err:
+            # Surface the provider's actual reason (cuerpo JSON), no solo el código.
+            return None, _http_error_detail(http_err)
         except Exception as e:
             return None, str(e)
 

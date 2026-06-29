@@ -171,13 +171,6 @@ class ImportService:
         return Error("No project path to save to")
 
     @staticmethod
-    def _taxonomy_dict(proj: Any) -> dict[str, Any]:
-        taxonomy = getattr(proj, "import_taxonomy", None)
-        if taxonomy is not None and hasattr(taxonomy, "to_dict"):
-            return taxonomy.to_dict()
-        return {}
-
-    @staticmethod
     def _canon_digest(proj: Any, *, limit: int = 40) -> dict[str, Any]:
         """Resumen compacto del canon (nombres) para desambiguar la extracción."""
         entities: list[str] = []
@@ -201,6 +194,44 @@ class ImportService:
             "branches": branches[:limit],
             "rings": rings[:limit],
         }
+
+    @staticmethod
+    def _chronology_context(proj: Any) -> dict[str, Any]:
+        """Marco temporal aplicado (calendario + eras) para datar entidades en Fase 2."""
+        chrono = getattr(proj, "project_chronology", None)
+        if chrono is None:
+            return {}
+        eras: list[dict[str, Any]] = []
+        for era in getattr(chrono, "eras", []) or []:
+            name = getattr(era, "name", "")
+            if not name:
+                continue
+            eras.append({
+                "name": name,
+                "start_year": getattr(era, "start_year", None),
+                "end_year": getattr(era, "end_year", None),
+            })
+        return {
+            "present_year": getattr(chrono, "present_year", None),
+            "calendar_name": getattr(chrono, "calendar_name", ""),
+            "calendar_system": getattr(chrono, "calendar_system", ""),
+            "eras": eras,
+        }
+
+    @staticmethod
+    def _world_layers_context(proj: Any, *, limit: int = 40) -> list[dict[str, Any]]:
+        """Anillos (capas causales) disponibles para asignar pertenencia en Fase 2."""
+        out: list[dict[str, Any]] = []
+        for wl in getattr(proj, "world_layers", []) or []:
+            name = getattr(wl, "name", "")
+            if not name or not getattr(wl, "is_visible", True):
+                continue
+            out.append({
+                "id": getattr(wl, "id", ""),
+                "name": name,
+                "causal_role": (getattr(wl, "metadata", {}) or {}).get("causal_role", ""),
+            })
+        return out[:limit]
 
     # ── Pipeline ────────────────────────────────────────────────────────
 
@@ -658,8 +689,12 @@ class ImportService:
         context.setdefault("project_name", getattr(proj, "name", ""))
         # Modo Canon dirigido: la IA recibe la taxonomía del proyecto y un
         # resumen del canon existente para extraer coherente y sin duplicar.
-        context.setdefault("import_taxonomy", self._taxonomy_dict(proj))
+        context.setdefault("import_taxonomy", {})  # PA04: taxonomía eliminada (sin restricción)
         context.setdefault("canon_digest", self._canon_digest(proj))
+        # Fase 2: el marco ya aplicado (calendario + anillos) viaja como contexto
+        # para que la IA date el span existencial y asigne layer_ids por entidad.
+        context.setdefault("chronology_applied", self._chronology_context(proj))
+        context.setdefault("world_layers", self._world_layers_context(proj))
         extractor = ImportAIExtractionService(
             provider=provider,
             allow_simulated=allow_simulated,
@@ -683,6 +718,23 @@ class ImportService:
         # I16: marcar coincidencias con el canon existente (enrich_existing).
         self._mark_enrich_targets(basket, dedupe)
 
+        # I23 Fase 3: agrupación estructural a nivel documento. Tras tener todas las
+        # hojas extraídas, una pasada IA propone ramas (con membresía y anidamiento)
+        # y AÑADE candidatos revisables: una entidad contenedora por rama + relaciones
+        # ``contiene`` (rama→miembro y rama→subrama). Best-effort: no rompe la extracción
+        # (sin proveedor o ante error de agrupación se sigue con las hojas ya extraídas).
+        # I24: si la extracción se interrumpió (error sistémico), el conjunto de
+        # entidades está incompleto → se omite la agrupación hasta reanudar y completar.
+        ai_extraction_meta = basket.metadata.get("ai_extraction")
+        aborted = isinstance(ai_extraction_meta, dict) and bool(ai_extraction_meta.get("aborted"))
+        if not aborted:
+            try:
+                grouping = extractor.propose_branches_for_basket(basket, project_context=context)
+                if isinstance(grouping, Error):
+                    basket.metadata.setdefault("ai_grouping", {})["error"] = grouping.error
+            except Exception as exc:  # noqa: BLE001 — la agrupación es auxiliar, nunca crítica
+                basket.metadata.setdefault("ai_grouping", {})["error"] = str(exc)
+
         # I13: propuesta de configuración de proyecto (calendario/temporal/config),
         # automática al importar desde el host. Best-effort: no rompe la extracción.
         if generate_config:
@@ -695,6 +747,37 @@ class ImportService:
             if c.review_state != ImportReviewState.FUSIONADO
         ]
         return Ok(presentable)
+
+    def propose_scaffolding(
+        self,
+        basket_id: str,
+        *,
+        provider=None,
+        allow_simulated: bool = False,
+        project_context: dict[str, Any] | None = None,
+    ) -> Result[dict[str, Any], str]:
+        """Fase 1 (gateada): propone el andamiaje del mundo SIN extraer entidades.
+
+        Genera la propuesta (config + calendario + anillos + hitos) en
+        ``basket.metadata['project_config_suggestion']`` para que el usuario la
+        revise y aplique en bloque antes de poblar entidades. No muta canon.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        proj = proj_r.value
+        basket = next((b for b in proj.import_baskets if b.id == basket_id), None)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        context = dict(project_context or {})
+        context.setdefault("project_name", getattr(proj, "name", ""))
+        from packages.application.import_project_config_service import (
+            ImportProjectConfigService,
+        )
+
+        return ImportProjectConfigService(
+            provider=provider, allow_simulated=allow_simulated
+        ).generate_for_basket(basket, project_context=context)
 
     def _maybe_generate_project_config(
         self, basket: ImportBasket, context: dict[str, Any], *, provider, allow_simulated: bool
@@ -740,8 +823,13 @@ class ImportService:
         proposal = (getattr(basket, "metadata", {}) or {}).get("project_config_suggestion")
         if not isinstance(proposal, dict):
             return Error("No hay propuesta de configuración para esta cesta")
+        if proposal.get("applied"):
+            return Error("La configuración ya fue aplicada")
 
-        applied: dict[str, Any] = {"chronology": False, "entities_placed": 0, "taxonomy": False}
+        applied: dict[str, Any] = {
+            "chronology": False, "entities_placed": 0, "tone_genre": False,
+            "world_layers_activated": 0, "world_layers_created": 0, "milestones": 0,
+        }
 
         chron = proposal.get("chronology") or {}
         if chron.get("eras") or chron.get("mode") not in (None, "", "none"):
@@ -774,14 +862,25 @@ class ImportService:
                 return res
             applied["chronology"] = True
 
+        # Anillos antes que hitos: los hitos resuelven affected_layer_ids contra
+        # las capas ya creadas. El calendario va primero (arriba) para datarlos.
+        activated, created = self._apply_world_layers_suggestion(
+            proj, proposal.get("world_layers")
+        )
+        applied["world_layers_activated"] = activated
+        applied["world_layers_created"] = created
+
+        applied["milestones"] = self._apply_milestones_suggestion(
+            proj, basket, proposal.get("milestones") or []
+        )
+
         applied["entities_placed"] = self._place_entities_in_time(
             basket, proposal.get("entity_temporal") or []
         )
 
-        taxonomy = (proposal.get("config") or {}).get("taxonomy") or {}
-        if any(taxonomy.get(k) for k in ("allowed_entity_types", "allowed_branch_types", "extraction_guidance")):
-            self._apply_taxonomy(proj, taxonomy)
-            applied["taxonomy"] = True
+        # PA04: la taxonomía de importación se eliminó; solo se aplican tono/género.
+        config = proposal.get("config") or {}
+        applied["tone_genre"] = self._apply_tone_genre(proj, config)
 
         proposal["applied"] = True
         basket.metadata["project_config_suggestion"] = proposal
@@ -837,6 +936,173 @@ class ImportService:
         basket.metadata.pop("project_config_suggestion", None)
         return Ok(True)
 
+    def rechunk_basket(self, basket_id: str) -> Result[int, str]:
+        """Re-trocea los segmentos ya importados de una cesta (I11-F3, opt-in).
+
+        Acción explícita del usuario: re-empaqueta los segmentos persistidos con el
+        chunker de tamaño objetivo (losless, sin el documento original) para mejorar
+        la granularidad de recuperación del RAG en documentos importados antes de la
+        mejora. El corpus se reconstruye al reindexar. Devuelve el nº de segmentos
+        resultante.
+        """
+        proj_r = self._proj()
+        if isinstance(proj_r, Error):
+            return proj_r
+        basket = next((b for b in proj_r.value.import_baskets if b.id == basket_id), None)
+        if basket is None:
+            return Error(f"Import basket '{basket_id[:8]}' not found")
+        old = list(getattr(basket, "segments", []) or [])
+        if not old:
+            return Ok(0)
+        from packages.infrastructure.text_extractor import repack_segments
+
+        basket.segments = repack_segments(old)
+        basket.updated_at = _now_iso()
+        basket.metadata["rechunked_at"] = basket.updated_at
+        return Ok(len(basket.segments))
+
+    @staticmethod
+    def _resolve_layer_refs(proj: Any, refs: Any) -> list[str]:
+        """Resuelve referencias de capa (id del catálogo o nombre de custom) a ids reales.
+
+        Descarta huérfanos sin fallar. Se evalúa contra ``proj.world_layers`` tras
+        crear/activar las capas, de modo que las custom recién creadas resuelven.
+        """
+        by_id: dict[str, str] = {}
+        by_name: dict[str, str] = {}
+        for wl in getattr(proj, "world_layers", []) or []:
+            wid = getattr(wl, "id", "")
+            if wid:
+                by_id[wid] = wid
+            name = (getattr(wl, "name", "") or "").strip().lower()
+            if name:
+                by_name.setdefault(name, wid)
+        out: list[str] = []
+        for ref in refs or []:
+            token = str(ref or "").strip()
+            if not token:
+                continue
+            resolved = by_id.get(token) or by_name.get(token.lower())
+            if resolved and resolved not in out:
+                out.append(resolved)
+        return out
+
+    def _apply_world_layers_suggestion(self, proj: Any, spec: Any) -> tuple[int, int]:
+        """Activa capas predefinidas (idempotente) y crea anillos a medida.
+
+        Devuelve ``(activadas, creadas)``. Activar una predefinida la materializa
+        desde ``default_world_layers()`` si no estaba en el proyecto; si ya estaba
+        oculta, la vuelve visible. Las custom son idempotentes por nombre.
+        """
+        spec = spec if isinstance(spec, dict) else {}
+        from packages.application.world_layer_service import WorldLayerService
+        from packages.domain.world_layer import WorldLayer, default_world_layers
+
+        layer_service = WorldLayerService(project_service=self.project_service)
+        defaults_by_id = {wl.id: wl for wl in default_world_layers()}
+        existing_ids = {getattr(wl, "id", "") for wl in getattr(proj, "world_layers", []) or []}
+        existing_names = {
+            (getattr(wl, "name", "") or "").strip().lower()
+            for wl in getattr(proj, "world_layers", []) or []
+        }
+
+        activated = 0
+        for layer_id in spec.get("activate_default_layer_ids") or []:
+            proto = defaults_by_id.get(layer_id)
+            if proto is None:
+                continue
+            if layer_id in existing_ids:
+                for wl in proj.world_layers:
+                    if wl.id == layer_id and not wl.is_visible:
+                        wl.is_visible = True
+                continue
+            proj.world_layers.append(
+                WorldLayer(
+                    id=proto.id,
+                    name=proto.name,
+                    description=proto.description,
+                    order=proto.order,
+                    is_visible=True,
+                    is_default=True,
+                    metadata=dict(proto.metadata),
+                )
+            )
+            existing_ids.add(layer_id)
+            existing_names.add((proto.name or "").strip().lower())
+            activated += 1
+
+        created = 0
+        for custom in spec.get("custom_layers") or []:
+            if not isinstance(custom, dict):
+                continue
+            name = str(custom.get("name") or "").strip()
+            if not name or name.lower() in existing_names:
+                continue
+            res = layer_service.create_layer(
+                name=name, description=str(custom.get("description") or "")
+            )
+            if isinstance(res, Error):
+                continue
+            metadata: dict[str, str] = {}
+            role = str(custom.get("causal_role") or "").strip()
+            if role:
+                metadata["causal_role"] = role
+            parents = self._resolve_layer_refs(proj, custom.get("causal_parent_layer_ids"))
+            if parents:
+                metadata["causal_parent_layer_ids"] = ",".join(parents)
+            if metadata:
+                layer_service.update_layer(res.value.id, metadata=metadata)
+            existing_names.add(name.lower())
+            created += 1
+
+        return activated, created
+
+    def _apply_milestones_suggestion(
+        self, proj: Any, basket: ImportBasket, milestones: list
+    ) -> int:
+        """Crea hitos del andamiaje (datados) y los enlaza a la cronología.
+
+        Best-effort por hito: uno que falle no aborta el resto. Devuelve el nº creado.
+        """
+        if not isinstance(milestones, list) or not milestones:
+            return 0
+        from packages.application.causal_milestone_service import CausalMilestoneService
+
+        milestone_service = CausalMilestoneService(project_service=self.project_service)
+        chronology = getattr(proj, "project_chronology", None)
+        created = 0
+        for item in milestones:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("name") or "").strip()
+            if not title:
+                continue
+            affected = self._resolve_layer_refs(proj, item.get("affected_layer_ids"))
+            payload = {
+                "title": title,
+                "description": str(item.get("description") or ""),
+                "milestone_type": item.get("milestone_type") or "otro",
+                "layer_ids": list(affected),
+                "affected_layer_ids": list(affected),
+                "source_ids": [basket.source_id] if basket.source_id else [],
+                "rationale": str(item.get("rationale") or ""),
+                "tags": list(item.get("tags") or []),
+                "visibility_state": "visible_usuario",
+                "metadata": {
+                    "import_basket_id": basket.id,
+                    "scaffolding": "true",
+                    "date_label": item.get("date_label", ""),
+                },
+                "year": _milestone_year(item),
+            }
+            res = milestone_service.create_hito_manual(payload)
+            if isinstance(res, Error):
+                continue
+            if chronology is not None and hasattr(chronology, "link_milestone"):
+                chronology.link_milestone(res.value.id)
+            created += 1
+        return created
+
     @staticmethod
     def _place_entities_in_time(basket: ImportBasket, placements: list) -> int:
         """Mergea birth/death/nature en los candidatos de entidad que casan por nombre."""
@@ -866,23 +1132,28 @@ class ImportService:
         return placed
 
     @staticmethod
-    def _apply_taxonomy(proj: Any, taxonomy: dict[str, Any]) -> None:
-        """Une los tipos propuestos a la taxonomía del proyecto (sin pisar lo existente)."""
-        tax_obj = getattr(proj, "import_taxonomy", None)
-        if tax_obj is None:
-            return
-        for attr, key in (
-            ("allowed_entity_types", "allowed_entity_types"),
-            ("allowed_branch_types", "allowed_branch_types"),
-        ):
-            if not hasattr(tax_obj, attr):
-                continue
-            existing = list(getattr(tax_obj, attr) or [])
-            merged = list(dict.fromkeys(existing + list(taxonomy.get(key) or [])))
-            setattr(tax_obj, attr, merged)
-        guidance = str(taxonomy.get("extraction_guidance") or "").strip()
-        if guidance and hasattr(tax_obj, "extraction_guidance") and not getattr(tax_obj, "extraction_guidance", ""):
-            tax_obj.extraction_guidance = guidance
+    def _apply_tone_genre(proj: Any, config: dict[str, Any]) -> bool:
+        """Aplica tono/género propuestos a creative_config SIN pisar lo del usuario.
+
+        PA04: tono → estilo.tono; género → identidad.genero_principal. Solo rellena
+        si el campo está vacío. Devuelve True si aplicó algo.
+        """
+        applied = False
+        tone = str(config.get("tone") or "").strip()
+        genre = str(config.get("genre") or "").strip()
+        cc = getattr(proj, "creative_config", None)
+        if cc is None:
+            return False
+        estilo = getattr(cc, "estilo", None)
+        if tone and estilo is not None and not str(getattr(estilo, "tono", "") or "").strip():
+            estilo.tono = tone
+            applied = True
+        identidad = getattr(cc, "identidad", None)
+        if genre and identidad is not None and not str(getattr(identidad, "genero_principal", "") or "").strip():
+            identidad.genero_principal = genre
+            applied = True
+        return applied
+
 
     @staticmethod
     def _mark_enrich_targets(basket: ImportBasket, dedupe: Any) -> None:
@@ -1137,6 +1408,18 @@ class ImportService:
             "origin": "import_review",
             "custom_metadata": custom_metadata,
         }
+        # Fase 2: propagar datación (span existencial) y pertenencia causal. El payload
+        # los trae de la extracción contextualizada y de `_place_entities_in_time`.
+        # `create_entity` → `from_dict` + `normalize_entity_dating` los materializa.
+        if payload.get("birth_year") is not None:
+            data["birth_year"] = payload.get("birth_year")
+        if payload.get("death_year") is not None:
+            data["death_year"] = payload.get("death_year")
+        if payload.get("temporal_nature"):
+            data["temporal_nature"] = payload.get("temporal_nature")
+        layer_ids = list(payload.get("layer_ids") or [])
+        if layer_ids:
+            data["layer_ids"] = layer_ids
         from packages.application.entity_service import EntityService
         entity_service = self.entity_service or EntityService(self.project_service)
         return entity_service.create_entity(data)
