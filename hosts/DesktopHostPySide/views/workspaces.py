@@ -1976,6 +1976,9 @@ class CreationWorkspace(QWidget):
         self.foco.setVisible(False)
         self.foco.openInMapRequested.connect(self._foco_open_in_map)
         self.foco.openInChronoRequested.connect(self._foco_open_in_chrono)
+        # FOCO-10: la banda local reutiliza los slots de la cronología global.
+        self.foco.lifespanEdited.connect(self._on_lifespan_edited)
+        self.foco.milestoneCreateRequested.connect(self._on_chrono_create_milestone)
         layout.addWidget(self.foco, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 

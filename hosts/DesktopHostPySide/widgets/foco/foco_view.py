@@ -36,6 +36,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     EmptyState,
 )
 from hosts.DesktopHostPySide.widgets.foco.foco_canvas import FocoCanvas
+from hosts.DesktopHostPySide.widgets.foco.foco_lifeline import FocoLifelineBand
 from packages.application.foco_zones import classify_neighbors
 
 _HISTORY_LIMIT = 50
@@ -47,6 +48,10 @@ class FocoView(QWidget):
     entityCentered = Signal(str)  # noqa: N815 — convención Qt de señales
     openInMapRequested = Signal(str)  # noqa: N815 — convención Qt de señales
     openInChronoRequested = Signal(str)  # noqa: N815 — convención Qt de señales
+    # FOCO-10: re-emisión de la banda local con las MISMAS firmas que la
+    # cronología global — el workspace reutiliza sus slots de persistencia.
+    lifespanEdited = Signal(str, int, object)  # noqa: N815 — convención Qt de señales
+    milestoneCreateRequested = Signal(int, str)  # noqa: N815 — convención Qt de señales
 
     def __init__(
         self,
@@ -107,9 +112,19 @@ class FocoView(QWidget):
             f"QFrame#focoCenterCard {{ background: {SURFACE_HI}; "
             f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_LG}px; }}"
         )
-        row = QHBoxLayout(card)
-        row.setContentsMargins(16, 14, 16, 14)
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(8)
+        row = QHBoxLayout()
         row.setSpacing(14)
+        outer.addLayout(row, 1)
+        # FOCO-10: cronología LOCAL bajo el editor, mismo ancho que el formulario.
+        self.lifeline = FocoLifelineBand(card)
+        self.lifeline.lifespanEdited.connect(self._on_lifeline_span_edited)
+        self.lifeline.milestoneCreateRequested.connect(self.milestoneCreateRequested)
+        self.lifeline.milestoneActivated.connect(self._open_milestone_adjacent)
+        self.lifeline.hide()
+        outer.addWidget(self.lifeline)
 
         self._image_placeholder = QFrame(card)
         self._image_placeholder.setFixedSize(84, 84)
@@ -208,8 +223,8 @@ class FocoView(QWidget):
         hole = self.canvas.center_hole_rect()
         # Con formulario embebido la tarjeta usa TODO el hueco central; el
         # resumen compacto solo necesita la franja superior.
-        card_height = int(hole.height()) if self._form_panel is not None else int(
-            min(hole.height(), 170)
+        card_height = (
+            int(hole.height()) if self._form_panel is not None else int(min(hole.height(), 170))
         )
         self._center_card.setGeometry(int(hole.x()), int(hole.y()), int(hole.width()), card_height)
         self._center_card.raise_()
@@ -315,7 +330,50 @@ class FocoView(QWidget):
     def _form_capable(self) -> bool:
         return self.ctx is not None and self.entity_controller is not None
 
+    def _refresh_lifeline(self, entity: Any) -> None:
+        milestones: list[Any] = []
+        # El controller del host lo llama list_for_leaf; el servicio, list_hitos_for_leaf.
+        lister = getattr(self.milestone_controller, "list_for_leaf", None) or getattr(
+            self.milestone_controller, "list_hitos_for_leaf", None
+        )
+        if callable(lister):
+            result = lister(entity.id)
+            value = getattr(result, "value", result)
+            if isinstance(value, list):
+                milestones = value
+        self.lifeline.set_entity(entity, milestones)
+        self.lifeline.show()
+
+    def _on_lifeline_span_edited(self, entity_id: str, birth: int, death: Any) -> None:
+        # Re-emite hacia el workspace (persistencia por EntityController) y
+        # refresca el lienzo: el lapso puede recolocar hitos por zona.
+        self.lifespanEdited.emit(entity_id, birth, death)
+        self._on_form_saved()
+
+    def _open_milestone_adjacent(self, milestone_id: str) -> None:
+        if self.ctx is None or self.milestone_controller is None or not milestone_id:
+            return
+        from hosts.DesktopHostPySide.widgets.milestone_detail_panel import MilestoneDetailPanel
+
+        panel = MilestoneDetailPanel(
+            self.ctx,
+            self.milestone_controller,
+            milestone_id,
+            entity_controller=self.entity_controller,
+            on_saved=lambda: self._refresh_lifeline_current(),
+        )
+        self.open_adjacent_widget(panel, "Hito")
+
+    def _refresh_lifeline_current(self) -> None:
+        project = self._project()
+        if project is None or not self._center_id:
+            return
+        entity = project.entity_by_id(self._center_id)
+        if entity is not None:
+            self._refresh_lifeline(entity)
+
     def _update_center_card(self, entity: Any) -> None:
+        self._refresh_lifeline(entity)
         if self._form_capable():
             self._mount_form(entity.id)
             for widget in (self._name_label, self._type_label, self._brief_label):
