@@ -47,6 +47,7 @@ from hosts.DesktopHostPySide.widgets.graph_canvas import (
     VisualFilterState,
     relation_family,
 )
+from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
 from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 from hosts.DesktopHostPySide.widgets.chrono_canvas import (
     ChronoCanvasView,
@@ -1952,7 +1953,27 @@ class CreationWorkspace(QWidget):
             self._on_chrono_link_entity
         )  # BETA1-HITO-MULTI
         layout.addWidget(self.chrono, 1)
-        self._active_view = "concentric"
+
+        # BETA2-FOCO: Modo Foco — escritorio causal centrado en una entidad.
+        # Es la vista PRINCIPAL de Creación; el grafo (Mapa) y la cronología
+        # pasan a ser vistas globales de orientación/revisión del jardín.
+        _foco_ps = getattr(getattr(self.ctx, "project_controller", None), "ps", None)
+        self.foco = FocoView(
+            project_provider=self._get_active_project,
+            last_entity_getter=(
+                (lambda: getattr(_foco_ps.get_last_worked_entity(), "value", ""))
+                if _foco_ps is not None
+                else None
+            ),
+            last_entity_setter=(
+                _foco_ps.set_last_worked_entity if _foco_ps is not None else None
+            ),
+        )
+        self.foco.setVisible(False)
+        self.foco.openInMapRequested.connect(self._foco_open_in_map)
+        self.foco.openInChronoRequested.connect(self._foco_open_in_chrono)
+        layout.addWidget(self.foco, 1)
+        self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
         # Command bar area replaces the old bottom button toolbar.
         self._command_bar = self._build_command_bar()
@@ -2022,15 +2043,12 @@ class CreationWorkspace(QWidget):
         self.setMouseTracking(True)
         self.graph.setMouseTracking(True)
 
-        # BETA1-G04: restaura la vista activa (preferencia persistida)
-        try:
-            saved_view = str(
-                QSettings("Dendro", "DesktopHost").value("creation/active_view", "concentric")
-            )
-        except Exception:  # noqa: BLE001
-            saved_view = "concentric"
-        if saved_view == "chrono":
-            self.set_active_view("chrono")
+        # BETA2-FOCO: al abrir la Creación se entra SIEMPRE en Foco (decisión de
+        # producto: Foco es la vista principal y carga la última entidad
+        # trabajada). La clave QSettings 'creation/active_view' se conserva —
+        # set_active_view la sigue escribiendo — pero ya no decide la vista
+        # inicial (antes BETA1-G04 restauraba grafo/cronología desde ahí).
+        self.set_active_view("foco")
 
     def _build_top_toolbar(self) -> QWidget:
         """Persistent B38 toolbar: creative actions left, utilities right."""
@@ -2181,9 +2199,11 @@ class CreationWorkspace(QWidget):
         return pill
 
     def _build_view_toggle(self) -> QFrame:
-        """BETA1-G04: píldora central que alterna entre las dos vistas
-        principales del árbol — desde arriba (anillos) y desde el lado
-        (tiempo). Misma estética calmada que los clusters."""
+        """BETA2-FOCO: barra superior de modos — Foco | Mapa | Cronología.
+
+        Sustituye a la píldora binaria BETA1-G04. Foco es el modo principal;
+        Mapa (grafo concéntrico) y Cronología quedan como vistas globales.
+        Se ancla arriba-centro (spec: "barra superior de modos")."""
         pill = QFrame(self)
         pill.setStyleSheet(
             f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; border-radius: 19px; }}"
@@ -2191,20 +2211,39 @@ class CreationWorkspace(QWidget):
         row = QHBoxLayout(pill)
         row.setContentsMargins(6, 3, 6, 3)
         row.setSpacing(0)
-        self._view_toggle_btn = QPushButton("  Cronología")
-        self._view_toggle_btn.setIcon(icons.icon("chronology", color=INK_SOFT, size=15))
-        self._view_toggle_btn.setIconSize(QSize(15, 15))
-        self._view_toggle_btn.setToolTip("Ver el mundo en el tiempo: eras, vidas e hitos")
-        self._view_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._view_toggle_btn.setFixedHeight(32)
-        self._view_toggle_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; border-radius: 16px; "
-            f"color: {INK_SOFT}; font-size: 13px; font-weight: 600; padding: 0 16px; }} "
-            f"QPushButton:hover {{ background: {GOLD_TINT}; color: {INK_STRONG}; }} "
-            f"QPushButton:pressed {{ background: {GOLD_SOFT}; }}"
-        )
-        self._view_toggle_btn.clicked.connect(self._toggle_chrono_view)
-        row.addWidget(self._view_toggle_btn)
+
+        def _mode_button(label: str, icon_name: str, tooltip: str, mode: str) -> QPushButton:
+            button = QPushButton(f"  {label}")
+            button.setIcon(icons.icon(icon_name, color=INK_SOFT, size=15))
+            button.setIconSize(QSize(15, 15))
+            button.setToolTip(tooltip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedHeight(32)
+            button.clicked.connect(lambda _=False, m=mode: self.set_active_view(m))
+            row.addWidget(button)
+            return button
+
+        self._mode_buttons = {
+            "foco": _mode_button(
+                "Foco",
+                "creation",
+                "Escritorio de la entidad en foco: crear, editar y cultivar",
+                "foco",
+            ),
+            "concentric": _mode_button(
+                "Mapa",
+                "worldbuilding",
+                "Vista global del canon y del jardín (anillos)",
+                "concentric",
+            ),
+            "chrono": _mode_button(
+                "Cronología",
+                "chronology",
+                "Ver el mundo en el tiempo: eras, vidas e hitos",
+                "chrono",
+            ),
+        }
+        self._update_mode_pill(getattr(self, "_active_view", "foco"))
         # CRON: botón para iniciar/continuar el recorrido; visible solo en cronológica.
         self._walk_toggle_btn = QPushButton("  Creación cronológica")
         self._walk_toggle_btn.setToolTip(
@@ -2224,6 +2263,44 @@ class CreationWorkspace(QWidget):
         pill.adjustSize()
         pill.raise_()
         return pill
+
+    def _update_mode_pill(self, view: str) -> None:
+        """BETA2-FOCO: resalta el modo activo en la barra superior."""
+        buttons = getattr(self, "_mode_buttons", None)
+        if not buttons:
+            return
+        active_style = (
+            f"QPushButton {{ background: {GOLD_TINT}; border: none; border-radius: 16px; "
+            f"color: {INK_STRONG}; font-size: 13px; font-weight: 700; padding: 0 16px; }}"
+        )
+        idle_style = (
+            f"QPushButton {{ background: transparent; border: none; border-radius: 16px; "
+            f"color: {INK_SOFT}; font-size: 13px; font-weight: 600; padding: 0 16px; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; color: {INK_STRONG}; }} "
+            f"QPushButton:pressed {{ background: {GOLD_SOFT}; }}"
+        )
+        for mode, button in buttons.items():
+            button.setStyleSheet(active_style if mode == view else idle_style)
+
+    def _foco_open_in_map(self, entity_id: str) -> None:
+        """BETA2-FOCO: 'ver esta entidad en Mapa' — vista global + enfoque."""
+        self.set_active_view("concentric")
+        focus = getattr(self.graph, "focus_node", None)
+        if callable(focus):
+            try:
+                focus(entity_id)
+            except Exception:  # noqa: BLE001 - enfocar es best-effort
+                pass
+
+    def _foco_open_in_chrono(self, entity_id: str) -> None:
+        """BETA2-FOCO: 'ver esta entidad en Cronología global'."""
+        self.set_active_view("chrono")
+        focus = getattr(self.chrono, "focus_entity", None)
+        if callable(focus):
+            try:
+                focus(entity_id)
+            except Exception:  # noqa: BLE001 - enfocar es best-effort
+                pass
 
     def _walk_bar_clicked(self) -> None:
         """CRON: botón de barra. Continúa el recorrido activo o, si no hay, lo
@@ -2287,43 +2364,49 @@ class CreationWorkspace(QWidget):
             pass
 
     def set_active_view(self, view: str):
-        """BETA1-G04: alterna concéntrica ↔ cronológica y persiste la elección."""
-        view = "chrono" if str(view) == "chrono" else "concentric"
+        """BETA2-FOCO: tres modos — "foco" (escritorio causal, PRINCIPAL) |
+        "concentric" (Mapa global) | "chrono" (Cronología global).
+
+        La elección se sigue persistiendo en QSettings 'creation/active_view'
+        (compat), pero el arranque de la Creación entra SIEMPRE en foco."""
+        view = str(view)
+        if view not in ("foco", "concentric", "chrono"):
+            view = "foco"
         self._active_view = view
         chrono_on = view == "chrono"
+        foco_on = view == "foco"
         if chrono_on:
             self.chrono.set_project(self._get_active_project())
             self.chrono.fit_all()
         self.chrono.setVisible(chrono_on)
-        self.graph.setVisible(not chrono_on)
+        self.graph.setVisible(view == "concentric")
+        foco_widget = getattr(self, "foco", None)
+        if foco_widget is not None:
+            if foco_on:
+                foco_widget.refresh()
+            foco_widget.setVisible(foco_on)
+        # Command bar visible en Foco y Mapa; oculta en Cronología (decisión de producto).
+        bar = getattr(self, "_command_bar", None)
+        if bar is not None:
+            bar.setVisible(view != "chrono")
         walk_btn = getattr(self, "_walk_toggle_btn", None)
         if walk_btn is not None:
             walk_btn.setVisible(chrono_on)  # CRON: entrada al recorrido solo en cronológica
-        button = getattr(self, "_view_toggle_btn", None)
-        if button is not None:
-            button.setText("  Grafo" if chrono_on else "  Cronología")
-            button.setIcon(
-                icons.icon("worldbuilding" if chrono_on else "chronology", color=INK_SOFT, size=15)
-            )
-            button.setIconSize(QSize(15, 15))
-            button.setToolTip(
-                "Volver a la vista concéntrica (el estado del mundo)"
-                if chrono_on
-                else "Ver el mundo en el tiempo: eras, vidas e hitos"
-            )
-        # UX25: transición suave (velo de pergamino que se desvanece sobre la nueva
-        # vista) para dar continuidad al cambio. Canvas-safe y fail-soft.
-        self._play_view_transition(chrono_on)
+        self._update_mode_pill(view)
+        # UX25: transición suave (velo) solo entre las vistas de lienzo global.
+        if not foco_on:
+            self._play_view_transition(chrono_on)
         # BETA1-UX8: alternar vista reflowa el área central; reposiciona los
-        # floats (migas/clusters/alternador) diferido para que no queden en
+        # floats (migas/clusters/barra de modos) diferido para que no queden en
         # coordenadas viejas tras el cambio de visibilidad.
         QTimer.singleShot(0, self._position_floats)
         # BETA1-L02c: al entrar en la concéntrica, el lienzo reclama el foco de
         # teclado para que los atajos (1…0, F, [ ], d) respondan sin clicar antes.
-        # Diferido: si esto viene de una navegación de búsqueda, el restore de la
-        # barra (singleShot posterior) corre después y conserva el foco del campo.
-        if not chrono_on:
+        if view == "concentric":
             QTimer.singleShot(0, self.graph.focus_canvas)
+        elif foco_on and foco_widget is not None:
+            # En Foco, las flechas navegan por las zonas: el lienzo toma el foco.
+            QTimer.singleShot(0, foco_widget.canvas.setFocus)
         try:
             QSettings("Dendro", "DesktopHost").setValue("creation/active_view", view)
         except Exception:  # noqa: BLE001
@@ -3069,11 +3152,13 @@ class CreationWorkspace(QWidget):
             right.adjustSize()
             right.move(self.width() - right.width() - 18, top)
             right.raise_()
-        # BETA1-G04: alternador de vista, centrado y prominente
+        # BETA2-FOCO: barra superior de modos (Foco | Mapa | Cronología),
+        # anclada arriba-centro (spec "barra superior"; antes flotaba junto a
+        # la command bar como alternador binario).
         toggle = getattr(self, "_float_view_toggle", None)
         if toggle is not None:
             toggle.adjustSize()
-            toggle.move((self.width() - toggle.width()) // 2, top)
+            toggle.move((self.width() - toggle.width()) // 2, 14)
             toggle.raise_()
         focus = getattr(self, "_float_focus", None)
         if focus is not None and focus.isVisible():
@@ -5955,6 +6040,10 @@ class CreationWorkspace(QWidget):
         # BETA1-G04: la cronológica se reconstruye solo si está activa
         if getattr(self, "_active_view", "concentric") == "chrono" and hasattr(self, "chrono"):
             self.chrono.set_project(self._get_active_project())
+        # BETA2-FOCO: refrescar la Creación con proyecto activo entra en Foco
+        # (vista principal), centrando la última entidad trabajada.
+        if getattr(self, "foco", None) is not None and self._get_active_project() is not None:
+            self.set_active_view("foco")
         self._load_project_budget_default()
         self._rehydrate_seed_notifications()  # SEM02: semillas pendientes al recargar
 
