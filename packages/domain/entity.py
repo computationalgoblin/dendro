@@ -49,7 +49,7 @@ class EntityType(str, Enum):
 
 
 class CanonState(str, Enum):
-    """Estados de canon — §3.4 (13 valores)."""
+    """Estados de canon — §3.4 (14 valores)."""
 
     CANONICO = "canonico"
     BORRADOR = "borrador"
@@ -64,6 +64,9 @@ class CanonState(str, Enum):
     RUMOR_INTERNO = "rumor_interno"
     FALSO = "falso"
     INTERPRETACION_SUBJETIVA = "interpretacion_subjetiva"
+    # BETA2-FOCO: placeholder manual persistente (nodo/relación fantasma) — borrador
+    # interno que no cuenta ni exporta como canon hasta su conversión explícita.
+    FANTASMA = "fantasma"
 
 
 class VisibilityState(str, Enum):

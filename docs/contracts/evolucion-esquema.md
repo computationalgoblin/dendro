@@ -200,7 +200,8 @@ Crear una nueva versión cuando:
 | Versión | Descripción | Fecha | Ticket |
 |---------|------------|-------|--------|
 | 1 | Versión inicial. Project básico (id, name, timestamps, metadata). | 2026-05-29 | B01-T05 |
-| (próxima) | _(aquí se documentará la v2 cuando se implemente)_ | — | — |
+| 2..32 | _(historial intermedio no documentado aquí; ver las funciones `_apply_migration_vN_to_vN+1` en `packages/persistence/schema.py` y sus tests `tests/persistence/test_schema_*.py`)_ | — | — |
+| 33 | Jardín narrativo (riego): colecciones aditivas `watering_diagnostics` y `watering_paused_entity_ids` a nivel de proyecto (vacías al migrar; canon intacto). Nuevo `CanonState.FANTASMA` para nodos/relaciones fantasma (no requiere migración de datos). Nota de realidad: las migraciones viven como funciones en `schema.py` con la cadena de carga en `store.load_project_data`; no existe carpeta `migrations/` ni registry (los pasos 3-4 de §3 describen una propuesta futura). | 2026-07-03 | BETA2-FOCO-01 |
 
 ---
 

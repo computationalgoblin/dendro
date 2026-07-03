@@ -10,11 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects
-# (v32: I25 — rediseño import map→reduce; descarta candidatos de importación viejos)
-CURRENT_SCHEMA_VERSION: int = 32
+# (v33: BETA2-FOCO — jardín narrativo: riego de entidades y estado "secada" a nivel proyecto)
+CURRENT_SCHEMA_VERSION: int = 33
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 32
+MAX_SUPPORTED_VERSION: int = 33
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1188,27 @@ def _apply_migration_v31_to_v32(data: dict[str, Any]) -> dict[str, Any]:
         migrated["import_baskets"] = new_baskets
 
     migrated["schema_version"] = 32
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Migration: v32 → v33
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v32_to_v33(data: dict[str, Any]) -> dict[str, Any]:
+    """v32 → v33 (BETA2-FOCO): jardín narrativo — riego de entidades.
+
+    Cambio puramente aditivo: introduce las colecciones de riego a nivel de
+    proyecto — ``watering_diagnostics`` (historial de diagnósticos IA por
+    entidad) y ``watering_paused_entity_ids`` (entidades "secadas", fuera del
+    ciclo de riego). Los proyectos antiguos cargan con ambas vacías; el canon
+    (entidades, relaciones, cronología, candidatos) queda intacto.
+    """
+    migrated = dict(data)
+    migrated.setdefault("watering_diagnostics", [])
+    migrated.setdefault("watering_paused_entity_ids", [])
+    migrated["schema_version"] = 33
     return migrated
 
 

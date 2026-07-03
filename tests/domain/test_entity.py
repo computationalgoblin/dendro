@@ -46,11 +46,15 @@ class TestEntityType:
 
 
 class TestCanonState:
-    def test_has_13_values(self):
-        assert len(CanonState) == 13
+    def test_has_14_values(self):
+        # 13 originales (§3.4) + "fantasma" (BETA2-FOCO: nodos/relaciones fantasma).
+        assert len(CanonState) == 14
 
     def test_archived_exists(self):
         assert CanonState.ARCHIVADO.value == "archivado"
+
+    def test_fantasma_exists(self):
+        assert CanonState.FANTASMA.value == "fantasma"
 
     def test_from_string(self):
         assert CanonState("borrador") == CanonState.BORRADOR

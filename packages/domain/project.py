@@ -35,6 +35,7 @@ from packages.domain.world_layer import WorldLayer
 from packages.domain.creative_config import CreativeProjectConfig
 from packages.domain.relation import NarrativeRelation
 from packages.domain.source_history import HistoryEntry, Source
+from packages.domain.watering import WateringDiagnostic
 
 
 class ProjectType:
@@ -155,6 +156,13 @@ class Project:
     # ── Modo Creación Cronológica (CRON) ──
     chronology_walk_sessions: list[ChronologyWalkSession] = field(default_factory=list)
     chronology_walk_reports: list[ChronologyWalkReport] = field(default_factory=list)
+
+    # ── Jardín narrativo: riego de entidades (BETA2-FOCO) ──
+    # Historial de diagnósticos IA por entidad. El "secado" vive a nivel de
+    # proyecto (no como campo de entidad) para que los formularios, que
+    # reescriben el payload completo de la entidad, no puedan pisarlo.
+    watering_diagnostics: list[WateringDiagnostic] = field(default_factory=list)
+    watering_paused_entity_ids: list[str] = field(default_factory=list)
 
     # ── Project type & creative config (B31-T03) ──
     project_type: str = "otro"  # campana, novela, otro
@@ -292,6 +300,9 @@ class Project:
             "project_chronology": self.project_chronology.to_dict(),
             "chronology_walk_sessions": [s.to_dict() for s in self.chronology_walk_sessions],
             "chronology_walk_reports": [r.to_dict() for r in self.chronology_walk_reports],
+            # ── Jardín narrativo: riego (BETA2-FOCO) ──
+            "watering_diagnostics": [d.to_dict() for d in self.watering_diagnostics],
+            "watering_paused_entity_ids": list(self.watering_paused_entity_ids),
             # ── Project type & creative config (B31-T03) ──
             "project_type": self.project_type,
             "worldbuilding_active": self.worldbuilding_active,
@@ -494,6 +505,19 @@ class Project:
                     if isinstance(r, dict)
                 ]}
                 if "chronology_walk_reports" in data else {}
+            ),
+            # ── Jardín narrativo: riego (BETA2-FOCO) ──
+            **(
+                {"watering_diagnostics": [
+                    WateringDiagnostic.from_dict(d)
+                    for d in data.get("watering_diagnostics", [])
+                    if isinstance(d, dict)
+                ]}
+                if "watering_diagnostics" in data else {}
+            ),
+            **(
+                {"watering_paused_entity_ids": _parse_str_list(data["watering_paused_entity_ids"])}
+                if "watering_paused_entity_ids" in data else {}
             ),
             # ── Project type & creative config (B31-T03) ──
             project_type=data.get("project_type", "otro"),
