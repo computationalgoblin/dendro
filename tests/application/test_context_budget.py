@@ -43,7 +43,6 @@ def test_rag_retrieval_share_is_positive_and_matches_profile(mgr):
         ("expand_worldbuilding", ContextTier.SUBGRAPH),
         ("freeform_planning", ContextTier.SUBGRAPH),
         ("review_graph", ContextTier.GLOBAL),
-        ("import_document", ContextTier.MASSIVE),
     ],
 )
 def test_tier_assignment(mgr, intent, expected):

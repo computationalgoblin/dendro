@@ -46,20 +46,20 @@ def test_flexible_section_trimmed_dropping_whole_items():
 
 
 def test_waterfilling_redistributes_surplus_by_priority():
-    # canon (alta prioridad) excede su 50%, pero imports (baja prioridad) casi no
-    # usa el suyo: el sobrante fluye a canon y cabe entero (sin water-filling se
-    # habría truncado).
+    # canon (alta prioridad) excede su 50%, pero el auxiliar (baja prioridad)
+    # casi no usa el suyo: el sobrante fluye a canon y cabe entero (sin
+    # water-filling se habría truncado).
     canon = {
         "autoridad": "CANON",
         "items": [{"ref_id": f"e{i}", "t": "palabra " * 12} for i in range(10)],
     }
-    imports = {"autoridad": "IMPORT", "items": [{"ref_id": "d1", "t": "x"}]}
-    message = {"canon_confirmado": canon, "importaciones_sin_revisar": imports}
+    aux = {"autoridad": "RAG", "items": [{"ref_id": "d1", "t": "x"}]}
+    message = {"canon_confirmado": canon, "rag_auxiliar": aux}
 
     canon_demand = _estimate_tokens(canon)
-    imports_demand = _estimate_tokens(imports)
-    total = canon_demand + imports_demand + 5  # pool justo para todo el contenido
-    pct = {"canon_confirmado": 0.5, "importaciones_sin_revisar": 0.5}
+    aux_demand = _estimate_tokens(aux)
+    total = canon_demand + aux_demand + 5  # pool justo para todo el contenido
+    pct = {"canon_confirmado": 0.5, "rag_auxiliar": 0.5}
 
     out = enforce_budget(message, total, pct)
     assert "truncado" not in out["canon_confirmado"]

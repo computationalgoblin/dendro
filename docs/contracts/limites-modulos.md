@@ -21,7 +21,7 @@
               ▼
 ┌─────────────────────────────────┐
 │    Infrastructure               │
-│  (IA, importacion, exportacion) │
+│  (IA, exportacion)              │
 │  Puede importar: domain         │
 │  Puede importar: application    │
 └─────────────┬───────────────────┘
@@ -58,10 +58,10 @@
 - **SI** importa: `domain`, stdlib
 - **Responsabilidad:** Orquestar flujos, validar permisos, coordinar repositorios a traves de puertos/interfaces definidos en `domain`.
 
-### Infrastructure (IA, importacion, etc.) — capa 2
+### Infrastructure (IA, etc.) — capa 2
 
 - **NO** importa: `persistence`, `ui`
-- **SI** importa: `domain`, `application`, stdlib, librerias externas (openai, pdfminer, etc.)
+- **SI** importa: `domain`, `application`, stdlib, librerias externas (openai, etc.)
 - **Responsabilidad:** Implementar puertos definidos en domain/application para servicios externos.
 
 ### Persistence (almacenamiento) — capa 3
@@ -96,7 +96,7 @@
 |------|-------------------------------|
 | **domain** | **Ninguna.** Solo stdlib. |
 | **application** | Ninguna en dominio puro. Puede tener dependencias de solo tipo si son necesarias para contratos. |
-| **infrastructure** | Permitidas segun funcionalidad (openai, pdfminer.six, etc.) |
+| **infrastructure** | Permitidas segun funcionalidad (openai, etc.) |
 | **persistence** | Permitidas para almacenamiento (sqlite3 stdlib, aiofiles, orjson, etc.) |
 | **ui** | Permitidas segun framework elegido (tkinter, textual, etc.) |
 

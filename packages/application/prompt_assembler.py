@@ -2,8 +2,8 @@
 
 RAG dejó de ser dueño del prompt: aquí se construye el mensaje completo con una
 jerarquía de autoridad explícita (DIRIGE > RESTRINGE > INFORMA > ATMÓSFERA) y se
-separan las fuentes por autoridad — canon confirmado, candidates pendientes,
-imports sin revisar y RAG auxiliar — para que el modelo no las confunda. El
+separan las fuentes por autoridad — canon confirmado, candidates pendientes
+y RAG auxiliar — para que el modelo no las confunda. El
 ``rag_context_pack`` se PARTICIONA por ``kind`` en esas secciones etiquetadas en
 vez de volcarse crudo en ``contexto_autorizado``.
 

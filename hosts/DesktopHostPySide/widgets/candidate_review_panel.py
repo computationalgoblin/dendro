@@ -168,8 +168,6 @@ def source_badge_text(candidate: Any) -> str:
     source = str(getattr(candidate, "source", "") or "").lower()
     if source.startswith("ai") or source == "ia":
         origin = "🤖 IA"
-    elif "import" in source:
-        origin = "📄 Importación"
     elif source in ("manual", "usuario", "user"):
         origin = "🧑 Usuario"
     else:

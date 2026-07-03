@@ -55,17 +55,16 @@ jobs:
   # Qt enlaza contra unas pocas libs del sistema. Con QT_QPA_PLATFORM=offscreen
   # no hace falta servidor de pantalla.
   #
-  # ESTADO ACTUAL DEL SUITE (jun-2026): está ampliamente ROJO por la migración
-  # de esquema v26 y el pipeline de import EN VUELO (pista paralela), no por
-  # este workflow:  domain 6✗ · persistence 19✗ · application ✗ · desktop 3✗.
-  # Para tener una PUERTA verde y significativa desde ya, se aplica una
-  # "cuarentena por capa": se bloquea sobre las capas verificadas en verde
-  # (desktop + infrastructure) y el resto se ejecuta como INFORMATIVO. Cuando
-  # se cierre la v26, mover domain/persistence/application al paso bloqueante.
+  # ESTADO ACTUAL DEL SUITE (jul-2026): el subsistema de importación se retiró
+  # (BETA1-CLEANUP-IMPORT). Queda una baseline roja heredada en
+  # domain/persistence/application (aserciones desfasadas del rework v25→v26,
+  # guards estáticos line-pinned y flakes de CLI por estado de sesión), no
+  # causada por este workflow. Para tener una PUERTA verde y significativa se
+  # aplica una "cuarentena por capa": se bloquea sobre las capas verificadas en
+  # verde (desktop + infrastructure) y el resto se ejecuta como INFORMATIVO.
+  # Al limpiar la baseline, mover esas capas al paso bloqueante.
   #
   # Exclusiones del paso bloqueante (documentadas, no silenciadas a ciegas):
-  #  - test_i06_...: access violation cross-test del reopen del drawer en vuelo
-  #    (F00E). Pasa en aislamiento; reactivar al estabilizarse.
   #  - 3 deseleccionados: estáticos obsoletos (b32, b41) + la migración v26.
   # ───────────────────────────────────────────────────────────────────────
   test:
@@ -96,7 +95,6 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           pytest tests/desktop tests/infrastructure -q -p no:cacheprovider \
-            --ignore tests/desktop/test_i06_import_utility_drawer.py \
             --deselect "tests/desktop/test_b27_5_shell_static.py::test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy" \
             --deselect "tests/desktop/test_b41_causal_milestone_ui_static.py::test_b41_creation_workspace_exposes_create_hito_button_and_panel" \
             --deselect "tests/desktop/test_beta1_time_domain.py::test_migration_v24_to_v25_backfills_time"

@@ -120,7 +120,6 @@ _SECTION_WARNING_LABELS = {
     "vecindario": "vecindario",
     "candidates_pendientes": "candidatos",
     "rag_auxiliar": "contexto auxiliar",
-    "importaciones_sin_revisar": "importaciones",
 }
 
 

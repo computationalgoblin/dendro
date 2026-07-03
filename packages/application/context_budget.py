@@ -6,7 +6,7 @@ prompt y el ``prompt_exacto_usuario`` quedan fuera, son sagrados) y de SALIDA
 (``max_tokens`` del proveedor).
 
 Filosofía: no metas todo el proyecto en cada prompt. El contexto largo
-(GLOBAL/MASSIVE) se reserva para auditorías o importaciones. El reparto interno
+(GLOBAL/MASSIVE) se reserva para auditorías. El reparto interno
 por sección lo fija :data:`INTENT_SECTION_PERCENTAGES` (un perfil por tier).
 
 Las claves de :data:`INTENT_TO_TIER` son los valores string de ``AIJobType``
@@ -77,7 +77,7 @@ FIXED_SECTIONS: frozenset[str] = frozenset(
 )
 
 # Secciones flexibles ordenadas por prioridad (mayor → menor) para el
-# water-filling: Selección > Canon recuperado > Candidates > Aux > Imports.
+# water-filling: Selección > Canon recuperado > Candidates > Aux.
 FLEXIBLE_PRIORITY_ORDER: tuple[str, ...] = (
     "seleccion",
     "canon_confirmado",
@@ -85,7 +85,6 @@ FLEXIBLE_PRIORITY_ORDER: tuple[str, ...] = (
     "vecindario",
     "candidates_pendientes",
     "rag_auxiliar",
-    "importaciones_sin_revisar",
 )
 
 # Subconjunto flexible nutrido por la recuperación RAG (para derivar desde el
@@ -95,7 +94,6 @@ _RAG_RETRIEVAL_SECTIONS: frozenset[str] = frozenset(
         "canon_confirmado",
         "candidates_pendientes",
         "rag_auxiliar",
-        "importaciones_sin_revisar",
     }
 )
 
@@ -118,7 +116,6 @@ INTENT_TO_TIER: dict[str, ContextTier] = {
     "expand_worldbuilding": ContextTier.SUBGRAPH,
     "freeform_planning": ContextTier.SUBGRAPH,
     "review_graph": ContextTier.GLOBAL,
-    "import_document": ContextTier.MASSIVE,
     "unknown": ContextTier.BALANCED,
 }
 
@@ -132,7 +129,7 @@ INTENT_TO_TIER: dict[str, ContextTier] = {
 # sagradas (prompt_exacto_usuario, formatos_h05) quedan siempre fuera del budget.
 #
 # Cada perfil suma 1.0. Las secciones nuevas etiquetadas por autoridad:
-#   canon_confirmado / candidates_pendientes / rag_auxiliar / importaciones_sin_revisar
+#   canon_confirmado / candidates_pendientes / rag_auxiliar
 # ---------------------------------------------------------------------------
 
 # FAST_LOCAL: ajustes pequeños (mejorar texto). El prompt del usuario es la
@@ -157,9 +154,8 @@ _PROFILE_BALANCED: dict[str, float] = {
     "canon_confirmado": 0.10,
     "parametros_permanentes": 0.08,
     "posicion_causal": 0.08,
-    "rag_auxiliar": 0.08,
+    "rag_auxiliar": 0.10,
     "candidates_pendientes": 0.04,
-    "importaciones_sin_revisar": 0.02,
     "directivas": 0.02,
     "menciones": 0.02,
 }
@@ -170,13 +166,12 @@ _PROFILE_CAUSAL: dict[str, float] = {
     "seleccion": 0.22,
     "posicion_causal": 0.18,
     "vecindario": 0.13,
-    "rag_auxiliar": 0.13,
+    "rag_auxiliar": 0.15,
     "cerco_canon": 0.09,
     "canon_confirmado": 0.08,
     "candidates_pendientes": 0.05,
     "parametros_permanentes": 0.04,
     "contexto_autorizado": 0.03,
-    "importaciones_sin_revisar": 0.02,
     "directivas": 0.02,
     "menciones": 0.01,
 }
@@ -186,13 +181,12 @@ _PROFILE_SUBGRAPH: dict[str, float] = {
     "canon_confirmado": 0.18,
     "vecindario": 0.16,
     "seleccion": 0.14,
-    "rag_auxiliar": 0.14,
+    "rag_auxiliar": 0.16,
     "posicion_causal": 0.10,
     "cerco_canon": 0.08,
     "contexto_autorizado": 0.08,
     "parametros_permanentes": 0.05,
     "candidates_pendientes": 0.03,
-    "importaciones_sin_revisar": 0.02,
     "directivas": 0.01,
     "menciones": 0.01,
 }
@@ -200,7 +194,7 @@ _PROFILE_SUBGRAPH: dict[str, float] = {
 # GLOBAL: auditoría/revisión de proyecto. Canon + RAG dominan.
 _PROFILE_GLOBAL: dict[str, float] = {
     "canon_confirmado": 0.22,
-    "rag_auxiliar": 0.18,
+    "rag_auxiliar": 0.21,
     "vecindario": 0.12,
     "contexto_autorizado": 0.10,
     "cerco_canon": 0.10,
@@ -208,7 +202,6 @@ _PROFILE_GLOBAL: dict[str, float] = {
     "candidates_pendientes": 0.06,
     "seleccion": 0.05,
     "parametros_permanentes": 0.04,
-    "importaciones_sin_revisar": 0.03,
     "directivas": 0.01,
     "menciones": 0.01,
 }

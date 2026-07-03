@@ -41,8 +41,10 @@ def test_source_badge_ia_con_confianza():
     assert "62%" in text
 
 
-def test_source_badge_importacion_y_usuario():
-    assert "Importación" in source_badge_text(_cand(source="import_review", confidence=None))
+def test_source_badge_usuario_y_origen_desconocido():
+    # La rama "Importación" se retiró con el subsistema de import (BETA1-CLEANUP-IMPORT):
+    # un source residual de import cae al origen genérico, sin badge especial.
+    assert "Importación" not in source_badge_text(_cand(source="import_review", confidence=None))
     assert "Usuario" in source_badge_text(_cand(source="manual", confidence=None))
 
 

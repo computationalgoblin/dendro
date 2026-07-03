@@ -232,13 +232,6 @@ class ProjectPanel(QWidget):
         close_btn.clicked.connect(self.callbacks["close_project"])
         btn_row.addWidget(close_btn)
         card.layout.addLayout(btn_row)
-        # BETA1-F01: importar documento vive en el área de proyecto del Home,
-        # no como botón permanente del canvas (regla de producto Fase F).
-        if "import_document" in self.callbacks and self.project is not None:
-            import_btn = QPushButton("Importar documento")
-            import_btn.setToolTip("Importar un documento al proyecto (cestas de candidatos)")
-            import_btn.clicked.connect(self.callbacks["import_document"])
-            card.layout.addWidget(import_btn)
         self.root_layout.addWidget(card)
 
     def _build_project_type_section(self):

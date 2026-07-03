@@ -1,6 +1,6 @@
 # Product Debt Map — Dendro / Narrative Architect (BETA baseline)
 
-Última actualización: 2026-07-02 — subsistema de importación de documentos retirado (BETA1-CLEANUP-IMPORT).
+Última actualización: 2026-07-03 — auditoría general (BETA1-AUDIT-01..04); retirada de pymupdf (deuda inversa de DC-028) y registro de DC-AUDIT-01.
 
 ## Deuda activa
 
@@ -21,6 +21,8 @@
 | DC-034-03 | Collapse/expand se pierde al refrescar | baja | abierta | B34 |
 | DC-034-04 | Layout jerárquico Windows imperfecto | media | abierta | B34 |
 | DC-UX4-HITO | editar:hito no aplica | media | cerrada (causa real: el hito seleccionado no llegaba al contexto; se inyecta `selected_milestones` + `_apply_edit` edita `year`; verificado en real 1200→1300) | UX4 |
+| DC-AUDIT-01 | La GUI no tiene punto de exportación (al retirar la vista de import/export desapareció su único consumidor; ExportService sigue vivo y accesible solo por CLI `export`) | media | abierta | AUDIT-01 |
+| DC-AUDIT-02 | output_schema_validator no cubre los AIJobType nuevos y la ruta principal de jobs llama al gateway con validate=False (la validación efectiva la hace _extract_json/stage_results) | baja | abierta | AUDIT-03 |
 
 ## Deuda cerrada
 
@@ -31,7 +33,7 @@
 | DC-016 | Absorbida | B12 |
 | DC-022 | CandidateService sin tests | B15.8 |
 | DC-024 | OrchestratorService sin tests | B15.8 |
-| DC-028 | PDFExtractor requiere pymupdf | BETA1-I08 |
+| DC-028 | PDFExtractor requiere pymupdf (dependencia retirada de pyproject en BETA1-AUDIT-01 al eliminarse PDFExtractor) | BETA1-I08 |
 | DC-045 | AnalysisService sin tests unitarios | BETA1-H01 |
 
 ## Reglas

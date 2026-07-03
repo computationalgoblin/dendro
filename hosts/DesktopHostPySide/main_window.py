@@ -37,7 +37,6 @@ from hosts.DesktopHostPySide.controllers.project_controller import ProjectContro
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
 
-from packages.application.export_service import ExportService
 from packages.domain.result import Ok
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
@@ -123,12 +122,6 @@ class MainWindow(QMainWindow):
         self.ec = EntityController(project_service=ps)
         self.rc = RelationController(project_service=ps)
         self.cc = CandidateController(project_service=ps)
-        # BETA1-H13: SessionController removed from Desktop runtime. Export UI
-        # no longer exposes session/campaign export.
-        self.export_service = ExportService(
-            project_service=ps,
-            entity_service=self.ec.es,
-        )
         self.src = SourceController(project_service=ps)
         self.lc = LayerController(project_service=ps)
         # Autoguardado silencioso (sin toast/refresh/diálogo). Lo consume quien lo necesite.

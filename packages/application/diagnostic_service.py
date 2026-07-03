@@ -116,7 +116,6 @@ class DiagnosticService:
         "candidates": 20,
         "issues": 20,
         "sources": 15,
-        "import_baskets": 10,
     }
 
     COLLECTIONS = (
@@ -126,7 +125,6 @@ class DiagnosticService:
         "history",
         "issues",
         "candidates",
-        "import_baskets",
         "writing_units",
         "campaigns",
         "player_character_profiles",
@@ -267,11 +265,6 @@ class DiagnosticService:
             recommendations.append(self._recommendation(
                 "cleanup_sources", "sources", counts["sources"],
                 "Fuentes/documentos acumulados: considerar consolidación no destructiva.",
-            ))
-        if counts.get("import_baskets", 0) > self.CLEANUP_THRESHOLDS["import_baskets"]:
-            recommendations.append(self._recommendation(
-                "cleanup_import_baskets", "import_baskets", counts["import_baskets"],
-                "Bandejas de importación acumuladas: revisar estados y archivar con trazabilidad.",
             ))
         return recommendations
 
