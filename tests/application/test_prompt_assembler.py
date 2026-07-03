@@ -82,13 +82,6 @@ def test_rag_pack_partitioned_by_authority():
                 "reason": "pend",
             },
             {
-                "kind": "import_document",
-                "ref_id": "d1",
-                "rendered_text": "doc",
-                "priority": "low",
-                "reason": "imp",
-            },
-            {
                 "kind": "issue",
                 "ref_id": "i1",
                 "rendered_text": "issue",
@@ -107,9 +100,6 @@ def test_rag_pack_partitioned_by_authority():
     # Candidates pendientes: claramente NO canon.
     assert {it["ref_id"] for it in msg["candidates_pendientes"]["items"]} == {"c1"}
     assert "NO" in msg["candidates_pendientes"]["autoridad"].upper()
-
-    # Imports sin revisar: fuente externa.
-    assert {it["ref_id"] for it in msg["importaciones_sin_revisar"]["items"]} == {"d1"}
 
     # RAG auxiliar: lo demás (issue/creative_config).
     assert {it["ref_id"] for it in msg["rag_auxiliar"]["items"]} == {"i1"}
@@ -146,7 +136,6 @@ def test_empty_pack_emits_no_authority_sections():
     for key in (
         "canon_confirmado",
         "candidates_pendientes",
-        "importaciones_sin_revisar",
         "rag_auxiliar",
     ):
         assert key not in msg

@@ -32,7 +32,6 @@ ROOT_MODULE_BY_COMMAND = {
     "framework": "cli_framework.py",
     "candidate": "cli_candidate.py",
     "ai": "cli_ai.py",
-    "import": "cli_import.py",
     "export": "cli_export.py",
     "timeline": "cli_timeline.py",
     "writing": "cli_writing.py",

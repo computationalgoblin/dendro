@@ -1,5 +1,11 @@
 # BETA1 — Auditoría de limpieza legacy y plan de actuación
 
+> ⛔ **ACTUALIZACIÓN (2026-07-02): la Importación de documentos se RETIRÓ por completo.**
+> Este documento describía la Importación como "capacidad central de BETA1"; esa decisión se
+> revirtió: el subsistema (canon + reservorio/contexto + germinación + extracción de texto +
+> `import_baskets`) se eliminó por inviable. La app ya no acepta documentos. Ignora las líneas
+> que marcan Importación como KEEP/central. Ver `.kanban/tickets/BETA1-CLEANUP-IMPORT.md`.
+
 Fecha: 2026-06-15
 Estado: contrato de limpieza aprobado por entrevista de producto
 Alcance: H00/H01 y plan posterior de reducción de código legacy
@@ -126,7 +132,7 @@ La coherencia narrativa no es una pantalla permanente: es una acción reactiva s
 | Anillos / `WorldLayer` | KEEP | Mostrar siempre como Anillo | Medio | Quitar lenguaje `layer/capa` visible |
 | Relaciones | MIGRATE | Pasar a tipos personalizados visibles | Medio/Alto | `RelationType` queda compatibilidad |
 | Semillas / candidatos | TEMPORAL KEEP | Renombrar visible Candidato -> Semilla | Medio | Se retirará como bandeja separada más adelante |
-| Importación | KEEP | Mantener revisión por Semillas | Medio | Central en BETA1 |
+| Importación | ~~KEEP~~ **RETIRADO** | Subsistema eliminado (2026-07-02) | — | Ver BETA1-CLEANUP-IMPORT; la app ya no acepta documentos |
 | IA | FREEZE | No tocar en este bloque | Alto | Otro modelo trabaja esta capa |
 | Cronología | KEEP | Mantener `ProjectChronology` y `CausalMilestone`; `TimelineEvent` UI retirada | Medio | `TimelineEvent` queda como legacy persistido |
 | Visibilidad | REMOVE-LATER | Quitar de UI primero; migrar después | Alto | Muy cruzado con dominio/export/RAG/canvas |

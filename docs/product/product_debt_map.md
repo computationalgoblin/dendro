@@ -1,14 +1,14 @@
 # Product Debt Map — Dendro / Narrative Architect (BETA baseline)
 
-Última actualización: 2026-06-22 — I09 importación por modos (canon/contexto).
+Última actualización: 2026-07-02 — subsistema de importación de documentos retirado (BETA1-CLEANUP-IMPORT).
 
 ## Deuda activa
 
 | ID | Descripción | Prioridad | Estado | Origen |
 |----|-------------|-----------|--------|--------|
 | DC-001..DC-024 | Sin evidencia documental individual | baja | abierta | B01-B16 |
-| DC-026 | import review edit no implementado | baja | cerrada (ya implementado; verificado en I09) | B17 |
-| DC-027 | import review merge no implementado | baja | cerrada (ya implementado; verificado en I09) | B17 |
+| DC-026 | import review edit no implementado | baja | obsoleta — subsistema de importación retirado (BETA1-CLEANUP-IMPORT) | B17 |
+| DC-027 | import review merge no implementado | baja | obsoleta — subsistema de importación retirado (BETA1-CLEANUP-IMPORT) | B17 |
 | DC-033 | get_ordered_events sin partial_order real | baja | abierta | B27 |
 | DC-034 | TimelineEvent sync con NarrativeEntity(EVENTO) | baja | abierta | B27 |
 | DC-035 | IA writing provider simulado | baja | abierta | B27 |

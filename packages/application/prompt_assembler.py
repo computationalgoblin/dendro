@@ -38,7 +38,7 @@ _DUPLICATED_CONTEXT_KEYS = frozenset(
         "contexto_causal",  # → posicion_causal
         "vecindario",  # → vecindario
         "cronologia",  # → cronologia (sección determinista compacta)
-        "rag_context_pack",  # → canon / candidates / imports / material_referencia / rag_auxiliar
+        "rag_context_pack",  # → canon / candidates / rag_auxiliar
     }
 )
 
@@ -46,13 +46,6 @@ _DUPLICATED_CONTEXT_KEYS = frozenset(
 _LABEL_CANON = "CANON CONFIRMADO — AUTORITATIVO. No lo contradigas."
 _LABEL_CANDIDATES = (
     "CANDIDATES PENDIENTES — PROPUESTAS, NO canon. Trátalos como hipótesis revisables."
-)
-_LABEL_IMPORTS = (
-    "AUXILIAR NO REVISADO — fuente externa importada. No se impone sobre el canon aceptado."
-)
-_LABEL_REFERENCIA = (
-    "MATERIAL DE REFERENCIA — consulta permanente, NO canon. Úsalo como apoyo/inspiración; "
-    "no lo impongas sobre el canon aceptado."
 )
 _LABEL_RAG = "RAG AUXILIAR — recuperado, NO autoritativo. Úsalo como apoyo, no como verdad."
 
@@ -184,8 +177,6 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
 
     canon: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
-    imports: list[dict[str, Any]] = []
-    referencia: list[dict[str, Any]] = []
     aux: list[dict[str, Any]] = []
     for it in items:
         if not isinstance(it, dict):
@@ -198,17 +189,8 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
             "reason": it.get("reason"),
         }
         kind = it.get("kind")
-        meta = it.get("metadata")
-        source_type = meta.get("source_type") if isinstance(meta, dict) else None
         if kind == "candidate":
             candidates.append(entry)
-        elif kind == "import_document":
-            # Material de referencia (modo contexto) va a su propia sección;
-            # el resto de importaciones quedan como auxiliar sin revisar.
-            if source_type == "referencia":
-                referencia.append(entry)
-            else:
-                imports.append(entry)
         elif kind in _CANON_KINDS:
             canon.append(entry)
         else:  # issue, creative_config, desconocido → apoyo auxiliar
@@ -219,10 +201,6 @@ def _rag_authority_sections(context: dict[str, Any]) -> dict[str, Any]:
         out["canon_confirmado"] = {"autoridad": _LABEL_CANON, "items": canon}
     if candidates:
         out["candidates_pendientes"] = {"autoridad": _LABEL_CANDIDATES, "items": candidates}
-    if imports:
-        out["importaciones_sin_revisar"] = {"autoridad": _LABEL_IMPORTS, "items": imports}
-    if referencia:
-        out["material_referencia"] = {"autoridad": _LABEL_REFERENCIA, "items": referencia}
     warnings = pack.get("warnings")
     if aux or warnings:
         rag_section: dict[str, Any] = {"autoridad": _LABEL_RAG}
@@ -368,8 +346,6 @@ SECTION_LABELS: dict[str, str] = {
     "seleccion": "Selección",
     "vecindario": "Vecindario",
     "candidates_pendientes": "Candidatos pendientes",
-    "importaciones_sin_revisar": "Importaciones sin revisar",
-    "material_referencia": "Material de referencia",
     "rag_auxiliar": "RAG auxiliar",
     "contexto_autorizado": "Contexto autorizado",
     "formatos_h05": "Formato de salida",
@@ -379,8 +355,6 @@ SECTION_LABELS: dict[str, str] = {
 _RAG_SECTION_KINDS: dict[str, frozenset[str] | None] = {
     "canon_confirmado": _CANON_KINDS,
     "candidates_pendientes": frozenset({"candidate"}),
-    "importaciones_sin_revisar": frozenset({"import_document"}),
-    "material_referencia": frozenset({"import_document"}),  # distinguido por source_type
     "rag_auxiliar": None,  # el resto (issue, creative_config, desconocido)
 }
 
@@ -398,18 +372,10 @@ _EXCLUDABLE_SECTIONS: frozenset[str] = frozenset(
 )
 
 
-def _section_for_kind(kind: Any, source_type: Any = None) -> str:
-    """Sección de autoridad a la que pertenece un item del pack.
-
-    Por ``kind``, salvo las importaciones, que se separan por ``source_type``:
-    el material de referencia (modo contexto) tiene su propia sección.
-    """
+def _section_for_kind(kind: Any) -> str:
+    """Sección de autoridad a la que pertenece un item del pack, por ``kind``."""
     if kind == "candidate":
         return "candidates_pendientes"
-    if kind == "import_document":
-        if source_type == "referencia":
-            return "material_referencia"
-        return "importaciones_sin_revisar"
     if kind in _CANON_KINDS:
         return "canon_confirmado"
     return "rag_auxiliar"
@@ -443,9 +409,7 @@ def apply_section_exclusions(
                 continue
             if str(it.get("ref_id") or "") in item_ids:
                 continue
-            meta = it.get("metadata")
-            st = meta.get("source_type") if isinstance(meta, dict) else None
-            if _section_for_kind(it.get("kind"), st) in sections:
+            if _section_for_kind(it.get("kind")) in sections:
                 continue
             kept.append(it)
         new_pack = dict(pack)
@@ -613,10 +577,6 @@ class PromptAssembler:
             message["vecindario"] = vecindario
         if "candidates_pendientes" in rag_sections:
             message["candidates_pendientes"] = rag_sections["candidates_pendientes"]
-        if "importaciones_sin_revisar" in rag_sections:
-            message["importaciones_sin_revisar"] = rag_sections["importaciones_sin_revisar"]
-        if "material_referencia" in rag_sections:
-            message["material_referencia"] = rag_sections["material_referencia"]
         if "rag_auxiliar" in rag_sections:
             message["rag_auxiliar"] = rag_sections["rag_auxiliar"]
 

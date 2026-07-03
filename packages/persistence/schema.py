@@ -1229,7 +1229,10 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
     collection_fields = (
         "entities", "relations", "sources", "history", "issues", "structured_issues", "narrative_frameworks", "framework_templates", "timeline_events", "writing_units",
         "custom_entity_types", "custom_field_definitions", "custom_relation_types",
-        "domains", "world_layers", "import_baskets",
+        "domains", "world_layers",
+        # import_baskets: colección retirada (subsistema de importación eliminado);
+        # se tolera en proyectos antiguos y se descarta al cargar.
+        "import_baskets",
         "campaigns", "player_character_profiles", "campaign_clocks",
         "secrets", "clues",
         "factions", "fronts",

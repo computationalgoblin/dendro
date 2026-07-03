@@ -287,8 +287,10 @@ def plan_command_jobs(
             "previous_ring_id": active_ring_id,
         })], warnings=warnings)
 
-    # --- Crear + Hoja/Rama: configurable suggestion count ------------------
-    if act is CommandAction.CREAR and scp in (CommandScope.HOJA, CommandScope.RAMA):
+    # --- Crear + Hoja/Rama: configurable suggestion count ---------
+    if act is CommandAction.CREAR and scp in (
+        CommandScope.HOJA, CommandScope.RAMA
+    ):
         count = _clamp(suggestion_count, 1, MAX_SUGGESTIONS)
         return CommandPlan(jobs=[PlannedJob(base_type, prompt, {
             **common,

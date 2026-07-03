@@ -1811,13 +1811,11 @@ class CreationWorkspace(QWidget):
         corpus_view,
         relation_view,
         candidate_view,
-        import_export_view,
         source_view=None,
         layer_view=None,
     ):
         super().__init__()
         self.ctx = ctx
-        self.import_export_view = import_export_view
         self.corpus_view = corpus_view
         self.relation_view = relation_view
         self.candidate_view = candidate_view
@@ -1843,8 +1841,6 @@ class CreationWorkspace(QWidget):
             prompt_trace_store=self.prompt_trace_store,
         )
         self._ai_workers = {}
-        # UX33: callback para abrir la importación desde el canvas (lo fija MainWindow).
-        self._on_open_import = None
         # Semillas (Fase A): notificaciones palpitantes abajo-derecha + campana zen.
         self._zen_bell = ZenBell()
         self._seed_notifications = SeedNotificationLayer(self)
@@ -1968,7 +1964,6 @@ class CreationWorkspace(QWidget):
             [
                 ("search", "Buscar y enfocar elementos", self._open_search_panel),
                 ("filter", "Filtros, anillos y eras", self._open_filter_panel),
-                ("project", "Importar documento", self._open_import_utility),
             ]
         )
         # UX29: el guardar usa el MISMO formato de píldora que el alternador central
@@ -3468,9 +3463,7 @@ class CreationWorkspace(QWidget):
             ),
             CommandAction.EXPANDIR: "Inverso de Explicar: expande el worldbuilding a partir de la selección.",
         }
-        for i, act in enumerate(CommandAction):
-            action.addItem(ACTION_LABELS[act], act.value)
-            action.setItemData(i, action_tips.get(act, ""), Qt.ItemDataRole.ToolTipRole)
+        self._action_tips = action_tips  # reusado por _populate_action_selector
 
         scope = QComboBox()
         scope.setObjectName("aiScopeSelector")
@@ -3536,6 +3529,7 @@ class CreationWorkspace(QWidget):
         self._temp_tuner = temp_tuner
         self._tokens_tuner = tokens_tuner
         self._budget_tuner = budget_tuner
+        self._populate_action_selector()
         action.currentIndexChanged.connect(lambda _=0: self._refresh_scope_selector())
         scope.currentIndexChanged.connect(lambda _=0: self._on_function_changed())
         self._refresh_scope_selector()
@@ -3613,6 +3607,25 @@ class CreationWorkspace(QWidget):
         self._temp_tuner.set_hint(params.temperature)
         self._tokens_tuner.set_hint(TIER_OUTPUT_TOKENS[tier])
         self._budget_tuner.set_hint(TIER_INPUT_TOKENS[tier])
+
+    def _populate_action_selector(self) -> None:
+        """Rellena el selector de Acción con todas las acciones disponibles."""
+        combo = getattr(self, "_action_selector", None)
+        if combo is None:
+            return
+        previous = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        tips = getattr(self, "_action_tips", {})
+        for act in CommandAction:
+            idx = combo.count()
+            combo.addItem(ACTION_LABELS[act], act.value)
+            combo.setItemData(idx, tips.get(act, ""), Qt.ItemDataRole.ToolTipRole)
+        if previous is not None:
+            j = combo.findData(previous)
+            if j >= 0:
+                combo.setCurrentIndex(j)
+        combo.blockSignals(False)
 
     def _refresh_scope_selector(self) -> None:
         """Repopulate the scope selector with the scopes valid for the action."""
@@ -4479,30 +4492,7 @@ class CreationWorkspace(QWidget):
                 return candidate
         return None
 
-    def _open_import_utility(self):
-        """UX33: abre el menú de importación desde el canvas.
-
-        Reusa la puerta de entrada de MainWindow (crea la vista con el controller
-        correcto y la monta en el cajón). Si no hay callback (tests), no-op seguro."""
-        if callable(self._on_open_import):
-            self._on_open_import()
-
-    def add_import_seed(self, basket_id: str, count: int):
-        """UX33: semilla palpitante al terminar una extracción en segundo plano.
-
-        Al pulsarla, ``_open_candidate_review`` detecta el prefijo ``import:`` y
-        reabre el menú de importación con los candidatos listos."""
-        layer = getattr(self, "_seed_notifications", None)
-        if layer is not None:
-            layer.add(f"import:{basket_id}", f"Importación: {count} candidato(s)")
-
     def _open_candidate_review(self, candidate_id: str):
-        # UX33: las semillas de importación no son candidatos del CandidateController;
-        # reabren el menú de importación (donde se revisan sus candidatos).
-        if str(candidate_id).startswith("import:"):
-            self._seed_notifications.remove(candidate_id)
-            self._open_import_utility()
-            return
         # CRON: durante un recorrido, la notificación de un candidato del paso
         # actual reabre la VENTANA ÚNICA (diffs editables + aplicación atómica),
         # no el panel por-candidato suelto (evita aceptación desordenada).
@@ -5945,7 +5935,6 @@ class CreationWorkspace(QWidget):
     def refresh(self):
         for widget in [
             self.graph,
-            self.import_export_view,
             self.corpus_view,
             self.relation_view,
             self.candidate_view,

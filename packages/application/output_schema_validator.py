@@ -82,44 +82,6 @@ EXPECTED_SCHEMAS: dict[str, dict[str, Any]] = {
         "required_fields": [],
         "optional_structure": True,
     },
-    "import_extraction": {
-        "container_key": "candidates",
-        "required_item_fields": ["kind"],
-    },
-    "import_map": {
-        # I26: fase MAP — menciones por ventana. Cada mención lleva 'kind'; la
-        # validación rica por tipo (body obligatorio, relation_type del vocabulario)
-        # la hace el servicio al normalizar.
-        "container_key": "mentions",
-        "required_item_fields": ["kind"],
-    },
-    "import_reconcile": {
-        # I27: fase REDUCE — el árbitro devuelve un objeto con el grafo consolidado;
-        # estructura libre validada/normalizada por el servicio de reconciliación.
-        "container_key": None,
-        "required_fields": [],
-        "optional_structure": True,
-    },
-    "import_project_config": {
-        # Andamiaje del mundo (I22): objeto plano libre (chronology/config/
-        # world_layers/milestones). Cualquier JSON válido pasa; el servicio normaliza.
-        "container_key": None,
-        "required_fields": [],
-        "optional_structure": True,
-    },
-    "import_grouping": {
-        # Agrupación estructural (I23): objeto con "branches"; cada rama puede traer
-        # members/parent. Estructura opcional: cualquier JSON válido pasa y el servicio
-        # normaliza/expande a candidatos branch + relaciones contiene.
-        "container_key": "branches",
-        "required_item_fields": [],
-        "optional_structure": True,
-    },
-    "import_context_summary": {
-        # Resumen no-canon del documento de referencia (modo contexto).
-        "container_key": "topic_cards",
-        "required_item_fields": [],
-    },
 }
 
 # Intents that are always valid (freeform text)

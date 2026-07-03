@@ -29,7 +29,6 @@ def test_e01_indexable_kinds_cover_advanced_narrative_corpus():
         "chronology",
         "candidate",
         "issue",
-        "import_document",
         "creative_config",
     }
 

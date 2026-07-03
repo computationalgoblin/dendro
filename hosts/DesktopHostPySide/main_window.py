@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, QSize
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -32,7 +32,6 @@ from hosts.DesktopHostPySide.widgets.modal_overlay import ModalOverlay
 from hosts.DesktopHostPySide.controllers.ai_controller import AIController
 from hosts.DesktopHostPySide.controllers.candidate_controller import CandidateController
 from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
-from hosts.DesktopHostPySide.controllers.import_job_runner import ImportJobRunner
 from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
 from hosts.DesktopHostPySide.controllers.project_controller import ProjectController
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
@@ -43,7 +42,6 @@ from packages.domain.result import Ok
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
 from hosts.DesktopHostPySide.views.home_view import HomeView
-from hosts.DesktopHostPySide.views.import_export_view import ImportExportView
 from hosts.DesktopHostPySide.views.layer_view import LayerView
 from hosts.DesktopHostPySide.views.relation_view import RelationView
 from hosts.DesktopHostPySide.views.source_view import SourceView
@@ -63,8 +61,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
-from hosts.DesktopHostPySide.widgets.drawer_forms import DrawerTextPrompt
-from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectActionsPanel, ProjectPanel
+from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectPanel
 from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
 from hosts.DesktopHostPySide.widgets.toast_layer import ToastLayer
 
@@ -127,25 +124,15 @@ class MainWindow(QMainWindow):
         self.rc = RelationController(project_service=ps)
         self.cc = CandidateController(project_service=ps)
         # BETA1-H13: SessionController removed from Desktop runtime. Export UI
-        # no longer exposes session/campaign export; ImportExportView builds
-        # its own ImportController. See docs/architecture/A03_legacy_classification.md.
+        # no longer exposes session/campaign export.
         self.export_service = ExportService(
             project_service=ps,
             entity_service=self.ec.es,
         )
         self.src = SourceController(project_service=ps)
         self.lc = LayerController(project_service=ps)
-        # UX33: runner persistente de importación, dueño de los QThread de
-        # andamiaje/extracción. Debe existir ANTES de construir las vistas (la
-        # ImportExportView lee ctx.import_jobs en su __init__).
-        self.import_job_runner = ImportJobRunner(self.controller, parent=self)
-        self.ctx.import_jobs = self.import_job_runner
-        self.import_job_runner.extractionDone.connect(self._on_import_extraction_done)
-        self.import_job_runner.scaffoldingDone.connect(self._on_import_scaffolding_done)
-        # UX33: autoguardado silencioso al terminar un job de importación.
+        # Autoguardado silencioso (sin toast/refresh/diálogo). Lo consume quien lo necesite.
         self.ctx.request_save_silent = self._save_active_project_silent
-        # I23/UX33-fix: reabrir el menú de importación (volver tras revisar el andamiaje).
-        self.ctx.reopen_import = self._import_document
 
     # ── Views ────────────────────────────────────────────────────────────────
 
@@ -155,7 +142,6 @@ class MainWindow(QMainWindow):
         self.corpus_view = CorpusView(self.ctx, self.ec)
         self.relation_view = RelationView(self.ctx, self.rc)
         self.candidate_view = CandidateView(self.ctx, self.cc)
-        self.import_export_view = self._make_import_export_view()
         self.source_view = SourceView(self.ctx, self.src)
         self.layer_view = LayerView(self.ctx, self.lc)
 
@@ -178,20 +164,11 @@ class MainWindow(QMainWindow):
             corpus_view=self.corpus_view,
             relation_view=self.relation_view,
             candidate_view=self.candidate_view,
-            import_export_view=self.import_export_view,
             source_view=self.source_view,
             layer_view=self.layer_view,
         )
-        # UX33: el botón de importación del canvas reusa la misma puerta de entrada
-        # que el Home (crea la vista con el controller correcto y la monta en el cajón).
-        self.creation_workspace._on_open_import = self._import_document
         # BETA1-H02: legacy gallery/session workspace classes were physically
         # removed from views/workspaces.py.
-
-    def _make_import_export_view(self):
-        view = ImportExportView(self.ctx, self.controller, self.export_service)
-        view.setWindowTitle("Importación documental")
-        return view
 
     # ── Shell ────────────────────────────────────────────────────────────────
 
@@ -526,8 +503,6 @@ class MainWindow(QMainWindow):
                 "open_project": self._open_project,
                 "save_project": self._save,
                 "close_project": self._close_project,
-                # BETA1-F01: importar documento desde el área de proyecto
-                "import_document": self._import_document,
             },
             on_preview=self._preview_project_change,
         )
@@ -541,18 +516,6 @@ class MainWindow(QMainWindow):
         # Update Creation workspace worldbuilding
         if hasattr(self, 'creation_workspace'):
             self.creation_workspace.set_worldbuilding_active(worldbuilding_active)
-
-    def _import_document(self):
-        """BETA1-F01: la importación se lanza desde el área de proyecto del
-        Home; abre Creación y su utilidad de importación existente (la vista
-        no se mueve de sitio — solo cambia la puerta de entrada)."""
-        _apptrace("UI import_document")
-        self._go_space(_IDX_CREATION)
-        workspace = getattr(self, "creation_workspace", None)
-        if workspace is not None and hasattr(workspace, "_open_utility"):
-            self.import_export_view = self._make_import_export_view()
-            workspace.import_export_view = self.import_export_view
-            workspace._open_utility(self.import_export_view, title="Importación documental")
 
     def _open_config_panel(self):
         _apptrace("UI open_config_panel")
@@ -696,92 +659,31 @@ class MainWindow(QMainWindow):
             return False
 
     def _save_active_project_silent(self) -> bool:
-        """UX33: guarda el proyecto SIN efectos de UI (autoguardado de jobs).
+        """UX33: guarda el proyecto SIN efectos de UI (autoguardado silencioso).
 
         A diferencia de ``_save_active_project``, no muestra toast "Proyecto
         guardado", no refresca todas las vistas, no cierra el cajón y NO abre un
-        diálogo si falta ruta (en ese caso no guarda: los candidatos quedan en
-        memoria hasta que el usuario guarde a mano). Pensado para correr en el
-        hilo principal desde el slot de fin de un job de importación."""
+        diálogo si falta ruta (en ese caso no guarda). Pensado para correr en el
+        hilo principal sin interrumpir al usuario."""
         try:
             if self.controller.ps.active_project is None:
                 return True
             if not self.controller.current_path:
-                self.log_msg("Importación: sin ruta de proyecto; candidatos en memoria")
+                self.log_msg("Autoguardado: sin ruta de proyecto; cambios en memoria")
                 return False
             result = self.controller.save()
             if not isinstance(result, Ok):
                 self.ctx.notify(
-                    f"Error guardando importación: {getattr(result, 'error', result)}", "error"
+                    f"Error en autoguardado: {getattr(result, 'error', result)}", "error"
                 )
                 return False
             self.ctx.remember_project(self.controller.current_path)
             return True
         except Exception as exc:  # noqa: BLE001 — el autoguardado nunca rompe la app
-            self.log_msg(f"Error en autoguardado de importación: {exc}")
+            self.log_msg(f"Error en autoguardado: {exc}")
             return False
 
-    def _import_extraction_meta(self, basket_id: str) -> dict:
-        """Resumen de la última extracción del basket (I24): aborted/skipped/pending."""
-        proj = self._get_active_project()
-        for b in getattr(proj, "import_baskets", []) or []:
-            if getattr(b, "id", "") == basket_id:
-                meta = (getattr(b, "metadata", {}) or {}).get("ai_extraction")
-                return meta if isinstance(meta, dict) else {}
-        return {}
-
-    def _on_import_extraction_done(self, basket_id: str, count: int, error: str):
-        """UX33/I24 (hilo principal): autoguarda + avisa al terminar la extracción.
-
-        I24: un error sistémico a media extracción YA NO llega como ``error`` duro
-        (la extracción devuelve parcial); el desenlace real vive en la metadata del
-        basket. Se autoguarda siempre que haya progreso para poder reanudar."""
-        if error:
-            # Error de arranque (p. ej. proveedor no configurado): nada que guardar.
-            self.ctx.notify(f"No se pudo analizar el documento: {error}", "error")
-            return
-
-        meta = self._import_extraction_meta(basket_id)
-        aborted = bool(meta.get("aborted"))
-        skipped = int(meta.get("skipped_sections") or 0)
-        pending = int(meta.get("pending_sections") or 0)
-
-        self._save_active_project_silent()  # I24: persiste el progreso (parcial o total)
-
-        if aborted:
-            reason = str(meta.get("abort_reason") or "")[:120]
-            self.ctx.notify(
-                f"Importación interrumpida ({reason}). Progreso guardado: {count} "
-                f"candidato(s); reanúdala cuando el proveedor esté disponible "
-                f"({pending} sección(es) pendientes).",
-                "error",
-            )
-            return
-
-        workspace = getattr(self, "creation_workspace", None)
-        if skipped:
-            self.ctx.notify(
-                f"Importación parcial: {count} candidato(s); {skipped} sección(es) "
-                "omitida(s) por el filtro de contenido del proveedor.",
-                "info",
-            )
-        else:
-            self.ctx.notify(f"Importación lista: {count} candidato(s) para revisar.", "success")
-        if workspace is not None and hasattr(workspace, "add_import_seed"):
-            workspace.add_import_seed(basket_id, count)
-
-    def _on_import_scaffolding_done(self, _basket_id: str, ok: bool, error: str):
-        """UX33: avisa al terminar el andamiaje (no crea candidatos → solo toast)."""
-        if not ok:
-            self.ctx.notify(f"No se pudo proponer el andamiaje: {error}", "error")
-            return
-        self.ctx.notify("Andamiaje propuesto: revísalo y aplícalo en la importación.", "info")
-
     def closeEvent(self, event):
-        # UX33: cancela y espera (corto) los jobs de importación vivos antes de cerrar.
-        runner = getattr(self, "import_job_runner", None)
-        if runner is not None:
-            runner.shutdown()
         if self._get_active_project() is None:
             event.accept()
             return
@@ -825,7 +727,7 @@ class MainWindow(QMainWindow):
         """Propagate advanced/debug visibility to every workspace/view."""
         # BETA1-A02: only runtime widgets (Home/Creation) receive the toggle
         for widget in [
-            self.creation_workspace, self.import_export_view,
+            self.creation_workspace,
             self.corpus_view, self.relation_view, self.candidate_view,
             self.source_view, self.layer_view, self.home_view,
         ]:

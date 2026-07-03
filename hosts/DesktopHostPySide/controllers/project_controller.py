@@ -12,7 +12,15 @@ class ProjectController:
             store = ProjectStore()
         self.store = store
         self.ps = ProjectService(store=self.store)
-        self.current_path: str | None = None
+        self._current_path: str | None = None
+
+    @property
+    def current_path(self) -> str | None:
+        return self._current_path
+
+    @current_path.setter
+    def current_path(self, value: str | None) -> None:
+        self._current_path = value
 
     def open(self, path: str):
         _apptrace(f"CTRL ProjectController.open path={path!r}"[:120])

@@ -1,5 +1,9 @@
 # Bloque I - Importacion narrativa avanzada de documentos
 
+> ⛔ **CANCELADO (2026-07-02) — documento histórico.** El subsistema de importación de documentos
+> se retiró por completo (inviable tras I01–I91). La app ya no acepta documentos. Este spec se
+> conserva solo como historia. Ver `.kanban/tickets/BETA1-CLEANUP-IMPORT.md`.
+
 ## Objetivo
 
 Transformar la importacion de TXT, Markdown y PDF textual en una pipeline

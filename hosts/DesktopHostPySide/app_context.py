@@ -38,17 +38,8 @@ class AppContext:
     left_drawer: Any = None  # LeftDrawer reference (set by MainWindow)
     rag_service: Any = None
     ai_prompt_trace_store: Any = None
-    # UX33: runner persistente de los jobs de importación (lo fija MainWindow). La
-    # extracción vive aquí, no en la vista, así que sobrevive al cierre del cajón.
-    import_jobs: Any = None
-    # UX33: guardado SIN UI ruidosa (sin toast/refresh/cierre de cajón ni diálogo),
-    # para autoguardar al terminar un job de importación. Lo fija MainWindow.
+    # UX33: guardado SIN UI ruidosa (sin toast/refresh/cierre de cajón ni diálogo). Lo fija MainWindow.
     request_save_silent: Callable[[], bool] | None = None
-    # I23/UX33-fix: reabrir el menú de importación (vista fresca en el cajón). Lo fija
-    # MainWindow = _import_document. Permite VOLVER al menú tras revisar el andamiaje
-    # en el panel de configuración (el cajón no apila contenido: set_content destruye
-    # la vista anterior, así que sin esto no había forma de regresar a aceptar/descartar).
-    reopen_import: Callable[[], None] | None = None
 
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large

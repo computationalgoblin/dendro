@@ -254,9 +254,6 @@ def _build_parser() -> argparse.ArgumentParser:
     from packages.ui.cli_ai import register_ai_commands
     register_ai_commands(sub)
 
-    # import
-    from packages.ui.cli_import import register_import_commands
-    register_import_commands(sub)
     from packages.ui.cli_export import register_export_commands
     register_export_commands(sub)
 
@@ -399,11 +396,6 @@ def main() -> None:
     if args.command == "ai":
         from packages.ui.cli_ai import handle_ai_command
         handle_ai_command(args, session)
-        return
-
-    if args.command == "import":
-        from packages.ui.cli_import import handle_import_command
-        print(handle_import_command(args, session))
         return
 
     if args.command == "export":

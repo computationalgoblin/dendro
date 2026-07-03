@@ -76,23 +76,6 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "coherence":           ModelParams(temperature=0.2, max_tokens=2000),
     "consistency":         ModelParams(temperature=0.2, max_tokens=2000),
     "extract":             ModelParams(temperature=0.15, max_tokens=1500),
-    "import_extraction":   ModelParams(temperature=0.15, max_tokens=3000),
-    # I26: fase MAP del rediseño map→reduce — extrae MENCIONES por ventana (1 llamada
-    # por ventana). Frío y preciso; techo alto porque una ventana densa puede dar
-    # muchas menciones (entidades + ramas + relaciones).
-    "import_map":          ModelParams(temperature=0.15, max_tokens=3000),
-    # I27: fase REDUCE — árbitro de reconciliación. UNA llamada que ve el resumen
-    # global y decide fusiones/nombre canónico. Frío; techo alto (grafo grande).
-    "import_reconcile":    ModelParams(temperature=0.15, max_tokens=4000),
-    # Andamiaje del mundo (I22): UNA llamada a nivel documento que devuelve un objeto
-    # grande (calendario + eras + entity_temporal + anillos + hitos). Necesita techo
-    # alto o la respuesta JSON se trunca y queda inválida.
-    "import_project_config": ModelParams(temperature=0.2, max_tokens=4000),
-    # Agrupacion estructural (I23): UNA llamada a nivel documento que agrupa las entidades
-    # ya extraidas en ramas (con membresia y anidamiento). La salida puede listar muchas
-    # ramas con miembros → techo alto para no truncar el JSON.
-    "import_grouping":     ModelParams(temperature=0.2, max_tokens=4000),
-    "import_context_summary": ModelParams(temperature=0.2, max_tokens=2500),
     "classify":            ModelParams(temperature=0.15, max_tokens=1000),
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
     "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),

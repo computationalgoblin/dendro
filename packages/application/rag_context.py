@@ -180,12 +180,6 @@ class RAGContextBuilder:
                 )
             )
 
-        # Material de referencia (baskets en modo contexto) es consulta
-        # permanente: si existe, garantizamos que IMPORT_DOCUMENT entre en la
-        # recuperación aunque el plan no lo pidiera explícitamente.
-        if _project_has_context_basket(project) and CorpusItemKind.IMPORT_DOCUMENT not in plan.include_kinds:
-            plan.include_kinds.append(CorpusItemKind.IMPORT_DOCUMENT)
-
         options = IndexingOptions(
             include_pending_candidates=plan.include_pending_candidates,
             include_rejected_candidates=plan.include_rejected_candidates,
@@ -193,7 +187,6 @@ class RAGContextBuilder:
             # created is indexed on its own, so a deleted entity/ring cannot
             # resurface through its leftover accepted-candidate record.
             include_accepted_candidates=False,
-            include_unaccepted_imports=plan.include_unaccepted_imports,
             audience=plan.audience,
         )
         indexed = self.rag_service.index_project(project, options=options)
@@ -220,10 +213,6 @@ class RAGContextBuilder:
         if not retrieval_needs and isinstance(ctx.get("command_bar_plan"), dict):
             retrieval_needs = _string_list(ctx["command_bar_plan"].get("retrieval_needs"))
         include_kinds = _include_kinds_for(intent_type, retrieval_needs, prompt)
-        if bool(ctx.get("include_unaccepted_imports", False)) or bool(
-            ctx.get("include_import_documents", False)
-        ):
-            include_kinds = _dedupe_kinds([*include_kinds, CorpusItemKind.IMPORT_DOCUMENT])
         active_layer_ids = _dedupe(
             _string_list(ctx.get("active_layer_ids"))
             + _ring_as_layer_ids(ctx.get("active_ring_id") or ctx.get("focused_ring_id"))
@@ -241,7 +230,6 @@ class RAGContextBuilder:
             timeout_ms=1500,
             include_pending_candidates=bool(ctx.get("include_pending_candidates", False)),
             include_rejected_candidates=bool(ctx.get("include_rejected_candidates", False)),
-            include_unaccepted_imports=bool(ctx.get("include_unaccepted_imports", False)),
             audience=str(ctx.get("audience") or "gm"),
         )
 
@@ -356,18 +344,6 @@ def _intent_type(intent: Any) -> str:
     return str(getattr(value, "value", value) or "unknown")
 
 
-def _project_has_context_basket(project: Any) -> bool:
-    """True si el proyecto tiene alguna cesta de importación en modo contexto."""
-    for basket in getattr(project, "import_baskets", []) or []:
-        mode = str(getattr(basket, "import_mode", "") or "").strip().lower()
-        if not mode:
-            meta = getattr(basket, "metadata", {}) or {}
-            mode = str(meta.get("import_mode", "") or "").strip().lower()
-        if mode == "contexto":
-            return True
-    return False
-
-
 def _include_kinds_for(
     intent_type: str, retrieval_needs: list[str], prompt: str
 ) -> list[CorpusItemKind]:
@@ -386,17 +362,6 @@ def _include_kinds_for(
         kinds.extend((CorpusItemKind.ISSUE, CorpusItemKind.RELATION))
     if prompt_tokens & {"anillo", "anillos", "capa", "capas", "worldbuilding"}:
         kinds.extend((CorpusItemKind.WORLD_LAYER, CorpusItemKind.BRANCH))
-    if prompt_tokens & {
-        "documento",
-        "documentos",
-        "importacion",
-        "importaciones",
-        "importado",
-        "importados",
-        "chunk",
-        "chunks",
-    }:
-        kinds.append(CorpusItemKind.IMPORT_DOCUMENT)
 
     # PA02: NO se añade CREATIVE_CONFIG — ya viaja determinista en el prompt.
     return _dedupe_kinds(kinds)

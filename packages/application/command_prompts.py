@@ -42,7 +42,15 @@ _BASE_ES = (
     "\n"
     "NATURALEZA TEMPORAL: SOLO los seres (personaje, criatura) llevan `temporal_nature` ∈ "
     "{mortal, inmortal, eterno}; `inmortal` = no muere (death_year null), `eterno` = sin nacimiento "
-    "mortal (birth_year null). El resto de tipos NO lo lleva. Ante la duda, `mortal`."
+    "mortal (birth_year null). El resto de tipos NO lo lleva. Ante la duda, `mortal`.\n"
+    "\n"
+    "CALIDAD Y ABSTENCIÓN (BETA1-I87/I88): al CREAR hojas/ramas/relaciones/hitos, propón "
+    "SOLO lo que merece de verdad ser un nodo del grafo — algo con nombre propio, "
+    "papel y sustancia narrativa. Ante la duda, NO lo propongas: mejor pocas piezas "
+    "sólidas que muchas triviales o incidentales. El número pedido en `directivas` "
+    "es un TOPE, no una cuota: si no hay tanto que merezca la pena, devuelve menos "
+    "(o ninguno) y explícalo en `report`. Si hay MATERIAL DE REFERENCIA, úsalo como "
+    "inspiración OPCIONAL: tienes plena libertad para inventar más allá de él (NO es un límite)."
 )
 
 # intent value (AIJobType.value) → task-specific block appended to the base.
@@ -237,7 +245,6 @@ _INTENT_SPECS_ES: dict[str, str] = {
 
 # Text intents return free text (no JSON) → reuse the inline writing prompt.
 _TEXT_INTENTS: frozenset[str] = frozenset({"improve_text", "generate_text"})
-
 
 def system_prompt_for_intent(intent: str, lang: str = "es") -> str:
     """Return the focused system prompt for an AIJobType value.

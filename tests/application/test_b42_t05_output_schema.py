@@ -28,9 +28,6 @@ class TestSchemaRegistry:
     def test_edit_schema_exists(self):
         assert "edit_entities" in EXPECTED_SCHEMAS
 
-    def test_import_extraction_schema_exists(self):
-        assert "import_extraction" in EXPECTED_SCHEMAS
-
 
 class TestValidJson:
     def test_valid_entity_output(self):
@@ -50,11 +47,6 @@ class TestValidJson:
         result = validate_ai_output(text, "coherence")
         assert result.is_valid
 
-    def test_valid_import_extraction_output(self):
-        text = '{"candidates": [{"kind": "entity", "name": "Eldrin"}]}'
-        result = validate_ai_output(text, "import_extraction")
-        assert result.is_valid
-
     def test_fenced_json_is_parsed(self):
         # Los modelos reales suelen envolver en ```json ... ```; debe tolerarse.
         text = '```json\n{"entities": [{"name": "Fosco", "entity_type": "personaje"}]}\n```'
@@ -64,10 +56,10 @@ class TestValidJson:
 
     def test_prose_wrapped_json_is_parsed(self):
         # Preámbulo en prosa antes del objeto JSON: se extrae el objeto más externo.
-        text = 'Aquí tienes la configuración:\n{"candidates": [{"kind": "entity", "name": "X"}]}\nEspero que sirva.'
-        result = validate_ai_output(text, "import_extraction")
+        text = 'Aquí tienes la configuración:\n{"entities": [{"name": "X", "entity_type": "personaje"}]}\nEspero que sirva.'
+        result = validate_ai_output(text, "generate_entities")
         assert result.is_valid
-        assert result.parsed["candidates"][0]["name"] == "X"
+        assert result.parsed["entities"][0]["name"] == "X"
 
 
 class TestInvalidJson:

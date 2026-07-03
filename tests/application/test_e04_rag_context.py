@@ -29,7 +29,6 @@ class E04Provider(AIProvider):
 _AUTHORITY_SECTIONS = (
     "canon_confirmado",
     "candidates_pendientes",
-    "importaciones_sin_revisar",
     "rag_auxiliar",
 )
 

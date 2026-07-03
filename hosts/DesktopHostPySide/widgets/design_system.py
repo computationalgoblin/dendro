@@ -710,6 +710,8 @@ class EmptyState(Card):
         *,
         action_text: str | None = None,
         on_action=None,
+        close_text: str | None = None,
+        on_close=None,
     ):
         super().__init__(title, message, parent, elevated=False)
         self.setStyleSheet(
@@ -717,16 +719,28 @@ class EmptyState(Card):
             f"border-radius: {RADIUS_LG}px; }}"
         )
         self.action_button: QPushButton | None = None
+        self.close_button: QPushButton | None = None
+        buttons: list[QPushButton] = []
+        # BETA1-I78: botón de cerrar (secundario) para descartar el aviso vacío.
+        if close_text and callable(on_close):
+            close_btn = QPushButton(close_text)
+            close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            close_btn.clicked.connect(on_close)
+            self.close_button = close_btn
+            buttons.append(close_btn)
         if action_text and callable(on_action):
             button = QPushButton(action_text)
             button.setObjectName("primaryButton")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(on_action)
+            self.action_button = button
+            buttons.append(button)
+        if buttons:
             row = self.add_row()
             row.addStretch(1)
-            row.addWidget(button)
+            for button in buttons:
+                row.addWidget(button)
             row.addStretch(1)
-            self.action_button = button
 
 
 class PanelScaffold(QWidget):

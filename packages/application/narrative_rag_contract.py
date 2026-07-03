@@ -20,7 +20,6 @@ class CorpusItemKind(str, Enum):
     CHRONOLOGY = "chronology"
     CANDIDATE = "candidate"
     ISSUE = "issue"
-    IMPORT_DOCUMENT = "import_document"
     CREATIVE_CONFIG = "creative_config"
 
 
@@ -54,7 +53,6 @@ class RetrievalPlan:
     timeout_ms: int = 1500
     include_pending_candidates: bool = False
     include_rejected_candidates: bool = False
-    include_unaccepted_imports: bool = False
     audience: str = "gm"
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,7 +68,6 @@ class RetrievalPlan:
             "timeout_ms": self.timeout_ms,
             "include_pending_candidates": self.include_pending_candidates,
             "include_rejected_candidates": self.include_rejected_candidates,
-            "include_unaccepted_imports": self.include_unaccepted_imports,
             "audience": self.audience,
         }
 
@@ -144,7 +141,6 @@ INDEXABLE_KINDS: tuple[CorpusItemKind, ...] = (
     CorpusItemKind.CHRONOLOGY,
     CorpusItemKind.CANDIDATE,
     CorpusItemKind.ISSUE,
-    CorpusItemKind.IMPORT_DOCUMENT,
     CorpusItemKind.CREATIVE_CONFIG,
 )
 

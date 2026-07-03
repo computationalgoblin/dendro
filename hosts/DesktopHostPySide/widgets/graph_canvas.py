@@ -250,6 +250,12 @@ class _NodeView:
     # death None = sigue viva). Permite la "fotografía" del grafo en un año.
     birth_year: int | None = None
     death_year: int | None = None
+    # BETA1-I63: color explícito del nodo (color del tipo de la ontología de importación).
+    # Vacío = usar la paleta por ``kind`` (comportamiento del lienzo de canon, sin cambios).
+    color: str = ""
+    # BETA1-I70: el nodo es un EVENTO → se dibuja como vórtice (campo de gravedad) y la
+    # física lo trata como pozo que atrae a sus entidades relacionadas (I71).
+    is_event: bool = False
 
 
 @dataclass(frozen=True)
@@ -493,6 +499,41 @@ def _paint_bloom_rings(
         painter.drawEllipse(QPointF(cx, cy), rr, rr)
 
 
+_EVENT_VORTEX_COLOR = "#C0632B"  # ámbar del tipo evento (I70)
+
+
+def _paint_event_vortex(painter: QPainter, rect: QRectF) -> None:
+    """I70: campo de gravedad de un EVENTO — radio de influencia + remolino en espiral.
+
+    Señala visualmente que el nodo es un vórtice que atrae a sus entidades relacionadas
+    (la atracción real la ejerce la física, I71). Se pinta DETRÁS del cuerpo del nodo."""
+    cx = rect.center().x()
+    cy = rect.center().y()
+    r = max(rect.width(), rect.height()) / 2.0
+    amber = QColor(_EVENT_VORTEX_COLOR)
+    influence = r * 2.6
+    # Relleno tenue del campo de influencia.
+    fill = QColor(amber)
+    fill.setAlpha(18)
+    painter.setPen(QPen(Qt.PenStyle.NoPen))
+    painter.setBrush(fill)
+    painter.drawEllipse(QPointF(cx, cy), influence, influence)
+    # Borde del radio de influencia.
+    ring = QColor(amber)
+    ring.setAlpha(60)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(ring, 2.0))
+    painter.drawEllipse(QPointF(cx, cy), influence, influence)
+    # Remolino: arcos en espiral que sugieren el giro del vórtice.
+    swirl = QColor(amber)
+    swirl.setAlpha(130)
+    painter.setPen(QPen(swirl, 2.0))
+    for k in range(3):
+        rr = r * (1.25 + 0.45 * k)
+        start = (k * 120) * 16          # Qt: ángulos en 1/16 de grado
+        painter.drawArc(QRectF(cx - rr, cy - rr, rr * 2.0, rr * 2.0), int(start), 210 * 16)
+
+
 # SEM · Acreción cósmica: la "semilla" germina como una ACRECIÓN — motas de
 # polvo orbitando que convergen y condensan en un núcleo luminoso. Ambiental
 # (sin etapas legibles tipo barra de progreso): todo se interpola de forma
@@ -549,7 +590,7 @@ class GraphNodeItem(QGraphicsEllipseItem):
         # (medido con NARRATIVE_PERF_LOG). Sin caché, Qt pinta los items
         # directamente por el viewport GL, que es justo lo que conviene.
 
-        color = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
+        color = QColor((node.color or _NODE_COLORS.get(node.kind.lower(), "#9A8E72")))
         self._normal_pen = QPen(
             QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0
         )
@@ -635,7 +676,7 @@ class GraphNodeItem(QGraphicsEllipseItem):
         type_rect = self._type_item.boundingRect()
         self._type_item.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
         # Halo del tipo
-        self._halo_color = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
+        self._halo_color = QColor((node.color or _NODE_COLORS.get(node.kind.lower(), "#9A8E72")))
         # Trazo 'propuesto' (rastro discontinuo ámbar) vs canónico
         self._normal_pen = QPen(
             QColor("#DCA35F" if node.proposed else "#F7F1E8"), 2.6 if node.proposed else 2.0
@@ -688,6 +729,9 @@ class GraphNodeItem(QGraphicsEllipseItem):
         # "pestañas negras"), SIN contorno marcado, halo interno al
         # seleccionar y aro ámbar solo como destino de drop.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # BETA1-I70: los eventos se pintan como vórtice (campo de gravedad) DETRÁS del cuerpo.
+        if getattr(self.node, "is_event", False):
+            _paint_event_vortex(painter, self.rect())
         ellipse = QPainterPath()
         ellipse.addEllipse(self.rect())
         # BETA1-F05: halo EXTERIOR sutil con el color del tipo — se pinta
@@ -809,7 +853,7 @@ class GraphTreeItem(QGraphicsRectItem):
         # color "funciona" sin teñir la caja.
         bg_color = QColor(255, 255, 255, 80)
         self.setBrush(QBrush(bg_color))
-        _tcolor = QColor(_NODE_COLORS.get(node.kind.lower(), "#9A8E72"))
+        _tcolor = QColor((node.color or _NODE_COLORS.get(node.kind.lower(), "#9A8E72")))
         _tcolor.setAlpha(170)
         self._normal_pen = QPen(_tcolor, 1.8)
         if node.proposed:
@@ -2329,6 +2373,22 @@ class GraphCanvasView(QGraphicsView):
         else:
             self._physics_timer.stop()
 
+    def set_relation_visibility(self, *, show_all: bool, focus_id: str = "") -> None:
+        """BETA1-I81: oculta las relaciones TIPADAS por defecto y muestra solo las incidentes
+        al nodo enfocado (``focus_id``). La contención (estructura de ramas) siempre visible.
+        Solo alterna ``setVisible`` sobre las aristas existentes — NO re-layouta ni reheat."""
+        for edge_item in self._edges:
+            edge = getattr(edge_item, "edge", None)
+            if edge is None:
+                continue
+            if show_all or getattr(edge, "kind", "") == "contiene":
+                visible = True
+            else:
+                visible = bool(focus_id) and focus_id in (
+                    getattr(edge, "source_id", ""), getattr(edge, "target_id", "")
+                )
+            edge_item.setVisible(visible)
+
     def _physics_top_level_of(self, entity_id: str):
         """Top-level body owning *entity_id* (itself, or its outermost tree).
         Nested content is never simulated — it travels with its tree."""
@@ -2439,6 +2499,12 @@ class GraphCanvasView(QGraphicsView):
                     factor = 0.3
                     if ring_a in ring_targets and ring_b in ring_targets:
                         ideal = max(230.0, abs(ring_targets[ring_a] - ring_targets[ring_b]))
+            # BETA1-I71: campo de gravedad del EVENTO — un muelle incidente a un vórtice se
+            # acorta y refuerza para ATRAER de verdad a sus entidades relacionadas (gana al
+            # debilitamiento inter-anillo: el vórtice agrupa a los suyos).
+            if getattr(src.node, "is_event", False) or getattr(tgt.node, "is_event", False):
+                ideal = 110.0
+                factor = 2.2
             springs.append(Spring(a=a, b=b, ideal_length=ideal, strength_factor=factor))
         # Compactación central solo en layout libre (contract C01 §4.4)
         self._physics_engine.center_strength = 0.0006 if self._layout_mode_active == "free" else 0.0
@@ -5714,12 +5780,15 @@ class GraphCanvasWidget(QWidget):
 
         # UX24: el vacío GUÍA — una acción crea la primera entidad (misma vía que el
         # menú contextual "crear entidad"), en vez de dejar el lienzo en blanco.
+        self._empty_dismissed = False  # BETA1-I78: el usuario cerró el aviso vacío
         self.empty = EmptyState(
             "Tu lienzo está por sembrar",
             "Aún no hay entidades en este proyecto. Crea la primera —un personaje, "
             "un lugar, una idea— y el grafo empezará a crecer.",
             action_text="Crear primera entidad",
             on_action=self.contextCreateEntityRequested.emit,
+            close_text="Cerrar",
+            on_close=self._dismiss_empty,
         )
         # UX34: tarjeta sólida contenida (no full-bleed con borde de puntos), para que
         # respire y se lea como una pieza "de producto" centrada en el lienzo.
@@ -5745,24 +5814,17 @@ class GraphCanvasWidget(QWidget):
         # UX34: el botón NO se reestiliza — usa el estilo global #primaryButton (marrón/oro,
         # esquinas redondeadas RADIUS_MD, texto legible), igual que el resto de botones.
 
-        # UX34: la invitación es un OVERLAY flotante (hijo del widget, no del layout),
-        # como `_time_bar`. Así puede superponerse sobre el canvas con anillos en modo
-        # concéntrico ("anillos + invitación encima") o cubrir el lienzo en otros modos.
-        # Mouse-transparente para que los clics en las zonas vacías lleguen al canvas
-        # detrás; la tarjeta y su botón sí reciben sus propios clics.
-        self._empty_host = QWidget(self)
-        self._empty_host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._empty_host.setStyleSheet("background: transparent;")
-        _eh = QVBoxLayout(self._empty_host)
-        _eh.setContentsMargins(SPACE_2XL, SPACE_2XL, SPACE_2XL, SPACE_2XL)
-        _eh.addStretch(1)
-        _erow = QHBoxLayout()
-        _erow.addStretch(1)
-        _erow.addWidget(self.empty)
-        _erow.addStretch(1)
-        _eh.addLayout(_erow)
-        _eh.addStretch(1)
-        self._empty_host.hide()
+        # UX34 / BETA1-I78-FIX: la invitación es un OVERLAY flotante hijo DIRECTO del
+        # widget (como `_time_bar`), centrado a mano en `_position_empty_overlay`.
+        # OJO: NO puede ir envuelta en un host WA_TransparentForMouseEvents. En Qt6 el
+        # hit-test OMITE el subárbol completo de un widget mouse-transparente, así que
+        # los clics de la tarjeta caían al canvas de detrás y los botones "Cerrar" /
+        # "Crear primera entidad" quedaban muertos (el test con QTest.mouseClick no lo
+        # veía porque entrega el evento directo al botón, saltándose el hit-test). Como
+        # hijo directo la tarjeta solo cubre su propia área: recibe sus clics y las
+        # zonas vacías de alrededor los dejan pasar al canvas — mismo efecto, funcional.
+        self.empty.setParent(self)
+        self.empty.hide()
 
         self.canvas = GraphCanvasView()
         self.canvas._atmosphere.set_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
@@ -5987,7 +6049,7 @@ class GraphCanvasWidget(QWidget):
 
     def resizeEvent(self, event):  # noqa: N802 (Qt API)
         super().resizeEvent(event)
-        if getattr(self, "_empty_host", None) is not None and self._empty_host.isVisible():
+        if getattr(self, "empty", None) is not None and self.empty.isVisible():
             self._position_empty_overlay()
         self._position_time_bar()
 
@@ -6269,20 +6331,35 @@ class GraphCanvasWidget(QWidget):
         return effective
 
     def _position_empty_overlay(self) -> None:
-        """Cubre todo el widget con el overlay de la invitación y lo eleva sobre el
-        canvas (la tarjeta queda centrada por sus stretches)."""
-        host = getattr(self, "_empty_host", None)
-        if host is None:
+        """Centra la tarjeta de invitación sobre el canvas y la eleva por encima.
+        Solo la tarjeta ocupa (y recibe) clics; las zonas vacías de alrededor no están
+        cubiertas por nada, así que sus clics llegan al canvas (anillos) de detrás."""
+        card = getattr(self, "empty", None)
+        if card is None:
             return
-        host.setGeometry(self.rect())
-        host.raise_()
+        avail_w = max(self.width(), 1)
+        width = min(460, max(320, avail_w - 2 * SPACE_2XL))
+        card.setFixedWidth(width)
+        card.adjustSize()  # altura natural del contenido a ese ancho
+        height = card.height()
+        x = max(SPACE_2XL, (avail_w - width) // 2)
+        y = max(SPACE_2XL, (self.height() - height) // 2)
+        card.move(x, y)
+        card.raise_()
+
+    def _dismiss_empty(self) -> None:
+        """BETA1-I78: el usuario cierra el aviso vacío; no reaparece hasta que el proyecto
+        deje de estar vacío (se re-arma en ``refresh`` cuando haya entidades)."""
+        self._empty_dismissed = True
+        self._set_empty_visible(False)
 
     def _set_empty_visible(self, visible: bool) -> None:
-        """Muestra/oculta la invitación de estado vacío. Alterna el overlay flotante
-        (que se eleva sobre el canvas) y la propia tarjeta (para que
-        ``self.empty.isHidden()`` siga reflejando el estado — contrato de tests)."""
+        """Muestra/oculta la invitación de estado vacío (tarjeta flotante que se eleva
+        sobre el canvas). ``self.empty.isHidden()`` refleja el estado — contrato de
+        tests."""
+        if visible and getattr(self, "_empty_dismissed", False):
+            visible = False  # I78: el usuario lo cerró; respétalo
         self.empty.setVisible(visible)
-        self._empty_host.setVisible(visible)
         if visible:
             self._position_empty_overlay()
 
@@ -6303,6 +6380,8 @@ class GraphCanvasWidget(QWidget):
                 continue
             seen_entity_ids.add(entity_id)
             entities.append(_entity_view(entity))
+        if entities:
+            self._empty_dismissed = False  # I78: re-arma el aviso al dejar de estar vacío
         relations = []
         seen_relation_ids: set[str] = set()
         for relation in getattr(project, "relations", []) or []:

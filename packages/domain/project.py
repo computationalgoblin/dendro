@@ -24,7 +24,6 @@ from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, Ca
 from packages.domain.secrets_models import Secreto, Pista
 from packages.domain.faction_models import Faction, Front
 from packages.domain.session_models import Session
-from packages.domain.import_models import ImportBasket
 from packages.domain.custom_types import (
     CustomEntityType,
     CustomFieldDefinition,
@@ -124,9 +123,6 @@ class Project:
         NarrativeDomain.SIN_ASIGNAR.value,
     ])
     world_layers: list[WorldLayer] = field(default_factory=list)
-
-    # ── Import baskets (Bloque 17) ──
-    import_baskets: list[ImportBasket] = field(default_factory=list)
 
     # ── Writing units (Bloque 19) ──
     writing_units: list[WritingUnit] = field(default_factory=list)
@@ -275,8 +271,6 @@ class Project:
             # Domains, layers & advanced config (Bloque 10)
             "domains": list(self.domains),
             "world_layers": [wl.to_dict() for wl in self.world_layers],
-            # ── Import baskets (Bloque 17) ──
-            "import_baskets": [b.to_dict() for b in self.import_baskets],
             # ── Writing units (Bloque 19) ──
             "writing_units": [wu.to_dict() for wu in self.writing_units],
             # ── Campaign collections (Bloque 20) ──
@@ -396,15 +390,9 @@ class Project:
                 ]}
                 if "world_layers" in data else {}
             ),
-            # ── Import baskets (Bloque 17) ──
-            **(
-                {"import_baskets": [
-                    ImportBasket.from_dict(b)
-                    for b in data.get("import_baskets", [])
-                    if isinstance(b, dict)
-                ]}
-                if "import_baskets" in data else {}
-            ),
+            # Nota: "import_baskets" (subsistema de importación, retirado) ya no se
+            # deserializa. Un valor residual en project.json de proyectos antiguos se
+            # ignora sin error (lectura selectiva) y se descarta al reguardar.
             # ── Writing units (Bloque 19) ──
             **(
                 {"writing_units": [

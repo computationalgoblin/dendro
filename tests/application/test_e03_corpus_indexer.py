@@ -15,7 +15,6 @@ from packages.domain.candidate_issue import (
 )
 from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneStatus
 from packages.domain.entity import CanonState, EntityType, NarrativeEntity
-from packages.domain.import_models import DocumentSegment, ImportBasket, ImportCandidate, ImportReviewState
 from packages.domain.project import Project
 from packages.domain.relation import NarrativeRelation, RelationType
 from packages.domain.result import Error, Ok
@@ -115,31 +114,6 @@ def _make_project() -> Project:
     project.creative_config.core_premise = "Toda lealtad tiene coste"
     project.creative_config.canon = {"hard_rules": ["No hay resurrecciones gratis"]}
 
-    accepted_segment = DocumentSegment(id="seg-1", source_id="source-1", section="Capitulo", raw_text="Texto aceptado")
-    pending_segment = DocumentSegment(id="seg-2", source_id="source-2", section="Borrador", raw_text="Texto no aceptado")
-    accepted_import_candidate = ImportCandidate(
-        id="imp-cand-1",
-        segment_id="seg-1",
-        candidate_type="entidad",
-        proposed_data={"name": "Fragmento aceptado"},
-        review_state=ImportReviewState.ACEPTADO,
-    )
-    project.import_baskets = [
-        ImportBasket(
-            id="basket-accepted",
-            source_id="source-1",
-            segments=[accepted_segment],
-            import_candidates=[accepted_import_candidate],
-            review_state="aceptado",
-        ),
-        ImportBasket(
-            id="basket-pending",
-            source_id="source-2",
-            segments=[pending_segment],
-            review_state="pendiente",
-        ),
-    ]
-
     project.world_layers = [layer]
     project.entities = [branch, leaf, archived]
     project.relations = [contains, conflict]
@@ -175,7 +149,7 @@ def test_e03_indexes_domain_corpus_without_canvas_or_parallel_branch_model():
     assert index.counts_by_kind()["creative_config"] == 1
 
 
-def test_e03_candidate_and_import_visibility_defaults_are_conservative():
+def test_e03_candidate_visibility_defaults_are_conservative():
     project = _make_project()
 
     index = CorpusIndexer().index_project(project)
@@ -183,22 +157,17 @@ def test_e03_candidate_and_import_visibility_defaults_are_conservative():
     assert index.get(CorpusItemKind.CANDIDATE, "cand-accepted") is not None
     assert index.get(CorpusItemKind.CANDIDATE, "cand-pending") is None
     assert index.get(CorpusItemKind.CANDIDATE, "cand-rejected") is None
-    assert index.get(CorpusItemKind.IMPORT_DOCUMENT, "basket-accepted:seg-1") is not None
-    assert index.get(CorpusItemKind.IMPORT_DOCUMENT, "imp-cand-1") is not None
-    assert index.get(CorpusItemKind.IMPORT_DOCUMENT, "basket-pending:seg-2") is None
 
     debug_index = CorpusIndexer().index_project(
         project,
         options=IndexingOptions(
             include_pending_candidates=True,
             include_rejected_candidates=True,
-            include_unaccepted_imports=True,
         ),
     )
 
     assert debug_index.get(CorpusItemKind.CANDIDATE, "cand-pending") is not None
     assert debug_index.get(CorpusItemKind.CANDIDATE, "cand-rejected") is not None
-    assert debug_index.get(CorpusItemKind.IMPORT_DOCUMENT, "basket-pending:seg-2") is not None
 
 
 def test_e03_incremental_reindex_marks_unchanged_updated_and_removed_items():
