@@ -1971,4 +1971,16 @@ def _sanitize_error(error: str) -> str:
     text = str(error or "Error IA")
     text = re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer [REDACTED]", text)
     text = re.sub(r"sk-[A-Za-z0-9._\-]+", "[REDACTED]", text)
+    # Otros formatos de credencial que un endpoint puede reflejar en su cuerpo
+    # de error (el detalle HTTP adjunta hasta 500 chars crudos): claves Google
+    # (AIza...), GitHub (ghp_/gho_...), y pares api_key/token/secret=valor.
+    text = re.sub(r"AIza[A-Za-z0-9._\-]{10,}", "[REDACTED]", text)
+    text = re.sub(r"gh[pousr]_[A-Za-z0-9]{20,}", "[REDACTED]", text)
+    text = re.sub(r"Basic\s+[A-Za-z0-9+/=._\-]+", "Basic [REDACTED]", text)
+    text = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?token|secret|authorization|x-api-key)\b"
+        r"(\W{0,4})[A-Za-z0-9+/=._\-]{4,}",
+        r"\1\2[REDACTED]",
+        text,
+    )
     return text[:500]

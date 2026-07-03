@@ -16,8 +16,11 @@ del intent). El reparto NO es un recorte rígido por porcentajes: es adaptativo.
    su asignación, se descartan sus items de menor prioridad (ya vienen ordenados
    por el retrieval); nunca se parte el texto de un item a la mitad.
 
-Si la reserva fija ya supera el total, se incluye igual (lo fijo es sagrado) y el
-pool flexible queda en 0.
+Si la reserva fija ya supera el total, lo sagrado/determinista pequeño se incluye
+igual y el pool flexible queda en 0 — con una excepción (BETA1-AUDIT-03): el
+residual ``contexto_autorizado`` es un volcado potencialmente enorme del
+``context_scope`` y SÍ se recorta (con aviso) hasta que la reserva quepa en el
+total, para que el prompt no reviente el límite de contexto del proveedor.
 """
 
 from __future__ import annotations
@@ -176,8 +179,29 @@ def enforce_budget_report(
             # Fija, sagrada o desconocida → reservada entera (nunca se trunca).
             fixed[key] = value
 
+    warnings: list[str] = []
+
     # 2. Reserva fija → pool flexible.
     fixed_tokens = sum(_estimate_tokens(v) for v in fixed.values())
+
+    # 2b. Tope duro del residual: si la reserva fija por sí sola excede el
+    #     presupuesto total, se recorta ``contexto_autorizado`` (el volcado
+    #     residual, nunca lo sagrado) hasta que quepa, con aviso. Sin esto un
+    #     residual grande producía prompts por encima del límite del proveedor.
+    if fixed_tokens > total and "contexto_autorizado" in fixed:
+        residual_tokens = _estimate_tokens(fixed["contexto_autorizado"])
+        cap = max(0, total - (fixed_tokens - residual_tokens))
+        if cap < residual_tokens:
+            before = fixed["contexto_autorizado"]
+            after = _trim_section(before, cap)
+            if _is_empty(after):
+                fixed.pop("contexto_autorizado")
+                order.remove("contexto_autorizado")
+            else:
+                fixed["contexto_autorizado"] = after
+            warnings.append("contexto autorizado recortado por presupuesto")
+            fixed_tokens = sum(_estimate_tokens(v) for v in fixed.values())
+
     pool = max(0, total - fixed_tokens)
 
     # 3. Reparto inicial por % (renormalizado sobre las flexibles presentes).
@@ -206,7 +230,6 @@ def enforce_budget_report(
 
     # 6. Recortar las flexibles que no caben (eliminando items enteros) y anotar
     #    un aviso por cada sección realmente recortada (no recorte silencioso).
-    warnings: list[str] = []
     for key in present:
         if demand[key] > assigned[key]:
             before = flexible[key]

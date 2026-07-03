@@ -28,7 +28,6 @@ from packages.application.relation_service import RelationService
 from packages.application.source_service import SourceService
 from packages.application.text_search_service import TextSearchService
 from packages.domain.result import Error
-from packages.persistence.store import ProjectStore
 
 # ---------------------------------------------------------------------------
 # SessionContext
@@ -139,8 +138,10 @@ def _bootstrap_services(
 
     When *project_path* is provided the project is opened automatically.
     """
-    store = ProjectStore()
-    ps = ProjectService(store=store)
+    # ui no importa persistence: ProjectService construye su ProjectStore por
+    # defecto y los servicios comparten esa misma instancia via ps.store.
+    ps = ProjectService()
+    store = ps.store
 
     if project_path is not None:
         result = ps.open(project_path)

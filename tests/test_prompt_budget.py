@@ -3,6 +3,7 @@
 from packages.application.prompt_budget import (
     _estimate_tokens,
     enforce_budget,
+    enforce_budget_report,
     tokens_to_chars,
     truncate_to_chars,
 )
@@ -21,7 +22,7 @@ def test_truncate_short_unchanged():
 
 
 def test_fixed_sections_reserved_intact():
-    # El contenido fijo/determinista se reserva entero aunque el budget sea ínfimo.
+    # El contenido fijo/determinista se reserva entero aunque el budget sea ínfimo…
     huge = "x" * 100000
     message = {
         "prompt_exacto_usuario": huge,
@@ -31,7 +32,10 @@ def test_fixed_sections_reserved_intact():
     out = enforce_budget(message, 100, {"vecindario": 1.0})
     assert out["prompt_exacto_usuario"] == huge
     assert out["configuracion_creativa"]["canon"]["hard_rules"] == [huge]
-    assert out["contexto_autorizado"]["dato"] == huge
+    # …salvo el residual contexto_autorizado, que desde BETA1-AUDIT-03 tiene
+    # tope duro: con la reserva fija desbordada ya no puede sobrevivir entero.
+    residual = out.get("contexto_autorizado")
+    assert residual is None or _estimate_tokens(residual) < _estimate_tokens(message["contexto_autorizado"])
 
 
 def test_flexible_section_trimmed_dropping_whole_items():
@@ -83,3 +87,27 @@ def test_enforce_budget_missing_sections_ok():
     assert "directivas" not in out
     assert "canon_confirmado" not in out
     assert out["seleccion"] == "x"
+
+
+def test_contexto_autorizado_tiene_tope_duro():
+    # BETA1-AUDIT-03: el residual (sección fija) ya no puede exceder por sí solo
+    # el presupuesto total — se recorta con aviso; lo sagrado queda íntegro.
+    residual = {"datos": ["bloque de contexto residual " * 20] * 100}
+    message = {"prompt_exacto_usuario": "haz X", "contexto_autorizado": residual}
+    total = 300
+    assert _estimate_tokens(residual) > total  # el escenario del bug
+
+    out, warnings = enforce_budget_report(message, total, {})
+
+    assert out["prompt_exacto_usuario"] == "haz X"
+    total_estimado = sum(_estimate_tokens(v) for v in out.values())
+    assert total_estimado <= total + 5  # margen de redondeo chars→tokens
+    assert "contexto autorizado recortado por presupuesto" in warnings
+
+
+def test_contexto_autorizado_pequeno_no_se_toca():
+    residual = {"nota": "pequeño"}
+    message = {"prompt_exacto_usuario": "haz X", "contexto_autorizado": residual}
+    out, warnings = enforce_budget_report(message, 4000, {})
+    assert out["contexto_autorizado"] == residual
+    assert warnings == []

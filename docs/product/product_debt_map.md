@@ -23,6 +23,7 @@
 | DC-UX4-HITO | editar:hito no aplica | media | cerrada (causa real: el hito seleccionado no llegaba al contexto; se inyecta `selected_milestones` + `_apply_edit` edita `year`; verificado en real 1200→1300) | UX4 |
 | DC-AUDIT-01 | La GUI no tiene punto de exportación (al retirar la vista de import/export desapareció su único consumidor; ExportService sigue vivo y accesible solo por CLI `export`) | media | abierta | AUDIT-01 |
 | DC-AUDIT-02 | output_schema_validator no cubre los AIJobType nuevos y la ruta principal de jobs llama al gateway con validate=False (la validación efectiva la hace _extract_json/stage_results) | baja | abierta | AUDIT-03 |
+| DC-AUDIT-03 | 12 violaciones de capas congeladas en DOCUMENTED_LAYER_DEBT (tests/architecture): application importa infrastructure.ai_provider (5 ficheros; falta puerto AIProvider en application) y persistence.store/schema (6 ficheros; falta puerto de repositorio + raíz de composición). El guard ya bloquea violaciones nuevas | media | abierta | AUDIT-03 |
 
 ## Deuda cerrada
 

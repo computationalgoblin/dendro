@@ -90,14 +90,34 @@ jobs:
           pip install -e ".[desktop]" pytest pytest-cov
 
       # PUERTA REAL — capas verificadas en verde. Si algo aquí se rompe, falla CI.
-      - name: Tests (capas estables) — bloqueante
+      # tests/desktop se ejecuta POR FICHERO en procesos separados: correr todo
+      # el directorio en un intérprete segfaultea (fragilidad PySide6/Qt con
+      # muchos tests de widgets — misma regla que documenta CLAUDE.md).
+      - name: Tests desktop (por fichero) — bloqueante
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          pytest tests/desktop tests/infrastructure -q -p no:cacheprovider \
-            --deselect "tests/desktop/test_b27_5_shell_static.py::test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy" \
-            --deselect "tests/desktop/test_b41_causal_milestone_ui_static.py::test_b41_creation_workspace_exposes_create_hito_button_and_panel" \
-            --deselect "tests/desktop/test_beta1_time_domain.py::test_migration_v24_to_v25_backfills_time"
+          status=0
+          for f in tests/desktop/test_*.py; do
+            pytest "$f" -q -p no:cacheprovider \
+              --deselect "tests/desktop/test_b27_5_shell_static.py::test_b32_workspaces_keep_views_but_hide_technical_routes_from_normal_copy" \
+              --deselect "tests/desktop/test_b41_causal_milestone_ui_static.py::test_b41_creation_workspace_exposes_create_hito_button_and_panel" \
+              --deselect "tests/desktop/test_beta1_time_domain.py::test_migration_v24_to_v25_backfills_time" \
+              && continue
+            rc=$?
+            # rc=5: fichero sin tests seleccionados (deselect total) — no es fallo.
+            if [ "$rc" -ne 5 ]; then
+              echo "::error::fallo en $f (rc=$rc)"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Tests infrastructure + arquitectura — bloqueante
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest tests/infrastructure tests/architecture -q -p no:cacheprovider
 
       # INFORMATIVO — capas en migración v26/import. Hoy en rojo; visibles en el
       # log sin bloquear. Al cerrarse la v26: subir estas carpetas al paso de

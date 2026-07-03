@@ -258,6 +258,18 @@ def _redact(text: str) -> str:
     value = str(text or "")
     value = re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer [REDACTED]", value)
     value = re.sub(r"sk-[A-Za-z0-9._\-]+", "[REDACTED]", value)
+    # Otros formatos de credencial que un endpoint puede reflejar en su cuerpo
+    # de error (el detalle HTTP adjunta hasta 500 chars crudos): claves Google
+    # (AIza...), GitHub (ghp_/gho_...), y pares api_key/token/secret=valor.
+    value = re.sub(r"AIza[A-Za-z0-9._\-]{10,}", "[REDACTED]", value)
+    value = re.sub(r"gh[pousr]_[A-Za-z0-9]{20,}", "[REDACTED]", value)
+    value = re.sub(r"Basic\s+[A-Za-z0-9+/=._\-]+", "Basic [REDACTED]", value)
+    value = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?token|secret|authorization|x-api-key)\b"
+        r"(\W{0,4})[A-Za-z0-9+/=._\-]{4,}",
+        r"\1\2[REDACTED]",
+        value,
+    )
     return value
 
 
