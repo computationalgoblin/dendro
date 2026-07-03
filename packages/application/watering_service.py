@@ -29,6 +29,7 @@ from typing import Any
 from packages.application.foco_zones import classify_milestones, classify_neighbors
 from packages.domain.entity import CanonState, NarrativeEntity, NarrativeImportance
 from packages.domain.project import Project
+from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok, Result
 from packages.domain.watering import WateringCostClass, WateringDiagnostic, WateringStatus
 
@@ -61,6 +62,43 @@ _UNCONFIGURED_AI_MESSAGE = (
     "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
     "la app). No se genera contenido simulado."
 )
+
+# Sugerir X → job existente + zona donde germina la Semilla (decisión de producto).
+# El hint viaja en context_scope y ai_jobs lo copia a candidate.metadata.
+_SUGGEST_SPECS: dict[str, dict[str, str]] = {
+    "arraigo": {
+        "job": "suggest_relations",
+        "zone": "raices",
+        "bias": (
+            "Sugiere ARRAIGO para la entidad en foco: relaciones, causas, contextos "
+            "superiores o vínculos con hitos y ramas que hagan verosímil su existencia."
+        ),
+    },
+    "nutrida": {
+        "job": "edit_entities",
+        "zone": "drawer",
+        "bias": (
+            "Sugiere NUTRICIÓN: ediciones del cuerpo/campos de la entidad en foco que "
+            "desarrollen su interior y la integren mejor en su Entorno."
+        ),
+    },
+    "iluminada": {
+        "job": "generate_entities",
+        "zone": "brotes",
+        "bias": (
+            "Sugiere ILUMINACIÓN: entidades o desarrollos derivados (Brotes) que nazcan "
+            "de la entidad en foco y proyecten sus consecuencias."
+        ),
+    },
+    "calidad": {
+        "job": "edit_entities",
+        "zone": "drawer",
+        "bias": (
+            "Sugiere CALIDAD NARRATIVA: ediciones de texto que mejoren claridad, tono y "
+            "fuerza narrativa de la entidad en foco."
+        ),
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -595,3 +633,175 @@ class WateringService:
             resulting_status=WateringStatus.REGADA.value,
         )
         return self.register_diagnostic(diagnostic)
+
+    # ------------------------------------------------------------------
+    # Sugerir X → Semillas con hint de zona (FOCO-06)
+    # ------------------------------------------------------------------
+
+    def suggest(
+        self,
+        entity_id: str,
+        metric: str,
+        *,
+        progress_callback: Any = None,
+    ) -> Result[Any, str]:
+        """Sugerir X: genera Semillas (candidatos) sesgadas a reparar una métrica.
+
+        Consume IA autorizada (la autorización visible es del host, antes de
+        llamar aquí). El hint de zona viaja en ``context_scope["foco_hint"]`` y
+        ``ai_jobs`` lo copia a la metadata de cada candidato: la UI de Foco lo
+        usa para germinar la Semilla en Raíces/Brotes o como tarjeta del drawer.
+        NUNCA canoniza — la aceptación sigue el flujo humano existente.
+        """
+        metric_key = str(metric or "").strip().lower()
+        spec = _SUGGEST_SPECS.get(metric_key)
+        if spec is None:
+            return Error(f"Métrica de sugerencia desconocida: {metric}")
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return proj
+        project = proj.value
+        entity = project.entity_by_id(entity_id)
+        if entity is None:
+            return Error(f"Entidad no encontrada: {entity_id}")
+        if entity.canon_state == CanonState.FANTASMA:
+            return Error("Un nodo fantasma no participa del ciclo de riego")
+        if entity_id in project.watering_paused_entity_ids:
+            return Error("La entidad está secada: usa Cultivar antes de pedir sugerencias")
+        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
+            return Error(_UNCONFIGURED_AI_MESSAGE)
+
+        context = self.build_watering_context(entity_id)
+        if isinstance(context, Error):
+            return context
+        lines = [context.value["text"], "", spec["bias"]]
+        previous = [d for d in self._diagnostics_for(project, entity_id) if not d.error]
+        if previous:
+            last = previous[-1]
+            score = last.scores.get(metric_key)
+            explanation = last.metric_explanations.get(metric_key, "")
+            if score is not None or explanation:
+                lines.append(
+                    f"Diagnóstico previo de {metric_key}: puntuación {score}. {explanation}".strip()
+                )
+        lines.append(
+            "Devuelve las propuestas como candidatos revisables (Semillas): "
+            "nada se integra al canon sin aceptación humana."
+        )
+        return self.ai_job_service.run_focused_job(
+            spec["job"],
+            "\n".join(lines),
+            context_scope={
+                "selected_entity_ids": [entity_id],
+                "foco_hint": {
+                    "zone": spec["zone"],
+                    "metric": metric_key,
+                    "center_entity_id": entity_id,
+                },
+            },
+            progress_callback=progress_callback,
+        )
+
+    # ------------------------------------------------------------------
+    # Riego en lote (FOCO-07): pasos persistentes, cancelable ENTRE pasos
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _branch_member_ids(project: Project, branch_id: str) -> list[str]:
+        """La rama y todos sus descendientes por contención (BFS determinista)."""
+        seen = {branch_id}
+        order = [branch_id]
+        queue = [branch_id]
+        while queue:
+            current = queue.pop(0)
+            for relation in project.relations_for(current):
+                child = None
+                contains = relation.relation_type == RelationType.CONTIENE
+                if contains and relation.source_id == current:
+                    child = relation.target_id
+                elif (
+                    relation.relation_type == RelationType.PERTENECE_A
+                    and relation.target_id == current
+                ):
+                    child = relation.source_id
+                if child and child not in seen:
+                    seen.add(child)
+                    order.append(child)
+                    queue.append(child)
+        return order
+
+    def entities_in_scope(self, scope: dict[str, Any] | None) -> Result[list[str], str]:
+        """Entidades elegibles para regar en un ámbito.
+
+        Ámbitos: ``{"selection": [ids]}`` · ``{"ring_id": id}`` (miembros
+        directos del anillo) · ``{"branch_id": id}`` (la rama y sus
+        descendientes por contención) · ``{"graph": True}``. Excluye SIEMPRE
+        fantasmas, Secadas y archivadas/descartadas. Orden estable por nombre.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return proj
+        project = proj.value
+        scope = scope or {}
+
+        candidates: list[NarrativeEntity]
+        if scope.get("graph"):
+            candidates = list(project.entities)
+        elif "selection" in scope:
+            wanted = [str(value) for value in (scope.get("selection") or [])]
+            candidates = [
+                entity
+                for entity in (project.entity_by_id(entity_id) for entity_id in wanted)
+                if entity is not None
+            ]
+        elif scope.get("ring_id"):
+            ring_id = str(scope["ring_id"])
+            candidates = [e for e in project.entities if ring_id in (e.layer_ids or [])]
+        elif scope.get("branch_id"):
+            branch_id = str(scope["branch_id"])
+            if project.entity_by_id(branch_id) is None:
+                return Error(f"Entidad no encontrada: {branch_id}")
+            member_ids = self._branch_member_ids(project, branch_id)
+            candidates = [
+                entity
+                for entity in (project.entity_by_id(member_id) for member_id in member_ids)
+                if entity is not None
+            ]
+        else:
+            return Error("Ámbito de riego no reconocido")
+
+        paused = set(project.watering_paused_entity_ids)
+        eligible = [
+            entity
+            for entity in candidates
+            if entity.canon_state not in _EXCLUDED_CANON
+            and entity.canon_state != CanonState.FANTASMA
+            and entity.id not in paused
+        ]
+        eligible.sort(key=lambda entity: (entity.name.casefold(), entity.id))
+        return Ok([entity.id for entity in eligible])
+
+    def record_failure(self, entity_id: str, error: str) -> Result[WateringDiagnostic, str]:
+        """Fallo trazable de lote: la entidad queda Falta regar con causa en su historial."""
+        failure = WateringDiagnostic(
+            entity_id=entity_id,
+            origin="batch",
+            error=str(error or "fallo de riego"),
+            resulting_status=WateringStatus.FALTA_REGAR.value,
+        )
+        return self.register_diagnostic(failure)
+
+    def water_batch_step(self, entity_id: str) -> Result[WateringDiagnostic, str]:
+        """Un paso del lote: riega o deja fallo trazable y sigue.
+
+        El host itera la lista de ``entities_in_scope`` y puede cancelar ENTRE
+        pasos: cada paso persiste su diagnóstico (o su fallo) al completarse,
+        así una cancelación nunca deja estado corrupto ni pierde parciales.
+        """
+        result = self.water_entity(entity_id, origin="batch")
+        if isinstance(result, Ok):
+            return result
+        # Best-effort: para fantasmas/desconocidas el registro también fallará
+        # y basta con propagar el error original.
+        self.record_failure(entity_id, result.error)
+        return result
