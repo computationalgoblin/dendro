@@ -1914,6 +1914,8 @@ class CreationWorkspace(QWidget):
         self.graph = GraphCanvasWidget(self.ctx)
         self.graph.set_ai_controller(self.ai_context_controller)
         self.graph.entitySelected.connect(self._open_node_panel)
+        # BETA2-FOCO-14: doble click en el Mapa (solo lectura) → entrar a Foco.
+        self.graph.entityFocusRequested.connect(self._on_map_entity_to_foco)
         self.graph.candidateClicked.connect(self._open_candidate_review)  # SEM04
         self.graph.relationSelected.connect(self._open_relation_panel)
         self.graph.relationCreateRequested.connect(self._open_relation_create_panel)
@@ -2024,6 +2026,8 @@ class CreationWorkspace(QWidget):
             [
                 ("search", "Buscar y enfocar elementos", self._open_search_panel),
                 ("filter", "Filtros, anillos y eras", self._open_filter_panel),
+                # BETA2-FOCO-14: Lente Jardín conmutable (estado del riego en el Mapa).
+                ("garden_lens", "Lente Jardín: estado de riego en el Mapa", self._toggle_garden_lens),
             ]
         )
         # UX29: el guardar usa el MISMO formato de píldora que el alternador central
@@ -2531,6 +2535,112 @@ class CreationWorkspace(QWidget):
                 scope_override=payload["context_scope"],
             ),
         )
+
+    # ------------------------------------------------------------------
+    # FOCO-14: Mapa solo lectura, Lente Jardín y riego por lotes desde el Mapa
+    # ------------------------------------------------------------------
+
+    def _on_map_entity_to_foco(self, entity_id: str) -> None:
+        """Doble click en el Mapa → Foco con esa entidad como centro."""
+        if not entity_id:
+            return
+        self.set_active_view("foco")
+        foco_widget = getattr(self, "foco", None)
+        if foco_widget is not None:
+            foco_widget.center_entity(entity_id)
+
+    def _garden_status_map(self, entity_ids: list) -> dict:
+        service = self.watering_service
+        if service is None:
+            return {}
+        result = service.statuses_for(list(entity_ids))
+        return getattr(result, "value", None) or {}
+
+    def _toggle_garden_lens(self) -> None:
+        """Lente Jardín conmutable; apagada deja el Mapa limpio (spec)."""
+        self._garden_lens_on = not getattr(self, "_garden_lens_on", False)
+        self.graph.set_garden_lens(self._garden_lens_on, self._garden_status_map)
+        self.ctx.log(
+            "info",
+            "Lente Jardín activada" if self._garden_lens_on else "Lente Jardín desactivada",
+        )
+
+    def _open_map_summary(self, entity_id: str) -> None:
+        """Ficha resumida NO editable del Mapa + riego por lotes (esta/anillo/grafo)."""
+        drawer = self.ctx.drawer
+        project = self._get_active_project()
+        entity = project.entity_by_id(entity_id) if project is not None else None
+        if drawer is None or entity is None:
+            return
+        card = QFrame()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        name_label = QLabel(entity.name, card)
+        name_label.setWordWrap(True)
+        name_label.setStyleSheet(
+            f"color: {INK_STRONG}; font-family: Georgia, serif; "
+            "font-size: 17px; font-weight: 700; background: transparent;"
+        )
+        layout.addWidget(name_label)
+        type_value = getattr(entity.entity_type, "value", str(entity.entity_type))
+        canon_value = getattr(entity.canon_state, "value", str(entity.canon_state))
+        meta_label = QLabel(f"{enum_human(type_value)} · {enum_human(canon_value)}", card)
+        meta_label.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent;")
+        layout.addWidget(meta_label)
+        brief = " ".join(str(entity.brief_description or "").split())
+        brief_label = QLabel(brief[:400] + ("…" if len(brief) > 400 else ""), card)
+        brief_label.setWordWrap(True)
+        brief_label.setStyleSheet(f"color: {INK_SOFT}; font-size: 12px; background: transparent;")
+        layout.addWidget(brief_label)
+        if self.watering_service is not None:
+            report = getattr(self.watering_service.status_of(entity_id), "value", None)
+            if report is not None:
+                status_label = QLabel(f"Riego: {report.status.replace('_', ' ')}", card)
+                status_label.setStyleSheet(
+                    f"color: {INK_SOFT}; font-size: 11px; background: transparent;"
+                )
+                layout.addWidget(status_label)
+
+        def _button(text: str, handler) -> QPushButton:
+            button = QPushButton(text, card)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setStyleSheet(
+                "QPushButton { background: transparent; border: 1px solid #BBAA66; "
+                "border-radius: 10px; color: #6E622E; padding: 6px 10px; }"
+            )
+            button.clicked.connect(handler)
+            layout.addWidget(button)
+            return button
+
+        _button("Abrir en Foco (editar)", lambda: self._on_map_entity_to_foco(entity_id))
+        _button("Regar esta entidad", lambda: self._on_foco_water([entity_id]))
+        ring_id = (entity.layer_ids or [""])[0]
+        if ring_id and self.watering_service is not None:
+            _button(
+                "Regar su anillo",
+                lambda: self._on_foco_water(
+                    getattr(
+                        self.watering_service.entities_in_scope({"ring_id": ring_id}),
+                        "value",
+                        None,
+                    )
+                    or []
+                ),
+            )
+        if self.watering_service is not None:
+            _button(
+                "Regar todo el grafo",
+                lambda: self._on_foco_water(
+                    getattr(
+                        self.watering_service.entities_in_scope({"graph": True}), "value", None
+                    )
+                    or []
+                ),
+            )
+        layout.addStretch(1)
+        drawer.set_content(card, title="Entidad (Mapa)")
+        drawer.open()
 
     # ------------------------------------------------------------------
     # FOCO-13: Semillas en Foco — germinación por zonas y chips no-visibles
@@ -6438,6 +6548,14 @@ class CreationWorkspace(QWidget):
         drawer.open()
 
     def _open_node_panel(self, entity_id: str, *, is_new: bool = False):
+        # BETA2-FOCO-14: el Mapa es SOLO LECTURA (decisión de producto): click
+        # → ficha resumida no editable; la edición vive en Foco (doble click).
+        if getattr(self, "_active_view", "") == "concentric" and not is_new:
+            self._open_map_summary(entity_id)
+            return
+        self._open_node_panel_editor(entity_id, is_new=is_new)
+
+    def _open_node_panel_editor(self, entity_id: str, *, is_new: bool = False):
         if self.entity_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo abrir el panel de nodo")
             return

@@ -212,6 +212,8 @@ _EDGE_COLORS = RELATION_KIND_PALETTE
 _STATUS_COLORS = {
     "canonico": "#6CCB8E",
     "canon": "#6CCB8E",
+    # BETA2-FOCO-14: nodo fantasma — borrador interno (translúcido en el lienzo).
+    "fantasma": "#B9B29A",
     "borrador": "#E0C46C",
     "propuesto": "#DCA35F",
     "archivado": "#8993A5",
@@ -631,6 +633,10 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
         self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
         self._status_dot.setVisible(False)
+        # BETA2-FOCO-14: los fantasmas son translúcidos también en el Mapa
+        # (borrador interno ≠ entidad real falta-regar, que se pinta sólida).
+        if node.canon.lower() == "fantasma":
+            self.setOpacity(0.45)
 
         visibility_key = node.visibility.lower()
         if visibility_key in _VISIBILITY_COLORS and visibility_key not in {
@@ -902,6 +908,9 @@ class GraphTreeItem(QGraphicsRectItem):
         self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
         self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
         self._status_dot.setVisible(False)
+        # BETA2-FOCO-14: ramas fantasma igualmente translúcidas.
+        if node.canon.lower() == "fantasma":
+            self.setOpacity(0.45)
 
         visibility_key = node.visibility.lower()
         if visibility_key in _VISIBILITY_COLORS and visibility_key not in {
@@ -1868,6 +1877,8 @@ class GraphCanvasView(QGraphicsView):
     """Interactive view: pan/zoom with selectable nodes and edges."""
 
     entitySelected = Signal(str)
+    # BETA2-FOCO-14: doble click en una hoja = entrar a Foco con esa entidad.
+    entityFocusRequested = Signal(str)  # noqa: N815 — convención Qt de señales
     relationSelected = Signal(str)
     relationCreateRequested = Signal(str, str)
     graphSelectionChanged = Signal(list, list)
@@ -1930,6 +1941,11 @@ class GraphCanvasView(QGraphicsView):
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
         self.setScene(self.scene_obj)
         self._nodes: dict[str, GraphNodeItem] = {}
+        # BETA2-FOCO-14: Lente Jardín (estado de riego pintado a mano).
+        self._garden_lens_enabled = False
+        self._garden_status_provider = None
+        self._garden_overlays: dict[str, dict] = {}
+        self._garden_ids_key: tuple | None = None
         self._trees: dict[str, GraphTreeItem] = {}
         self._edges: list[GraphEdgeItem] = []
         self._all_nodes: list[_NodeView] = []
@@ -2076,8 +2092,113 @@ class GraphCanvasView(QGraphicsView):
                 timer.stop()
         self.viewport().update()
 
+    # ------------------------------------------------------------------
+    # BETA2-FOCO-14: Lente Jardín (conmutable; provider = WateringService)
+    # ------------------------------------------------------------------
+
+    def set_garden_lens(self, enabled: bool, status_provider=None) -> None:
+        """Activa/desactiva la lente. ``status_provider(ids) -> {id: report}``.
+
+        El provider se consulta al reconstruir el conjunto de nodos (nunca por
+        frame): WateringService ya cachea por revisión de proyecto.
+        """
+        self._garden_lens_enabled = bool(enabled)
+        if status_provider is not None:
+            self._garden_status_provider = status_provider
+        self._garden_overlays = {}
+        self._garden_ids_key = None
+        self._apply_garden_lens()
+        self.viewport().update()
+
+    def _ensure_garden_overlays(self) -> None:
+        nodes = getattr(self, "_nodes", {}) or {}
+        if tuple(sorted(nodes.keys())) != self._garden_ids_key:
+            self._apply_garden_lens()
+
+    def _apply_garden_lens(self) -> None:
+        """Aplica opacidades (Nutrida/secada) y prepara los overlays del halo.
+
+        Con la lente OFF restaura el lienzo limpio (solo el fantasma conserva
+        su translucidez, que no es de la lente sino de su naturaleza).
+        """
+        nodes = getattr(self, "_nodes", {}) or {}
+        if not self._garden_lens_enabled or self._garden_status_provider is None:
+            self._garden_overlays = {}
+            self._garden_ids_key = None
+            for item in nodes.values():
+                canon = str(getattr(getattr(item, "node", None), "canon", "")).lower()
+                item.setOpacity(0.45 if canon == "fantasma" else 1.0)
+            return
+        entity_ids = sorted(nodes.keys())
+        try:
+            reports = self._garden_status_provider(list(entity_ids)) or {}
+        except Exception:  # noqa: BLE001 — la lente jamás rompe el lienzo
+            reports = {}
+        overlays: dict[str, dict] = {}
+        for entity_id, item in nodes.items():
+            canon = str(getattr(getattr(item, "node", None), "canon", "")).lower()
+            if canon == "fantasma":
+                item.setOpacity(0.45)
+                continue
+            report = reports.get(entity_id)
+            if report is None:
+                continue
+            latest = getattr(report, "latest", None)
+            scores = dict(getattr(latest, "scores", {}) or {}) if latest is not None else {}
+            status = str(getattr(report, "status", ""))
+            stale = bool(getattr(report, "stale", False))
+            overlays[entity_id] = {
+                "status": status,
+                "stale": stale,
+                "never": latest is None and status == "falta_regar",
+                "iluminada": scores.get("iluminada"),
+            }
+            if status == "secada":
+                item.setOpacity(0.35)  # apagada, estable, sin competir
+            elif latest is None:
+                item.setOpacity(0.8)  # semilla sin cultivar (aún sin métricas)
+            else:
+                nutrida = float(scores.get("nutrida") or 0.0)
+                solid = 0.5 + 0.5 * nutrida / 100.0
+                item.setOpacity(solid * (0.75 if stale else 1.0))
+        self._garden_overlays = overlays
+        self._garden_ids_key = tuple(entity_ids)
+
     def drawForeground(self, painter, rect):  # noqa: N802 (Qt API)
         super().drawForeground(painter, rect)
+        # BETA2-FOCO-14: Lente Jardín — pintura A MANO en primer plano (sin
+        # QGraphicsEffect): halo dorado que crece con Iluminada y marca de
+        # "semilla sin cultivar" bajo las nunca regadas. Suave ("zona
+        # cultivable"), sin rojos; con la lente OFF el mapa queda limpio.
+        if getattr(self, "_garden_lens_enabled", False):
+            self._ensure_garden_overlays()
+            if self._garden_overlays:
+                painter.save()
+                for entity_id, overlay in self._garden_overlays.items():
+                    item = self._nodes.get(entity_id)
+                    if item is None or not item.isVisible():
+                        continue
+                    bounds = item.sceneBoundingRect()
+                    center = bounds.center()
+                    radius = max(bounds.width(), 26.0) / 2.0
+                    iluminada = overlay.get("iluminada")
+                    if iluminada:
+                        strength = max(0.0, min(1.0, float(iluminada) / 100.0))
+                        halo = QColor("#8B7A36")
+                        halo.setAlphaF(0.14 + 0.30 * strength)
+                        halo_pen = QPen(halo)
+                        halo_pen.setWidthF(1.0 + 2.5 * strength)
+                        painter.setPen(halo_pen)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        grow = 4.0 + 7.0 * strength
+                        painter.drawEllipse(center, radius + grow, radius + grow)
+                    if overlay.get("never"):
+                        seed_pen = QPen(QColor("#6E622E"))
+                        seed_pen.setStyle(Qt.PenStyle.DotLine)
+                        painter.setPen(seed_pen)
+                        painter.setBrush(QColor(236, 228, 199, 170))
+                        painter.drawEllipse(center + QPointF(0.0, radius + 10.0), 4.5, 4.5)
+                painter.restore()
         alpha = getattr(self, "_reveal_alpha", 0.0)
         if alpha > 0.0:
             painter.save()
@@ -3179,6 +3300,12 @@ class GraphCanvasView(QGraphicsView):
             # por doble click en la cabecera; el vacío sigue al foco de anillo.
             kind, hit = self._topmost_node_or_edge_at(event.position())
             if kind == "edge" or (kind == "node" and isinstance(hit, GraphNodeItem)):
+                # BETA2-FOCO-14: en el Mapa (solo lectura) el doble click sobre
+                # una hoja pide entrar a Foco con esa entidad como centro.
+                if kind == "node" and isinstance(hit, GraphNodeItem):
+                    node_id = str(getattr(getattr(hit, "node", None), "entity_id", "") or "")
+                    if node_id:
+                        self.entityFocusRequested.emit(node_id)
                 event.accept()
                 return
             node = self._item_node_at(event.position())
@@ -5733,6 +5860,7 @@ class GraphCanvasWidget(QWidget):
     """B31-T03 graph-first Creation entry."""
 
     entitySelected = Signal(str)
+    entityFocusRequested = Signal(str)  # noqa: N815 — BETA2-FOCO-14: doble click → Foco
     relationSelected = Signal(str)
     relationCreateRequested = Signal(str, str)
     graphSelectionChanged = Signal(list, list)
@@ -5829,6 +5957,8 @@ class GraphCanvasWidget(QWidget):
         self.canvas = GraphCanvasView()
         self.canvas._atmosphere.set_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
         self.canvas.entitySelected.connect(self._entity_selected)
+        # BETA2-FOCO-14: reenvío del doble click (Mapa → Foco).
+        self.canvas.entityFocusRequested.connect(self.entityFocusRequested)
         self.canvas.relationSelected.connect(self._relation_selected)
         self.canvas.relationCreateRequested.connect(self.relationCreateRequested.emit)
         self.canvas.relationCreateRejected.connect(self.relationCreateRejected.emit)
@@ -6090,6 +6220,10 @@ class GraphCanvasWidget(QWidget):
         if ok:
             self._entity_selected(entity_id)
         return ok
+
+    def set_garden_lens(self, enabled: bool, status_provider=None) -> None:
+        """BETA2-FOCO-14: Lente Jardín (estado de riego pintado en el Mapa)."""
+        self.canvas.set_garden_lens(enabled, status_provider)
 
     def bloom_node(self, entity_id: str) -> bool:
         # SEM02: enfoca el nodo recién germinado y dispara el glow dorado.
