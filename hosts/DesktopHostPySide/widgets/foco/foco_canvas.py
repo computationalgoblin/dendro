@@ -120,11 +120,70 @@ class FocoSatelliteItem(QGraphicsObject):
         event.accept()
 
 
+class FocoSeedItem(QGraphicsObject):
+    """Semilla IA germinando en su zona (FOCO-13).
+
+    Visual PROPIO — distinta del satélite (sólido) y del fantasma (translúcido
+    discontinuo): brote con acento dorado y anillo de germinación punteado.
+    Click ⇒ abre la revisión (aceptar/rechazar por el flujo humano existente).
+    """
+
+    is_seed = True
+
+    def __init__(self, candidate_id: str, title: str, zone: str) -> None:
+        super().__init__()
+        self.candidate_id = candidate_id
+        self.title = title
+        self.zone = zone
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(f"Semilla IA: {title} — click para revisar")
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 (API Qt)
+        return QRectF(-_LABEL_WIDTH / 2, -22, _LABEL_WIDTH, 52)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        germination = QPen(QColor(GOLD))
+        germination.setStyle(Qt.PenStyle.DotLine)
+        germination.setWidthF(1.6)
+        painter.setPen(germination)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(0, 0), 15.0, 15.0)
+        painter.setPen(QPen(QColor(GOLD), 2.0))
+        gold_fill = QColor(GOLD)
+        gold_fill.setAlphaF(0.35)
+        painter.setBrush(gold_fill)
+        painter.drawEllipse(QPointF(0, 2), 6.5, 6.5)
+        # Brote: tallo + hoja hacia arriba (acento IA).
+        painter.drawLine(QPointF(0, -4), QPointF(0, -12))
+        painter.drawArc(QRectF(-8, -16, 8, 8), 0 * 16, 180 * 16)
+        painter.setPen(QPen(QColor(INK)))
+        font = QFont()
+        font.setPointSizeF(8.0)
+        font.setItalic(True)
+        painter.setFont(font)
+        label = self.title if len(self.title) <= 20 else self.title[:19] + "…"
+        painter.drawText(
+            QRectF(-_LABEL_WIDTH / 2, 17, _LABEL_WIDTH, 16),
+            Qt.AlignmentFlag.AlignHCenter,
+            label,
+        )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        scene = self.scene()
+        views = scene.views() if scene is not None else []
+        if views and isinstance(views[0], FocoCanvas):
+            views[0].seedClicked.emit(self.candidate_id)
+        event.accept()
+
+
 class FocoCanvas(QGraphicsView):
     """Vista de zonas con layout por slots. El centro es un hueco reservado."""
 
     satelliteActivated = Signal(str)  # noqa: N815 — centra al click/flecha (convención Qt)
     selectionChanged = Signal(list)  # noqa: N815 — multiselección Ctrl (convención Qt)
+    seedClicked = Signal(str)  # noqa: N815 — Semilla IA ⇒ abrir revisión (convención Qt)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -140,6 +199,9 @@ class FocoCanvas(QGraphicsView):
         self._zone_meta: dict[str, list[dict]] = {key: [] for key in _ZONE_KEYS}
         self._items: dict[str, FocoSatelliteItem] = {}
         self._selected: list[str] = []
+        # FOCO-13: semillas IA germinando por zona: cid -> (zone, title).
+        self._seed_meta: dict[str, tuple[str, str]] = {}
+        self._seed_items: dict[str, FocoSeedItem] = {}
 
     # ------------------------------------------------------------------
     # Datos
@@ -152,13 +214,48 @@ class FocoCanvas(QGraphicsView):
         ``entity_id/name/entity_type/is_ghost/reason`` (el orden es el de
         ``foco_zones.classify_neighbors`` y gobierna la navegación por flechas).
         """
+        if center_id != self._center_id:
+            self._seed_meta = {}
         self._center_id = center_id
         self._zone_meta = {key: list(zones.get(key, [])) for key in _ZONE_KEYS}
         self._selected = []
+        self._rebuild_scene()
+        self.selectionChanged.emit([])
+
+    # -- Semillas IA (FOCO-13) ------------------------------------------
+
+    def sync_seeds(self, seeds: list[tuple[str, str, str]]) -> None:
+        """Sincroniza las semillas visibles: lista de (candidate_id, zone, title).
+
+        Las de zona "drawer" NO llegan aquí (van como tarjeta al panel de riego).
+        """
+        self._seed_meta = {
+            str(candidate_id): (zone if zone in _ZONE_KEYS else "entorno", str(title))
+            for candidate_id, zone, title in seeds
+        }
+        self._rebuild_scene()
+
+    def seed_ids(self) -> list[str]:
+        return list(self._seed_meta.keys())
+
+    def seeds_in_zone(self, zone: str) -> list[str]:
+        return [cid for cid, (seed_zone, _t) in self._seed_meta.items() if seed_zone == zone]
+
+    def bloom_seed(self, candidate_id: str) -> None:
+        """Aceptada: la semilla deja el lienzo; lo aceptado aparece en su zona
+        al reconstruirse el vecindario (el centro NO cambia — spec)."""
+        self._seed_meta.pop(str(candidate_id), None)
+        self._rebuild_scene()
+
+    def wither_seed(self, candidate_id: str) -> None:
+        self._seed_meta.pop(str(candidate_id), None)
+        self._rebuild_scene()
+
+    def _rebuild_scene(self) -> None:
         self._items.clear()
+        self._seed_items.clear()
         self._scene.clear()
         self._relayout()
-        self.selectionChanged.emit([])
 
     def zone_ids(self, zone: str) -> list[str]:
         return [meta["entity_id"] for meta in self._zone_meta.get(zone, [])]
@@ -196,29 +293,53 @@ class FocoCanvas(QGraphicsView):
             step = span / (count + 1)
             return [offset + step * (index + 1) for index in range(count)]
 
-        placements: list[tuple[dict, QPointF]] = []
-        raices = self._zone_meta["raices"]
-        for meta, x in zip(raices, _spread(len(raices), width * 0.76, width * 0.12)):
-            placements.append((meta, QPointF(x, height * 0.13)))
-        brotes = self._zone_meta["brotes"]
-        for meta, x in zip(brotes, _spread(len(brotes), width * 0.76, width * 0.12)):
-            placements.append((meta, QPointF(x, height * 0.87)))
+        # FOCO-13: las semillas ocupan slots al FINAL de su zona (tras las
+        # entidades) — germinan en su sitio y lo aceptado permanece ahí.
+        seeds_by_zone: dict[str, list[tuple[str, str]]] = {key: [] for key in _ZONE_KEYS}
+        for candidate_id, (zone, title) in self._seed_meta.items():
+            seeds_by_zone[zone].append((candidate_id, title))
+
+        placements: list[tuple[dict | None, tuple[str, str] | None, QPointF]] = []
+
+        def _band(zone: str, y_pos: float) -> None:
+            entities = self._zone_meta[zone]
+            seeds = seeds_by_zone[zone]
+            xs = _spread(len(entities) + len(seeds), width * 0.76, width * 0.12)
+            for meta, x in zip(entities, xs):
+                placements.append((meta, None, QPointF(x, y_pos)))
+            for seed, x in zip(seeds, xs[len(entities) :]):
+                placements.append((None, seed, QPointF(x, y_pos)))
+
+        _band("raices", height * 0.13)
+        _band("brotes", height * 0.87)
         entorno = self._zone_meta["entorno"]
-        left = entorno[0::2]
-        right = entorno[1::2]
-        for meta, y in zip(left, _spread(len(left), height * 0.56, height * 0.22)):
-            placements.append((meta, QPointF(width * 0.09, y)))
-        for meta, y in zip(right, _spread(len(right), height * 0.56, height * 0.22)):
-            placements.append((meta, QPointF(width * 0.91, y)))
+        entorno_seeds = seeds_by_zone["entorno"]
+        combined: list[tuple[dict | None, tuple[str, str] | None]] = [
+            (meta, None) for meta in entorno
+        ] + [(None, seed) for seed in entorno_seeds]
+        left = combined[0::2]
+        right = combined[1::2]
+        for (meta, seed), y in zip(left, _spread(len(left), height * 0.56, height * 0.22)):
+            placements.append((meta, seed, QPointF(width * 0.09, y)))
+        for (meta, seed), y in zip(right, _spread(len(right), height * 0.56, height * 0.22)):
+            placements.append((meta, seed, QPointF(width * 0.91, y)))
 
         pen = QPen(QColor(LINE_SOFT))
         pen.setWidthF(1.0)
-        for meta, position in placements:
-            # Línea sutil hacia el centro, detrás del satélite.
+        for meta, seed, position in placements:
+            # Línea sutil hacia el centro, detrás del elemento.
             direction = center - position
             trimmed = position + direction * 0.42
             line = self._scene.addLine(position.x(), position.y(), trimmed.x(), trimmed.y(), pen)
             line.setZValue(-1)
+            if seed is not None:
+                candidate_id, title = seed
+                zone = self._seed_meta[candidate_id][0]
+                seed_item = FocoSeedItem(candidate_id, title, zone)
+                seed_item.setPos(position)
+                self._scene.addItem(seed_item)
+                self._seed_items[candidate_id] = seed_item
+                continue
             item = FocoSatelliteItem(
                 meta["entity_id"],
                 meta.get("name", ""),
@@ -234,12 +355,10 @@ class FocoCanvas(QGraphicsView):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if self._zone_meta and any(self._zone_meta.values()):
+        if any(self._zone_meta.values()) or self._seed_meta:
             selected = list(self._selected)
-            self._items.clear()
-            self._scene.clear()
+            self._rebuild_scene()
             self._selected = selected
-            self._relayout()
 
     # ------------------------------------------------------------------
     # Interacción

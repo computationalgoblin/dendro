@@ -62,6 +62,7 @@ class WateringPanel(QWidget):
     pauseToggled = Signal(bool)  # noqa: N815 — True = Secar, False = Cultivar
     suggestRequested = Signal(str)  # noqa: N815 — métrica a reparar
     cancelBatchRequested = Signal()  # noqa: N815 — cancelar lote ENTRE pasos
+    reviewRequested = Signal(str)  # noqa: N815 — tarjeta de Semilla textual ⇒ revisión
 
     def __init__(self, watering_service: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -190,6 +191,61 @@ class WateringPanel(QWidget):
 
     def current_status(self) -> str:
         return self._status
+
+    def set_text_cards(self, candidates: list[Any]) -> None:
+        """FOCO-13: Semillas de edición TEXTUAL de la entidad en foco.
+
+        Aparecen como tarjetas con preview del cambio (no en el lienzo); el
+        botón «Revisar» abre el flujo humano existente de aceptar/rechazar.
+        """
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._card_ids: list[str] = []
+        for candidate in candidates or []:
+            candidate_id = str(getattr(candidate, "id", "") or "")
+            if not candidate_id:
+                continue
+            proposed = getattr(candidate, "proposed_data", {}) or {}
+            preview = str(
+                proposed.get("edit_proposed_value") or proposed.get("report") or ""
+            ).strip()
+            card = QWidget(self)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 6, 8, 6)
+            card_layout.setSpacing(4)
+            card.setStyleSheet(
+                f"QWidget {{ border: 1px dashed {GOLD}; border-radius: 10px; "
+                "background: rgba(255,255,255,0.5); }"
+            )
+            title_label = QLabel(str(getattr(candidate, "title", "") or "Semilla"), card)
+            title_label.setWordWrap(True)
+            title_label.setStyleSheet(
+                f"color: {INK_STRONG}; font-weight: 600; border: none; background: transparent;"
+            )
+            card_layout.addWidget(title_label)
+            preview_label = QLabel(preview[:220] + ("…" if len(preview) > 220 else ""), card)
+            preview_label.setWordWrap(True)
+            preview_label.setStyleSheet(
+                f"color: {INK_SOFT}; font-size: 11px; border: none; background: transparent;"
+            )
+            card_layout.addWidget(preview_label)
+            review_button = QPushButton("Revisar", card)
+            review_button.setStyleSheet(
+                f"QPushButton {{ background: {GOLD}; border: none; border-radius: 8px; "
+                "color: #FCF8EC; padding: 4px 10px; }"
+            )
+            review_button.clicked.connect(
+                lambda _=False, cid=candidate_id: self.reviewRequested.emit(cid)
+            )
+            card_layout.addWidget(review_button, 0, Qt.AlignmentFlag.AlignRight)
+            self.cards_layout.addWidget(card)
+            self._card_ids.append(candidate_id)
+
+    def card_ids(self) -> list[str]:
+        return list(getattr(self, "_card_ids", []))
 
     def set_batch_running(self, running: bool, progress_text: str = "") -> None:
         self.cancel_button.setVisible(bool(running))

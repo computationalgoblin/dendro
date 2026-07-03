@@ -73,6 +73,8 @@ class FocoView(QWidget):
     waterRequested = Signal(list)  # noqa: N815 — ids a regar (selección o centro)
     dryRequested = Signal(str)  # noqa: N815 — Secar (sin IA)
     cultivateRequested = Signal(str)  # noqa: N815 — Cultivar (sin IA)
+    # FOCO-13: click en una Semilla de zona ⇒ revisión (flujo humano existente).
+    seedReviewRequested = Signal(str)  # noqa: N815 — convención Qt de señales
 
     def __init__(
         self,
@@ -111,6 +113,7 @@ class FocoView(QWidget):
         self.canvas = FocoCanvas(self)
         layout.addWidget(self.canvas, 1)
         self.canvas.satelliteActivated.connect(self.center_entity)
+        self.canvas.seedClicked.connect(self.seedReviewRequested)
 
         # FOCO-11: rail izquierdo de herramientas (columna única de iconos).
         self.tool_rail = FocoToolRail(self)

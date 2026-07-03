@@ -2006,6 +2006,10 @@ class CreationWorkspace(QWidget):
         self.foco.dryRequested.connect(self._on_foco_dry)
         self.foco.cultivateRequested.connect(self._on_foco_cultivate)
         self.foco.entityCentered.connect(self._sync_watering_panel_entity)
+        # FOCO-13: semillas de la entidad enfocada germinan en zona/drawer; el
+        # resto conserva su chip pulsante (nada se pierde, nada se duplica).
+        self.foco.seedReviewRequested.connect(self._open_candidate_review)
+        self.foco.entityCentered.connect(lambda _eid: self._rehydrate_seed_notifications())
         layout.addWidget(self.foco, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
@@ -2353,6 +2357,7 @@ class CreationWorkspace(QWidget):
             panel.pauseToggled.connect(self._on_watering_pause_toggled)
             panel.suggestRequested.connect(self._on_foco_suggest)
             panel.cancelBatchRequested.connect(self._cancel_watering_batch)
+            panel.reviewRequested.connect(self._open_candidate_review)  # FOCO-13
             self._watering_panel = panel
         return self._watering_panel
 
@@ -2527,6 +2532,61 @@ class CreationWorkspace(QWidget):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # FOCO-13: Semillas en Foco — germinación por zonas y chips no-visibles
+    # ------------------------------------------------------------------
+
+    def _pending_foco_candidates(self) -> list:
+        """Candidatos PENDIENTES cuyo foco_hint apunta a la entidad enfocada."""
+        controller = getattr(self.candidate_view, "cc", None)
+        foco_widget = getattr(self, "foco", None)
+        center = foco_widget.current_entity_id() if foco_widget is not None else ""
+        if controller is None or not center:
+            return []
+        matched = []
+        for cand in controller.list_all():
+            state = getattr(cand, "state", None)
+            if str(getattr(state, "value", state)) != "pendiente":
+                continue
+            metadata = getattr(cand, "metadata", None) or {}
+            hint = (metadata.get("context_scope") or {}).get("foco_hint") or {}
+            if str(hint.get("center_entity_id") or "") == center:
+                matched.append(cand)
+        return matched
+
+    def _foco_visible_candidate_ids(self) -> set:
+        """Ids de Semillas visibles en Foco AHORA (zona o tarjeta del drawer)."""
+        if getattr(self, "_active_view", "") != "foco":
+            return set()
+        return {str(getattr(cand, "id", "")) for cand in self._pending_foco_candidates()}
+
+    def _sync_foco_seeds(self) -> set:
+        """Germina en su zona las Semillas de la entidad enfocada; las de
+        edición textual van como tarjetas al drawer de riego. Devuelve los ids
+        visibles (sus chips pulsantes no se duplican)."""
+        foco_widget = getattr(self, "foco", None)
+        if getattr(self, "_active_view", "") != "foco" or foco_widget is None:
+            return set()
+        zone_seeds: list[tuple] = []
+        cards: list = []
+        for cand in self._pending_foco_candidates():
+            metadata = getattr(cand, "metadata", None) or {}
+            hint = (metadata.get("context_scope") or {}).get("foco_hint") or {}
+            zone = str(hint.get("zone") or "entorno")
+            if zone == "drawer":
+                cards.append(cand)
+            else:
+                zone_seeds.append(
+                    (str(cand.id), zone, str(getattr(cand, "title", "") or "Semilla"))
+                )
+        foco_widget.canvas.sync_seeds(zone_seeds)
+        panel = self._ensure_watering_panel()
+        if panel is not None:
+            panel.set_text_cards(cards)
+        return {cid for cid, _zone, _title in zone_seeds} | {
+            str(getattr(cand, "id", "")) for cand in cards
+        }
+
     def _walk_bar_clicked(self) -> None:
         """CRON: botón de barra. Continúa el recorrido activo o, si no hay, lo
         inicia por el PRINCIPIO de la cronología (el hito más temprano)."""
@@ -2632,6 +2692,9 @@ class CreationWorkspace(QWidget):
         elif foco_on and foco_widget is not None:
             # En Foco, las flechas navegan por las zonas: el lienzo toma el foco.
             QTimer.singleShot(0, foco_widget.canvas.setFocus)
+        # FOCO-13: la visibilidad de las Semillas depende de la vista — los
+        # chips pulsantes se recalculan al cambiar de modo (idempotente).
+        QTimer.singleShot(0, self._rehydrate_seed_notifications)
         try:
             QSettings("Dendro", "DesktopHost").setValue("creation/active_view", view)
         except Exception:  # noqa: BLE001
@@ -4654,7 +4717,16 @@ class CreationWorkspace(QWidget):
             if not cid:
                 continue
             label = str(getattr(candidate, "title", "") or "Candidato")
-            self._seed_notifications.add(cid, label)
+            # FOCO-13: si la Semilla pertenece a la entidad enfocada (foco_hint),
+            # germina en su zona/drawer y NO duplica chip pulsante.
+            hint = ((data.get("metadata") or {}).get("context_scope") or {}).get("foco_hint") or {}
+            visible_in_foco = (
+                getattr(self, "_active_view", "") == "foco"
+                and getattr(self, "foco", None) is not None
+                and str(hint.get("center_entity_id") or "") == self.foco.current_entity_id()
+            )
+            if not visible_in_foco:
+                self._seed_notifications.add(cid, label)
             created_ids.append(cid)
             # SEM04: anillo concreto del candidato (su layer) para colocar la
             # semilla-candidato en la banda correcta al dividir.
@@ -4673,6 +4745,7 @@ class CreationWorkspace(QWidget):
             self._on_suggestion_changed()
         elif job_id:
             self.graph.wither_seed(job_id)
+        self._sync_foco_seeds()  # FOCO-13: germinación espacial en el lienzo de Foco
         return created_ids
 
     @_qt_safe_slot
@@ -4970,6 +5043,13 @@ class CreationWorkspace(QWidget):
             self.graph.bloom_seed(candidate_id)
         else:
             self.graph.wither_seed(candidate_id)
+        # FOCO-13: la semilla del lienzo de Foco sigue la misma decisión.
+        foco_widget = getattr(self, "foco", None)
+        if foco_widget is not None:
+            if accepted:
+                foco_widget.canvas.bloom_seed(candidate_id)
+            else:
+                foco_widget.canvas.wither_seed(candidate_id)
         # UX17: confirmación visible que sobrevive al cierre del cajón (toast).
         notify = getattr(self.ctx, "notify", None)
         if callable(notify):
@@ -5003,6 +5083,15 @@ class CreationWorkspace(QWidget):
                 # ya disparados arriba en su posición viva). NO se vuelve a florecer el
                 # nodo recién creado (era una segunda floración en otro punto).
                 self._on_suggestion_changed()  # reconstruye el grafo/cronología con lo nuevo
+                # FOCO-13: aceptar una Semilla MANTIENE el foco original; el
+                # vecindario se reconstruye y lo aceptado aparece en su zona.
+                if (
+                    getattr(self, "_active_view", "") == "foco"
+                    and getattr(self, "foco", None) is not None
+                    and self.foco.current_entity_id()
+                ):
+                    self.foco.center_entity(self.foco.current_entity_id(), push_history=False)
+                    self._sync_foco_seeds()
             except Exception:  # noqa: BLE001 — el diferido nunca rompe el flujo
                 pass
 
@@ -6298,10 +6387,13 @@ class CreationWorkspace(QWidget):
             if not cid:
                 continue
             pending_ids.append(cid)
-            if not layer.has(cid):
+            # FOCO-13: chips pulsantes SOLO para lo NO visible en la vista actual;
+            # las semillas de la entidad enfocada germinan en su zona/drawer.
+            if not layer.has(cid) and cid not in self._foco_visible_candidate_ids():
                 label = str(getattr(cand, "title", "") or "Candidato")
                 layer.add(cid, label)
         self.graph.rehydrate_candidate_seeds(pending_ids)  # SEM04: semillas en el grafo
+        self._sync_foco_seeds()  # FOCO-13: rehidratación espacial en Foco (idempotente)
 
     def open_graph(self):
         """Graph is always visible - this is now a no-op."""
