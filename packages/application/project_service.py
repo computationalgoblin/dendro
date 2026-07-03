@@ -99,6 +99,35 @@ class ProjectService:
         self.active_project = result.value
         return Ok(result.value)
 
+    def set_last_worked_entity(self, entity_id: str) -> Result[None, str]:
+        """BETA2-FOCO: recuerda la última entidad trabajada (Foco la centra al abrir).
+
+        Vive en ``Project.metadata["last_worked_entity_id"]``: viaja con el
+        archivo del proyecto y se persiste con cualquier guardado normal. No
+        marca el proyecto como editado (sin ``touch``): centrar una entidad no
+        es un cambio de contenido. Cadena vacía limpia la marca.
+        """
+        if self.active_project is None:
+            return Error("No active project")
+        project = self.active_project
+        cleaned = (entity_id or "").strip()
+        if not cleaned:
+            project.metadata.pop("last_worked_entity_id", None)
+            return Ok(None)
+        if project.entity_by_id(cleaned) is None:
+            return Error(f"Entidad no encontrada: {cleaned}")
+        project.metadata["last_worked_entity_id"] = cleaned
+        return Ok(None)
+
+    def get_last_worked_entity(self) -> Result[str, str]:
+        """Id de la última entidad trabajada, o "" si no hay o ya no existe."""
+        if self.active_project is None:
+            return Error("No active project")
+        value = self.active_project.metadata.get("last_worked_entity_id", "")
+        if value and self.active_project.entity_by_id(value) is None:
+            return Ok("")
+        return Ok(value)
+
     def save(self, path: Path) -> Result[None, str]:
         """Persist the active project to disk.
 
