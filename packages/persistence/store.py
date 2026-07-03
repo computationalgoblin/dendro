@@ -345,7 +345,6 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
         data = _apply_migration_v5_to_v6(data)
         data["schema_version"] = 6
         version = 6
-        version = 6
 
     if version == 6:
         data = _apply_migration_v6_to_v7(data)
@@ -439,6 +438,7 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 24:
         data = _apply_migration_v24_to_v25(data)
+        data["schema_version"] = 25
         version = 25
 
     if version == 25:

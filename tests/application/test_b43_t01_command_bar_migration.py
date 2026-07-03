@@ -52,6 +52,6 @@ class TestCommandBarMigration:
     def test_ai_jobs_imports_registry(self):
         """ai_jobs should import from prompt_registry."""
         import packages.application.ai_jobs as aj
-        with open(aj.__file__) as f:
+        with open(aj.__file__, encoding="utf-8") as f:
             source = f.read()
         assert "get_prompt" in source or "prompt_registry" in source

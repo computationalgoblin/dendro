@@ -897,6 +897,32 @@ try:  # la parte pura debe poder importarse sin PySide6
         QVBoxLayout,
         QWidget,
     )
+
+    # BETA1-AUDIT-04: la paleta base vive en design_system (importa PySide6 sin
+    # guard, por eso este import va dentro del try).
+    from hosts.DesktopHostPySide.widgets.design_system import (
+        CANVAS,
+        CHRONO_BLOOM,
+        CHRONO_EDGE_HI,
+        CHRONO_ERA_TINTS,
+        CHRONO_GOLD,
+        CHRONO_GOLD_DEEP,
+        CHRONO_INK,
+        CHRONO_LINE,
+        CHRONO_MUTED,
+        CHRONO_RING_TINTS,
+        CHRONO_RING_UNCLASSIFIED,
+        CHRONO_VIGNETTE,
+        INK_OLIVE_DEEP,
+        LINE,
+        LINE_CARD,
+        LINE_OLIVE,
+        POPUP_BG,
+        SHADOW_RGB,
+        SURFACE_HI,
+        SURFACE_PALE,
+        entity_kind_color,
+    )
     HAS_QT = True
 except Exception:  # pragma: no cover
     HAS_QT = False
@@ -904,26 +930,24 @@ except Exception:  # pragma: no cover
 
 if HAS_QT:
 
-    _BG = QColor("#E6DFCD")  # BETA1-G07: alineado con la viñeta de la concéntrica
-    _SHADOW = QColor(92, 90, 62)
-    _INK = QColor("#504B2E")
-    _MUTED = QColor("#7C806E")
-    _LINE = QColor("#8A8563")
+    # BETA1-AUDIT-04: la paleta base vive en design_system (tokens generales y
+    # CHRONO_*); aquí solo quedan los QColor derivados listos para pintar.
+    _BG = QColor(CANVAS)  # BETA1-G07: alineado con la viñeta de la concéntrica
+    _SHADOW = QColor(INK_OLIVE_DEEP)
+    _INK = QColor(CHRONO_INK)
+    _MUTED = QColor(CHRONO_MUTED)
+    _LINE = QColor(CHRONO_LINE)
     _WHITE = QColor(255, 255, 253, 250)
-    _PILL_FILL = QColor("#FBF8EF")
+    _PILL_FILL = QColor(SURFACE_HI)
     _PILL_FILL.setAlpha(232)
-    _PILL_LINE = QColor("#D2CAB1")
-    # BETA1-UX feedback: tintes BOTÁNICOS cálidos para los estratos de era
-    # (oro · salvia · terracota · ciruela · musgo). Mismos que el slider de la
-    # concéntrica, para que las dos vistas hablen el mismo idioma de color.
-    _ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
-    # BETA1-UX35: tintes por ANILLO (world layer) para las columnas de la
-    # cronología. Cálidos y distintos entre sí, pero deliberadamente SEPARADOS de
-    # los de era (que tiñen el fondo por TIEMPO) para que era×anillo no colisionen
-    # en tono. Se asignan por orden de columna (rango causal). El anillo "Sin
+    _PILL_LINE = QColor(LINE)
+    # Tintes de era (BETA1-UX feedback) y de anillo (BETA1-UX35): definidos en
+    # design_system para que era×anillo compartan una sola fuente de color. Los
+    # de anillo se asignan por orden de columna (rango causal); el anillo "Sin
     # anillo" usa un neutro fijo, no de la paleta.
-    _RING_TINTS = ("#B0794A", "#6F8A5E", "#A05C6E", "#8C7BA0", "#B79A46", "#7E8A74")
-    _RING_UNCLASSIFIED_TINT = "#9A927C"  # gris cálido neutro
+    _ERA_TINTS = CHRONO_ERA_TINTS
+    _RING_TINTS = CHRONO_RING_TINTS
+    _RING_UNCLASSIFIED_TINT = CHRONO_RING_UNCLASSIFIED
 
     def _ring_tint(index: int, ring_id: str) -> QColor:
         """Color base (saturado) del anillo en la columna ``index``. El anillo sin
@@ -939,12 +963,7 @@ if HAS_QT:
     BOX_LABEL_PAD = 10.0
     # BETA1-UX feedback: viñeta cálida IDÉNTICA a la concéntrica (corazón con luz
     # → bordes que se hunden). Aquí se pinta centrada en el viewport.
-    _VIGNETTE = (
-        (0.0, "#F3EDDD"),
-        (0.50, "#E6DFCD"),
-        (0.82, "#DBD1B9"),
-        (1.0, "#CFC4A8"),
-    )
+    _VIGNETTE = CHRONO_VIGNETTE
 
     def _add_pill_label(
         scene, text, x, y, *, font, fg, z=31.0, max_w=None, align_right=False,
@@ -992,7 +1011,7 @@ if HAS_QT:
         def __init__(self, lifeline: Lifeline, radius: float):
             super().__init__(-radius, -radius, radius * 2, radius * 2)
             self.entity_id = lifeline.entity_id
-            halo = QColor(lifeline.color) if lifeline.color else QColor("#AFA77A")
+            halo = QColor(lifeline.color) if lifeline.color else QColor(LINE_OLIVE)
             halo.setAlpha(70)
             self.setPen(QPen(halo, 5))
             self.setBrush(QBrush(_WHITE))
@@ -1107,7 +1126,7 @@ if HAS_QT:
         def paint(self, painter, option, widget=None):  # noqa: N802
             option.state = QStyle.State(option.state & ~QStyle.StateFlag.State_Selected)
             if 0.0 < self._bloom_phase < 1.0:
-                glow = QColor("#E2B23C")
+                glow = QColor(CHRONO_BLOOM)
                 glow.setAlpha(int(150 * (1.0 - self._bloom_phase)))
                 painter.setPen(QPen(glow, 4.0))
                 painter.drawLine(self.line())
@@ -1135,7 +1154,7 @@ if HAS_QT:
         def __init__(self, branch_id, color, depth, header_px, horizontal, *args, collapsed=False):
             super().__init__(*args)
             self.branch_id = str(branch_id)
-            self._color = QColor(color) if color else QColor("#A89878")
+            self._color = QColor(color) if color else QColor(entity_kind_color("contenedor"))
             self._depth = int(depth)
             self._header_px = float(header_px)
             self._horizontal = bool(horizontal)
@@ -1187,7 +1206,7 @@ if HAS_QT:
                 cx = hr.left() + m + s / 2.0
                 cy = hr.top() + m + s / 2.0
                 if hr.width() >= s + 2 * m and hr.height() >= s + 2 * m:
-                    plus = QColor("#FCF8EE"); plus.setAlpha(230)
+                    plus = QColor(CHRONO_EDGE_HI); plus.setAlpha(230)
                     painter.setPen(QPen(plus, 1.8))
                     painter.drawLine(QPointF(cx - s / 2.0, cy), QPointF(cx + s / 2.0, cy))
                     painter.drawLine(QPointF(cx, cy - s / 2.0), QPointF(cx, cy + s / 2.0))
@@ -1226,7 +1245,7 @@ if HAS_QT:
             self.radius = radius
             self._bloom_phase = 0.0  # SEM03: germinación del hito (glow dorado)
             self.setPen(QPen(_LINE, 1.4))
-            self.setBrush(QBrush(QColor("#F8F5EA")))
+            self.setBrush(QBrush(QColor(SURFACE_PALE)))
             self.setToolTip(f"{mark.title} — año {mark.year}")
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self.setZValue(40)
@@ -1266,7 +1285,7 @@ if HAS_QT:
                     if t <= 0.0 or t >= 1.0:
                         continue
                     rr = self.radius + 3.0 + 24.0 * t
-                    glow = QColor("#E2B23C")
+                    glow = QColor(CHRONO_BLOOM)
                     glow.setAlpha(int(200 * (1.0 - t)))
                     painter.setPen(QPen(glow, 3.0 * (1.0 - t) + 1.0))
                     painter.drawEllipse(QPointF(0.0, 0.0), rr, rr)
@@ -1289,8 +1308,8 @@ if HAS_QT:
             # stylesheet y los campos quedan "flotando" sin la tarjeta detrás.
             self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.setStyleSheet(
-                "QWidget#milestoneQuickCreate { background: #FFFDF7; "
-                "border: 1px solid #D8D6C8; border-radius: 12px; }"
+                f"QWidget#milestoneQuickCreate {{ background: {POPUP_BG}; "
+                f"border: 1px solid {LINE_CARD}; border-radius: 12px; }}"
             )
             self.setMinimumWidth(380)
             self._era_name = str(era_name or "")
@@ -1360,9 +1379,9 @@ if HAS_QT:
         rangeChanged = Signal(int, int)
         cleared = Signal()
 
-        _GOLD = "#C8A24C"
-        _GOLD_DEEP = "#8A7A33"
-        _SURFACE_HI = "#FBF8EF"
+        _GOLD = CHRONO_GOLD
+        _GOLD_DEEP = CHRONO_GOLD_DEEP
+        _SURFACE_HI = SURFACE_HI
 
         def __init__(self, parent=None):
             super().__init__(parent)
@@ -2174,7 +2193,7 @@ if HAS_QT:
             vpt = self.mapFromScene(self._pt(ln.x, ln.y_birth))
             painter.save()
             painter.resetTransform()
-            painter.setPen(QPen(QColor("#C8A24C"), 2.4))
+            painter.setPen(QPen(QColor(CHRONO_GOLD), 2.4))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(float(vpt.x()), float(vpt.y())), 13.0, 13.0)
             painter.restore()
@@ -2319,10 +2338,10 @@ if HAS_QT:
                 scene.addItem(rect)
                 # Filo iluminado + sombra fina que separa los estratos (la misma
                 # sensación de relieve que las coronas) en el borde de inicio de era.
-                hi_line = QColor("#FCF8EE"); hi_line.setAlpha(165)
+                hi_line = QColor(CHRONO_EDGE_HI); hi_line.setAlpha(165)
                 top_edge = self._add_line(scene, 0, band.y0, layout.width, band.y0, QPen(hi_line, 1.6))
                 top_edge.setZValue(-29)
-                sh_line = QColor(52, 47, 28); sh_line.setAlpha(46)
+                sh_line = QColor(*SHADOW_RGB); sh_line.setAlpha(46)
                 shadow_edge = self._add_line(
                     scene, 0, band.y0 + 1.6, layout.width, band.y0 + 1.6, QPen(sh_line, 1.0)
                 )
@@ -2416,9 +2435,9 @@ if HAS_QT:
                 scene.addItem(veil_rect)
                 # Separador con relieve (filo iluminado + sombra fina) en el borde
                 # izquierdo de la columna — el mismo lenguaje que los estratos de era.
-                hi_sep = QColor("#FCF8EE")
+                hi_sep = QColor(CHRONO_EDGE_HI)
                 hi_sep.setAlpha(150)
-                sh_sep = QColor(52, 47, 28)
+                sh_sep = QColor(*SHADOW_RGB)
                 sh_sep.setAlpha(40)
                 self._add_line(
                     scene, column.x_left, 0.0, column.x_left, layout.height, QPen(hi_sep, 1.4)
@@ -2466,7 +2485,7 @@ if HAS_QT:
             # Cierre: filo en el borde derecho de la última columna.
             if layout.columns:
                 last = layout.columns[-1]
-                hi_edge = QColor("#FCF8EE")
+                hi_edge = QColor(CHRONO_EDGE_HI)
                 hi_edge.setAlpha(150)
                 self._add_line(
                     scene, last.x_right, 0.0, last.x_right, layout.height, QPen(hi_edge, 1.4)

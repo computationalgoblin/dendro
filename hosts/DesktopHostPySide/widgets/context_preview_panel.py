@@ -28,7 +28,9 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD_DEEP,
     GOLD_SOFT,
     INK,
+    INK_INVERSE,
     INK_MUTED,
+    INK_STRONG,
     LINE,
     RADIUS_MD,
     SURFACE_HI,
@@ -172,14 +174,14 @@ class ContextPreviewPanel(QWidget):
                 f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
                 f"border: 1px solid {GOLD_SOFT}; border-radius: 16px; "
                 f"min-height: 32px; padding: 0 14px; font-size: 12px; font-weight: 700; }} "
-                f"QPushButton:hover {{ background: {GOLD_SOFT}; color: #34301E; }}"
+                f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
             )
             refresh.clicked.connect(lambda: self._on_refresh())
             row.addWidget(refresh)
         row.addStretch(1)
         apply_btn = QPushButton("Crear con esta selección")
         apply_btn.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
+            f"QPushButton {{ background: {GOLD}; color: {INK_INVERSE}; border: none; "
             f"border-radius: 16px; min-height: 34px; padding: 0 16px; "
             f"font-size: 12px; font-weight: 700; }} "
             f"QPushButton:hover {{ background: {GOLD_DEEP}; }}"

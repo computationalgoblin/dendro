@@ -1337,16 +1337,6 @@ def _b40_prompt_profile(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Backward-compatible helper kept only for tests that inject explicit mock jobs.
-def build_ai_job_result(job: AIJob, provider: AIProvider | None = None, *, allow_simulated: bool = False) -> dict[str, Any]:
-    service = AIJobService(provider=provider or SimulatedAIProvider(), allow_simulated=allow_simulated)
-    service._jobs[job.id] = job
-    result = service.execute_job(job.id)
-    if isinstance(result, Error):
-        raise RuntimeError(result.error)
-    return result.value.result
-
-
 class AIJobService:
     """In-memory AI job registry and command-bar runner."""
 
@@ -1700,85 +1690,6 @@ class AIJobService:
         except Exception:
             return
 
-    def _execute_job_pre_d03(self, job_id: str, progress_callback=None) -> Result:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return Error("Job IA no encontrado")
-        if job.status == AIJobStatus.CANCELLED:
-            return Error("Job IA cancelado")
-        provider_name = str(getattr(self._provider, "provider_name", "ai"))
-        if provider_name == "simulated" and not self.allow_simulated:
-            msg = (
-                "IA no configurada: define las variables de entorno NARRATIVE_AI_PROVIDER, "
-                "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
-                "la app). No se genera contenido simulado."
-            )
-            self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
-            return Error(msg)
-
-        self.update_status(job_id, AIJobStatus.BUILDING_CONTEXT, message="Construyendo contexto…", progress=0.20)
-        if progress_callback:
-            progress_callback(job)
-        intent = classify_intent(job.prompt, job.context_scope)
-        job.intent = intent.to_dict()
-        self.update_status(job_id, AIJobStatus.PLANNING, message="Interpretando petición…", progress=0.35)
-        if progress_callback:
-            progress_callback(job)
-        plan = build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)
-        plan = self._with_rag_context(job, plan)
-        job.type = intent.intent_type
-        job.plan = plan.to_dict()
-        self.update_status(job_id, AIJobStatus.WAITING_FOR_MODEL, message="Consultando IA…", progress=0.60)
-        if progress_callback:
-            progress_callback(job)
-        model_user_message = build_model_user_message(plan)
-        system_prompt = system_prompt_for_intent(plan.intent.intent_type.value)
-        self._trace_prompt_request(
-            job=job,
-            plan=plan,
-            provider_name=provider_name,
-            model_user_message=model_user_message,
-            system_prompt=system_prompt,
-        )
-        try:
-            gw = self._gateway.execute(GatewayRequest(
-                intent=plan.intent.intent_type.value,
-                user_prompt=model_user_message,
-                system_prompt_override=system_prompt,
-                json_mode=True,
-                validate=False,
-                max_tokens=self._budget.output_budget(plan.intent.intent_type),
-            ))
-            text, error = gw.text, gw.error
-        except Exception as exc:
-            text, error = None, str(exc)
-        if error:
-            safe = _sanitize_error(error)
-            self._trace_prompt_response(job_id=job.id, status="error", error=safe)
-            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=safe, progress=1.0)
-            return Error(safe)
-        if not text:
-            msg = "El proveedor IA no devolvió contenido."
-            self._trace_prompt_response(job_id=job.id, status="error", error=msg)
-            self.update_status(job_id, AIJobStatus.FAILED, message="Job fallido", error=msg, progress=1.0)
-            return Error(msg)
-        self.update_status(job_id, AIJobStatus.POSTPROCESSING, message="Preparando candidatos…", progress=0.80)
-        if progress_callback:
-            progress_callback(job)
-        payload = _extract_json(text)
-        result = stage_results(payload, job)
-        self._trace_prompt_response(job_id=job.id, status="ok", response_text=text)
-        result["provider"] = provider_name
-        updated = self.update_status(
-            job_id,
-            AIJobStatus.READY_FOR_REVIEW,
-            message=result.get("summary", "Listo para revisar"),
-            progress=1.0,
-            result=result,
-        )
-        if progress_callback and not isinstance(updated, Error):
-            progress_callback(updated.value)
-        return updated
 
     def execute_job(self, job_id: str, progress_callback=None) -> Result:
         """Execute a command-bar job with cooperative cancel and timeout.

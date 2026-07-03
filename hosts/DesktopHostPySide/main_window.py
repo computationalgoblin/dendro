@@ -37,7 +37,7 @@ from hosts.DesktopHostPySide.controllers.project_controller import ProjectContro
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
 
-from packages.domain.result import Ok
+from packages.domain.result import Error, Ok
 from hosts.DesktopHostPySide.views.candidate_view import CandidateView
 from hosts.DesktopHostPySide.views.corpus_view import CorpusView
 from hosts.DesktopHostPySide.views.home_view import HomeView
@@ -51,9 +51,13 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     APP_STYLESHEET,
     GOLD,
     INK_MUTED,
+    INK_OLIVE_DEEP,
     INK_SOFT,
     INK_STRONG,
     LINE,
+    SESSION_INK,
+    SESSION_LINE,
+    SESSION_TINT,
     SURFACE,
     SURFACE_HI,
 )
@@ -277,7 +281,7 @@ class MainWindow(QMainWindow):
 
         self._top_project = QLabel("Dendro")
         self._top_project.setStyleSheet(
-            "font-weight: 700; font-size: 13px; color: #5C5A3E; "
+            f"font-weight: 700; font-size: 13px; color: {INK_OLIVE_DEEP}; "
             "background: transparent; border: none;"
         )
         layout.addWidget(self._top_project)
@@ -296,8 +300,8 @@ class MainWindow(QMainWindow):
 
         self._advanced_badge = QLabel("AVANZADO")
         self._advanced_badge.setStyleSheet(
-            "font-size: 10px; font-weight: 700; color: #8A6849; "
-            "background: #EFE3C7; border: 1px solid #C8AF8C; "
+            f"font-size: 10px; font-weight: 700; color: {SESSION_INK}; "
+            f"background: {SESSION_TINT}; border: 1px solid {SESSION_LINE}; "
             "border-radius: 8px; padding: 3px 8px;"
         )
         layout.addWidget(self._advanced_badge)
@@ -479,7 +483,10 @@ class MainWindow(QMainWindow):
             self._refresh_recent_project_option()
             return
         try:
-            self.controller.open(path)
+            result = self.controller.open(path)
+            if isinstance(result, Error):
+                self.log_msg(f"Error abriendo último proyecto: {result.error}")
+                return
             self.ctx.remember_project(path)
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
             self._refresh_all_views()
@@ -603,7 +610,10 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.controller.open(path)
+            result = self.controller.open(path)
+            if isinstance(result, Error):
+                self.log_msg(f"Error abriendo proyecto: {result.error}")
+                return
             self.ctx.remember_project(path)
             self._refresh_recent_project_option()
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
@@ -710,7 +720,7 @@ class MainWindow(QMainWindow):
 
     def _test_ai(self):
         result = self.ai.test_provider()
-        if hasattr(result, "error"):
+        if isinstance(result, Error):
             self.log_msg(f"AI ERROR: {result.error}")
             return
         resp = result.value

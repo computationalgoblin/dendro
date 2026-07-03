@@ -82,6 +82,68 @@ SHADOW_RGB  = (52, 47, 28)
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Tokens extraídos del host (BETA1-AUDIT-04) — extracción PURA de hex que
+# vivían hardcodeados en widgets/vistas. Mismos valores exactos: mover el
+# color aquí NO cambia nada visual, solo da una única fuente de verdad.
+# ─────────────────────────────────────────────────────────────────────────
+
+WHITE = "#FFFFFF"   # blanco puro (hover de superficies claras)
+
+# Tinta oliva — títulos/etiquetas de paneles e iconos de cierre
+INK_OLIVE      = "#6F6A42"
+INK_OLIVE_DEEP = "#5C5A3E"
+INK_OLIVE_SOFT = "#7A733D"
+
+# Texto claro sobre oro (botón primario, badge dorado)
+INK_INVERSE = "#FCF8EC"
+
+# Superficies y bordes de tarjetas flotantes claras (popups, sugerencias)
+POPUP_BG     = "#FFFDF7"
+SURFACE_PALE = "#F8F5EA"   # pergamino muy claro (hover de botones, rellenos)
+LINE_CARD    = "#D8D6C8"   # borde suave de tarjetas/group boxes claros
+LINE_OLIVE   = "#AFA77A"   # borde de realce (hover) / halos neutros
+LINE_MUTED   = "#C9C5B1"   # conectores y ornamentos tenues del Home
+
+# Tono "sesión" (cuero cálido): badge AVANZADO de la topbar y nodo Sesión del Home
+SESSION_INK  = "#8A6849"
+SESSION_TINT = "#EFE3C7"
+SESSION_LINE = "#C8AF8C"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Cronología (BETA1-AUDIT-04) — paleta base de chrono_canvas. El fondo
+# (CANVAS), la píldora (SURFACE_HI) y su borde (LINE) reutilizan los tokens
+# generales; aquí viven solo los valores propios de la vista.
+# ─────────────────────────────────────────────────────────────────────────
+
+CHRONO_INK   = "#504B2E"   # tinta de la cronología (etiquetas sobre pergamino)
+CHRONO_MUTED = "#7C806E"   # texto secundario
+CHRONO_LINE  = "#8A8563"   # líneas de vida y bordes de hito
+
+CHRONO_GOLD      = "#C8A24C"   # oro de la cronología (scrubber, foco de navegación)
+CHRONO_GOLD_DEEP = "#8A7A33"
+CHRONO_BLOOM     = "#E2B23C"   # glow dorado de germinación (hitos/vidas que brotan)
+CHRONO_EDGE_HI   = "#FCF8EE"   # filo iluminado del relieve (estratos/columnas)
+
+# Tintes BOTÁNICOS de los estratos de ERA (oro · salvia · terracota · ciruela ·
+# musgo). Mismos que el slider de la concéntrica, para que las dos vistas hablen
+# el mismo idioma de color.
+CHRONO_ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
+# Tintes por ANILLO (world layer) para las columnas de la cronología. Cálidos y
+# distintos entre sí, pero deliberadamente SEPARADOS de los de era (que tiñen el
+# fondo por TIEMPO) para que era×anillo no colisionen en tono.
+CHRONO_RING_TINTS = ("#B0794A", "#6F8A5E", "#A05C6E", "#8C7BA0", "#B79A46", "#7E8A74")
+CHRONO_RING_UNCLASSIFIED = "#9A927C"   # gris cálido neutro del anillo "Sin anillo"
+# Viñeta cálida (corazón con luz → bordes que se hunden), idéntica a la concéntrica.
+CHRONO_VIGNETTE = (
+    (0.0, "#F3EDDD"),
+    (0.50, CANVAS),
+    (0.82, "#DBD1B9"),
+    (1.0, "#CFC4A8"),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Cimientos del sistema (BETA1-UX01) — tokens transversales que dan
 # COHESIÓN y APLOMO. Principios:
 #   · Una sola voz de oro para la acción (nunca arcoíris).
@@ -312,7 +374,7 @@ QPushButton#primaryButton {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {GOLD}, stop:1 {GOLD_DEEP});
     border: 1px solid {GOLD_DEEP};
     border-radius: {RADIUS_MD}px;
-    color: #FCF8EC;
+    color: {INK_INVERSE};
     font-weight: 700;
     padding: 9px 16px;
 }}
@@ -663,7 +725,7 @@ class Badge(QLabel):
             "success": ("#DCE8D2", "#4F6E3F"),
             "warning": ("#EFE2C3", "#8A6534"),
             "danger": ("#EFD4C9", "#8C4A3C"),
-            "gold": (GOLD, "#FCF8EC"),
+            "gold": (GOLD, INK_INVERSE),
         }
         bg, fg = colors.get(tone, colors["neutral"])
         self.setStyleSheet(

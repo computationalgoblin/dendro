@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
     EASING_ENTER,
+    INK_OLIVE,
     MOTION_BASE,
     MOTION_SLOW,
     install_wheel_guard,
@@ -49,7 +50,7 @@ class BaseSlideDrawer(QFrame):
     WIDTH_MAX = 680
     HEADER_HEIGHT = 48
     HEADER_MARGINS = (16, 7, 12, 7)
-    CLOSE_ICON_COLOR = "#6F6A42"
+    CLOSE_ICON_COLOR = INK_OLIVE
     CLOSE_ICON_SIZE = 13
 
     def __init__(self, parent: QWidget | None = None):

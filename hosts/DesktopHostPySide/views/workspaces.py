@@ -75,6 +75,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     INK_SOFT,
     INK_STRONG,
     INK_MUTED,
+    INK_OLIVE,
     INPUT_BG,
     LINE,
     LINE_STRONG,
@@ -4406,7 +4407,7 @@ class CreationWorkspace(QWidget):
     @_qt_safe_slot
     def _reset_job_status_style(self):
         self._job_status_label.setStyleSheet(
-            "color: #6F6A42; font-size: 11px; background: transparent; border: none;"
+            f"color: {INK_OLIVE}; font-size: 11px; background: transparent; border: none;"
         )
         # Only reset text if it's still showing an error
         current = self._job_status_label.text()

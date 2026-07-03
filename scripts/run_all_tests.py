@@ -24,6 +24,9 @@ Suites:
     b39         Project control artifacts/tests
     b40         Creative project config and wizard tests
     b41         Causal milestones domain/persistence tests
+    b42         AI gateway, sanitizer, model params y prompt tests
+    b43         Command bar prompt-registry migration tests
+    b44         Concentric rings layout (desktop) tests
     infra       infrastructure tests (fast)
     sanity      test_sanity (fast)
     all         everything (default)

@@ -38,17 +38,6 @@ _BLOCKED_CONTEXT_KEYS: frozenset[str] = frozenset({
     "narrative_ai_api_key", "narrative_ai_base_url",
 })
 
-_ALLOWLIST_PREFIXES: tuple[str, ...] = (
-    "project_", "genre", "tone", "style", "theme",
-    "entity", "entities", "relation", "relations",
-    "name", "description", "brief", "text",
-    "canon", "creative", "narrative", "world",
-    "character", "plot", "setting", "type",
-    "summary", "notes", "tags", "custom_",
-    "tree", "trees", "layer", "layers",
-    "selected_", "target", "context",
-)
-
 
 # ---------------------------------------------------------------------------
 # Intent → model params mapping

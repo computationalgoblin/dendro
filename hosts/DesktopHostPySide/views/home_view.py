@@ -38,10 +38,15 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD_SOFT,
     INK,
     INK_MUTED,
+    INK_OLIVE_SOFT,
     INK_SOFT,
     INK_STRONG,
     LINE,
+    LINE_MUTED,
+    SESSION_INK,
+    SESSION_LINE,
     SURFACE_HI,
+    WHITE,
 )
 
 try:  # BETA1-F01: QtMultimedia viene con PySide6, pero protegemos el import
@@ -462,7 +467,7 @@ class HomeNode(QFrame):
         self._wb_label = QLabel("Capas")
         self._wb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._wb_label.setStyleSheet(
-            "font-size: 11px; color: #7A733D; background: transparent; border: none; "
+            f"font-size: 11px; color: {INK_OLIVE_SOFT}; background: transparent; border: none; "
             "margin-top: 2px;"
         )
         self._wb_label.setVisible(False)
@@ -487,7 +492,7 @@ class HomeNode(QFrame):
         tones = {
             "creation": (SURFACE_HI, GOLD_DEEP, GOLD_SOFT),
             "gallery": ("#F3F5EE", "#6E7B59", "#B5BBA5"),
-            "session": ("#F6F1E8", "#8A6849", "#C8AF8C"),
+            "session": ("#F6F1E8", SESSION_INK, SESSION_LINE),
         }
         bg, fg, border = tones.get(tone, tones["creation"])
         self._bg_default = bg
@@ -496,7 +501,7 @@ class HomeNode(QFrame):
         self.setStyleSheet(
             f"QFrame#dendroNode {{ background: {bg}; border: 1px solid {border}; "
             "border-radius: 36px; }} "
-            f"QFrame#dendroNode:hover {{ background: #FFFFFF; border: 2px solid {GOLD}; }}"
+            f"QFrame#dendroNode:hover {{ background: {WHITE}; border: 2px solid {GOLD}; }}"
         )
 
     def set_dimmed(self, dimmed: bool):
@@ -563,13 +568,13 @@ class QuietIconButton(QPushButton):
             self.setStyleSheet(
                 f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
                 f"border-radius: 17px; padding: 0px; color: {INK_SOFT}; font-size: 16px; }} "
-                f"QPushButton:hover {{ background: #FFFFFF; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
+                f"QPushButton:hover {{ background: {WHITE}; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
             )
         else:
             self.setStyleSheet(
                 f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {LINE}; "
                 f"border-radius: 18px; padding: 8px 14px; color: {INK_SOFT}; font-size: 12px; font-weight: 600; }} "
-                f"QPushButton:hover {{ background: #FFFFFF; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
+                f"QPushButton:hover {{ background: {WHITE}; border: 1px solid {GOLD}; color: {INK_STRONG}; }}"
             )
         if icon_name:
             icons.set_button_icon(self, icon_name, color=INK_SOFT, size=18 if icon_only else 16)
@@ -582,7 +587,7 @@ class _BranchLine(QFrame):
         super().__init__(parent)
         self.setFixedWidth(2)
         self.setMinimumHeight(24)
-        self.setStyleSheet("background: #C9C5B1; border: none;")
+        self.setStyleSheet(f"background: {LINE_MUTED}; border: none;")
 
 
 class HomeView(QWidget):
@@ -725,7 +730,9 @@ class HomeView(QWidget):
         inner.setContentsMargins(0, 0, 0, 0)
         lbl = QLabel("┃")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("font-size: 18px; color: #C9C5B1; background: transparent; border: none;")
+        lbl.setStyleSheet(
+            f"font-size: 18px; color: {LINE_MUTED}; background: transparent; border: none;"
+        )
         inner.addWidget(lbl)
         return line
 

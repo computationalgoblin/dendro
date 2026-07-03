@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
+from hosts.DesktopHostPySide.widgets.design_system import INK_OLIVE, LINE_CARD
 from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from packages.domain.result import Error
 
@@ -85,8 +86,8 @@ class ChronologyConfigPanel(QGroupBox):
         self._mode_rows: dict[str, list[QWidget]] = {"vague_periods": [], "full_calendar": []}
         self.setObjectName("chronologyConfigPanel")
         self.setStyleSheet(
-            "QGroupBox#chronologyConfigPanel { color: #6F6A42; font-weight: 600; "
-            "border: 1px solid #D8D6C8; border-radius: 10px; margin-top: 8px; "
+            f"QGroupBox#chronologyConfigPanel {{ color: {INK_OLIVE}; font-weight: 600; "
+            f"border: 1px solid {LINE_CARD}; border-radius: 10px; margin-top: 8px; "
             "padding-top: 14px; background: transparent; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
         )

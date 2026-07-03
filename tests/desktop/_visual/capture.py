@@ -16,6 +16,8 @@ No es un test (sin prefijo ``test_``); pytest no lo recoge.
 
 from __future__ import annotations
 
+from packages.domain.result import Error as DomainError
+
 # Nota: NO forzamos QT_QPA_PLATFORM aquí. En Windows, la plataforma "offscreen"
 # no carga las fuentes del sistema y el texto sale en cajas (□), inútil para
 # verificar tipografía/iconos. Por defecto dejamos la plataforma real (fiel) y
@@ -94,7 +96,9 @@ def capture(out_dir: str | Path, label: str = "baseline") -> list[Path]:
 
     # 4) Cargar el demo y entrar a Creación.
     try:
-        mw.controller.open(str(demo_path))
+        result = mw.controller.open(str(demo_path))
+        if isinstance(result, DomainError):
+            print(f"  [warn] no se pudo abrir el demo: {result.error}")
     except Exception as exc:  # noqa: BLE001
         print(f"  [warn] no se pudo abrir el demo: {exc}")
     if hasattr(mw, "_refresh_all_views"):

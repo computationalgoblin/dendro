@@ -2,16 +2,15 @@
 from __future__ import annotations
 from pathlib import Path
 from packages.application.project_service import ProjectService
-from packages.domain.result import Error
+from packages.domain.result import Error, Result
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
 class ProjectController:
     def __init__(self, store=None):
-        if store is None:
-            from packages.persistence.store import ProjectStore
-            store = ProjectStore()
-        self.store = store
-        self.ps = ProjectService(store=self.store)
+        # El host no importa persistence: ProjectService construye su propio
+        # ProjectStore por defecto; `store` queda como punto de inyección (tests).
+        self.ps = ProjectService(store=store) if store is not None else ProjectService()
+        self.store = self.ps.store
         self._current_path: str | None = None
 
     @property
@@ -22,17 +21,18 @@ class ProjectController:
     def current_path(self, value: str | None) -> None:
         self._current_path = value
 
-    def open(self, path: str):
+    def open(self, path: str) -> Result:
         _apptrace(f"CTRL ProjectController.open path={path!r}"[:120])
         result = self.ps.open(Path(path))
-        if hasattr(result, 'error'):
-            raise ValueError(f"Cannot open project: {result.error}")
+        if isinstance(result, Error):
+            return result
         self.current_path = path
+        return result
 
     def create(self, name: str, path: str | None = None):
         _apptrace(f"CTRL ProjectController.create name={name!r}"[:120])
         result = self.ps.create(name=name)
-        if hasattr(result, "error"):
+        if isinstance(result, Error):
             return result
         project = self.ps.active_project
         if project is not None:
