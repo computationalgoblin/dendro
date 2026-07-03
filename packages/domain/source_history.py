@@ -43,7 +43,7 @@ class SourceState(str, Enum):
 
 
 class HistoryEventType(str, Enum):
-    """Tipos de evento trazable — §5.4 (16 operaciones) + riego (BETA2-FOCO, 3)."""
+    """Tipos de evento trazable — §5.4 (16 operaciones) + jardín BETA2-FOCO (4)."""
 
     CREACION_PROYECTO = "creacion_proyecto"
     CAMBIO_CONFIGURACION = "cambio_configuracion"
@@ -61,10 +61,11 @@ class HistoryEventType(str, Enum):
     ACEPTACION_SUGERENCIA = "aceptacion_sugerencia"
     IMPORTACION_DOCUMENTAL = "importacion_documental"
     ACTUALIZACION_POST_SESION = "actualizacion_post_sesion"
-    # BETA2-FOCO: jardín narrativo (riego). El riego diagnostica, no muta canon.
+    # BETA2-FOCO: jardín narrativo (riego + fantasmas). El riego diagnostica, no muta canon.
     RIEGO_ENTIDAD = "riego_entidad"
     SECADO_ENTIDAD = "secado_entidad"
     CULTIVO_ENTIDAD = "cultivo_entidad"
+    DESCARTE_FANTASMA = "descarte_fantasma"
 
 
 # ═══════════════════════════════════════════════════════════════════════

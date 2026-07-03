@@ -35,6 +35,9 @@ ARCHIVED_CANON_STATES: frozenset[str] = frozenset({
     "archivado",
     "descartado",
     "obsoleto",
+    # BETA2-FOCO: los nodos fantasma son borradores internos — no se indexan
+    # al RAG como canon (su intención llega al contexto por otra vía, marcada).
+    "fantasma",
 })
 
 PRIVATE_VISIBILITY_STATES: frozenset[str] = frozenset({

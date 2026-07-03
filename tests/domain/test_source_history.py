@@ -24,9 +24,9 @@ class TestSourceState:
 
 
 class TestHistoryEventType:
-    def test_has_19_values(self):
-        # 16 originales (§5.4) + 3 de riego (BETA2-FOCO: riego/secado/cultivo).
-        assert len(HistoryEventType) == 19
+    def test_has_20_values(self):
+        # 16 originales (§5.4) + 4 del jardín BETA2-FOCO (riego/secado/cultivo/descarte fantasma).
+        assert len(HistoryEventType) == 20
 
 
 class TestSource:

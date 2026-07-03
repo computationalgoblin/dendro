@@ -886,7 +886,8 @@ class NarrativeContextBuilder:
         canon = _string_value(getattr(entity, "canon_state", "")).lower()
         if any(token in visibility for token in _SECRET_VISIBILITY_TOKENS):
             return False
-        if canon in {"sugerido_ia", "importado_pendiente", "descartado", "archivado"}:
+        # "fantasma" (BETA2-FOCO): borrador interno — solo la audiencia gm lo ve, marcado.
+        if canon in {"sugerido_ia", "importado_pendiente", "descartado", "archivado", "fantasma"}:
             return False
         return True
 
@@ -897,7 +898,7 @@ class NarrativeContextBuilder:
         canon = _string_value(getattr(relation, "canon_state", "")).lower()
         if any(token in visibility for token in _SECRET_VISIBILITY_TOKENS):
             return False
-        if canon in {"sugerido_ia", "importado_pendiente", "descartado", "archivado"}:
+        if canon in {"sugerido_ia", "importado_pendiente", "descartado", "archivado", "fantasma"}:
             return False
         source = self._entity_by_id(getattr(relation, "source_id", ""))
         target = self._entity_by_id(getattr(relation, "target_id", ""))

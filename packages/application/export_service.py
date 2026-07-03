@@ -13,10 +13,12 @@ class ExportService:
     def _proj(self): return self.project_service.active_project
 
     def _filter_entities(self, audience):
-        entities = self._proj().entities
+        # BETA2-FOCO: los nodos fantasma son borradores internos — jamás exportan,
+        # tampoco para el GM (exportar = compartir; el fantasma no es canon pleno).
+        entities = [e for e in self._proj().entities if e.canon_state.value != "fantasma"]
         if audience == "public": return [e for e in entities if e.visibility_state.value == "publico_mundo"]
         if audience == "player": return [e for e in entities if e.visibility_state.value not in ("privado_autor", "secreto_mundo")]
-        return entities  # gm: all
+        return entities  # gm: all (sin fantasmas)
 
     def export_public_summary(self, audience="public"):
         entities = self._filter_entities(audience)
@@ -49,6 +51,8 @@ class ExportService:
         for e in self._proj().entities:
             if e.id == entity_id: entity = e; break
         if entity is None: return Error("Entity not found")
+        if entity.canon_state.value == "fantasma":
+            return Error("Entidad fantasma: borrador interno no exportable")
         if audience == "public" and entity.visibility_state.value != "publico_mundo": return Error("Entity not visible to public")
         parts = [f"{entity.entity_type.value}: {entity.name}", f"Description: {entity.brief_description}"]
         if audience == "gm": parts.append(f"Notes: {entity.private_notes or '(none)'}")
