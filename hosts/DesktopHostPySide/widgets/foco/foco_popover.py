@@ -122,8 +122,7 @@ class EntitySearchPopover(Popover):
 
     def result_ids(self) -> list[str]:
         return [
-            self.results.item(i).data(Qt.ItemDataRole.UserRole)
-            for i in range(self.results.count())
+            self.results.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.results.count())
         ]
 
     def pick_first(self) -> None:

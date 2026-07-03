@@ -34,9 +34,7 @@ class GhostController:
         _apptrace(
             f"CTRL GhostController.create_ghost_relation src={source_id!r} tgt={target_id!r}"[:120]
         )
-        return self.service.create_ghost_relation(
-            source_id, target_id, relation_type, description
-        )
+        return self.service.create_ghost_relation(source_id, target_id, relation_type, description)
 
     def convert_to_entity(self, ghost_id):
         _apptrace(f"CTRL GhostController.convert_to_entity ghost={ghost_id!r}"[:120])

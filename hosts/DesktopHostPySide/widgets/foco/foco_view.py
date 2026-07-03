@@ -586,9 +586,7 @@ class FocoView(QWidget):
             return
         center_id = self._center_id
         if tool_id == "create_entity":
-            self._popover = QuickCreatePopover(
-                title="Nueva entidad", on_submit=self._create_entity
-            )
+            self._popover = QuickCreatePopover(title="Nueva entidad", on_submit=self._create_entity)
             self._popover.open_next_to(anchor)
         elif tool_id == "create_related" and center_id:
             self._popover = QuickCreatePopover(
