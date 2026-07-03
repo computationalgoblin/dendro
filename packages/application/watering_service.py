@@ -638,20 +638,12 @@ class WateringService:
     # Sugerir X → Semillas con hint de zona (FOCO-06)
     # ------------------------------------------------------------------
 
-    def suggest(
-        self,
-        entity_id: str,
-        metric: str,
-        *,
-        progress_callback: Any = None,
-    ) -> Result[Any, str]:
-        """Sugerir X: genera Semillas (candidatos) sesgadas a reparar una métrica.
+    def build_suggestion_request(self, entity_id: str, metric: str) -> Result[dict[str, Any], str]:
+        """Prepara (SIN ejecutar) la petición de Sugerir X: job, prompt y scope.
 
-        Consume IA autorizada (la autorización visible es del host, antes de
-        llamar aquí). El hint de zona viaja en ``context_scope["foco_hint"]`` y
-        ``ai_jobs`` lo copia a la metadata de cada candidato: la UI de Foco lo
-        usa para germinar la Semilla en Raíces/Brotes o como tarjeta del drawer.
-        NUNCA canoniza — la aceptación sigue el flujo humano existente.
+        El host la usa para mostrar su autorización visible y lanzar después el
+        job por el pipeline estándar (worker + staging + germinación SEM04).
+        No comprueba proveedor: preparar no consume IA.
         """
         metric_key = str(metric or "").strip().lower()
         spec = _SUGGEST_SPECS.get(metric_key)
@@ -668,8 +660,6 @@ class WateringService:
             return Error("Un nodo fantasma no participa del ciclo de riego")
         if entity_id in project.watering_paused_entity_ids:
             return Error("La entidad está secada: usa Cultivar antes de pedir sugerencias")
-        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
-            return Error(_UNCONFIGURED_AI_MESSAGE)
 
         context = self.build_watering_context(entity_id)
         if isinstance(context, Error):
@@ -688,17 +678,50 @@ class WateringService:
             "Devuelve las propuestas como candidatos revisables (Semillas): "
             "nada se integra al canon sin aceptación humana."
         )
-        return self.ai_job_service.run_focused_job(
-            spec["job"],
-            "\n".join(lines),
-            context_scope={
-                "selected_entity_ids": [entity_id],
-                "foco_hint": {
-                    "zone": spec["zone"],
-                    "metric": metric_key,
-                    "center_entity_id": entity_id,
+        tokens = int(context.value["estimated_tokens"])
+        return Ok(
+            {
+                "job_type": spec["job"],
+                "prompt": "\n".join(lines),
+                "context_scope": {
+                    "selected_entity_ids": [entity_id],
+                    "foco_hint": {
+                        "zone": spec["zone"],
+                        "metric": metric_key,
+                        "center_entity_id": entity_id,
+                    },
                 },
-            },
+                "entity_name": entity.name,
+                "estimated_input_tokens": tokens,
+                "cost_class": self._cost_class_for_tokens(tokens),
+            }
+        )
+
+    def suggest(
+        self,
+        entity_id: str,
+        metric: str,
+        *,
+        progress_callback: Any = None,
+    ) -> Result[Any, str]:
+        """Sugerir X: genera Semillas (candidatos) sesgadas a reparar una métrica.
+
+        Consume IA autorizada (la autorización visible es del host, antes de
+        llamar aquí). El hint de zona viaja en ``context_scope["foco_hint"]`` y
+        ``ai_jobs`` lo copia a la metadata de cada candidato: la UI de Foco lo
+        usa para germinar la Semilla en Raíces/Brotes o como tarjeta del drawer.
+        NUNCA canoniza — la aceptación sigue el flujo humano existente.
+        """
+        request = self.build_suggestion_request(entity_id, metric)
+        if isinstance(request, Error):
+            return request
+        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
+            return Error(_UNCONFIGURED_AI_MESSAGE)
+        payload = request.value
+        return self.ai_job_service.run_focused_job(
+            payload["job_type"],
+            payload["prompt"],
+            context_scope=payload["context_scope"],
             progress_callback=progress_callback,
         )
 

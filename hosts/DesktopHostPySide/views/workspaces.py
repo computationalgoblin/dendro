@@ -49,6 +49,13 @@ from hosts.DesktopHostPySide.widgets.graph_canvas import (
 )
 from hosts.DesktopHostPySide.controllers.ghost_controller import GhostController
 from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
+from hosts.DesktopHostPySide.widgets.foco.watering_authorize import (
+    request_watering_authorization,
+)
+from hosts.DesktopHostPySide.widgets.foco.watering_batch import WateringBatchWorker
+from hosts.DesktopHostPySide.widgets.foco.watering_panel import WateringPanel
+from packages.application.history_service import HistoryService
+from packages.application.watering_service import WateringService
 from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 from hosts.DesktopHostPySide.widgets.chrono_canvas import (
     ChronoCanvasView,
@@ -1982,6 +1989,23 @@ class CreationWorkspace(QWidget):
         # FOCO-10: la banda local reutiliza los slots de la cronología global.
         self.foco.lifespanEdited.connect(self._on_lifespan_edited)
         self.foco.milestoneCreateRequested.connect(self._on_chrono_create_milestone)
+        # FOCO-12: riego — servicio real + drawer dedicado + autorización SIEMPRE.
+        self.watering_service = (
+            WateringService(
+                _foco_ps,
+                ai_job_service=self.ai_job_service,
+                history_service=HistoryService(_foco_ps),
+            )
+            if _foco_ps is not None
+            else None
+        )
+        self.foco.watering_service = self.watering_service
+        self._watering_panel: WateringPanel | None = None
+        self._watering_worker: WateringBatchWorker | None = None
+        self.foco.waterRequested.connect(self._on_foco_water)
+        self.foco.dryRequested.connect(self._on_foco_dry)
+        self.foco.cultivateRequested.connect(self._on_foco_cultivate)
+        self.foco.entityCentered.connect(self._sync_watering_panel_entity)
         layout.addWidget(self.foco, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
@@ -2311,6 +2335,197 @@ class CreationWorkspace(QWidget):
                 focus(entity_id)
             except Exception:  # noqa: BLE001 - enfocar es best-effort
                 pass
+
+    # ------------------------------------------------------------------
+    # FOCO-12: riego desde la UI — drawer dedicado, autorización y lote
+    # ------------------------------------------------------------------
+
+    def _ensure_watering_panel(self) -> "WateringPanel | None":
+        if self.watering_service is None:
+            return None
+        if self._watering_panel is None:
+            panel = WateringPanel(self.watering_service)
+            panel.waterRequested.connect(
+                lambda: self._on_foco_water(
+                    [self.foco.current_entity_id()] if self.foco.current_entity_id() else []
+                )
+            )
+            panel.pauseToggled.connect(self._on_watering_pause_toggled)
+            panel.suggestRequested.connect(self._on_foco_suggest)
+            panel.cancelBatchRequested.connect(self._cancel_watering_batch)
+            self._watering_panel = panel
+        return self._watering_panel
+
+    def _open_watering_drawer(self, entity_id: str = "") -> None:
+        panel = self._ensure_watering_panel()
+        if panel is None or self.ctx.drawer is None:
+            return
+        panel.set_entity(entity_id or self.foco.current_entity_id())
+        self.ctx.drawer.set_content(panel, title="Riego")
+        self.ctx.drawer.open()
+
+    def _sync_watering_panel_entity(self, entity_id: str) -> None:
+        panel = self._watering_panel
+        if panel is not None and panel.isVisible():
+            panel.set_entity(entity_id)
+
+    def _on_foco_dry(self, entity_id: str) -> None:
+        """Secar: sin IA, con historial; conserva/silencia la lectura previa."""
+        if self.watering_service is None or not entity_id:
+            return
+        result = self.watering_service.pause(entity_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        self.ctx.request_save_silent()
+        self.foco._refresh_tool_context()
+        self._open_watering_drawer(entity_id)
+
+    def _on_foco_cultivate(self, entity_id: str) -> None:
+        """Cultivar: sin IA; la entidad vuelve al ciclo como Falta regar."""
+        if self.watering_service is None or not entity_id:
+            return
+        result = self.watering_service.resume(entity_id)
+        if isinstance(result, Error):
+            self.ctx.log("error", result.error)
+            return
+        self.ctx.request_save_silent()
+        self.foco._refresh_tool_context()
+        self._open_watering_drawer(entity_id)
+
+    def _on_watering_pause_toggled(self, pause: bool) -> None:
+        panel = self._watering_panel
+        entity_id = panel.entity_id() if panel is not None else self.foco.current_entity_id()
+        if pause:
+            self._on_foco_dry(entity_id)
+        else:
+            self._on_foco_cultivate(entity_id)
+
+    def _on_foco_water(self, entity_ids: list) -> None:
+        """Regar entidad/selección: SIEMPRE pasa por la autorización visible."""
+        service = self.watering_service
+        ids = [str(entity_id) for entity_id in (entity_ids or []) if entity_id]
+        if service is None or not ids:
+            return
+        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
+            self.ctx.log(
+                "error",
+                "IA no configurada: define el proveedor en Ajustes de IA para poder regar.",
+            )
+            return
+        scope = service.entities_in_scope({"selection": ids})
+        eligible = getattr(scope, "value", None) or []
+        if not eligible:
+            self.ctx.log("info", "Nada que regar: la selección no tiene entidades elegibles.")
+            return
+        estimate = getattr(service.estimate(eligible), "value", None)
+        if estimate is None:
+            self.ctx.log("error", "No se pudo estimar el coste del riego.")
+            return
+        project = self._get_active_project()
+        names = [
+            getattr(project.entity_by_id(entity_id), "name", entity_id)
+            for entity_id in eligible[:6]
+        ]
+        extra = f" (+{len(eligible) - 6} más)" if len(eligible) > 6 else ""
+        lines = [
+            f"Entidades afectadas ({estimate.entity_count}): {', '.join(names)}{extra}",
+            "Se enviará contexto COMPACTO por entidad: ficha, Raíces/Entorno/Brotes, "
+            "hitos vinculados y última lectura (los fantasmas van marcados como intención).",
+            f"Tokens de entrada estimados: ~{estimate.estimated_input_tokens}.",
+            "Resultado esperado: diagnóstico persistente por entidad (métricas + informe). "
+            "NO crea Semillas ni modifica canon.",
+        ]
+        request_watering_authorization(
+            getattr(self.ctx, "modal_overlay", None),
+            title=("Regar 1 entidad" if len(eligible) == 1 else f"Regar {len(eligible)} entidades"),
+            lines=lines,
+            cost_class=estimate.cost_class,
+            confirm_text="Autorizar y regar",
+            on_confirm=lambda: self._run_watering_batch(eligible),
+        )
+
+    def _run_watering_batch(self, entity_ids: list) -> None:
+        if self.watering_service is None or not entity_ids:
+            return
+        worker = WateringBatchWorker(self.watering_service, list(entity_ids))
+        worker.entityDone.connect(self._on_watering_entity_done)
+        worker.progressChanged.connect(self._on_watering_progress)
+        worker.finishedOk.connect(self._on_watering_finished)
+        worker.finished.connect(lambda: setattr(self, "_watering_worker", None))
+        self._watering_worker = worker
+        track_worker(worker)  # apagado ordenado al cerrar la app (AUDIT-02)
+        panel = self._ensure_watering_panel()
+        if panel is not None:
+            panel.set_batch_running(True, f"Regando 0/{len(entity_ids)}…")
+        self._open_watering_drawer(str(entity_ids[0]))
+        worker.start()
+
+    def _cancel_watering_batch(self) -> None:
+        worker = self._watering_worker
+        if worker is not None:
+            worker.request_cancel()
+            self.ctx.log("info", "Riego: cancelando entre pasos (los parciales se conservan).")
+
+    def _on_watering_entity_done(self, entity_id: str, ok: bool, error: str) -> None:
+        # Parciales SIEMPRE persistidos (guardado silencioso desde el hilo UI).
+        self.ctx.request_save_silent()
+        if not ok:
+            self.ctx.log("error", f"Riego fallido ({entity_id}): {error}")
+        if entity_id == self.foco.current_entity_id():
+            self.foco._refresh_tool_context()
+        if self._watering_panel is not None:
+            self._watering_panel.refresh()
+
+    def _on_watering_progress(self, done: int, total: int) -> None:
+        if self._watering_panel is not None:
+            self._watering_panel.set_batch_running(True, f"Regando {done}/{total}…")
+        self._job_status_label.setText(f"Regando {done}/{total}…")
+
+    def _on_watering_finished(self) -> None:
+        if self._watering_panel is not None:
+            self._watering_panel.set_batch_running(False)
+            self._watering_panel.refresh()
+        self._job_status_label.setText("")
+        self.ctx.log("info", "Riego completado: diagnósticos persistidos.")
+
+    def _on_foco_suggest(self, metric: str) -> None:
+        """Sugerir X: autorización visible → pipeline estándar de jobs (Semillas)."""
+        service = self.watering_service
+        entity_id = self.foco.current_entity_id()
+        if service is None or not entity_id:
+            return
+        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
+            self.ctx.log(
+                "error",
+                "IA no configurada: define el proveedor en Ajustes de IA para pedir sugerencias.",
+            )
+            return
+        request = service.build_suggestion_request(entity_id, metric)
+        if isinstance(request, Error):
+            self.ctx.log("error", request.error)
+            return
+        payload = request.value
+        lines = [
+            f"Entidad afectada: {payload['entity_name']}.",
+            "Se enviará su contexto compacto (ficha + zonas + hitos + última lectura).",
+            f"Tokens de entrada estimados: ~{payload['estimated_input_tokens']}.",
+            "Resultado esperado: Semillas (candidatos revisables) para reparar la métrica. "
+            "Nada se integra al canon sin tu aceptación.",
+        ]
+        request_watering_authorization(
+            getattr(self.ctx, "modal_overlay", None),
+            title=f"Sugerir {metric}",
+            lines=lines,
+            cost_class=str(payload["cost_class"]),
+            confirm_text="Autorizar y sugerir",
+            on_confirm=lambda: self._launch_toolbar_ai_job(
+                payload["prompt"],
+                f"Sugerir {metric}…",
+                payload["job_type"],
+                scope_override=payload["context_scope"],
+            ),
+        )
 
     def _walk_bar_clicked(self) -> None:
         """CRON: botón de barra. Continúa el recorrido activo o, si no hay, lo
