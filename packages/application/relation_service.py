@@ -75,7 +75,7 @@ class RelationService:
             ("relation_type", RelationType, RelationType.ESTA_RELACIONADO_CON),
             ("direction", Direction, Direction.UNIDIRECCIONAL),
             ("intensity", IntensityLevel, IntensityLevel.MEDIA),
-            ("canon_state", CanonState, CanonState.BORRADOR),
+            ("canon_state", CanonState, CanonState.CANONICO),
             ("visibility_state", VisibilityState, VisibilityState.VISIBLE_USUARIO),
         )
         for attr, enum_cls, default in enum_specs:
@@ -242,7 +242,7 @@ class RelationService:
                     "source": getattr(r, "source", ""),
                     "direction": getattr(r, "direction", Direction.UNIDIRECCIONAL),
                     "intensity": getattr(r, "intensity", IntensityLevel.MEDIA),
-                    "canon_state": getattr(r, "canon_state", CanonState.BORRADOR),
+                    "canon_state": getattr(r, "canon_state", CanonState.CANONICO),
                     "visibility_state": getattr(r, "visibility_state", VisibilityState.VISIBLE_USUARIO),
                     "validity_conditions": list(getattr(r, "validity_conditions", []) or []),
                     "tags": list(getattr(r, "tags", []) or []),
@@ -323,7 +323,7 @@ class RelationService:
                     return Error(
                         f"Relation '{relation_id}' is not archived"
                     )
-                r.canon_state = CanonState.BORRADOR
+                r.canon_state = CanonState.CANONICO
                 r.touch()
                 proj.value.touch()
                 return Ok(r)

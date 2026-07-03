@@ -126,16 +126,17 @@ class GhostService:
         return Ok(relation)
 
     def convert_to_entity(self, ghost_id: str) -> Result[NarrativeEntity, str]:
-        """Convierte el fantasma en entidad real (BORRADOR). Acción explícita, trazada.
+        """Convierte el fantasma en entidad real (CANONICO). Acción explícita, trazada.
 
-        Las relaciones fantasma cuyo otro extremo ya es real maduran a BORRADOR;
+        BETA2-FOCO-16 (canon total): todo es canon salvo declaración fantasma.
+        Las relaciones fantasma cuyo otro extremo ya es real maduran a CANONICO;
         las que apuntan a otro fantasma siguen fantasma.
         """
         checked = self._require_ghost(ghost_id)
         if isinstance(checked, Error):
             return checked
         project, entity = checked.value
-        entity.canon_state = CanonState.BORRADOR
+        entity.canon_state = CanonState.CANONICO
         entity.touch()
         for relation in project.relations_for(ghost_id):
             if relation.canon_state != CanonState.FANTASMA:
@@ -143,14 +144,14 @@ class GhostService:
             other_id = relation.target_id if relation.source_id == ghost_id else relation.source_id
             other = project.entity_by_id(other_id)
             if other is not None and not self.is_ghost(other):
-                relation.canon_state = CanonState.BORRADOR
+                relation.canon_state = CanonState.CANONICO
                 relation.touch()
         project.touch()
         self._record(
             HistoryEventType.CAMBIO_CANON,
             entity_id=ghost_id,
             previous=CanonState.FANTASMA.value,
-            new=CanonState.BORRADOR.value,
+            new=CanonState.CANONICO.value,
             operation="convertir_fantasma",
             description=f"Nodo fantasma convertido en entidad: {entity.name}",
         )
@@ -187,7 +188,7 @@ class GhostService:
                 and other is not None
                 and not self.is_ghost(other)
             ):
-                relation.canon_state = CanonState.BORRADOR
+                relation.canon_state = CanonState.CANONICO
             relation.touch()
         project.entities.remove(ghost)
         if project.metadata.get("last_worked_entity_id") == ghost_id:

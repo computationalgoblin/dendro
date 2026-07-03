@@ -129,7 +129,8 @@ class NarrativeRelation:
     life_span: TemporalSpan | None = None
 
     # --- State (10–12, reused from entity.py) ---
-    canon_state: CanonState = CanonState.BORRADOR
+    # BETA2-FOCO-16 (canon total): las relaciones también nacen canónicas.
+    canon_state: CanonState = CanonState.CANONICO
     visibility_state: VisibilityState = VisibilityState.VISIBLE_USUARIO
     certainty_level: CertaintyLevel = CertaintyLevel.PROBABLE
 
@@ -235,7 +236,7 @@ class NarrativeRelation:
             death_year=_parse_optional_int(data.get("death_year")),
             life_span=_parse_life_span(data.get("life_span")),
             canon_state=_parse_enum(
-                CanonState, data.get("canon_state"), CanonState.BORRADOR,
+                CanonState, data.get("canon_state"), CanonState.CANONICO,
             ),
             visibility_state=_parse_enum(
                 VisibilityState, data.get("visibility_state"),

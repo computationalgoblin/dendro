@@ -189,7 +189,7 @@ class TestToolActions:
         view.center_entity(ghost.id, push_history=False)
 
         view._on_tool("ghost_convert")
-        assert ghost.canon_state == CanonState.BORRADOR
+        assert ghost.canon_state == CanonState.CANONICO
 
     def test_add_to_branch_creates_containment(self, qapp):
         project_service, view = _setup()

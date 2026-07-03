@@ -104,9 +104,9 @@ class TestGhostSafety:
         ghost = _entity(project_service, "¿Sombra?", canon_state=CanonState.FANTASMA)
         panel = _panel(ctx, entity_controller, ghost.id)
 
-        # El combo de canon queda oculto y aparece el aviso de fantasma.
+        # BETA2-FOCO-16 (canon total): no hay combo de canon; aparece el aviso.
         assert panel._is_ghost is True
-        assert panel.canon_combo.isHidden()
+        assert not hasattr(panel, "canon_combo")
         assert not panel.ghost_state_label.isHidden()
 
         panel.name_edit.setText("¿Sombra renombrada?")
@@ -115,13 +115,16 @@ class TestGhostSafety:
         assert ghost.canon_state == CanonState.FANTASMA  # ¡no se des-fantasma!
         assert ghost.name == "¿Sombra renombrada?"
 
-    def test_normal_entity_still_saves_canon(self, qapp):
+    def test_normal_entity_keeps_canon_on_autosave(self, qapp):
+        # BETA2-FOCO-16 (canon total): el panel ya no emite canon_state — el
+        # guardado conserva el estado existente tal cual.
         project_service, ctx, entity_controller, _ = _setup()
-        entity = _entity(project_service, "Real")
+        entity = _entity(project_service, "Real", canon_state=CanonState.CANONICO)
         panel = _panel(ctx, entity_controller, entity.id)
-        panel.canon_combo.setCurrentIndex(1)  # Canónico
+        panel.name_edit.setText("Real renombrada")
         panel._do_save(refresh_after=False)
         assert entity.canon_state == CanonState.CANONICO
+        assert entity.name == "Real renombrada"
 
 
 class TestClickableRelations:

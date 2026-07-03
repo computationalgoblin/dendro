@@ -49,7 +49,7 @@ class TestCreateEntity:
         svc = _setup(tmp_path)
         result = svc.create_entity({"name": "X", "entity_type": "nota"})
         assert isinstance(result, Ok)
-        assert result.value.canon_state == CanonState.BORRADOR
+        assert result.value.canon_state == CanonState.CANONICO
         assert result.value.visibility_state == VisibilityState.VISIBLE_USUARIO
 
     def test_create_empty_name_fails(self, tmp_path: Path):
@@ -126,7 +126,7 @@ class TestArchive:
         svc.archive_entity(e.id)
         result = svc.restore_entity(e.id)
         assert isinstance(result, Ok)
-        assert result.value.canon_state == CanonState.BORRADOR
+        assert result.value.canon_state == CanonState.CANONICO
 
     def test_restore_non_archived_errors(self, tmp_path: Path):
         svc = _setup(tmp_path)

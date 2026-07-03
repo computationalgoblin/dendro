@@ -5977,7 +5977,7 @@ class CreationWorkspace(QWidget):
                     "name": "Nueva hoja",
                     "entity_type": "nota",
                     "brief_description": "",
-                    "canon_state": "borrador",
+                    "canon_state": "canonico",
                     "custom_metadata": {"_visual_draft": True},
                 }
             )
@@ -5987,7 +5987,7 @@ class CreationWorkspace(QWidget):
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
-        self.ctx.log("info", "Hoja creada en modo borrador")
+        self.ctx.log("info", "Hoja creada")
         self.refresh()
         # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         # that yanked the camera on every contextual creation.
@@ -6006,7 +6006,7 @@ class CreationWorkspace(QWidget):
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
-        self.ctx.log("info", "Hoja creada en modo borrador")
+        self.ctx.log("info", "Hoja creada")
         self.refresh()
         self.graph.canvas.reveal_entity(entity_id)
         if open_panel:
@@ -6027,7 +6027,7 @@ class CreationWorkspace(QWidget):
                     "name": "Nueva rama",
                     "entity_type": "contenedor",
                     "brief_description": "",
-                    "canon_state": "borrador",
+                    "canon_state": "canonico",
                     "custom_metadata": {"_visual_draft": True},
                 }
             )
@@ -6037,7 +6037,7 @@ class CreationWorkspace(QWidget):
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
-        self.ctx.log("info", "Rama creada en modo borrador")
+        self.ctx.log("info", "Rama creada")
         self.refresh()
         # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         self.graph.canvas.reveal_entity(entity_id)
@@ -6053,7 +6053,7 @@ class CreationWorkspace(QWidget):
                 "name": "Nueva hoja",
                 "entity_type": "nota",
                 "brief_description": "",
-                "canon_state": "borrador",
+                "canon_state": "canonico",
                 "custom_metadata": {"_visual_draft": True},
             },
         )
@@ -6070,7 +6070,7 @@ class CreationWorkspace(QWidget):
                 "name": "Nueva rama",
                 "entity_type": "contenedor",
                 "brief_description": "",
-                "canon_state": "borrador",
+                "canon_state": "canonico",
                 "custom_metadata": {"_visual_draft": True},
             },
         )
@@ -6082,7 +6082,7 @@ class CreationWorkspace(QWidget):
             self.ctx.log("error", f"Error creando rama: {result.error}")
             return
         entity_id = getattr(result.value, "id", "")
-        self.ctx.log("info", "Rama creada en modo borrador")
+        self.ctx.log("info", "Rama creada")
         self.refresh()
         self.graph.canvas.reveal_entity(entity_id)
         if entity_id and tree_id:

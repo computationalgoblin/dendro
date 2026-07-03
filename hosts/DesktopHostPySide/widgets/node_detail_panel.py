@@ -77,9 +77,6 @@ BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion
 # UX15: paleta cálida por tipo centralizada en el design system (antes duplicada).
 _NODE_COLORS: dict[str, str] = ENTITY_KIND_PALETTE
 
-# Simplified canon options for normal mode
-_SIMPLE_CANON = ["borrador", "canonico"]
-
 # ---------------------------------------------------------------------------
 # Creative AI system prompt (Spanish, separate from help-chatbot prompt)
 # ---------------------------------------------------------------------------
@@ -321,6 +318,11 @@ class NodeDetailPanel(QWidget):
         self.summary.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
         root.addWidget(self.summary)
 
+        # BETA2-FOCO-16: badge de fantasma bajo la cabecera (se crea más abajo
+        # junto al resto de widgets de estado y se monta aquí vía placeholder).
+        self._ghost_badge_slot = QVBoxLayout()
+        root.addLayout(self._ghost_badge_slot)
+
         # -- Form card --
         form_card = QFrame()
         form_card.setObjectName("formCard")
@@ -408,22 +410,20 @@ class NodeDetailPanel(QWidget):
         self.brief_edit.setStyleSheet(_card_ss)
         self._editorial_card_ss = _card_ss
 
-        # Estado/canon → submenú "Más opciones" (BETA1-F04); se crea aquí,
-        # se monta más abajo.
-        self.canon_combo = QComboBox()
-        for val in _SIMPLE_CANON:
-            self.canon_combo.addItem(enum_human(val), val)
+        # BETA2-FOCO-16 (canon total): el estado canon ya no se edita — todo es
+        # canon salvo fantasma; el combo desapareció del producto.
         # BETA2-FOCO: «Relevancia narrativa» — la fija el USUARIO; calibra la
         # exigencia del riego (métrica Relevancia) y la invalidación de 2º grado.
         self.importance_combo = QComboBox()
         for val in ("critico", "alto", "medio", "bajo", "menor"):
             self.importance_combo.addItem(enum_human(val), val)
-        # BETA2-FOCO: un fantasma no expone el combo de canon (ver refresh).
+        # BETA2-FOCO: badge informativo de fantasma (no editable).
         self.ghost_state_label = QLabel("Fantasma — borrador interno, no canon")
         self.ghost_state_label.setStyleSheet(
             f"color: {_MUTED_COLOR}; font-style: italic; background: transparent;"
         )
         self.ghost_state_label.setVisible(False)
+        self._ghost_badge_slot.addWidget(self.ghost_state_label)
 
         root.addWidget(form_card)
 
@@ -651,14 +651,9 @@ class NodeDetailPanel(QWidget):
         # (Estado/canon, contexto, hitos, convertir en rama, datos técnicos
         # —estos últimos siguen además sujetos al modo avanzado—.)
         self.more_section = AdvancedSection("Más opciones")
-        canon_row = QHBoxLayout()
-        canon_mini_label = QLabel("Estado:")
-        canon_mini_label.setStyleSheet(_label_ss)
-        canon_row.addWidget(canon_mini_label)
-        canon_row.addWidget(self.canon_combo, 1)
-        canon_row.addWidget(self.ghost_state_label, 1)
-        self.more_section.body_layout.addLayout(canon_row)
-        # BETA2-FOCO: relevancia narrativa (editable por el usuario) junto al estado.
+        # BETA2-FOCO-16: sin fila de estado canon (canon total); el badge de
+        # fantasma vive junto a la cabecera del formulario.
+        # BETA2-FOCO: relevancia narrativa (editable por el usuario).
         importance_row = QHBoxLayout()
         importance_mini_label = QLabel("Relevancia:")
         importance_mini_label.setStyleSheet(_label_ss)
@@ -788,7 +783,6 @@ class NodeDetailPanel(QWidget):
         self.extended_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.private_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.exportable_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.importance_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
@@ -1202,15 +1196,11 @@ class NodeDetailPanel(QWidget):
             self.private_notes_edit.setPlainText(getattr(entity, "private_notes", "") or "")
             self.exportable_notes_edit.setPlainText(getattr(entity, "exportable_notes", "") or "")
 
-            # Canon combo (simplified). BETA2-FOCO: un fantasma NO expone el
-            # combo — su autosave jamás debe des-fantasmarlo en silencio.
+            # BETA2-FOCO-16 (canon total): el canon no se edita en el panel;
+            # solo se refleja el badge de fantasma. El autosave jamás debe
+            # des-fantasmar en silencio.
             self._is_ghost = canon_val.lower() == "fantasma"
-            self.canon_combo.setVisible(not self._is_ghost)
             self.ghost_state_label.setVisible(self._is_ghost)
-            if "canon" in canon_val.lower():
-                self.canon_combo.setCurrentIndex(1)  # Canónico
-            else:
-                self.canon_combo.setCurrentIndex(0)  # Borrador
             self._set_combo_value(
                 self.importance_combo,
                 _enum_value(getattr(entity, "narrative_importance", None), "medio"),
@@ -1338,9 +1328,8 @@ class NodeDetailPanel(QWidget):
         else:
             entity_type_value = "nota"
 
-        # Determine canon_state from simplified combo
-        canon_data = self.canon_combo.currentData()
-        canon_value = canon_data if canon_data else "borrador"
+        # BETA2-FOCO-16 (canon total): el panel NO emite canon_state — el
+        # estado solo cambia por acciones explícitas (servicios/migración).
 
         # Build custom_metadata with colour
         meta = dict(getattr(self._entity, "custom_metadata", {}) or {})
@@ -1359,7 +1348,6 @@ class NodeDetailPanel(QWidget):
             "extended_description": self.extended_edit.toPlainText().strip(),
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
-            "canon_state": canon_value,
             # BETA2-FOCO: relevancia narrativa del usuario (calibra el riego).
             "narrative_importance": self.importance_combo.currentData() or "medio",
             "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),

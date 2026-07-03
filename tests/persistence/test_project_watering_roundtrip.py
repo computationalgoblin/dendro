@@ -92,14 +92,14 @@ class TestWateringRoundtrip:
         assert loaded.watering_paused_entity_ids == []
         assert loaded.entities[0].name == "Eldrin"
 
-    def test_v33_roundtrip_without_migration(self, tmp_path):
-        # Guardar (v33) y recargar: no debe pasar por migración ni perder nada.
+    def test_v34_roundtrip_without_migration(self, tmp_path):
+        # Guardar (v34) y recargar: no debe pasar por migración ni perder nada.
         store = ProjectStore()
         path = tmp_path / "nuevo.json"
         store.save(_project_with_watering(), path)
 
         raw = json.loads(path.read_text(encoding="utf-8"))
-        assert raw["schema_version"] == 33
+        assert raw["schema_version"] == 34
 
         reloaded = store.load(path)
         assert isinstance(reloaded, Ok)

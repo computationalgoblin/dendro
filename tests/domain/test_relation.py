@@ -50,7 +50,7 @@ class TestRelationCreation:
         assert r.relation_type == RelationType.ESTA_RELACIONADO_CON
         assert r.direction == Direction.UNIDIRECCIONAL
         assert r.intensity == IntensityLevel.MEDIA
-        assert r.canon_state == CanonState.BORRADOR
+        assert r.canon_state == CanonState.CANONICO
         assert r.visibility_state == VisibilityState.VISIBLE_USUARIO
         assert r.certainty_level == CertaintyLevel.PROBABLE
         assert isinstance(r.created_at, datetime)

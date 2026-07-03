@@ -10,11 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects
-# (v33: BETA2-FOCO — jardín narrativo: riego de entidades y estado "secada" a nivel proyecto)
-CURRENT_SCHEMA_VERSION: int = 33
+# (v34: BETA2-FOCO-16 — canon total: borrador → canonico en entidades y relaciones)
+CURRENT_SCHEMA_VERSION: int = 34
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 33
+MAX_SUPPORTED_VERSION: int = 34
 
 
 # ---------------------------------------------------------------------------
@@ -1209,6 +1209,36 @@ def _apply_migration_v32_to_v33(data: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("watering_diagnostics", [])
     migrated.setdefault("watering_paused_entity_ids", [])
     migrated["schema_version"] = 33
+    return migrated
+
+
+# ---------------------------------------------------------------------------
+# Migration: v33 → v34
+# ---------------------------------------------------------------------------
+
+
+def _apply_migration_v33_to_v34(data: dict[str, Any]) -> dict[str, Any]:
+    """v33 → v34 (BETA2-FOCO-16): canon total.
+
+    Decisión de producto: algo es canon salvo que haya sido declarado fantasma.
+    El estado intermedio ``borrador`` desaparece del flujo — las entidades y
+    relaciones existentes en ``borrador`` pasan a ``canonico``. El resto de
+    estados (fantasma, archivado, hipotesis, ...) queda intacto y no se pierde
+    ningún dato.
+    """
+    migrated = dict(data)
+    for collection in ("entities", "relations"):
+        items = migrated.get(collection)
+        if not isinstance(items, list):
+            continue
+        upgraded = []
+        for item in items:
+            if isinstance(item, dict) and item.get("canon_state") == "borrador":
+                item = dict(item)
+                item["canon_state"] = "canonico"
+            upgraded.append(item)
+        migrated[collection] = upgraded
+    migrated["schema_version"] = 34
     return migrated
 
 

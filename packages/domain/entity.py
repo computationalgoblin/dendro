@@ -151,7 +151,9 @@ class NarrativeEntity:
     extended_description: str = ""
 
     # --- State (7–9) ---
-    canon_state: CanonState = CanonState.BORRADOR
+    # BETA2-FOCO-16 (canon total): todo nace canónico salvo declaración explícita
+    # (fantasma); el estado borrador queda solo por compatibilidad de parseo.
+    canon_state: CanonState = CanonState.CANONICO
     visibility_state: VisibilityState = VisibilityState.VISIBLE_USUARIO
     certainty_level: CertaintyLevel = CertaintyLevel.PROBABLE
 
@@ -281,7 +283,7 @@ class NarrativeEntity:
             ),
             brief_description=data.get("brief_description", ""),
             extended_description=data.get("extended_description", ""),
-            canon_state=_parse_enum(CanonState, data.get("canon_state"), CanonState.BORRADOR),
+            canon_state=_parse_enum(CanonState, data.get("canon_state"), CanonState.CANONICO),
             visibility_state=_parse_enum(
                 VisibilityState, data.get("visibility_state"), VisibilityState.VISIBLE_USUARIO
             ),

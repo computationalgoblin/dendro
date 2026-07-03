@@ -43,6 +43,7 @@ from packages.persistence.schema import (
     _apply_migration_v30_to_v31,
     _apply_migration_v31_to_v32,
     _apply_migration_v32_to_v33,
+    _apply_migration_v33_to_v34,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -479,6 +480,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 32:
         data = _apply_migration_v32_to_v33(data)
+        data["schema_version"] = 33
+        version = 33
+
+    if version == 33:
+        data = _apply_migration_v33_to_v34(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -720,7 +726,7 @@ class ProjectStore:
     def restore_entity(
         self, project: Project, entity_id: str, path: Path
     ) -> Result[None, str]:
-        """Restore an archived entity to BORRADOR state.
+        """Restore an archived entity to CANONICO state (BETA2-FOCO-16: canon total).
 
         Args:
             project: The project containing the entity.
@@ -739,7 +745,7 @@ class ProjectStore:
                         f"Entity '{entity_id}' is not archived "
                         f"(current state: {entity.canon_state.value})"
                     )
-                entity.canon_state = CanonState.BORRADOR
+                entity.canon_state = CanonState.CANONICO
                 entity.touch()
                 return self.save(project, path)
         return Error(f"Entity with id '{entity_id}' not found in project")
@@ -797,7 +803,7 @@ class ProjectStore:
     def restore_relation(
         self, project: Project, relation_id: str
     ) -> Result[None, str]:
-        """Restore an archived relation to BORRADOR state."""
+        """Restore an archived relation to CANONICO state (BETA2-FOCO-16: canon total)."""
         from packages.domain.entity import CanonState
 
         for rel in project.relations:
@@ -807,7 +813,7 @@ class ProjectStore:
                         f"Relation '{relation_id}' is not archived "
                         f"(current: {rel.canon_state.value})"
                     )
-                rel.canon_state = CanonState.BORRADOR
+                rel.canon_state = CanonState.CANONICO
                 rel.touch()
                 return Ok(None)
         return Error(f"Relation with id '{relation_id}' not found in project")

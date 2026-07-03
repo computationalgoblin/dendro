@@ -240,7 +240,7 @@ class EntityService:
         return Error(f"Entity with id '{entity_id}' not found")
 
     def restore_entity(self, entity_id: str, history_service: Any = None) -> Result[NarrativeEntity, str]:
-        """Restore an archived entity to BORRADOR state."""
+        """Restore an archived entity to CANONICO state (BETA2-FOCO-16: canon total)."""
         proj = self._active_project()
         if isinstance(proj, Error):
             return Error(proj.error)
@@ -252,7 +252,7 @@ class EntityService:
                         f"Entity '{entity_id}' is not archived "
                         f"(current: {e.canon_state.value})"
                     )
-                e.canon_state = CanonState.BORRADOR
+                e.canon_state = CanonState.CANONICO
                 e.touch()
                 proj.value.touch()
                 return Ok(e)

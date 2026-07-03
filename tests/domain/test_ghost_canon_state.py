@@ -27,8 +27,9 @@ class TestGhostCanonState:
     def test_unknown_canon_still_degrades_to_default(self):
         # La tolerancia de _parse_enum no cambia: un valor desconocido cae al default.
         e = NarrativeEntity.from_dict({"id": "e1", "name": "X", "canon_state": "no_existe"})
-        assert e.canon_state == CanonState.BORRADOR
+        assert e.canon_state == CanonState.CANONICO
 
     def test_default_canon_is_not_fantasma(self):
-        # Las entidades normales nacen BORRADOR; fantasma es siempre una elección explícita.
-        assert NarrativeEntity(name="Normal").canon_state == CanonState.BORRADOR
+        # BETA2-FOCO-16 (canon total): las entidades normales nacen CANONICO;
+        # fantasma es siempre una elección explícita.
+        assert NarrativeEntity(name="Normal").canon_state == CanonState.CANONICO

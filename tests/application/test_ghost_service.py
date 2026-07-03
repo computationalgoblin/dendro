@@ -78,9 +78,9 @@ class TestGhostLifecycle:
 
         result = ghost_service.convert_to_entity(ghost.id)
         assert isinstance(result, Ok), getattr(result, "error", None)
-        assert result.value.canon_state == CanonState.BORRADOR
+        assert result.value.canon_state == CanonState.CANONICO
         # La relación hacia la entidad real madura; la que apunta a otro fantasma no.
-        assert to_real.canon_state == CanonState.BORRADOR
+        assert to_real.canon_state == CanonState.CANONICO
         assert to_ghost.canon_state == CanonState.FANTASMA
         assert "cambio_canon" in _events(project_service)
 
@@ -107,7 +107,7 @@ class TestGhostLifecycle:
         # La relación al vecino queda re-apuntada a la entidad real y madura.
         assert rewired.source_id == real.id
         assert rewired.target_id == neighbor.id
-        assert rewired.canon_state == CanonState.BORRADOR
+        assert rewired.canon_state == CanonState.CANONICO
         # La relación fantasma→destino se elimina (sería un self-loop).
         assert redundant not in project.relations
         # La última entidad trabajada apunta ahora a la real.

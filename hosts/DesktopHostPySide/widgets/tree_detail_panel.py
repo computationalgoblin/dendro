@@ -401,8 +401,9 @@ class TreeDetailPanel(QWidget):
         wc_form = QFormLayout()
         wc_form.setSpacing(6)
 
+        # BETA2-FOCO-16 (canon total): el estado canon ya no se edita — el
+        # combo existe (carga/guardado lo usan como pass-through) sin montar.
         self.canon_combo = _styled_combo([e.value for e in CanonState], "")
-        wc_form.addRow("Estado canon", self.canon_combo)
 
         # BETA1-H07: la visibilidad sale del producto visible.
         # El combo existe (la carga/guardado lo siguen usando) pero no se

@@ -97,7 +97,7 @@ class TestEntityCreation:
         assert e.entity_type == EntityType.NOTA
         assert e.brief_description == ""
         assert e.extended_description == ""
-        assert e.canon_state == CanonState.BORRADOR
+        assert e.canon_state == CanonState.CANONICO
         assert e.visibility_state == VisibilityState.VISIBLE_USUARIO
         assert e.certainty_level == CertaintyLevel.PROBABLE
         assert e.tags == []
@@ -217,7 +217,7 @@ class TestSerialisation:
         assert e.entity_type == EntityType.PERSONAJE
         assert e.brief_description == ""
         assert e.aliases == []
-        assert e.canon_state == CanonState.BORRADOR
+        assert e.canon_state == CanonState.CANONICO
 
     def test_from_dict_empty(self):
         e = NarrativeEntity.from_dict({})

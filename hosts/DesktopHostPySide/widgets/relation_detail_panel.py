@@ -55,9 +55,6 @@ _LABEL_COLOR = "#6F6A42"
 _MUTED_COLOR = "#7C806E"
 _SUGGESTION_BG = "#FFFDF7"
 
-# Simplified canon options for normal mode
-_SIMPLE_CANON = ["borrador", "canonico"]
-
 # UX21: paleta cálida de relaciones centralizada (antes este mapa estaba drifteado
 # a azules/púrpuras fríos pese a "mirrors graph_canvas"). Ahora coincide con el arco.
 _EDGE_COLORS: dict[str, str] = RELATION_KIND_PALETTE
@@ -344,11 +341,8 @@ class RelationDetailPanel(QWidget):
         self.description_edit.setMaximumHeight(80)
         self.description_edit.setPlaceholderText("Descripción breve…")
 
-        # Estado y dirección → submenú (BETA1-F04); se crean aquí, se montan
-        # en "Más opciones". La dirección sale de la vista principal.
-        self.canon_combo = QComboBox()
-        for val in _SIMPLE_CANON:
-            self.canon_combo.addItem(enum_human(val), val)
+        # BETA2-FOCO-16 (canon total): el estado canon ya no se edita en el
+        # panel — todo es canon salvo relación fantasma (conversión explícita).
 
         root.addWidget(form_card)
 
@@ -549,9 +543,6 @@ class RelationDetailPanel(QWidget):
         _temp_widget.setLayout(_temp_row)
         more_form.addRow(more_temp_label, _temp_widget)
 
-        more_canon_label = QLabel("Estado:")
-        more_canon_label.setStyleSheet(_label_ss)
-        more_form.addRow(more_canon_label, self.canon_combo)
         more_notes_label = QLabel("Notas:")
         more_notes_label.setStyleSheet(_label_ss)
         more_form.addRow(more_notes_label, self.notes_edit)
@@ -683,7 +674,6 @@ class RelationDetailPanel(QWidget):
         self.direction_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.description_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.body_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
 
         self.notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.birth_year_edit.textChanged.connect(self._schedule_autosave)
@@ -983,11 +973,8 @@ class RelationDetailPanel(QWidget):
             self.death_year_edit.setText("" if dy is None else str(dy))
             canon_val = _enum_value(getattr(relation, "canon_state", None), "")
             # BETA2-FOCO: una relación fantasma no se des-fantasma por autosave.
+            # BETA2-FOCO-16 (canon total): el canon ya no se edita en el panel.
             self._is_ghost_relation = canon_val.lower() == "fantasma"
-            if "canon" in canon_val.lower():
-                self.canon_combo.setCurrentIndex(1)
-            else:
-                self.canon_combo.setCurrentIndex(0)
             self._set_combo_value(self.visibility_combo, _enum_value(getattr(relation, "visibility_state", None), ""))
 
             # Color
@@ -1062,8 +1049,7 @@ class RelationDetailPanel(QWidget):
             else:
                 relation_type_value = slug or "esta_relacionado_con"
 
-        canon_data = self.canon_combo.currentData()
-        canon_value = canon_data if canon_data else "borrador"
+        # BETA2-FOCO-16 (canon total): el panel NO emite canon_state.
 
         # Build metadata with color, body, notes
         meta = dict(getattr(self._relation, "custom_metadata", {}) or {})
@@ -1118,7 +1104,6 @@ class RelationDetailPanel(QWidget):
             "death_year": _parse_year(self.death_year_edit.text()),
             "validity_conditions": [],
             "tags": [],
-            "canon_state": canon_value,
             "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
             "custom_metadata": meta,
             "custom_relation_type_id": custom_relation_type_id,

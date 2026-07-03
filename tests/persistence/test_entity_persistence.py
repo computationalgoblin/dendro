@@ -201,7 +201,7 @@ class TestEntityPersistence:
 
         loaded = store.load(path)
         p2 = loaded.value
-        assert p2.entities[0].canon_state == CanonState.BORRADOR
+        assert p2.entities[0].canon_state == CanonState.CANONICO
 
     def test_restore_non_archived_errors(self, tmp_path: Path):
         store = ProjectStore()
