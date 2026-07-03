@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import (
     ENTITY_KIND_PALETTE,
@@ -809,6 +810,7 @@ class NodeDetailPanel(QWidget):
             getattr(self.ctx, "language", "es"),
         )
         self._ai_worker.finished.connect(self._on_ai_finished)
+        track_worker(self._ai_worker)  # sobrevive al panel; se para al cerrar la app
         self._ai_worker.start()
 
     def _show_ai_error(self, message: str):
@@ -822,6 +824,7 @@ class NodeDetailPanel(QWidget):
         if self.ctx is not None:
             self.ctx.log("warning", f"IA: {message}")
 
+    @_qt_safe_slot
     def _on_ai_finished(self, text: str, error: str):
         has_ai = self.ai_controller is not None
         self.ai_generate_btn.setEnabled(has_ai)
@@ -870,8 +873,10 @@ class NodeDetailPanel(QWidget):
         self._refine_selection_end = cursor.selectionEnd()
         self._refine_full_text = full_text
         self._ai_worker.finished.connect(self._on_refine_finished)
+        track_worker(self._ai_worker)  # sobrevive al panel; se para al cerrar la app
         self._ai_worker.start()
 
+    @_qt_safe_slot
     def _on_refine_finished(self, text: str, error: str):
         self.ai_generate_btn.setEnabled(self.ai_controller is not None)
         self.refine_btn.setEnabled(True)

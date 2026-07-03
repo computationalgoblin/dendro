@@ -21,6 +21,7 @@ from enum import Enum
 from typing import Any, Callable
 import json
 import re
+import threading
 import time
 import uuid
 
@@ -1362,6 +1363,9 @@ class AIJobService:
         gateway: AIRequestGateway | None = None,
     ):
         self._jobs: dict[str, AIJob] = {}
+        # El worker (execute_job) y el hilo UI (cancel_job/update_status) mutan
+        # los mismos AIJob: todas las transiciones de estado pasan por este lock.
+        self._state_lock = threading.RLock()
         self._provider = provider if provider is not None else create_provider()
         # BETA1-AI02: single provider chokepoint. Every model call goes through
         # the gateway (sanitize → params → dispatch). Injectable for tests.
@@ -1478,7 +1482,8 @@ class AIJobService:
         )
         plan = build_job_plan(intent, prompt, context, job_id=job.id)
         job.plan = plan.to_dict()
-        self._jobs[job.id] = job
+        with self._state_lock:
+            self._jobs[job.id] = job
         return Ok(job)
 
     def run_focused_job(self, job_type: AIJobType | str, prompt: str, *, context_scope: dict[str, Any] | None = None, progress_callback=None) -> Result:
@@ -1518,23 +1523,29 @@ class AIJobService:
         result: dict[str, Any] | None = None,
         error: str = "",
     ) -> Result:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return Error("Job IA no encontrado")
-        try:
-            job.status = status if isinstance(status, AIJobStatus) else AIJobStatus(str(status))
-        except ValueError:
-            return Error("Estado de job IA no válido")
-        if message:
-            job.message = message
-        if progress is not None:
-            job.progress = max(0.0, min(1.0, float(progress)))
-        if result is not None:
-            job.result = dict(result)
-        if error:
-            job.error = _sanitize_error(error)
-        job.updated_at = _now_iso()
-        return Ok(job)
+        with self._state_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return Error("Job IA no encontrado")
+            try:
+                new_status = status if isinstance(status, AIJobStatus) else AIJobStatus(str(status))
+            except ValueError:
+                return Error("Estado de job IA no válido")
+            # Cancelado gana: un worker que termina tarde no puede resucitar el
+            # job pisando CANCELLED con FAILED/READY_FOR_REVIEW.
+            if job.status == AIJobStatus.CANCELLED and new_status != AIJobStatus.CANCELLED:
+                return Error("Job IA cancelado")
+            job.status = new_status
+            if message:
+                job.message = message
+            if progress is not None:
+                job.progress = max(0.0, min(1.0, float(progress)))
+            if result is not None:
+                job.result = dict(result)
+            if error:
+                job.error = _sanitize_error(error)
+            job.updated_at = _now_iso()
+            return Ok(job)
 
     def _record_observability(
         self,
@@ -1932,26 +1943,28 @@ class AIJobService:
         return updated
 
     def _ensure_not_cancelled(self, job_id: str) -> Result | None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return Error("Job IA no encontrado")
-        if job.status == AIJobStatus.CANCELLED:
-            job.message = "Job cancelado"
-            job.updated_at = _now_iso()
-            return Error("Job IA cancelado")
-        return None
+        with self._state_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return Error("Job IA no encontrado")
+            if job.status == AIJobStatus.CANCELLED:
+                job.message = "Job cancelado"
+                job.updated_at = _now_iso()
+                return Error("Job IA cancelado")
+            return None
 
     def cancel_job(self, job_id: str) -> Result:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return Error("Job IA no encontrado")
-        if not job.cancellable:
-            return Error("Este job no se puede cancelar")
-        job.status = AIJobStatus.CANCELLED
-        job.message = "Job cancelado"
-        job.progress = min(job.progress, 1.0)
-        job.updated_at = _now_iso()
-        return Ok(job)
+        with self._state_lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return Error("Job IA no encontrado")
+            if not job.cancellable:
+                return Error("Este job no se puede cancelar")
+            job.status = AIJobStatus.CANCELLED
+            job.message = "Job cancelado"
+            job.progress = min(job.progress, 1.0)
+            job.updated_at = _now_iso()
+            return Ok(job)
 
 
 def _sanitize_error(error: str) -> str:

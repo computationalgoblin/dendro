@@ -58,6 +58,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
 )
 from hosts.DesktopHostPySide.widgets import icons
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive, shutdown_workers
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectPanel
@@ -414,9 +415,17 @@ class MainWindow(QMainWindow):
             animation.setStartValue(0.60)
             animation.setEndValue(1.0)
             animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            # El efecto no puede quedarse instalado: QGraphicsEffect sobre un
+            # widget dinámico (el workspace con el canvas) cachea el render y
+            # acaba blanqueándolo (regla documentada en design_system).
+            animation.finished.connect(
+                lambda w=widget: _qt_alive(w) and w.setGraphicsEffect(None)
+            )
             animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — la animación nunca rompe la navegación
+            _apptrace(f"UI stack-anim degradada: {exc}")
+            if _qt_alive(widget):
+                widget.setGraphicsEffect(None)
 
     def _apply_live_preferences(self):
         """Apply appearance preferences immediately."""
@@ -678,6 +687,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self._get_active_project() is None:
+            shutdown_workers()
             event.accept()
             return
         answer = QMessageBox.question(
@@ -695,6 +705,7 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Save and not self._save_active_project():
             event.ignore()
             return
+        shutdown_workers()
         event.accept()
 
     def _test_ai(self):

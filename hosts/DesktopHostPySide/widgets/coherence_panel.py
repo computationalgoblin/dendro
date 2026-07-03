@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from hosts.DesktopHostPySide.widgets.design_system import SectionHeader
 from packages.domain.result import Error
 
@@ -199,8 +200,10 @@ class CoherencePanel(QWidget):
             language=self._language(),
         )
         self._worker.finished.connect(self._on_analysis_finished)
+        track_worker(self._worker)  # sobrevive al panel; se para al cerrar la app
         self._worker.start()
 
+    @_qt_safe_slot
     def _on_analysis_finished(self, text: str, error: str):
         self._set_busy(False)
         if error:
@@ -227,8 +230,10 @@ class CoherencePanel(QWidget):
             language=self._language(),
         )
         self._worker.finished.connect(self._on_repair_finished)
+        track_worker(self._worker)  # sobrevive al panel; se para al cerrar la app
         self._worker.start()
 
+    @_qt_safe_slot
     def _on_repair_finished(self, text: str, error: str):
         self._set_busy(False)
         if error:

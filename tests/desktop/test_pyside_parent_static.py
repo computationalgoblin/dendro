@@ -16,19 +16,19 @@ DESKTOP = ROOT / "hosts" / "DesktopHostPySide"
 PARENTLESS_WIDGET_RE = re.compile(r"\b(QFrame|QWidget|QGroupBox)\(\)")
 
 EXPECTED_PARENTLESS_WIDGETS = {
-    # Baseline regenerado tras la retirada del subsistema de importación (borrado de
-    # import_export_view y desplazamiento de líneas en main_window/workspaces).
-    'hosts/DesktopHostPySide/main_window.py:176:cw = QWidget()',
-    'hosts/DesktopHostPySide/main_window.py:274:bar = QFrame()',
-    'hosts/DesktopHostPySide/main_window.py:315:wrapper = QWidget()',
-    'hosts/DesktopHostPySide/main_window.py:321:navbar = QFrame()',
+    # Baseline regenerado en BETA1-AUDIT-02 (track_worker/_qt_safe_slot desplazaron
+    # líneas en workspaces y paneles de detalle).
+    'hosts/DesktopHostPySide/main_window.py:170:cw = QWidget()',
+    'hosts/DesktopHostPySide/main_window.py:268:bar = QFrame()',
+    'hosts/DesktopHostPySide/main_window.py:309:wrapper = QWidget()',
+    'hosts/DesktopHostPySide/main_window.py:315:navbar = QFrame()',
     'hosts/DesktopHostPySide/views/corpus_view.py:176:w = QWidget()',
     'hosts/DesktopHostPySide/views/home_view.py:609:content = QWidget()',
     'hosts/DesktopHostPySide/views/home_view.py:718:line = QFrame()',
     'hosts/DesktopHostPySide/views/relation_view.py:222:w = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:1552:self._chips_widget = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:2036:bar = QFrame()',
-    'hosts/DesktopHostPySide/views/workspaces.py:3158:bar = QFrame()',
+    'hosts/DesktopHostPySide/views/workspaces.py:3159:bar = QFrame()',
     'hosts/DesktopHostPySide/views/workspaces.py:621:grid_host = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:668:self._layer_section = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:679:self._layer_chips_container = QWidget()',
@@ -43,9 +43,9 @@ EXPECTED_PARENTLESS_WIDGETS = {
     'hosts/DesktopHostPySide/widgets/milestone_chronology_view.py:211:self.cards_widget = QWidget()',
     'hosts/DesktopHostPySide/widgets/milestone_chronology_view.py:217:self.detail_frame = QFrame()',
     'hosts/DesktopHostPySide/widgets/milestone_detail_panel.py:103:body = QWidget()',
-    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:305:form_card = QFrame()',
-    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:497:ai_card = QFrame()',
-    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:543:self.suggestion_frame = QFrame()',
+    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:306:form_card = QFrame()',
+    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:498:ai_card = QFrame()',
+    'hosts/DesktopHostPySide/widgets/node_detail_panel.py:544:self.suggestion_frame = QFrame()',
     'hosts/DesktopHostPySide/widgets/project_wizard.py:175:content = QWidget()',
     'hosts/DesktopHostPySide/widgets/project_wizard.py:197:rail = QFrame()',
     'hosts/DesktopHostPySide/widgets/project_wizard.py:241:head = QWidget()',
@@ -54,15 +54,15 @@ EXPECTED_PARENTLESS_WIDGETS = {
     'hosts/DesktopHostPySide/widgets/project_wizard.py:449:simple = QWidget()',
     'hosts/DesktopHostPySide/widgets/project_wizard.py:89:block = QWidget()',
     'hosts/DesktopHostPySide/widgets/related_milestones_panel.py:101:self.body = QWidget()',
-    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:296:form_card = QFrame()',
-    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:420:ai_card = QFrame()',
-    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:461:self.suggestion_frame = QFrame()',
-    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:547:_temp_widget = QWidget()',
+    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:297:form_card = QFrame()',
+    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:421:ai_card = QFrame()',
+    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:462:self.suggestion_frame = QFrame()',
+    'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:548:_temp_widget = QWidget()',
     'hosts/DesktopHostPySide/widgets/repair_review_panel.py:69:holder = QWidget()',
     'hosts/DesktopHostPySide/widgets/repair_review_panel.py:97:frame = QFrame()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:255:id_card = QWidget()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:562:self.suggestion_frame = QFrame()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:79:frame = QFrame()',
+    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:256:id_card = QWidget()',
+    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:563:self.suggestion_frame = QFrame()',
+    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:80:frame = QFrame()',
 }
 
 

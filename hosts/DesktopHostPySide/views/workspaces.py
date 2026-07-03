@@ -41,7 +41,6 @@ from hosts.DesktopHostPySide.controllers.chronology_walk_controller import Chron
 from hosts.DesktopHostPySide.controllers.project_chronology_controller import (
     ProjectChronologyController,
 )
-from hosts.DesktopHostPySide.widgets.entity_card import EntityCard
 from hosts.DesktopHostPySide.widgets.graph_canvas import (
     GraphCanvasWidget,
     GraphSearchResult,
@@ -121,6 +120,7 @@ from hosts.DesktopHostPySide.widgets.qt_lifecycle import (
     _qt_alive,
     _qt_safe_slot,
     _qt_safe_timer,
+    track_worker,
 )
 from packages.application import coherence_repair
 from packages.application.ai_prompt_debug import AIPromptDebugTraceStore
@@ -2503,6 +2503,7 @@ class CreationWorkspace(QWidget):
         worker.finished.connect(self._on_walk_worker_stopped)
         self._walk_step_worker = worker
         self._walk_workers.add(worker)  # keep-alive hasta que termine
+        track_worker(worker)  # apagado ordenado al cerrar la app
         self._start_walk_watchdog()
         worker.start()
 
@@ -4155,6 +4156,7 @@ class CreationWorkspace(QWidget):
         )
         worker.finished.connect(self._refresh_busy_indicator)
         self._preview_workers.add(worker)
+        track_worker(worker)  # apagado ordenado al cerrar la app
         worker.start()
         self._refresh_busy_indicator()  # UX11: actividad visible al calcular preview
 
@@ -4224,6 +4226,7 @@ class CreationWorkspace(QWidget):
         worker.failed.connect(self._on_ai_job_failed)
         worker.finished.connect(self._on_ai_worker_stopped)
         self._ai_workers[job_id] = worker
+        track_worker(worker)  # apagado ordenado al cerrar la app
         self._refresh_busy_indicator()  # UX11: actividad visible mientras corre
         # SEM04: planta una semilla germinante en el grafo si el job creará
         # candidatos (no para reportes ni jobs de texto inline).
@@ -5345,6 +5348,7 @@ class CreationWorkspace(QWidget):
             relation_ids=relation_ids,
         )
         self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
+        track_worker(self._suggest_worker)  # apagado ordenado al cerrar la app
         self._suggest_worker.start()
         self.ctx.log("info", f"Consultando IA para sugerir hojas (contexto: {context_label})...")
 
@@ -5403,6 +5407,7 @@ class CreationWorkspace(QWidget):
                 "relación", "_suggest_relation_btn", "_suggest_rel_worker"
             )
         )
+        track_worker(self._suggest_rel_worker)  # apagado ordenado al cerrar la app
         self._suggest_rel_worker.start()
         self.ctx.log(
             "info", f"Consultando IA para sugerir relaciones (contexto: {context_label})..."
