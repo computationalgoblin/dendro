@@ -37,7 +37,24 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 )
 from hosts.DesktopHostPySide.widgets.foco.foco_canvas import FocoCanvas
 from hosts.DesktopHostPySide.widgets.foco.foco_lifeline import FocoLifelineBand
+from hosts.DesktopHostPySide.widgets.foco.foco_popover import (
+    EntitySearchPopover,
+    QuickCreatePopover,
+)
+from hosts.DesktopHostPySide.widgets.foco.foco_tool_rail import FocoToolRail
 from packages.application.foco_zones import classify_neighbors
+from packages.domain.result import Error
+
+# Tipos de entidad que cuentan como "rama" para el popover Añadir a rama.
+_BRANCH_TYPES = {
+    "contenedor",
+    "faccion",
+    "cultura",
+    "sistema_magico",
+    "religion",
+    "institucion",
+    "trama",
+}
 
 _HISTORY_LIMIT = 50
 
@@ -52,6 +69,10 @@ class FocoView(QWidget):
     # cronología global — el workspace reutiliza sus slots de persistencia.
     lifespanEdited = Signal(str, int, object)  # noqa: N815 — convención Qt de señales
     milestoneCreateRequested = Signal(int, str)  # noqa: N815 — convención Qt de señales
+    # FOCO-11: el riego lo orquesta el workspace (autorización + drawer, FOCO-12).
+    waterRequested = Signal(list)  # noqa: N815 — ids a regar (selección o centro)
+    dryRequested = Signal(str)  # noqa: N815 — Secar (sin IA)
+    cultivateRequested = Signal(str)  # noqa: N815 — Cultivar (sin IA)
 
     def __init__(
         self,
@@ -90,6 +111,12 @@ class FocoView(QWidget):
         self.canvas = FocoCanvas(self)
         layout.addWidget(self.canvas, 1)
         self.canvas.satelliteActivated.connect(self.center_entity)
+
+        # FOCO-11: rail izquierdo de herramientas (columna única de iconos).
+        self.tool_rail = FocoToolRail(self)
+        self.tool_rail.toolTriggered.connect(self._on_tool)
+        self.canvas.selectionChanged.connect(lambda _ids: self._refresh_tool_context())
+        self._popover: Any = None  # referencia viva del popover abierto
 
         self._center_card = self._build_center_card()
         self._adjacent_card = self._build_adjacent_card()
@@ -228,6 +255,9 @@ class FocoView(QWidget):
         )
         self._center_card.setGeometry(int(hole.x()), int(hole.y()), int(hole.width()), card_height)
         self._center_card.raise_()
+        self.tool_rail.adjustSize()
+        self.tool_rail.move(12, max(12, (self.height() - self.tool_rail.height()) // 2))
+        self.tool_rail.raise_()
         if not self._adjacent_card.isHidden():
             adjacent_width = max(260, min(380, self.width() - int(hole.right()) - 24))
             self._adjacent_card.setGeometry(
@@ -270,6 +300,7 @@ class FocoView(QWidget):
             self._center_card.hide()
             self._empty.show()
             self._position_overlays()
+            self._refresh_tool_context()
             return
         self._empty.hide()
         candidate = self._center_id
@@ -304,6 +335,7 @@ class FocoView(QWidget):
         self._back_button.setVisible(bool(self._history))
         self._center_card.show()
         self._position_overlays()
+        self._refresh_tool_context()
         self.entityCentered.emit(entity.id)
 
     def _rebuild_canvas(self, project: Any, entity: Any) -> None:
@@ -474,3 +506,265 @@ class FocoView(QWidget):
     def request_open_in_chrono(self) -> None:
         if self._center_id:
             self.openInChronoRequested.emit(self._center_id)
+
+    # ------------------------------------------------------------------
+    # Rail de herramientas (FOCO-11): contexto de selección y acciones
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _canon_of(entity: Any) -> str:
+        return str(getattr(getattr(entity, "canon_state", None), "value", "")).lower()
+
+    def _selection_context(self) -> dict:
+        project = self._project()
+        center = (
+            project.entity_by_id(self._center_id)
+            if project is not None and self._center_id
+            else None
+        )
+        selection = self.canvas.selected_ids()
+        selection_has_ghost = False
+        if project is not None:
+            for selected_id in selection:
+                other = project.entity_by_id(selected_id)
+                if other is not None and self._canon_of(other) == "fantasma":
+                    selection_has_ghost = True
+                    break
+        paused = list(getattr(project, "watering_paused_entity_ids", []) or [])
+        return {
+            "has_project": project is not None,
+            "center_id": center.id if center is not None else "",
+            "center_is_ghost": center is not None and self._canon_of(center) == "fantasma",
+            "center_is_paused": center is not None and center.id in paused,
+            "selection": selection,
+            "selection_has_ghost": selection_has_ghost,
+        }
+
+    def _refresh_tool_context(self) -> None:
+        self.tool_rail.set_selection_context(self._selection_context())
+
+    def _log_error(self, message: str) -> None:
+        log = getattr(self.ctx, "log", None)
+        if callable(log):
+            log("error", message)
+
+    def _entities(self) -> list[Any]:
+        project = self._project()
+        return list(getattr(project, "entities", []) or []) if project is not None else []
+
+    def _branch_candidates(self) -> list[Any]:
+        return [
+            entity
+            for entity in self._entities()
+            if str(getattr(getattr(entity, "entity_type", None), "value", "")).lower()
+            in _BRANCH_TYPES
+            and self._canon_of(entity) != "fantasma"
+        ]
+
+    def _ghost_target(self) -> str:
+        """Fantasma sobre el que actúan Convertir/Vincular: el centro o la selección."""
+        context = self._selection_context()
+        if context["center_is_ghost"]:
+            return context["center_id"]
+        project = self._project()
+        if project is not None:
+            for selected_id in self.canvas.selected_ids():
+                other = project.entity_by_id(selected_id)
+                if other is not None and self._canon_of(other) == "fantasma":
+                    return selected_id
+        return ""
+
+    def _recenter(self, entity_id: str | None = None) -> None:
+        target = entity_id or self._center_id
+        if target:
+            self.center_entity(target, push_history=False)
+
+    def _on_tool(self, tool_id: str) -> None:  # noqa: PLR0912 — dispatcher plano del rail
+        anchor = self.tool_rail.anchor_for(tool_id)
+        project = self._project()
+        if project is None:
+            return
+        center_id = self._center_id
+        if tool_id == "create_entity":
+            self._popover = QuickCreatePopover(
+                title="Nueva entidad", on_submit=self._create_entity
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "create_related" and center_id:
+            self._popover = QuickCreatePopover(
+                title="Nueva entidad relacionada", on_submit=self._create_related
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "create_branch" and center_id:
+            self._popover = QuickCreatePopover(
+                title="Nueva rama contenedora", on_submit=self._create_branch
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "ghost_node":
+            self._popover = QuickCreatePopover(
+                title="Nuevo nodo fantasma",
+                submit_text="Crear fantasma",
+                with_description=True,
+                on_submit=self._create_ghost,
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "create_relation" and center_id:
+            self._popover = EntitySearchPopover(
+                entities_provider=self._entities,
+                on_pick=self._relate_to,
+                on_create_ghost=self._ghost_and_relate,
+                exclude_ids={center_id},
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "ghost_relation" and center_id:
+            self._popover = EntitySearchPopover(
+                entities_provider=self._entities,
+                on_pick=self._ghost_relate_to,
+                on_create_ghost=self._ghost_and_relate,
+                exclude_ids={center_id},
+                placeholder="Vincular (pendiente) con…",
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "add_to_branch" and center_id:
+            self._popover = EntitySearchPopover(
+                entities_provider=self._branch_candidates,
+                on_pick=self._add_to_branch,
+                placeholder="Buscar rama…",
+            )
+            self._popover.open_next_to(anchor)
+        elif tool_id == "create_milestone" and center_id:
+            self.lifeline._request_create()
+        elif tool_id == "ghost_convert":
+            self._convert_ghost(self._ghost_target())
+        elif tool_id == "ghost_link":
+            ghost_id = self._ghost_target()
+            if ghost_id:
+                self._popover = EntitySearchPopover(
+                    entities_provider=self._entities,
+                    on_pick=lambda target_id, g=ghost_id: self._link_ghost(g, target_id),
+                    exclude_ids={ghost_id},
+                    only_real=True,
+                    placeholder="Vincular fantasma con…",
+                )
+                self._popover.open_next_to(anchor)
+        elif tool_id == "water":
+            ids = self.canvas.selected_ids() or ([center_id] if center_id else [])
+            if ids:
+                self.waterRequested.emit(ids)
+        elif tool_id == "dry" and center_id:
+            self.dryRequested.emit(center_id)
+        elif tool_id == "cultivate" and center_id:
+            self.cultivateRequested.emit(center_id)
+        elif tool_id == "view_map":
+            self.request_open_in_map()
+        elif tool_id == "view_chrono":
+            self.request_open_in_chrono()
+
+    # -- acciones de creación/vinculación (todas vía controllers/servicios) --
+
+    def _create_entity(self, payload: dict) -> None:
+        if self.entity_controller is None:
+            return
+        result = self.entity_controller.create(payload)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        self.center_entity(result.value.id)
+
+    def _create_related(self, payload: dict) -> None:
+        if self.entity_controller is None or self.relation_controller is None:
+            return
+        result = self.entity_controller.create(payload)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        relation = self.relation_controller.create(
+            self._center_id, result.value.id, "esta_relacionado_con"
+        )
+        if isinstance(relation, Error):
+            self._log_error(relation.error)
+        # La central sigue siendo una (spec): la nueva aparece en su zona.
+        self._recenter()
+
+    def _create_branch(self, payload: dict) -> None:
+        if self.entity_controller is None or self.relation_controller is None:
+            return
+        payload = dict(payload)
+        payload["entity_type"] = "contenedor"
+        result = self.entity_controller.create(payload)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        relation = self.relation_controller.create(result.value.id, self._center_id, "contiene")
+        if isinstance(relation, Error):
+            self._log_error(relation.error)
+        self._recenter()
+
+    def _create_ghost(self, payload: dict) -> None:
+        if self.ghost_service is None:
+            return
+        result = self.ghost_service.create_ghost(payload)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        # Nace vinculado (relación fantasma) al centro si lo hay → zona Entorno.
+        if self._center_id:
+            self.ghost_service.create_ghost_relation(self._center_id, result.value.id)
+        self._recenter()
+
+    def _ghost_and_relate(self, name: str) -> None:
+        """«No existe» en el popover de relación → fantasma + vínculo pendiente."""
+        if self.ghost_service is None or not self._center_id:
+            return
+        result = self.ghost_service.create_ghost({"name": name})
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        self.ghost_service.create_ghost_relation(self._center_id, result.value.id)
+        self._recenter()
+
+    def _relate_to(self, target_id: str) -> None:
+        if self.relation_controller is None or not self._center_id:
+            return
+        result = self.relation_controller.create(self._center_id, target_id, "esta_relacionado_con")
+        if isinstance(result, Error):
+            self._log_error(result.error)
+        self._recenter()
+
+    def _ghost_relate_to(self, target_id: str) -> None:
+        if self.ghost_service is None or not self._center_id:
+            return
+        result = self.ghost_service.create_ghost_relation(self._center_id, target_id)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+        self._recenter()
+
+    def _add_to_branch(self, branch_id: str) -> None:
+        if self.relation_controller is None or not self._center_id:
+            return
+        result = self.relation_controller.create(branch_id, self._center_id, "contiene")
+        if isinstance(result, Error):
+            self._log_error(result.error)
+        self._recenter()
+
+    def _convert_ghost(self, ghost_id: str) -> None:
+        if self.ghost_service is None or not ghost_id:
+            return
+        result = self.ghost_service.convert_to_entity(ghost_id)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        self._recenter(ghost_id if ghost_id == self._center_id else None)
+
+    def _link_ghost(self, ghost_id: str, target_id: str) -> None:
+        if self.ghost_service is None:
+            return
+        result = self.ghost_service.link_to_existing(ghost_id, target_id)
+        if isinstance(result, Error):
+            self._log_error(result.error)
+            return
+        # El fantasma desaparece: el foco pasa a la entidad real vinculada.
+        if ghost_id == self._center_id:
+            self.center_entity(target_id, push_history=False)
+        else:
+            self._recenter()

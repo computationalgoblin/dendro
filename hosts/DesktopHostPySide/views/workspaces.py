@@ -47,6 +47,7 @@ from hosts.DesktopHostPySide.widgets.graph_canvas import (
     VisualFilterState,
     relation_family,
 )
+from hosts.DesktopHostPySide.controllers.ghost_controller import GhostController
 from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
 from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 from hosts.DesktopHostPySide.widgets.chrono_canvas import (
@@ -1972,6 +1973,8 @@ class CreationWorkspace(QWidget):
             entity_controller=self.entity_controller,
             relation_controller=self.relation_controller,
             milestone_controller=self._milestone_ctrl,
+            # FOCO-11: fantasmas por controller (mismos métodos que GhostService).
+            ghost_service=(GhostController(_foco_ps) if _foco_ps is not None else None),
         )
         self.foco.setVisible(False)
         self.foco.openInMapRequested.connect(self._foco_open_in_map)
