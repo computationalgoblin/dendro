@@ -1968,6 +1968,10 @@ class CreationWorkspace(QWidget):
             last_entity_setter=(
                 _foco_ps.set_last_worked_entity if _foco_ps is not None else None
             ),
+            ctx=self.ctx,
+            entity_controller=self.entity_controller,
+            relation_controller=self.relation_controller,
+            milestone_controller=self._milestone_ctrl,
         )
         self.foco.setVisible(False)
         self.foco.openInMapRequested.connect(self._foco_open_in_map)

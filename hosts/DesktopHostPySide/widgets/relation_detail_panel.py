@@ -982,6 +982,8 @@ class RelationDetailPanel(QWidget):
             self.birth_year_edit.setText("" if by is None else str(by))
             self.death_year_edit.setText("" if dy is None else str(dy))
             canon_val = _enum_value(getattr(relation, "canon_state", None), "")
+            # BETA2-FOCO: una relación fantasma no se des-fantasma por autosave.
+            self._is_ghost_relation = canon_val.lower() == "fantasma"
             if "canon" in canon_val.lower():
                 self.canon_combo.setCurrentIndex(1)
             else:
@@ -1121,6 +1123,9 @@ class RelationDetailPanel(QWidget):
             "custom_metadata": meta,
             "custom_relation_type_id": custom_relation_type_id,
         }
+        if getattr(self, "_is_ghost_relation", False):
+            # BETA2-FOCO: el canon fantasma solo cambia en la conversión explícita.
+            payload.pop("canon_state", None)
         result = self.relation_controller.update(self.relation_id, payload)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)

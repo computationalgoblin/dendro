@@ -7,6 +7,7 @@ Technical fields remain hidden unless advanced mode is active.
 """
 from __future__ import annotations
 
+import html
 import json
 from typing import Any
 
@@ -245,9 +246,16 @@ class NodeDetailPanel(QWidget):
         on_convert_to_branch=None,
         on_open_milestones=None,
         on_suggest_milestone=None,
+        variant: str = "drawer",
+        on_open_relation=None,
     ):
         super().__init__()
         self.ctx = ctx
+        # BETA2-FOCO: variant="foco" monta las relaciones clicables en el propio
+        # formulario (abren panel ADYACENTE) y oculta el bloque IA inline.
+        self.variant = str(variant or "drawer")
+        self.on_open_relation = on_open_relation
+        self._is_ghost = False
         self.entity_controller = entity_controller
         self.entity_id = entity_id
         self.on_saved = on_saved
@@ -268,6 +276,17 @@ class NodeDetailPanel(QWidget):
         self._autosave_timer.setInterval(800)  # ms
         self._autosave_timer.timeout.connect(self._autosave)
         self._build()
+        if self.variant == "foco":
+            # BETA2-FOCO: en Foco la IA vive en el drawer de riego (Regar /
+            # Sugerir X); el bloque IA inline del panel se oculta.
+            for ai_widget in (
+                getattr(self, "ai_prompt_edit", None),
+                getattr(self, "ai_generate_btn", None),
+                getattr(self, "ai_coherence_btn", None),
+                getattr(self, "suggestion_frame", None),
+            ):
+                if ai_widget is not None:
+                    ai_widget.hide()
         self._connect_autosave_signals()
         self.refresh()
 
@@ -394,6 +413,17 @@ class NodeDetailPanel(QWidget):
         self.canon_combo = QComboBox()
         for val in _SIMPLE_CANON:
             self.canon_combo.addItem(enum_human(val), val)
+        # BETA2-FOCO: «Relevancia narrativa» — la fija el USUARIO; calibra la
+        # exigencia del riego (métrica Relevancia) y la invalidación de 2º grado.
+        self.importance_combo = QComboBox()
+        for val in ("critico", "alto", "medio", "bajo", "menor"):
+            self.importance_combo.addItem(enum_human(val), val)
+        # BETA2-FOCO: un fantasma no expone el combo de canon (ver refresh).
+        self.ghost_state_label = QLabel("Fantasma — borrador interno, no canon")
+        self.ghost_state_label.setStyleSheet(
+            f"color: {_MUTED_COLOR}; font-style: italic; background: transparent;"
+        )
+        self.ghost_state_label.setVisible(False)
 
         root.addWidget(form_card)
 
@@ -459,6 +489,11 @@ class NodeDetailPanel(QWidget):
         context_layout.setSpacing(2)
         self.relations_label = QLabel("Relaciones: —")
         self.relations_label.setWordWrap(True)
+        # BETA2-FOCO: relaciones CLICABLES — al pulsarlas se abre su panel
+        # adyacente al formulario (decisión de producto; no el drawer derecho).
+        self.relations_label.setTextFormat(Qt.TextFormat.RichText)
+        self.relations_label.setOpenExternalLinks(False)
+        self.relations_label.linkActivated.connect(self._on_relation_link)
         self.campaigns_label = QLabel("Campañas: —")
         self.campaigns_label.setWordWrap(True)
         for w in (self.relations_label, self.campaigns_label):
@@ -621,7 +656,15 @@ class NodeDetailPanel(QWidget):
         canon_mini_label.setStyleSheet(_label_ss)
         canon_row.addWidget(canon_mini_label)
         canon_row.addWidget(self.canon_combo, 1)
+        canon_row.addWidget(self.ghost_state_label, 1)
         self.more_section.body_layout.addLayout(canon_row)
+        # BETA2-FOCO: relevancia narrativa (editable por el usuario) junto al estado.
+        importance_row = QHBoxLayout()
+        importance_mini_label = QLabel("Relevancia:")
+        importance_mini_label.setStyleSheet(_label_ss)
+        importance_row.addWidget(importance_mini_label)
+        importance_row.addWidget(self.importance_combo, 1)
+        self.more_section.body_layout.addLayout(importance_row)
         # BETA1-F05: contexto y datos técnicos FUERA del producto (los
         # widgets viven sin montar; _refresh_context/_refresh_technical
         # siguen escribiendo en ellos sin coste visual).
@@ -629,6 +672,13 @@ class NodeDetailPanel(QWidget):
             self.more_section.body_layout.addWidget(self.related_milestones_panel)
         self.more_section.body_layout.addWidget(self.convert_to_branch_btn)
         root.addWidget(self.more_section)
+        if self.variant == "foco":
+            # BETA2-FOCO: en Foco las relaciones se LISTAN en el formulario
+            # (context_box, desmontado en el drawer desde BETA1-F05) y el
+            # submenú queda expandible como siempre.
+            self.context_box.setTitle("Relaciones")
+            root.addWidget(self.context_box)
+            self.context_box.show()
 
         # -- Actions --
         actions = QHBoxLayout()
@@ -739,11 +789,17 @@ class NodeDetailPanel(QWidget):
         self.private_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.exportable_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.canon_combo.currentIndexChanged.connect(self._schedule_autosave)
+        self.importance_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.nature_combo.currentIndexChanged.connect(self._schedule_autosave)
         # BETA1-UX2C: el lapso de vida ya no se edita aquí (se estira el nodo en
         # la cronología), así que no hay campos de año que autoguardar.
+
+    def _on_relation_link(self, relation_id: str) -> None:
+        """BETA2-FOCO: una relación de la lista se abre en su panel adyacente."""
+        if callable(self.on_open_relation) and relation_id:
+            self.on_open_relation(relation_id)
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -1146,11 +1202,19 @@ class NodeDetailPanel(QWidget):
             self.private_notes_edit.setPlainText(getattr(entity, "private_notes", "") or "")
             self.exportable_notes_edit.setPlainText(getattr(entity, "exportable_notes", "") or "")
 
-            # Canon combo (simplified)
+            # Canon combo (simplified). BETA2-FOCO: un fantasma NO expone el
+            # combo — su autosave jamás debe des-fantasmarlo en silencio.
+            self._is_ghost = canon_val.lower() == "fantasma"
+            self.canon_combo.setVisible(not self._is_ghost)
+            self.ghost_state_label.setVisible(self._is_ghost)
             if "canon" in canon_val.lower():
                 self.canon_combo.setCurrentIndex(1)  # Canónico
             else:
                 self.canon_combo.setCurrentIndex(0)  # Borrador
+            self._set_combo_value(
+                self.importance_combo,
+                _enum_value(getattr(entity, "narrative_importance", None), "medio"),
+            )
 
             self._set_combo_value(self.visibility_combo, _enum_value(getattr(entity, "visibility_state", None), ""))
 
@@ -1194,10 +1258,21 @@ class NodeDetailPanel(QWidget):
                 if other
                 else "Elemento vinculado"
             )
-            relation_lines.append(
-                f"{enum_human(_enum_value(getattr(relation, 'relation_type', None), 'relación'))}: {other_ref}"
+            line_text = (
+                f"{enum_human(_enum_value(getattr(relation, 'relation_type', None), 'relación'))}: "
+                f"{other_ref}"
             )
-        self.relations_label.setText("Relaciones: " + ("; ".join(relation_lines[:6]) if relation_lines else "—"))
+            relation_id = str(getattr(relation, "id", "") or "")
+            if relation_id:
+                # BETA2-FOCO: enlace clicable — abre el panel adyacente en Foco.
+                relation_lines.append(
+                    f'<a href="{relation_id}" style="color:#6F6A42;">{html.escape(line_text)}</a>'
+                )
+            else:
+                relation_lines.append(html.escape(line_text))
+        self.relations_label.setText(
+            "Relaciones: " + ("; ".join(relation_lines[:6]) if relation_lines else "—")
+        )
 
         campaigns = []
         for campaign in getattr(project, "campaigns", []) or []:
@@ -1285,6 +1360,8 @@ class NodeDetailPanel(QWidget):
             "private_notes": self.private_notes_edit.toPlainText().strip(),
             "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
             "canon_state": canon_value,
+            # BETA2-FOCO: relevancia narrativa del usuario (calibra el riego).
+            "narrative_importance": self.importance_combo.currentData() or "medio",
             "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
@@ -1302,6 +1379,10 @@ class NodeDetailPanel(QWidget):
             f"combo_data={self.layer_combo.currentData()!r} payload_layers={payload.get('layer_ids', [])!r} "
             f"worldbuilding_active={self._worldbuilding_active()}",
         )
+        if self._is_ghost:
+            # BETA2-FOCO: los fantasmas solo cambian de canon por la conversión
+            # explícita (GhostService) — el autosave no puede des-fantasmarlos.
+            payload.pop("canon_state", None)
         result = self.entity_controller.update(self.entity_id, payload)
         if isinstance(result, Error):
             self.ctx.log("error", result.error)

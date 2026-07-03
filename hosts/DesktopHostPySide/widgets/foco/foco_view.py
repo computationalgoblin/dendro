@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,10 @@ class FocoView(QWidget):
         project_provider: Callable[[], Any],
         last_entity_getter: Callable[[], str] | None = None,
         last_entity_setter: Callable[[str], Any] | None = None,
+        ctx: Any = None,
+        entity_controller: Any = None,
+        relation_controller: Any = None,
+        milestone_controller: Any = None,
         watering_service: Any = None,
         ghost_service: Any = None,
         parent: QWidget | None = None,
@@ -61,10 +66,18 @@ class FocoView(QWidget):
         self._project_provider = project_provider
         self._last_entity_getter = last_entity_getter
         self._last_entity_setter = last_entity_setter
+        # FOCO-09: con ctx + entity_controller el centro embebe el FORMULARIO
+        # real (NodeDetailPanel variant="foco", autosave 800 ms); sin ellos se
+        # muestra la tarjeta-resumen (tests/consumidores ligeros).
+        self.ctx = ctx
+        self.entity_controller = entity_controller
+        self.relation_controller = relation_controller
+        self.milestone_controller = milestone_controller
         self.watering_service = watering_service
         self.ghost_service = ghost_service
         self._center_id = ""
         self._history: list[str] = []
+        self._form_panel: Any = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -74,6 +87,7 @@ class FocoView(QWidget):
         self.canvas.satelliteActivated.connect(self.center_entity)
 
         self._center_card = self._build_center_card()
+        self._adjacent_card = self._build_adjacent_card()
         self._empty = EmptyState(
             "Crea tu primera entidad",
             "El jardín está vacío. Planta la primera entidad con la herramienta "
@@ -140,15 +154,71 @@ class FocoView(QWidget):
         )
         column.addWidget(self._brief_label, 1)
         row.addLayout(column, 1)
+        # FOCO-09: hueco del formulario real (NodeDetailPanel), en scroll para
+        # que el editor completo quepa en el centro del lienzo.
+        self._form_scroll = QScrollArea(card)
+        self._form_scroll.setWidgetResizable(True)
+        self._form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._form_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._form_scroll.hide()
+        row.addWidget(self._form_scroll, 2)
+        card.hide()
+        return card
+
+    def _build_adjacent_card(self) -> QFrame:
+        """Panel ADYACENTE al formulario (relación/hito) — decisión de producto:
+        estos editores no van al drawer derecho (reservado al riego)."""
+        card = QFrame(self)
+        card.setObjectName("focoAdjacentCard")
+        card.setStyleSheet(
+            f"QFrame#focoAdjacentCard {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {LINE_SOFT}; border-radius: {RADIUS_LG}px; }}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(6)
+        header = QHBoxLayout()
+        self._adjacent_title = QLabel("", card)
+        self._adjacent_title.setStyleSheet(
+            f"color: {INK_STRONG}; font-weight: 700; font-size: 13px; "
+            "border: none; background: transparent;"
+        )
+        header.addWidget(self._adjacent_title, 1)
+        close_button = QPushButton("✕", card)
+        close_button.setFixedSize(24, 24)
+        close_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_button.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {LINE_SOFT}; border-radius: 12px; "
+            f"background: transparent; color: {INK_SOFT}; }}"
+        )
+        close_button.clicked.connect(self.close_adjacent)
+        header.addWidget(close_button, 0)
+        layout.addLayout(header)
+        self._adjacent_scroll = QScrollArea(card)
+        self._adjacent_scroll.setWidgetResizable(True)
+        self._adjacent_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._adjacent_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+        layout.addWidget(self._adjacent_scroll, 1)
         card.hide()
         return card
 
     def _position_overlays(self) -> None:
         hole = self.canvas.center_hole_rect()
-        self._center_card.setGeometry(
-            int(hole.x()), int(hole.y()), int(hole.width()), int(min(hole.height(), 170))
+        # Con formulario embebido la tarjeta usa TODO el hueco central; el
+        # resumen compacto solo necesita la franja superior.
+        card_height = int(hole.height()) if self._form_panel is not None else int(
+            min(hole.height(), 170)
         )
+        self._center_card.setGeometry(int(hole.x()), int(hole.y()), int(hole.width()), card_height)
         self._center_card.raise_()
+        if not self._adjacent_card.isHidden():
+            adjacent_width = max(260, min(380, self.width() - int(hole.right()) - 24))
+            self._adjacent_card.setGeometry(
+                int(hole.right()) + 10, int(hole.y()), adjacent_width, int(hole.height())
+            )
+            self._adjacent_card.raise_()
         if self._empty.isVisible():
             self._empty.adjustSize()
             self._empty.move(
@@ -213,6 +283,15 @@ class FocoView(QWidget):
             # Best-effort: recordar el foco jamás debe romper el centrado.
             self._last_entity_setter(entity.id)
 
+        self.close_adjacent()
+        self._rebuild_canvas(project, entity)
+        self._update_center_card(entity)
+        self._back_button.setVisible(bool(self._history))
+        self._center_card.show()
+        self._position_overlays()
+        self.entityCentered.emit(entity.id)
+
+    def _rebuild_canvas(self, project: Any, entity: Any) -> None:
         zones_payload: dict[str, list[dict]] = {}
         for zone, neighbors in classify_neighbors(project, entity.id).items():
             entries: list[dict] = []
@@ -233,6 +312,19 @@ class FocoView(QWidget):
             zones_payload[zone] = entries
         self.canvas.set_zones(entity.id, zones_payload)
 
+    def _form_capable(self) -> bool:
+        return self.ctx is not None and self.entity_controller is not None
+
+    def _update_center_card(self, entity: Any) -> None:
+        if self._form_capable():
+            self._mount_form(entity.id)
+            for widget in (self._name_label, self._type_label, self._brief_label):
+                widget.hide()
+            self._form_scroll.show()
+            return
+        self._form_scroll.hide()
+        for widget in (self._name_label, self._type_label, self._brief_label):
+            widget.show()
         self._name_label.setText(entity.name)
         type_value = getattr(entity.entity_type, "value", str(entity.entity_type))
         canon_value = getattr(entity.canon_state, "value", str(entity.canon_state))
@@ -240,10 +332,70 @@ class FocoView(QWidget):
         self._type_label.setText(f"{type_value}{suffix}")
         brief = " ".join(str(entity.brief_description or "").split())
         self._brief_label.setText(brief[:280] + ("…" if len(brief) > 280 else ""))
-        self._back_button.setVisible(bool(self._history))
-        self._center_card.show()
+
+    def _mount_form(self, entity_id: str) -> None:
+        """Instancia NUEVA del formulario por recentrado (patrón de la casa)."""
+        from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+
+        if self._form_panel is not None:
+            self._form_panel.deleteLater()
+        self._form_panel = NodeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            entity_id,
+            variant="foco",
+            relation_controller=self.relation_controller,
+            milestone_controller=self.milestone_controller,
+            on_open_relation=self._open_relation_adjacent,
+            on_saved=self._on_form_saved,
+        )
+        self._form_scroll.setWidget(self._form_panel)
+
+    def _on_form_saved(self, *args: Any) -> None:
+        """Autosave del formulario: refresca el LIENZO (vecindario/estados) sin
+        reconstruir el formulario — no se puede perder el cursor al escribir."""
+        project = self._project()
+        if project is None or not self._center_id:
+            return
+        entity = project.entity_by_id(self._center_id)
+        if entity is not None:
+            self._rebuild_canvas(project, entity)
+
+    # ------------------------------------------------------------------
+    # Panel adyacente (relación / hito) — decisión 9: NO en el drawer derecho
+    # ------------------------------------------------------------------
+
+    def open_adjacent_widget(self, widget: QWidget, title: str) -> None:
+        old = self._adjacent_scroll.takeWidget()
+        if old is not None:
+            old.deleteLater()
+        self._adjacent_scroll.setWidget(widget)
+        self._adjacent_title.setText(title)
+        self._adjacent_card.show()
         self._position_overlays()
-        self.entityCentered.emit(entity.id)
+
+    def close_adjacent(self) -> None:
+        if self._adjacent_card.isHidden():
+            return
+        old = self._adjacent_scroll.takeWidget()
+        if old is not None:
+            old.deleteLater()
+        self._adjacent_card.hide()
+
+    def _open_relation_adjacent(self, relation_id: str) -> None:
+        if self.ctx is None or self.relation_controller is None or not relation_id:
+            return
+        from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
+
+        panel = RelationDetailPanel(
+            self.ctx,
+            self.relation_controller,
+            relation_id,
+            entity_controller=self.entity_controller,
+            milestone_controller=self.milestone_controller,
+            on_saved=self._on_form_saved,
+        )
+        self.open_adjacent_widget(panel, "Relación")
 
     def go_back(self) -> None:
         """Historial de foco en memoria: vuelve al centro anterior."""
