@@ -20,17 +20,56 @@ antigua atenuada" salga gratis: si el diagnóstico quedó obsoleto se conserva e
 
 from __future__ import annotations
 
+import math
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application.foco_zones import classify_milestones, classify_neighbors
 from packages.domain.entity import CanonState, NarrativeEntity, NarrativeImportance
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok, Result
-from packages.domain.watering import WateringDiagnostic, WateringStatus
+from packages.domain.watering import WateringCostClass, WateringDiagnostic, WateringStatus
 
 _HIGH_IMPORTANCE = frozenset({NarrativeImportance.CRITICO, NarrativeImportance.ALTO})
 _EXCLUDED_CANON = frozenset({CanonState.ARCHIVADO, CanonState.DESCARTADO})
+
+# Misma aproximación que prompt_budget (~3.5 chars/token).
+_CHARS_PER_TOKEN = 3.5
+# Umbrales de clase de coste por tokens estimados de entrada (centralizados aquí
+# para recalibrar en un solo sitio; el coste real no se mide — es ESTIMADO).
+_TOKENS_BAJO_MAX = 6_000
+_TOKENS_MEDIO_MAX = 15_000
+# Un lote grande eleva la clase aunque cada entidad sea barata.
+_BATCH_MEDIO_MIN = 20
+_BATCH_ALTO_MIN = 60
+
+# Relevancia (0-100) derivada de la importancia narrativa que FIJA EL USUARIO.
+_IMPORTANCE_SCORE = {
+    NarrativeImportance.CRITICO.value: 95,
+    NarrativeImportance.ALTO.value: 75,
+    NarrativeImportance.MEDIO.value: 50,
+    NarrativeImportance.BAJO.value: 30,
+    NarrativeImportance.MENOR.value: 15,
+}
+
+_ZONE_HEADERS = (("raices", "RAÍCES"), ("entorno", "ENTORNO"), ("brotes", "BROTES"))
+
+_UNCONFIGURED_AI_MESSAGE = (
+    "IA no configurada: define las variables de entorno NARRATIVE_AI_PROVIDER, "
+    "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
+    "la app). No se genera contenido simulado."
+)
+
+
+@dataclass(frozen=True)
+class WateringEstimate:
+    """Estimación previa a la autorización: nº de entidades, tokens y clase de coste."""
+
+    entity_count: int
+    estimated_input_tokens: int
+    cost_class: str
 
 
 @dataclass(frozen=True)
@@ -335,3 +374,224 @@ class WateringService:
                 {"scores": dict(diagnostic.scores), "cost_class": diagnostic.cost_class},
             )
         return Ok(diagnostic)
+
+    # ------------------------------------------------------------------
+    # Riego con IA (autorizado por la UI antes de llegar aquí) — FOCO-05
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cost_class_for_tokens(tokens: int) -> str:
+        if tokens <= _TOKENS_BAJO_MAX:
+            return WateringCostClass.BAJO.value
+        if tokens <= _TOKENS_MEDIO_MAX:
+            return WateringCostClass.MEDIO.value
+        return WateringCostClass.ALTO.value
+
+    @staticmethod
+    def _clip(text: str, limit: int) -> str:
+        cleaned = " ".join(str(text or "").split())
+        if len(cleaned) <= limit:
+            return cleaned
+        return cleaned[: limit - 1] + "…"
+
+    def build_watering_context(self, entity_id: str) -> Result[dict[str, Any], str]:
+        """Contexto COMPACTO por entidad: ficha + zonas + hitos + última lectura.
+
+        Nunca el proyecto entero (decisión de coste del spec): lo que se envía
+        es la ficha de la entidad, sus Raíces/Entorno/Brotes con los fantasmas
+        marcados, su anillo/rama y el resumen del último diagnóstico si existe.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return proj
+        project = proj.value
+        entity = project.entity_by_id(entity_id)
+        if entity is None:
+            return Error(f"Entidad no encontrada: {entity_id}")
+        if entity.canon_state == CanonState.FANTASMA:
+            return Error("Un nodo fantasma no participa del ciclo de riego")
+
+        layers_by_id = {layer.id: layer for layer in project.world_layers}
+        layer_names = [
+            layers_by_id[layer_id].name
+            for layer_id in entity.layer_ids or []
+            if layer_id in layers_by_id
+        ]
+        lines: list[str] = [
+            f"ENTIDAD EN FOCO: {entity.name} (tipo: {entity.entity_type.value})",
+            f"Relevancia narrativa (fijada por el usuario): {entity.narrative_importance.value}",
+            f"Nivel de desarrollo: {entity.development_level.value}",
+        ]
+        if layer_names:
+            lines.append(f"Anillo(s): {', '.join(layer_names)}")
+        if entity.birth_year is not None or entity.death_year is not None:
+            lines.append(f"Lapso: {entity.birth_year} → {entity.death_year}")
+        if entity.brief_description:
+            lines.append(f"Descripción breve: {self._clip(entity.brief_description, 400)}")
+        if entity.extended_description:
+            lines.append(f"Descripción extendida: {self._clip(entity.extended_description, 900)}")
+        if entity.tags:
+            lines.append(f"Etiquetas: {', '.join(entity.tags[:10])}")
+
+        zones = classify_neighbors(project, entity_id)
+        neighbor_entity_ids: list[str] = []
+        for zone_key, header in _ZONE_HEADERS:
+            neighbors = zones.get(zone_key, [])
+            lines.append(f"{header}:")
+            if not neighbors:
+                lines.append("- (vacío)")
+                continue
+            for neighbor in neighbors:
+                other = project.entity_by_id(neighbor.entity_id)
+                if other is None:
+                    continue
+                neighbor_entity_ids.append(other.id)
+                ghost_mark = (
+                    " [fantasma/no-canon: intención, no sostén]" if neighbor.is_ghost else ""
+                )
+                brief = self._clip(other.brief_description, 160)
+                detail = f" — {brief}" if brief else ""
+                lines.append(f"- {other.name} ({other.entity_type.value}){ghost_mark}{detail}")
+
+        milestones_by_id = {milestone.id: milestone for milestone in project.causal_milestones}
+        milestone_zones = classify_milestones(project, entity_id)
+        milestone_lines: list[str] = []
+        for zone_key, header in _ZONE_HEADERS:
+            for milestone_id in milestone_zones.get(zone_key, []):
+                milestone = milestones_by_id.get(milestone_id)
+                if milestone is None:
+                    continue
+                year = f"año {milestone.year}" if milestone.year is not None else "sin fecha"
+                milestone_lines.append(f"- [{header.lower()}] {milestone.title} ({year})")
+        if milestone_lines:
+            lines.append("HITOS VINCULADOS:")
+            lines.extend(milestone_lines)
+
+        previous = [d for d in self._diagnostics_for(project, entity_id) if not d.error]
+        if previous:
+            last = previous[-1]
+            lines.append(
+                "ÚLTIMO RIEGO ("
+                + last.created_at.date().isoformat()
+                + f"): {self._clip(last.summary, 300)} | scores: {dict(last.scores)}"
+            )
+
+        text = "\n".join(lines)
+        estimated_tokens = max(1, math.ceil(len(text) / _CHARS_PER_TOKEN))
+        return Ok(
+            {
+                "text": text,
+                "entity_ids": [entity_id, *neighbor_entity_ids],
+                "neighbor_ids": sorted(self._direct_neighbor_ids(project, entity_id)),
+                "estimated_tokens": estimated_tokens,
+            }
+        )
+
+    def estimate(self, entity_ids: list[str]) -> Result[WateringEstimate, str]:
+        """Estimación para la autorización previa. Ids no elegibles se omiten."""
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return proj
+        total_tokens = 0
+        count = 0
+        worst = WateringCostClass.BAJO.value
+        order = [
+            WateringCostClass.BAJO.value,
+            WateringCostClass.MEDIO.value,
+            WateringCostClass.ALTO.value,
+        ]
+        for entity_id in entity_ids:
+            context = self.build_watering_context(entity_id)
+            if isinstance(context, Error):
+                continue
+            tokens = int(context.value["estimated_tokens"])
+            total_tokens += tokens
+            count += 1
+            entity_class = self._cost_class_for_tokens(tokens)
+            if order.index(entity_class) > order.index(worst):
+                worst = entity_class
+        if count >= _BATCH_ALTO_MIN:
+            worst = WateringCostClass.ALTO.value
+        elif count >= _BATCH_MEDIO_MIN and worst == WateringCostClass.BAJO.value:
+            worst = WateringCostClass.MEDIO.value
+        return Ok(WateringEstimate(count, total_tokens, worst))
+
+    def water_entity(
+        self,
+        entity_id: str,
+        *,
+        origin: str = "single",
+        progress_callback: Any = None,
+    ) -> Result[WateringDiagnostic, str]:
+        """Regar: diagnóstico IA persistente. JAMÁS genera Semillas ni toca canon.
+
+        La autorización visible (qué se envía, coste) es responsabilidad del
+        host ANTES de llamar aquí; sin proveedor real este método falla claro.
+        """
+        proj = self._active_project()
+        if isinstance(proj, Error):
+            return proj
+        project = proj.value
+        entity = project.entity_by_id(entity_id)
+        if entity is None:
+            return Error(f"Entidad no encontrada: {entity_id}")
+        if entity.canon_state == CanonState.FANTASMA:
+            return Error("Un nodo fantasma no participa del ciclo de riego")
+        if entity_id in project.watering_paused_entity_ids:
+            return Error(
+                "La entidad está secada: usa Cultivar para devolverla al ciclo antes de regar"
+            )
+        if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
+            return Error(_UNCONFIGURED_AI_MESSAGE)
+
+        context = self.build_watering_context(entity_id)
+        if isinstance(context, Error):
+            return context
+        ctx = context.value
+        prompt = (
+            ctx["text"] + "\n\nRiega esta entidad: evalúa arraigo, nutrida e iluminada (0-100) y "
+            "devuelve SOLO el JSON del diagnóstico."
+        )
+        result = self.ai_job_service.run_focused_job(
+            "water_entity",
+            prompt,
+            context_scope={"entity_id": entity_id, "watering": True},
+            progress_callback=progress_callback,
+        )
+        if isinstance(result, Error):
+            return result
+        staged = getattr(result.value, "result", {}) or {}
+        watering = staged.get("watering")
+        if not watering:
+            return Error(
+                str(
+                    staged.get("watering_error")
+                    or "El modelo no devolvió un diagnóstico de riego válido"
+                )
+            )
+
+        scores = dict(watering.get("scores") or {})
+        # Relevancia: SIEMPRE la del usuario; cualquier valor de la IA fue descartado.
+        scores["relevancia"] = _IMPORTANCE_SCORE.get(entity.narrative_importance.value, 50)
+        provider = getattr(self.ai_job_service, "provider", None)
+        provider_name = str(getattr(provider, "provider_name", "") or "")
+        model = str(getattr(provider, "model", "") or os.environ.get("NARRATIVE_AI_MODEL", ""))
+        tokens = int(ctx["estimated_tokens"])
+        diagnostic = WateringDiagnostic(
+            entity_id=entity_id,
+            scores=scores,
+            summary=str(watering.get("summary", "")),
+            metric_explanations=dict(watering.get("metric_explanations") or {}),
+            risks=list(watering.get("risks") or []),
+            context_manifest={
+                "entity_ids": list(ctx["entity_ids"]),
+                "neighbor_ids": list(ctx["neighbor_ids"]),
+                "estimated_tokens": tokens,
+            },
+            provider=provider_name,
+            model=model,
+            cost_class=self._cost_class_for_tokens(tokens),
+            origin=origin,
+            resulting_status=WateringStatus.REGADA.value,
+        )
+        return self.register_diagnostic(diagnostic)

@@ -67,6 +67,8 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "extract":             ModelParams(temperature=0.15, max_tokens=1500),
     "classify":            ModelParams(temperature=0.15, max_tokens=1000),
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
+    # BETA2-FOCO: riego — diagnóstico JSON acotado y analítico.
+    "water_entity":        ModelParams(temperature=0.2, max_tokens=1400),
     "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),
     "detect_contradiction": ModelParams(temperature=0.2, max_tokens=2000),
     "detect_inconsistency": ModelParams(temperature=0.2, max_tokens=2000),

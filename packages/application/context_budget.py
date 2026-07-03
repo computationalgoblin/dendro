@@ -100,6 +100,8 @@ _RAG_RETRIEVAL_SECTIONS: frozenset[str] = frozenset(
 # intent value (AIJobType.value) → tier. Asignación inicial acordada.
 INTENT_TO_TIER: dict[str, ContextTier] = {
     "improve_text": ContextTier.FAST_LOCAL,
+    # BETA2-FOCO: el riego usa contexto COMPACTO por entidad (nunca el proyecto entero).
+    "water_entity": ContextTier.FAST_LOCAL,
     "generate_text": ContextTier.BALANCED,
     "generate_entities": ContextTier.BALANCED,
     "generate_tree": ContextTier.BALANCED,

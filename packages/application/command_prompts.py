@@ -241,6 +241,28 @@ _INTENT_SPECS_ES: dict[str, str] = {
         '"open_questions": ["..."], "narrative_state": {"...": "..."}, "stop_required": '
         '<bool>, "stop_reason": "..."}'
     ),
+    # BETA2-FOCO: riego — diagnóstico puro del jardín. JAMÁS candidatos ni ediciones.
+    "water_entity": (
+        "TAREA: RIEGO — diagnóstico de UNA entidad del jardín narrativo.\n"
+        "Evalúa SIEMPRE estas TRES métricas, cada una con un entero 0-100:\n"
+        "- arraigo: cuán sostenida está por sus Raíces (contextos superiores, anillos previos, "
+        "hitos, ramas, relaciones o escenarios que hacen verosímil su existencia). No exijas "
+        "causas directas: un contexto que la haga creíble también arraiga.\n"
+        "- nutrida: desarrollo interno (descripciones, coherencia propia) e integración en su "
+        "Entorno (vecinas, rama).\n"
+        "- iluminada: cuánto proyecta Brotes (derivaciones, consecuencias, influencia, "
+        "escenarios posteriores o vecinos).\n"
+        "NO evalúes ni devuelvas 'relevancia': la define el usuario y no te corresponde.\n"
+        "Las entradas marcadas canon_state=fantasma son INTENCIÓN del autor, no canon: puedes "
+        "mencionarlas como intención, pero NO cuentan como sostén real de ninguna métrica.\n"
+        "PROHIBIDO proponer entidades, relaciones, hitos, ediciones o cambio alguno: este "
+        "trabajo SOLO diagnostica; las sugerencias llegan por otra vía cuando el usuario las pide.\n"
+        "Responde SOLO con JSON válido, sin texto fuera del JSON, con esta forma exacta: "
+        '{"scores": {"arraigo": <0-100>, "nutrida": <0-100>, "iluminada": <0-100>}, '
+        '"summary": "resumen breve del estado narrativo de la entidad", '
+        '"metric_explanations": {"arraigo": "...", "nutrida": "...", "iluminada": "..."}, '
+        '"risks": ["problema o riesgo principal", "..."]}'
+    ),
 }
 
 # Text intents return free text (no JSON) → reuse the inline writing prompt.

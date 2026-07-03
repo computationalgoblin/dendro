@@ -98,6 +98,9 @@ class AIJobType(str, Enum):
     # stays inline (e.g. the entity detail panel) until the user saves.
     IMPROVE_TEXT = "improve_text"
     GENERATE_TEXT = "generate_text"
+    # BETA2-FOCO: riego — diagnóstico IA puro de una entidad (jamás candidatos,
+    # jamás canon). El resultado se persiste como WateringDiagnostic.
+    WATER_ENTITY = "water_entity"
     UNKNOWN = "unknown"
 
 
@@ -494,6 +497,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["candidatos de hito causal", "relaciones causales candidatas"]
     if intent_type == AIJobType.CHRONOLOGY_WALK_STEP:
         return ["informe editorial", "candidatos", "propuestas de cambio", "preguntas abiertas"]
+    if intent_type == AIJobType.WATER_ENTITY:
+        return ["diagnóstico de riego persistente (sin candidatos ni cambios de canon)"]
     if intent_type in _TEXT_INTENTS:
         return ["texto sugerido (no canon hasta guardar)"]
     return ["plan revisable"]
@@ -522,6 +527,8 @@ def _expected_output_for_intent(intent_type: AIJobType) -> str:
         return "edit_candidates"
     if intent_type == AIJobType.PROPOSE_MILESTONES:
         return "milestone_candidates"
+    if intent_type == AIJobType.WATER_ENTITY:
+        return "watering_diagnostic"
     if intent_type == AIJobType.CHRONOLOGY_WALK_STEP:
         return "chronology_walk_step"
     if intent_type in _TEXT_INTENTS:
@@ -825,6 +832,29 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             "summary": str(payload.get("summary") or f"{len(changes)} cambio(s) de reparación"),
             "report": str(payload.get("report") or ""),
             "repair_changes": changes,
+            "candidates": [],
+        }
+
+    # BETA2-FOCO: el riego produce SOLO un diagnóstico persistente. Se valida aquí
+    # (import lazy, patrón repair) porque la ruta principal llama al gateway con
+    # validate=False (DC-AUDIT-02): la validación autoritativa es nuestra.
+    if job.type == AIJobType.WATER_ENTITY:
+        from packages.application.watering_payload import normalize_watering_payload
+
+        normalized = normalize_watering_payload(payload)
+        if isinstance(normalized, Error):
+            return {
+                "kind": "watering_diagnostic",
+                "summary": "",
+                "watering": None,
+                "watering_error": normalized.error,
+                "candidates": [],
+            }
+        data = normalized.value
+        return {
+            "kind": "watering_diagnostic",
+            "summary": str(data.get("summary", "")),
+            "watering": data,
             "candidates": [],
         }
 
