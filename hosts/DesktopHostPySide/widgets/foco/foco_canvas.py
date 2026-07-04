@@ -30,15 +30,95 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     CANVAS,
     ENTITY_KIND_PALETTE,
     GOLD,
+    GOLD_SOFT,
     INK,
     INK_MUTED,
     INK_SOFT,
     LINE_SOFT,
+    SURFACE_HI,
 )
 
 _NODE_RADIUS = 24.0
 _LABEL_WIDTH = 128.0
 _ZONE_KEYS = ("raices", "entorno", "brotes")
+
+# FOCO-22: cabeceras que explican qué contiene cada zona.
+_ZONE_CAPTIONS = {
+    "raices": "RAÍCES · causas y anillos superiores",
+    "brotes": "BROTES · consecuencias y anillos inferiores",
+    "entorno": "ENTORNO",
+}
+
+
+class FocoContainerFrame(QGraphicsObject):
+    """FOCO-22: la rama contenedora ENVUELVE al centro como marco clicable.
+
+    Marco redondeado alrededor del hueco central con el nombre de la rama en
+    el borde superior; si hay más ancestras, breadcrumb «Abuela › Madre» a la
+    derecha. Click ⇒ centrar la contenedora inmediata.
+    """
+
+    def __init__(self, container_id: str, name: str, breadcrumb: str = "") -> None:
+        super().__init__()
+        self.container_id = container_id
+        self.display_name = name
+        self.breadcrumb = breadcrumb
+        self._rect = QRectF(0, 0, 10, 10)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setZValue(-2)  # detrás de satélites y conectores
+        self.setToolTip(f"Rama contenedora: {name} — click para centrarla")
+
+    def set_frame_rect(self, rect: QRectF) -> None:
+        self.prepareGeometryChange()
+        self._rect = QRectF(rect)
+        self.update()
+
+    def boundingRect(self) -> QRectF:  # noqa: N802 (API Qt)
+        return self._rect.adjusted(-4, -16, 4, 4)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(GOLD_SOFT))
+        pen.setWidthF(1.6)
+        painter.setPen(pen)
+        fill = QColor(SURFACE_HI)
+        fill.setAlphaF(0.35)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(self._rect, 18.0, 18.0)
+        # Pestaña con el nombre en el borde superior.
+        font = QFont()
+        font.setPointSizeF(8.5)
+        font.setBold(True)
+        painter.setFont(font)
+        label = f"⌂ {self.display_name}"
+        metrics = painter.fontMetrics()
+        tab_width = metrics.horizontalAdvance(label) + 22
+        tab = QRectF(self._rect.x() + 18, self._rect.y() - 11, tab_width, 20)
+        painter.setBrush(QColor(SURFACE_HI))
+        painter.drawRoundedRect(tab, 9.0, 9.0)
+        painter.setPen(QPen(QColor(INK_SOFT)))
+        painter.drawText(tab, Qt.AlignmentFlag.AlignCenter, label)
+        if self.breadcrumb:
+            crumb_font = QFont()
+            crumb_font.setPointSizeF(7.5)
+            painter.setFont(crumb_font)
+            painter.setPen(QPen(QColor(INK_MUTED)))
+            crumb_rect = QRectF(
+                tab.right() + 8, self._rect.y() - 11, self._rect.width() - tab_width - 44, 20
+            )
+            painter.drawText(
+                crumb_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                f"dentro de {self.breadcrumb}",
+            )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        scene = self.scene()
+        views = scene.views() if scene is not None else []
+        if views and isinstance(views[0], FocoCanvas):
+            views[0].satelliteActivated.emit(self.container_id)
+        event.accept()
 
 
 class FocoSatelliteItem(QGraphicsObject):
@@ -202,22 +282,33 @@ class FocoCanvas(QGraphicsView):
         # FOCO-13: semillas IA germinando por zona: cid -> (zone, title).
         self._seed_meta: dict[str, tuple[str, str]] = {}
         self._seed_items: dict[str, FocoSeedItem] = {}
+        # FOCO-22: cadena de contención (la inmediata primero) → marco.
+        self._container_meta: list[dict] = []
+        self._container_frame: FocoContainerFrame | None = None
 
     # ------------------------------------------------------------------
     # Datos
     # ------------------------------------------------------------------
 
-    def set_zones(self, center_id: str, zones: dict[str, list[dict]]) -> None:
+    def set_zones(
+        self,
+        center_id: str,
+        zones: dict[str, list[dict]],
+        containers: list[dict] | None = None,
+    ) -> None:
         """Reconstruye el lienzo para un centro.
 
         ``zones`` mapea zona → lista ORDENADA de dicts con
-        ``entity_id/name/entity_type/is_ghost/reason`` (el orden es el de
-        ``foco_zones.classify_neighbors`` y gobierna la navegación por flechas).
+        ``entity_id/name/entity_type/is_ghost/reason`` (+ ``link_label``
+        opcional para el rótulo del conector — FOCO-22). ``containers`` es la
+        cadena de contención (dicts ``entity_id/name``, la inmediata primero):
+        se dibuja como marco envolvente, no como satélites.
         """
         if center_id != self._center_id:
             self._seed_meta = {}
         self._center_id = center_id
         self._zone_meta = {key: list(zones.get(key, [])) for key in _ZONE_KEYS}
+        self._container_meta = list(containers or [])
         self._selected = []
         self._rebuild_scene()
         self.selectionChanged.emit([])
@@ -261,12 +352,8 @@ class FocoCanvas(QGraphicsView):
         return [meta["entity_id"] for meta in self._zone_meta.get(zone, [])]
 
     def container_ids(self) -> list[str]:
-        """Ramas contenedoras del centro (viven en Entorno con reason='container')."""
-        return [
-            meta["entity_id"]
-            for meta in self._zone_meta.get("entorno", [])
-            if meta.get("reason") == "container"
-        ]
+        """Cadena de contención del centro (FOCO-22: la inmediata primero)."""
+        return [meta["entity_id"] for meta in self._container_meta]
 
     def selected_ids(self) -> list[str]:
         return list(self._selected)
@@ -324,14 +411,46 @@ class FocoCanvas(QGraphicsView):
         for (meta, seed), y in zip(right, _spread(len(right), height * 0.56, height * 0.22)):
             placements.append((meta, seed, QPointF(width * 0.91, y)))
 
+        # FOCO-22: marco de la rama contenedora envolviendo el hueco central.
+        self._container_frame = None
+        if self._container_meta:
+            immediate = self._container_meta[0]
+            ancestors = " › ".join(
+                str(meta.get("name", "")) for meta in self._container_meta[1:3]
+            )
+            hole = self.center_hole_rect()
+            frame = FocoContainerFrame(
+                str(immediate.get("entity_id", "")),
+                str(immediate.get("name", "")),
+                ancestors,
+            )
+            frame.set_frame_rect(hole.adjusted(-26, -22, 26, 22))
+            self._scene.addItem(frame)
+            self._container_frame = frame
+
         pen = QPen(QColor(LINE_SOFT))
         pen.setWidthF(1.0)
+        label_font = QFont()
+        label_font.setPointSizeF(7.0)
         for meta, seed, position in placements:
             # Línea sutil hacia el centro, detrás del elemento.
             direction = center - position
             trimmed = position + direction * 0.42
             line = self._scene.addLine(position.x(), position.y(), trimmed.x(), trimmed.y(), pen)
             line.setZValue(-1)
+            # FOCO-22: rótulo del vínculo sobre el conector (tipo de relación,
+            # «anillo superior/inferior», «hito anterior/posterior»…).
+            link_label = str((meta or {}).get("link_label", "") or "")
+            if link_label:
+                text_item = self._scene.addSimpleText(link_label, label_font)
+                text_item.setBrush(QColor(INK_MUTED))
+                midpoint = position + direction * 0.24
+                text_rect = text_item.boundingRect()
+                text_item.setPos(
+                    midpoint.x() - text_rect.width() / 2.0,
+                    midpoint.y() - text_rect.height() - 1.0,
+                )
+                text_item.setZValue(-1)
             if seed is not None:
                 candidate_id, title = seed
                 zone = self._seed_meta[candidate_id][0]
@@ -355,10 +474,47 @@ class FocoCanvas(QGraphicsView):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if any(self._zone_meta.values()) or self._seed_meta:
+        if any(self._zone_meta.values()) or self._seed_meta or self._container_meta:
             selected = list(self._selected)
             self._rebuild_scene()
             self._selected = selected
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
+        super().drawBackground(painter, rect)
+        # FOCO-22: cabeceras de zona — el lienzo se explica a sí mismo.
+        if not self._center_id:
+            return
+        width = max(720, self.viewport().width())
+        height = max(500, self.viewport().height())
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        caption_font = QFont()
+        caption_font.setPointSizeF(7.5)
+        caption_font.setBold(True)
+        caption_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
+        painter.setFont(caption_font)
+        painter.setPen(QPen(QColor(INK_MUTED)))
+        painter.drawText(
+            QRectF(0, height * 0.015, width, 16),
+            Qt.AlignmentFlag.AlignHCenter,
+            _ZONE_CAPTIONS["raices"],
+        )
+        painter.drawText(
+            QRectF(0, height - 18 - height * 0.006, width, 16),
+            Qt.AlignmentFlag.AlignHCenter,
+            _ZONE_CAPTIONS["brotes"],
+        )
+        painter.drawText(
+            QRectF(8, height * 0.145, 220, 14),
+            Qt.AlignmentFlag.AlignLeft,
+            _ZONE_CAPTIONS["entorno"],
+        )
+        painter.drawText(
+            QRectF(width - 228, height * 0.145, 220, 14),
+            Qt.AlignmentFlag.AlignRight,
+            _ZONE_CAPTIONS["entorno"],
+        )
+        painter.restore()
 
     # ------------------------------------------------------------------
     # Interacción

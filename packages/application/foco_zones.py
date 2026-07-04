@@ -8,8 +8,10 @@ Heurística combinada (decisión de producto BETA2-FOCO, en orden de prioridad):
 
 1. Familia causal dirigida: quien causa/condiciona/explica al centro ⇒ Raíces;
    lo que el centro causa/deriva ⇒ Brotes. Señales contradictorias ⇒ Entorno.
-2. Contención: la rama contenedora del centro ⇒ Entorno (``reason="container"``;
-   la navegación ↑ la prioriza desde ahí); los hijos contenidos ⇒ Brotes.
+2. Contención: la rama contenedora del centro NO es un satélite — se devuelve
+   aparte (``classify_containers``, cadena con la inmediata primero) y la UI
+   la dibuja como MARCO envolvente del centro (BETA2-FOCO-22); los hijos
+   contenidos ⇒ Brotes.
 3. Anillos: rango causal de capas (``world_layer_causal``) — anillo superior ⇒
    Raíces, inferior ⇒ Brotes.
 4. Hitos: co-afectadas por un hito fechado antes del centro ⇒ Raíces; después ⇒
@@ -189,9 +191,16 @@ def classify_neighbors(project: Project, entity_id: str) -> dict[str, list[Zoned
             conflicted.add(other_id)
 
     classified: dict[str, ZonedNeighbor] = {}
+    container_ids: set[str] = set()
     for other_id, relation_id in neighbor_relations.items():
         other = project.entity_by_id(other_id)
         ghost = is_ghost_entity(other)
+        # BETA2-FOCO-22: la contenedora directa NO es un satélite — la UI la
+        # dibuja como marco envolvente (classify_containers la expone aparte).
+        signal = signals.get(other_id)
+        if signal is not None and signal[1] == "container" and other_id not in conflicted:
+            container_ids.add(other_id)
+            continue
         if other_id in conflicted:
             classified[other_id] = ZonedNeighbor(
                 other_id, signals[other_id][3], CausalZone.ENTORNO.value, "conflicting", ghost
@@ -231,6 +240,9 @@ def classify_neighbors(project: Project, entity_id: str) -> dict[str, list[Zoned
         for other_id in milestone.affected_entity_ids:
             if other_id == entity_id or other_id in classified:
                 continue
+            if other_id in container_ids:
+                # FOCO-22: la contenedora es marco, no vuelve como satélite.
+                continue
             other = project.entity_by_id(other_id)
             if other is None or other.canon_state in _EXCLUDED_CANON:
                 continue
@@ -248,6 +260,64 @@ def classify_neighbors(project: Project, entity_id: str) -> dict[str, list[Zoned
     for zone_list in zones.values():
         zone_list.sort(key=_sort_key)
     return zones
+
+
+def _direct_containers(project: Project, entity_id: str) -> list[tuple[str, str]]:
+    """[(container_id, relation_id)] de las contenedoras DIRECTAS, orden por nombre."""
+    found: dict[str, str] = {}
+    for relation in project.relations_for(entity_id):
+        other_id = relation.target_id if relation.source_id == entity_id else relation.source_id
+        if other_id == entity_id:
+            continue
+        other = project.entity_by_id(other_id)
+        if other is None or other.canon_state in _EXCLUDED_CANON:
+            continue
+        signal = _relation_signal(relation, entity_id)
+        if signal is not None and signal[1] == "container":
+            found.setdefault(other_id, relation.id)
+
+    def _name_key(item: tuple[str, str]) -> tuple[str, str]:
+        entity = project.entity_by_id(item[0])
+        return ((entity.name if entity else "").casefold(), item[0])
+
+    return sorted(found.items(), key=_name_key)
+
+
+def classify_containers(project: Project, entity_id: str) -> list[ZonedNeighbor]:
+    """Cadena de contención del centro, la INMEDIATA primero (BETA2-FOCO-22).
+
+    La primera entrada es la rama contenedora directa (si hay varias, la
+    primera por nombre; el resto se añade tras ella en el mismo nivel); a
+    continuación, las ancestras siguiendo la primera contenedora de cada
+    nivel. Sin ciclos y con tope defensivo de profundidad.
+    """
+    chain: list[ZonedNeighbor] = []
+    seen: set[str] = {entity_id}
+    level = _direct_containers(project, entity_id)
+    depth = 0
+    while level and depth < 6:
+        next_anchor = ""
+        for container_id, relation_id in level:
+            if container_id in seen:
+                continue
+            seen.add(container_id)
+            container = project.entity_by_id(container_id)
+            chain.append(
+                ZonedNeighbor(
+                    container_id,
+                    relation_id,
+                    CausalZone.ENTORNO.value,
+                    "container",
+                    is_ghost_entity(container),
+                )
+            )
+            if not next_anchor:
+                next_anchor = container_id
+        if not next_anchor:
+            break
+        level = _direct_containers(project, next_anchor)
+        depth += 1
+    return chain
 
 
 def classify_milestones(project: Project, entity_id: str) -> dict[str, list[str]]:

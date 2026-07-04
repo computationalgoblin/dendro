@@ -26,7 +26,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from packages.application.foco_zones import classify_milestones, classify_neighbors
+from packages.application.foco_zones import (
+    classify_containers,
+    classify_milestones,
+    classify_neighbors,
+)
 from packages.domain.entity import CanonState, NarrativeEntity, NarrativeImportance
 from packages.domain.project import Project
 from packages.domain.relation import RelationType
@@ -473,6 +477,18 @@ class WateringService:
 
         zones = classify_neighbors(project, entity_id)
         neighbor_entity_ids: list[str] = []
+        # BETA2-FOCO-22: las contenedoras ya no viajan como satélites de zona —
+        # se enumeran aparte para que la IA no pierda la pertenencia a rama.
+        containers = classify_containers(project, entity_id)
+        if containers:
+            names = []
+            for container in containers:
+                other = project.entity_by_id(container.entity_id)
+                if other is not None:
+                    neighbor_entity_ids.append(other.id)
+                    names.append(other.name)
+            if names:
+                lines.append(f"RAMA CONTENEDORA: {' › '.join(names[:3])}")
         for zone_key, header in _ZONE_HEADERS:
             neighbors = zones.get(zone_key, [])
             lines.append(f"{header}:")

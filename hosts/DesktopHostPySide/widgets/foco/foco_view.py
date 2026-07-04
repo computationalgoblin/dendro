@@ -34,6 +34,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     RADIUS_LG,
     SURFACE_HI,
     EmptyState,
+    enum_human,
 )
 from hosts.DesktopHostPySide.widgets.foco.foco_canvas import FocoCanvas
 from hosts.DesktopHostPySide.widgets.foco.foco_lifeline import FocoLifelineBand
@@ -42,7 +43,7 @@ from hosts.DesktopHostPySide.widgets.foco.foco_popover import (
     QuickCreatePopover,
 )
 from hosts.DesktopHostPySide.widgets.foco.foco_tool_rail import FocoToolRail
-from packages.application.foco_zones import classify_neighbors
+from packages.application.foco_zones import classify_containers, classify_neighbors
 from packages.domain.result import Error
 
 # Tipos de entidad que cuentan como "rama" para el popover Añadir a rama.
@@ -378,10 +379,43 @@ class FocoView(QWidget):
                         "is_ghost": neighbor.is_ghost,
                         "zone": zone,
                         "reason": neighbor.reason,
+                        # FOCO-22: rótulo del conector — cada línea dice qué es.
+                        "link_label": self._link_label(project, neighbor, zone),
                     }
                 )
             zones_payload[zone] = entries
-        self.canvas.set_zones(entity.id, zones_payload)
+        # FOCO-22: la cadena de contención se dibuja como MARCO, no satélites.
+        containers_payload = [
+            {
+                "entity_id": container.entity_id,
+                "name": getattr(project.entity_by_id(container.entity_id), "name", ""),
+                "is_ghost": container.is_ghost,
+            }
+            for container in classify_containers(project, entity.id)
+        ]
+        self.canvas.set_zones(entity.id, zones_payload, containers=containers_payload)
+
+    @staticmethod
+    def _link_label(project: Any, neighbor: Any, zone: str) -> str:
+        """Texto corto del vínculo: tipo de relación o señal estructural."""
+        reason = getattr(neighbor, "reason", "")
+        if reason == "causal_rank":
+            return "anillo superior" if zone == "raices" else "anillo inferior"
+        if reason == "milestone":
+            return "hito anterior" if zone == "raices" else "hito posterior"
+        relation_id = getattr(neighbor, "relation_id", "")
+        if relation_id:
+            for relation in getattr(project, "relations", []) or []:
+                if relation.id == relation_id:
+                    kind = getattr(relation.relation_type, "value", str(relation.relation_type))
+                    label = enum_human(kind)
+                    if reason == "child":
+                        label = "contiene"
+                    ghost_rel = (
+                        getattr(getattr(relation, "canon_state", None), "value", "") == "fantasma"
+                    )
+                    return f"{label} (pendiente)" if ghost_rel else label
+        return ""
 
     def _form_capable(self) -> bool:
         return self.ctx is not None and self.entity_controller is not None

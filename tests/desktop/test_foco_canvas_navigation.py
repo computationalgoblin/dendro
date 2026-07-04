@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -98,8 +99,9 @@ class TestClickAndZones:
 
         assert set(view.canvas.zone_ids("raices")) == {root.id, ghost.id}
         assert view.canvas.zone_ids("brotes") == [sprout.id]
-        # Entorno ordenado por nombre: Alfa, Beta, Rama madre (contenedora).
-        assert view.canvas.zone_ids("entorno") == [alfa.id, beta.id, branch.id]
+        # FOCO-22: la contenedora ya NO es satélite del Entorno — es el marco.
+        assert view.canvas.zone_ids("entorno") == [alfa.id, beta.id]
+        assert view.canvas.container_ids() == [branch.id]
         assert view.canvas.container_ids() == [branch.id]
         ghost_item = view.canvas._items[ghost.id]
         assert ghost_item.is_ghost is True  # translúcido/borrador en el lienzo
@@ -130,11 +132,12 @@ class TestArrowNavigation:
         assert view.current_entity_id() == alfa.id
 
     def test_left_goes_to_last_entorno(self, qapp):
-        project_service, center, _, _, _, _, branch, _ = _garden()
+        project_service, center, _, _, _, beta, _, _ = _garden()
         view = _view(project_service)
         view.center_entity(center.id, push_history=False)
         _press(view, Qt.Key.Key_Left)
-        assert view.current_entity_id() == branch.id
+        # FOCO-22: la contenedora salió del Entorno — la última es Beta.
+        assert view.current_entity_id() == beta.id
 
     def test_up_prioritizes_container_then_roots(self, qapp):
         project_service, center, root, _, _, _, branch, _ = _garden()
@@ -209,3 +212,58 @@ class TestFloatingBackButton:
         view.go_back()
         assert view.current_entity_id() == center.id
         assert view._back_button.isHidden()
+
+
+class TestContainerFrameAndLabels:
+    """BETA2-FOCO-22: marco contenedor envolvente, zonas explicadas y rótulos."""
+
+    def test_container_renders_as_frame_not_satellite(self, qapp):
+        from hosts.DesktopHostPySide.widgets.foco.foco_canvas import FocoContainerFrame
+
+        project_service, center, *_ = _garden()
+        view = _view(project_service)
+        view.resize(1100, 760)
+        view.center_entity(center.id, push_history=False)
+
+        frame = view.canvas._container_frame
+        assert isinstance(frame, FocoContainerFrame)
+        assert frame.container_id == view.canvas.container_ids()[0]
+        assert "Rama madre" in frame.display_name
+        # La contenedora NO tiene satélite propio.
+        assert frame.container_id not in view.canvas._items
+
+    def test_frame_click_centers_the_branch(self, qapp):
+        project_service, center, *_ , branch, _ = _garden()
+        view = _view(project_service)
+        view.center_entity(center.id, push_history=False)
+        activated: list[str] = []
+        view.canvas.satelliteActivated.connect(activated.append)
+        view.canvas.satelliteActivated.emit(view.canvas._container_frame.container_id)
+        assert activated == [branch.id]
+
+    def test_connector_labels_present_in_scene(self, qapp):
+        from PySide6.QtWidgets import QGraphicsSimpleTextItem
+
+        project_service, center, *_ = _garden()
+        view = _view(project_service)
+        view.resize(1100, 760)
+        view.center_entity(center.id, push_history=False)
+        labels = [
+            item.text()
+            for item in view.canvas._scene.items()
+            if isinstance(item, QGraphicsSimpleTextItem)
+        ]
+        # Las relaciones causales y planas van rotuladas sobre su conector.
+        assert any("caus" in text.lower() for text in labels)
+        assert any("aliado" in text.lower() for text in labels)
+
+    def test_zone_captions_are_painted(self, qapp):
+        from hosts.DesktopHostPySide.widgets.foco.foco_canvas import _ZONE_CAPTIONS
+
+        assert "causas y anillos superiores" in _ZONE_CAPTIONS["raices"]
+        assert "consecuencias y anillos inferiores" in _ZONE_CAPTIONS["brotes"]
+        source = Path("hosts/DesktopHostPySide/widgets/foco/foco_canvas.py").read_text(
+            encoding="utf-8"
+        )
+        assert "def drawBackground" in source
+        assert "_ZONE_CAPTIONS" in source

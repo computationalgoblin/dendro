@@ -6,6 +6,7 @@ import pytest
 
 from packages.application.foco_zones import (
     CausalZone,
+    classify_containers,
     classify_milestones,
     classify_neighbors,
 )
@@ -113,15 +114,19 @@ class TestCausalSignals:
 
 @pytest.mark.application
 class TestContainment:
-    def test_container_branch_goes_to_entorno(self):
-        # Decisión de producto: Entorno = vecinas + rama contenedora + hermanos.
+    def test_container_branch_leaves_zones_and_goes_to_chain(self):
+        # BETA2-FOCO-22: la contenedora NO es un satélite — la UI la dibuja
+        # como marco envolvente; classify_containers la expone aparte.
         project = _project()
         center = _entity(project, "Hoja")
         branch = _entity(project, "Rama madre")
         _relate(project, branch, center, RelationType.CONTIENE)
 
         zones = classify_neighbors(project, center.id)
-        assert _zone_of(zones, branch.id) == (CausalZone.ENTORNO.value, "container")
+        assert _zone_of(zones, branch.id) is None  # fuera de las tres zonas
+        chain = classify_containers(project, center.id)
+        assert [c.entity_id for c in chain] == [branch.id]
+        assert chain[0].reason == "container"
 
     def test_pertenece_a_outgoing_marks_container(self):
         project = _project()
@@ -130,7 +135,20 @@ class TestContainment:
         _relate(project, center, branch, RelationType.PERTENECE_A)
 
         zones = classify_neighbors(project, center.id)
-        assert _zone_of(zones, branch.id) == (CausalZone.ENTORNO.value, "container")
+        assert _zone_of(zones, branch.id) is None
+        chain = classify_containers(project, center.id)
+        assert [c.entity_id for c in chain] == [branch.id]
+
+    def test_container_chain_walks_ancestors_immediate_first(self):
+        project = _project()
+        center = _entity(project, "Hoja")
+        mother = _entity(project, "Madre")
+        grandmother = _entity(project, "Abuela")
+        _relate(project, mother, center, RelationType.CONTIENE)
+        _relate(project, grandmother, mother, RelationType.CONTIENE)
+
+        chain = classify_containers(project, center.id)
+        assert [c.entity_id for c in chain] == [mother.id, grandmother.id]
 
     def test_children_go_to_brotes(self):
         project = _project()
@@ -316,3 +334,25 @@ class TestMiscBehaviour:
             for neighbor in zones[CausalZone.ENTORNO.value]
         ]
         assert names == ["Alfa", "Momo", "Zeta"]
+
+
+@pytest.mark.application
+class TestContainerNotReaddedByMilestones:
+    def test_milestone_coaffected_container_stays_out_of_zones(self):
+        # FOCO-22: la contenedora es marco — un hito co-afectado no debe
+        # devolverla a las zonas como satélite.
+        project = _project()
+        center = _entity(project, "Hoja", birth_year=10)
+        branch = _entity(project, "Rama madre")
+        _relate(project, branch, center, RelationType.CONTIENE)
+        project.causal_milestones.append(
+            CausalMilestone(
+                title="Fundación",
+                year=50,
+                affected_entity_ids=[center.id, branch.id],
+            )
+        )
+
+        zones = classify_neighbors(project, center.id)
+        assert _zone_of(zones, branch.id) is None
+        assert [c.entity_id for c in classify_containers(project, center.id)] == [branch.id]
