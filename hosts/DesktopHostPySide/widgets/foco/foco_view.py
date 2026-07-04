@@ -160,30 +160,27 @@ class FocoView(QWidget):
         self.lifeline.hide()
         outer.addWidget(self.lifeline)
 
-        self._image_placeholder = QFrame(card)
-        self._image_placeholder.setFixedSize(84, 84)
-        self._image_placeholder.setStyleSheet(
-            f"QFrame {{ border: 1px dashed {LINE_SOFT}; border-radius: 12px; "
-            "background: rgba(255,255,255,0.4); }}"
-        )
-        row.addWidget(self._image_placeholder, 0, Qt.AlignmentFlag.AlignTop)
-
+        # FOCO-20/21: el placeholder de imagen vive en la CABECERA del propio
+        # formulario (NodeDetailPanel) — la tarjeta ya no duplica uno al lado.
         column = QVBoxLayout()
         column.setSpacing(4)
         header = QHBoxLayout()
         header.setSpacing(8)
-        self._back_button = QPushButton("◀", card)
-        self._back_button.setToolTip("Volver al foco anterior")
+        # FOCO-21: el botón «volver» vive FUERA del editor — flotante sobre el
+        # lienzo (esquina superior izquierda, junto al rail), con el nombre de
+        # la entidad anterior. Hijo del FocoView, no de la tarjeta.
+        self._back_button = QPushButton("◀", self)
+        self._back_button.setToolTip("Volver a la entidad anterior")
         self._back_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._back_button.setFixedSize(26, 26)
+        self._back_button.setFixedHeight(30)
         self._back_button.setStyleSheet(
-            f"QPushButton {{ border: 1px solid {LINE_SOFT}; border-radius: 13px; "
-            f"background: transparent; color: {INK_SOFT}; }}"
-            "QPushButton:hover { background: rgba(255,255,255,0.6); }"
+            f"QPushButton {{ border: 1px solid {LINE_SOFT}; border-radius: 15px; "
+            f"background: {SURFACE_HI}; color: {INK_SOFT}; padding: 0 14px; "
+            "font-size: 12px; } "
+            f"QPushButton:hover {{ border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}"
         )
         self._back_button.clicked.connect(self.go_back)
         self._back_button.setVisible(False)
-        header.addWidget(self._back_button, 0)
         self._name_label = QLabel("", card)
         self._name_label.setStyleSheet(
             f"color: {INK_STRONG}; font-family: Georgia, serif; "
@@ -278,6 +275,12 @@ class FocoView(QWidget):
                 (self.height() - self._empty.height()) // 2,
             )
             self._empty.raise_()
+        # FOCO-21: botón «volver» flotante arriba-izquierda, a la derecha del
+        # rail de herramientas, fuera del editor.
+        if not self._back_button.isHidden():
+            self._back_button.adjustSize()
+            self._back_button.move(self.tool_rail.x() + self.tool_rail.width() + 12, 14)
+            self._back_button.raise_()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -305,6 +308,7 @@ class FocoView(QWidget):
             self._history = []
             self.canvas.set_zones("", {})
             self._center_card.hide()
+            self._update_back_button()
             self._empty.show()
             self._position_overlays()
             self._refresh_tool_context()
@@ -339,11 +343,24 @@ class FocoView(QWidget):
         self.close_adjacent()
         self._rebuild_canvas(project, entity)
         self._update_center_card(entity)
-        self._back_button.setVisible(bool(self._history))
+        self._update_back_button()
         self._center_card.show()
         self._position_overlays()
         self._refresh_tool_context()
         self.entityCentered.emit(entity.id)
+
+    def _update_back_button(self) -> None:
+        """FOCO-21: «◀ Nombre-anterior» flotante; oculto sin historial."""
+        if not self._history:
+            self._back_button.setVisible(False)
+            return
+        project = self._project()
+        previous = project.entity_by_id(self._history[-1]) if project is not None else None
+        name = getattr(previous, "name", "") or "anterior"
+        metrics = self._back_button.fontMetrics()
+        elided = metrics.elidedText(name, Qt.TextElideMode.ElideRight, 170)
+        self._back_button.setText(f"◀  {elided}")
+        self._back_button.setVisible(True)
 
     def _rebuild_canvas(self, project: Any, entity: Any) -> None:
         zones_payload: dict[str, list[dict]] = {}
@@ -506,9 +523,9 @@ class FocoView(QWidget):
             project = self._project()
             if project is not None and project.entity_by_id(previous) is not None:
                 self.center_entity(previous, push_history=False)
-                self._back_button.setVisible(bool(self._history))
+                self._update_back_button()
                 return
-        self._back_button.setVisible(False)
+        self._update_back_button()
 
     # Accesos usados por la barra superior / rail (FOCO-11).
     def request_open_in_map(self) -> None:

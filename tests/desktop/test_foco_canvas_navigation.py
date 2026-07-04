@@ -177,3 +177,35 @@ class TestFocusHistory:
         view.go_back()
         assert view.current_entity_id() == center.id
         assert view.history_ids() == []
+
+
+class TestFloatingBackButton:
+    """BETA2-FOCO-21: «volver» flotante FUERA del editor, con el nombre previo."""
+
+    def test_back_button_floats_outside_the_center_card(self, qapp):
+        project_service, center, root, *_ = _garden()
+        view = _view(project_service)
+        view.center_entity(center.id, push_history=False)
+        # Hijo del FocoView (no de la tarjeta central) — flota sobre el lienzo.
+        assert view._back_button.parent() is view
+
+    def test_back_button_shows_previous_entity_name(self, qapp):
+        project_service, center, root, *_ = _garden()
+        view = _view(project_service)
+        view.resize(1200, 800)
+        view.center_entity(center.id, push_history=False)
+        assert view._back_button.isHidden()  # sin historial, oculto
+
+        view.center_entity(root.id)
+        assert not view._back_button.isHidden()
+        assert view._back_button.text().startswith("◀")
+        assert center.name.split()[0] in view._back_button.text()
+        # Posicionado a la derecha del rail, pegado arriba (fuera del editor;
+        # el hueco central real no se materializa offscreen sin layout).
+        view._position_overlays()
+        assert view._back_button.x() >= view.tool_rail.x() + view.tool_rail.width()
+        assert view._back_button.y() == 14
+
+        view.go_back()
+        assert view.current_entity_id() == center.id
+        assert view._back_button.isHidden()
