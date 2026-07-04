@@ -75,6 +75,10 @@ class FocoView(QWidget):
     cultivateRequested = Signal(str)  # noqa: N815 — Cultivar (sin IA)
     # FOCO-13: click en una Semilla de zona ⇒ revisión (flujo humano existente).
     seedReviewRequested = Signal(str)  # noqa: N815 — convención Qt de señales
+    # FOCO-19: toda mutación hecha desde Foco (crear/relacionar/fantasma/
+    # convertir/vincular/editar formulario) avisa al workspace para que el
+    # Mapa se reconstruya al entrar (antes quedaba desactualizado).
+    dataChanged = Signal()  # noqa: N815 — convención Qt de señales
 
     def __init__(
         self,
@@ -447,6 +451,8 @@ class FocoView(QWidget):
     def _on_form_saved(self, *args: Any) -> None:
         """Autosave del formulario: refresca el LIENZO (vecindario/estados) sin
         reconstruir el formulario — no se puede perder el cursor al escribir."""
+        # FOCO-19: el nombre/tipo editados también se ven en el Mapa.
+        self.dataChanged.emit()
         project = self._project()
         if project is None or not self._center_id:
             return
@@ -649,7 +655,11 @@ class FocoView(QWidget):
                 )
                 self._popover.open_next_to(anchor)
         elif tool_id == "water":
-            ids = self.canvas.selected_ids() or ([center_id] if center_id else [])
+            # FOCO-19: la central se asume SIEMPRE seleccionada — la selección
+            # de satélites se le SUMA (antes la sustituía).
+            ids = list(self.canvas.selected_ids())
+            if center_id and center_id not in ids:
+                ids.insert(0, center_id)
             if ids:
                 self.waterRequested.emit(ids)
         elif tool_id == "dry" and center_id:
@@ -670,6 +680,7 @@ class FocoView(QWidget):
         if isinstance(result, Error):
             self._log_error(result.error)
             return
+        self.dataChanged.emit()
         self.center_entity(result.value.id)
 
     def _create_related(self, payload: dict) -> None:
@@ -684,6 +695,7 @@ class FocoView(QWidget):
         )
         if isinstance(relation, Error):
             self._log_error(relation.error)
+        self.dataChanged.emit()
         # La central sigue siendo una (spec): la nueva aparece en su zona.
         self._recenter()
 
@@ -699,6 +711,7 @@ class FocoView(QWidget):
         relation = self.relation_controller.create(result.value.id, self._center_id, "contiene")
         if isinstance(relation, Error):
             self._log_error(relation.error)
+        self.dataChanged.emit()
         self._recenter()
 
     def _create_ghost(self, payload: dict) -> None:
@@ -711,6 +724,7 @@ class FocoView(QWidget):
         # Nace vinculado (relación fantasma) al centro si lo hay → zona Entorno.
         if self._center_id:
             self.ghost_service.create_ghost_relation(self._center_id, result.value.id)
+        self.dataChanged.emit()
         self._recenter()
 
     def _ghost_and_relate(self, name: str) -> None:
@@ -722,6 +736,7 @@ class FocoView(QWidget):
             self._log_error(result.error)
             return
         self.ghost_service.create_ghost_relation(self._center_id, result.value.id)
+        self.dataChanged.emit()
         self._recenter()
 
     def _relate_to(self, target_id: str) -> None:
@@ -730,6 +745,7 @@ class FocoView(QWidget):
         result = self.relation_controller.create(self._center_id, target_id, "esta_relacionado_con")
         if isinstance(result, Error):
             self._log_error(result.error)
+        self.dataChanged.emit()
         self._recenter()
 
     def _ghost_relate_to(self, target_id: str) -> None:
@@ -738,6 +754,7 @@ class FocoView(QWidget):
         result = self.ghost_service.create_ghost_relation(self._center_id, target_id)
         if isinstance(result, Error):
             self._log_error(result.error)
+        self.dataChanged.emit()
         self._recenter()
 
     def _add_to_branch(self, branch_id: str) -> None:
@@ -746,6 +763,7 @@ class FocoView(QWidget):
         result = self.relation_controller.create(branch_id, self._center_id, "contiene")
         if isinstance(result, Error):
             self._log_error(result.error)
+        self.dataChanged.emit()
         self._recenter()
 
     def _convert_ghost(self, ghost_id: str) -> None:
@@ -755,6 +773,7 @@ class FocoView(QWidget):
         if isinstance(result, Error):
             self._log_error(result.error)
             return
+        self.dataChanged.emit()
         self._recenter(ghost_id if ghost_id == self._center_id else None)
 
     def _link_ghost(self, ghost_id: str, target_id: str) -> None:

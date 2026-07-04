@@ -2012,6 +2012,11 @@ class CreationWorkspace(QWidget):
         # resto conserva su chip pulsante (nada se pierde, nada se duplica).
         self.foco.seedReviewRequested.connect(self._open_candidate_review)
         self.foco.entityCentered.connect(lambda _eid: self._rehydrate_seed_notifications())
+        # FOCO-19: las mutaciones hechas en Foco marcan el Mapa como obsoleto;
+        # al entrar a "concentric" se reconstruye (antes la entidad nueva no
+        # aparecía hasta un refresh completo).
+        self._graph_stale = False
+        self.foco.dataChanged.connect(self._mark_graph_stale)
         layout.addWidget(self.foco, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
@@ -2758,6 +2763,11 @@ class CreationWorkspace(QWidget):
         except Exception:  # noqa: BLE001 - el pulido nunca rompe el cambio de vista
             pass
 
+    @_qt_safe_slot
+    def _mark_graph_stale(self):
+        # FOCO-19: mutación fuera del Mapa → reconstruir al volver a entrar.
+        self._graph_stale = True
+
     def set_active_view(self, view: str):
         """BETA2-FOCO: tres modos — "foco" (escritorio causal, PRINCIPAL) |
         "concentric" (Mapa global) | "chrono" (Cronología global).
@@ -2774,6 +2784,11 @@ class CreationWorkspace(QWidget):
             self.chrono.set_project(self._get_active_project())
             self.chrono.fit_all()
         self.chrono.setVisible(chrono_on)
+        # FOCO-19: si Foco mutó datos, el Mapa se reconstruye al entrar (la
+        # cronología ya lo hace siempre vía set_project unas líneas arriba).
+        if view == "concentric" and getattr(self, "_graph_stale", False):
+            self.graph.refresh()
+            self._graph_stale = False
         self.graph.setVisible(view == "concentric")
         foco_widget = getattr(self, "foco", None)
         if foco_widget is not None:
@@ -6467,6 +6482,8 @@ class CreationWorkspace(QWidget):
                     widget.refresh()
             except RuntimeError:
                 continue
+        # FOCO-19: el refresh completo acaba de reconstruir el grafo.
+        self._graph_stale = False
         # BETA1-G04: la cronológica se reconstruye solo si está activa
         if getattr(self, "_active_view", "concentric") == "chrono" and hasattr(self, "chrono"):
             self.chrono.set_project(self._get_active_project())

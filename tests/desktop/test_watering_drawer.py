@@ -274,3 +274,14 @@ class TestWorkspaceWiring:
         assert "request_watering_authorization" in suggest_body
         assert "_launch_toolbar_ai_job" in suggest_body
         assert "track_worker(worker)" in source
+
+    def test_map_rebuilds_after_foco_mutations(self):
+        # BETA2-FOCO-19: dataChanged → _graph_stale → refresh al entrar a Mapa.
+        source = Path("hosts/DesktopHostPySide/views/workspaces.py").read_text(encoding="utf-8")
+        assert "self.foco.dataChanged.connect(self._mark_graph_stale)" in source
+        assert "def _mark_graph_stale" in source
+        view_body = source.split("def set_active_view", 1)[1].split("def _update_mode_pill")[0]
+        assert 'if view == "concentric" and getattr(self, "_graph_stale", False):' in view_body
+        assert "self.graph.refresh()" in view_body
+        refresh_body = source.split("\n    def refresh(self):", 2)[-1]
+        assert "self._graph_stale = False" in refresh_body

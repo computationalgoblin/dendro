@@ -251,3 +251,64 @@ class TestToolActions:
         )
         result = Ok(None)  # sanity: import de Result usado por la vista
         assert isinstance(result, Ok)
+
+
+class TestWaterIncludesCenter:
+    """BETA2-FOCO-19: la central se asume SIEMPRE seleccionada al regar."""
+
+    def test_water_unions_selection_with_center(self, qapp):
+        project_service, view = _setup()
+        center = _entity(project_service, "Centro")
+        vecina_a = _entity(project_service, "VecinaA")
+        vecina_b = _entity(project_service, "VecinaB")
+        view.center_entity(center.id, push_history=False)
+        view.canvas._selected = [vecina_a.id, vecina_b.id]
+
+        watered: list[list] = []
+        view.waterRequested.connect(watered.append)
+        view._on_tool("water")
+
+        assert watered == [[center.id, vecina_a.id, vecina_b.id]]
+
+    def test_water_does_not_duplicate_center_if_selected(self, qapp):
+        project_service, view = _setup()
+        center = _entity(project_service, "Centro")
+        vecina = _entity(project_service, "Vecina")
+        view.center_entity(center.id, push_history=False)
+        view.canvas._selected = [center.id, vecina.id]
+
+        watered: list[list] = []
+        view.waterRequested.connect(watered.append)
+        view._on_tool("water")
+
+        assert watered == [[center.id, vecina.id]]
+
+
+class TestDataChangedSignal:
+    """BETA2-FOCO-19: toda mutación de Foco avisa para reconstruir el Mapa."""
+
+    def test_create_entity_emits_data_changed(self, qapp):
+        project_service, view = _setup()
+        seed = _entity(project_service, "Base")
+        view.center_entity(seed.id, push_history=False)
+        changes: list[bool] = []
+        view.dataChanged.connect(lambda: changes.append(True))
+
+        view._create_entity({"name": "Nueva desde Foco", "entity_type": "nota"})
+
+        assert changes, "crear entidad debe emitir dataChanged"
+        names = [e.name for e in project_service.active_project.entities]
+        assert "Nueva desde Foco" in names
+
+    def test_relate_and_ghost_paths_emit_data_changed(self, qapp):
+        project_service, view = _setup()
+        center = _entity(project_service, "Centro")
+        other = _entity(project_service, "Aliada")
+        view.center_entity(center.id, push_history=False)
+        changes: list[bool] = []
+        view.dataChanged.connect(lambda: changes.append(True))
+
+        view._relate_to(other.id)
+        view._create_ghost({"name": "¿Pendiente?"})
+
+        assert len(changes) >= 2
