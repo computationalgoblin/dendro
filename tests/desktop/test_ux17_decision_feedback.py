@@ -57,13 +57,13 @@ def _decision_stub(decision: str):
 def test_aceptar_emite_toast_success() -> None:
     stub, toasts = _decision_stub("accept")
     CreationWorkspace._on_candidate_decision(stub, "cand-1", "accept")
-    assert ("Candidato integrado al canon", "success") in toasts
+    assert ("Semilla integrada al canon", "success") in toasts
 
 
 def test_rechazar_emite_toast_info() -> None:
     stub, toasts = _decision_stub("reject")
     CreationWorkspace._on_candidate_decision(stub, "cand-2", "reject")
-    assert ("Candidato descartado", "info") in toasts
+    assert ("Semilla descartada", "info") in toasts
 
 
 def test_decision_sin_notify_no_rompe() -> None:

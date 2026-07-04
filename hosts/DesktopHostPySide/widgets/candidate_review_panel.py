@@ -218,8 +218,8 @@ class CandidateReviewPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         kind = getattr(getattr(self._candidate, "candidate_type", None), "value", "")
-        badge_text = str(kind).replace("_", " ").upper() or "CANDIDATO"
-        scaffold = PanelScaffold("Revisión de candidato", badge=badge_text, badge_tone="gold")
+        badge_text = str(kind).replace("_", " ").upper() or "SEMILLA"
+        scaffold = PanelScaffold("Revisión de semilla", badge=badge_text, badge_tone="gold")
         outer.addWidget(scaffold)
         layout = scaffold.body  # las _build_* añaden el contenido aquí
 
@@ -238,7 +238,7 @@ class CandidateReviewPanel(QWidget):
             placeholder = "Nombre de la entidad"
         else:
             title_initial = str(getattr(self._candidate, "title", "") or "")
-            placeholder = "Encabezado del candidato"
+            placeholder = "Encabezado de la semilla"
         self._title_edit = QLineEdit(title_initial)
         self._title_edit.setPlaceholderText(placeholder)
         layout.addWidget(self._title_edit)
@@ -365,7 +365,7 @@ class CandidateReviewPanel(QWidget):
     def _build_default(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
         """Candidato normal: cuerpo de texto editable."""
         self._body_edit = QTextEdit()
-        self._body_edit.setPlaceholderText("Texto del candidato")
+        self._body_edit.setPlaceholderText("Texto de la semilla")
         self._body_edit.setPlainText(candidate_body_text(proposed))
         self._body_edit.setMinimumHeight(200)
         layout.addWidget(self._body_edit, 1)

@@ -2524,7 +2524,7 @@ class CreationWorkspace(QWidget):
             f"Entidad afectada: {payload['entity_name']}.",
             "Se enviará su contexto compacto (ficha + zonas + hitos + última lectura).",
             f"Tokens de entrada estimados: ~{payload['estimated_input_tokens']}.",
-            "Resultado esperado: Semillas (candidatos revisables) para reparar la métrica. "
+            "Resultado esperado: semillas revisables para reparar la métrica. "
             "Nada se integra al canon sin tu aceptación.",
         ]
         request_watering_authorization(
@@ -3818,8 +3818,8 @@ class CreationWorkspace(QWidget):
             "<b>4 · Diales.</b> Creatividad, longitud y contexto van en <i>Auto</i> "
             "(recomendado de la tarea). Arrástralos o haz clic para fijar un número exacto; "
             "doble clic vuelve a Auto.<br>"
-            "<b>Importante:</b> toda salida es un <b>candidato revisable</b> que germina como "
-            "semilla — nunca cambia el canon por sí sola."
+            "<b>Importante:</b> toda salida es una <b>semilla revisable</b> que germina en el "
+            "jardín — nunca cambia el canon por sí sola."
         )
         body.setWordWrap(True)
         body.setTextFormat(Qt.TextFormat.RichText)
@@ -3879,7 +3879,7 @@ class CreationWorkspace(QWidget):
             (
                 self._command_preview_btn,
                 "3 / 3 · Pulsa «Vista previa» para ver y ajustar el contexto antes de crear. "
-                "Todo resultado es un candidato revisable.",
+                "Todo resultado es una semilla revisable.",
             ),
         ]
 
@@ -4851,7 +4851,7 @@ class CreationWorkspace(QWidget):
             cid = str(getattr(candidate, "id", "") or "")
             if not cid:
                 continue
-            label = str(getattr(candidate, "title", "") or "Candidato")
+            label = str(getattr(candidate, "title", "") or "Semilla")
             # FOCO-13: si la Semilla pertenece a la entidad enfocada (foco_hint),
             # germina en su zona/drawer y NO duplica chip pulsante.
             hint = ((data.get("metadata") or {}).get("context_scope") or {}).get("foco_hint") or {}
@@ -5189,9 +5189,9 @@ class CreationWorkspace(QWidget):
         notify = getattr(self.ctx, "notify", None)
         if callable(notify):
             if accepted:
-                notify("Candidato integrado al canon", "success")
+                notify("Semilla integrada al canon", "success")
             else:
-                notify("Candidato descartado", "info")
+                notify("Semilla descartada", "info")
         # SEM04-fix: cerrar el modal centrado (o el cajón, si era el fallback).
         modal = getattr(self.ctx, "modal_overlay", None)
         if modal is not None and getattr(modal, "is_open", False):
@@ -6527,7 +6527,7 @@ class CreationWorkspace(QWidget):
             # FOCO-13: chips pulsantes SOLO para lo NO visible en la vista actual;
             # las semillas de la entidad enfocada germinan en su zona/drawer.
             if not layer.has(cid) and cid not in self._foco_visible_candidate_ids():
-                label = str(getattr(cand, "title", "") or "Candidato")
+                label = str(getattr(cand, "title", "") or "Semilla")
                 layer.add(cid, label)
         self.graph.rehydrate_candidate_seeds(pending_ids)  # SEM04: semillas en el grafo
         self._sync_foco_seeds()  # FOCO-13: rehidratación espacial en Foco (idempotente)

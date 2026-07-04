@@ -61,6 +61,9 @@ def _stub_workspace(qapp, controller):
         _on_suggestion_changed=lambda: None,
         # SEM04: _auto_stage_and_notify divide la semilla del grafo / la marchita.
         graph=SimpleNamespace(split_seed=lambda *a, **k: None, wither_seed=lambda *a, **k: None),
+        # FOCO-13: germinación espacial en Foco (idempotente en el flujo real).
+        _foco_visible_candidate_ids=lambda: set(),
+        _sync_foco_seeds=lambda: None,
     )
     stub._host = host  # mantener vivo el padre
     return stub

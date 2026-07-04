@@ -79,7 +79,7 @@ class ChronologyWalkReportView(QWidget):
             self._next_steps.addItem(str(step))
 
         self._candidates.setText(
-            f"Candidatos creados durante el recorrido: {len(data.get('candidates_created') or [])}"
+            f"Semillas creadas durante el recorrido: {len(data.get('candidates_created') or [])}"
         )
 
     @staticmethod
