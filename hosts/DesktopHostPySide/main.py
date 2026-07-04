@@ -12,7 +12,7 @@ except ImportError:
     print("PySide6 not installed. Run: pip install narrative-architect[desktop]")
     sys.exit(1)
 from hosts.DesktopHostPySide.main_window import MainWindow
-from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
+from hosts.DesktopHostPySide.widgets.design_system import apply_light_theme
 
 
 def _install_crash_guard() -> None:
@@ -75,7 +75,11 @@ def main():
     _install_crash_guard()
     _enable_msaa()
     app = QApplication(sys.argv)
-    install_tooltip_suppression(app)
+    # BETA2-FOCO-17: tema claro SIEMPRE (Fusion + paleta Dendro). Sin esto,
+    # Windows en modo oscuro imponía texto casi blanco sobre pergamino y
+    # tooltips ilegibles (la causa raíz de la antigua supresión global de
+    # tooltips de BETA1-F00, que se retira: ahora QToolTip va estilado).
+    apply_light_theme(app)
     w = MainWindow(); w.show()
     sys.exit(app.exec())
 

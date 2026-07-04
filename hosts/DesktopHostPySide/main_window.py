@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
@@ -50,6 +51,7 @@ from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace
 from hosts.DesktopHostPySide.widgets.design_system import (
     APP_STYLESHEET,
     GOLD,
+    apply_light_theme,
     INK_MUTED,
     INK_OLIVE_DEEP,
     INK_SOFT,
@@ -66,7 +68,6 @@ from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive, shutdown_wor
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
 from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectPanel
-from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
 from hosts.DesktopHostPySide.widgets.toast_layer import ToastLayer
 
 
@@ -90,7 +91,14 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        install_tooltip_suppression()
+        # BETA2-FOCO-17: la supresión global de tooltips (BETA1-F00) se retira
+        # — con paleta clara + QToolTip estilado los tooltips vuelven a ser
+        # legibles y el rail de Foco los necesita. El tema claro se aplica
+        # también aquí (idempotente) para cubrir arranques que no pasan por
+        # main() — p. ej. el arnés visual.
+        app = QApplication.instance()
+        if app is not None:
+            apply_light_theme(app)
         self.ctx = AppContext()
         self.controller = ProjectController()
         self.ctx.project_controller = self.controller

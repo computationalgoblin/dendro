@@ -447,6 +447,25 @@ QComboBox QAbstractItemView {{
 QComboBox QAbstractItemView::item {{ padding: 7px 8px; min-height: 28px; color: {INK}; border-radius: 6px; }}
 QComboBox QAbstractItemView::item:hover {{ background: {SURFACE}; }}
 QComboBox QAbstractItemView::item:selected {{ background: {GOLD_TINT}; color: {INK_STRONG}; }}
+QComboBox QLineEdit {{
+    /* BETA2-FOCO-17: el line-edit interno de un combo editable NO hereda el
+       color del QSS de QComboBox — bajo la paleta oscura de Windows su texto
+       se veía blanco sobre pergamino. Se fija tinta explícitamente. */
+    color: {INK};
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
+}}
+QToolTip {{
+    /* BETA2-FOCO-17: tooltips legibles en pergamino (antes: popup negro del
+       estilo del SO, motivo por el que se suprimían globalmente). */
+    background: {SURFACE_HI};
+    color: {INK};
+    border: 1px solid {LINE};
+    border-radius: {RADIUS_SM}px;
+    padding: 6px 9px;
+}}
 QTextEdit, QPlainTextEdit {{ min-height: 60px; }}
 QTabWidget::pane {{ border: 1px solid {LINE}; border-radius: {RADIUS_LG}px; background: {SURFACE}; }}
 QTabBar::tab {{
@@ -475,6 +494,67 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: 
 
 
 APP_STYLESHEET = _qss()
+
+
+def build_light_palette():
+    """BETA2-FOCO-17: QPalette clara construida con los tokens Dendro.
+
+    En Windows 11 con modo oscuro del SO, Qt 6.5+ aplica una paleta oscura
+    (texto casi blanco) allí donde el QSS no fija ``color`` explícito — el
+    texto se veía blanco sobre pergamino y los tooltips salían ilegibles.
+    La app es de tema claro por diseño: se fija la paleta SIEMPRE.
+    """
+    from PySide6.QtGui import QPalette
+
+    palette = QPalette()
+    groups = (
+        QPalette.ColorGroup.Active,
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorGroup.Disabled,
+    )
+    spec = {
+        QPalette.ColorRole.Window: PAPER,
+        QPalette.ColorRole.WindowText: INK,
+        QPalette.ColorRole.Base: INPUT_BG,
+        QPalette.ColorRole.AlternateBase: SURFACE,
+        QPalette.ColorRole.Text: INK,
+        QPalette.ColorRole.PlaceholderText: INK_MUTED,
+        QPalette.ColorRole.Button: SURFACE,
+        QPalette.ColorRole.ButtonText: INK,
+        QPalette.ColorRole.ToolTipBase: SURFACE_HI,
+        QPalette.ColorRole.ToolTipText: INK,
+        QPalette.ColorRole.Highlight: GOLD,
+        QPalette.ColorRole.HighlightedText: SURFACE_HI,
+        QPalette.ColorRole.Link: GOLD_DEEP,
+        QPalette.ColorRole.BrightText: SURFACE_HI,
+    }
+    for role, hex_color in spec.items():
+        for group in groups:
+            palette.setColor(group, role, QColor(hex_color))
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(INK_MUTED)
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(INK_MUTED)
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(INK_MUTED)
+    )
+    return palette
+
+
+def apply_light_theme(app) -> None:
+    """Fija estilo Fusion + paleta clara Dendro a nivel de aplicación.
+
+    Debe llamarse tras crear el ``QApplication`` y antes de construir ventanas.
+    Fusion respeta QPalette al 100% (los estilos nativos de Windows no); el
+    aspecto real lo sigue mandando ``APP_STYLESHEET``.
+    """
+    try:
+        app.setStyle("Fusion")
+    except Exception:  # noqa: BLE001 — el tema nunca debe impedir arrancar
+        pass
+    app.setPalette(build_light_palette())
 
 
 # ─────────────────────────────────────────────────────────────────────────
