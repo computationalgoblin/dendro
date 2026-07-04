@@ -350,7 +350,8 @@ def test_apply_repair_changes_applies_and_consumes_report(qapp):
     layer.add("a1", "Informe")
     bell = ZenBell(); bell.set_enabled(False)
     stub = SimpleNamespace(
-        candidate_view=SimpleNamespace(cc=controller),
+        # BETA2-UX-02: la Creación usa candidate_controller directo (antes candidate_view.cc).
+        candidate_controller=controller,
         _get_active_project=lambda: ps.active_project,
         _seed_notifications=layer, _zen_bell=bell,
         ctx=SimpleNamespace(log=lambda *a, **k: None),

@@ -54,7 +54,8 @@ def _stub_workspace(qapp, controller):
     bell = ZenBell()
     bell.set_enabled(False)  # sin síntesis en tests
     stub = SimpleNamespace(
-        candidate_view=SimpleNamespace(cc=controller),
+        # BETA2-UX-02: la Creación usa candidate_controller directo (antes candidate_view.cc).
+        candidate_controller=controller,
         _seed_notifications=layer,
         _zen_bell=bell,
         ctx=SimpleNamespace(log=lambda *a, **k: None),

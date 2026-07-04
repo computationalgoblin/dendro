@@ -53,7 +53,8 @@ def _cand(cid, title="x", state="pendiente"):
 def _rehydrate_stub(layer, pending):
     return SimpleNamespace(
         _seed_notifications=layer,
-        candidate_view=SimpleNamespace(cc=_RehydrateController(pending)),
+        # BETA2-UX-02: la Creación usa candidate_controller directo (antes candidate_view.cc).
+        candidate_controller=_RehydrateController(pending),
         # SEM04: rehidratación también recrea las semillas-candidato del grafo.
         graph=SimpleNamespace(rehydrate_candidate_seeds=lambda ids: None),
         # FOCO-13: los chips se saltan las semillas visibles en Foco — el stub
