@@ -39,12 +39,7 @@ from hosts.DesktopHostPySide.controllers.relation_controller import RelationCont
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
 
 from packages.domain.result import Error, Ok
-from hosts.DesktopHostPySide.views.candidate_view import CandidateView
-from hosts.DesktopHostPySide.views.corpus_view import CorpusView
 from hosts.DesktopHostPySide.views.home_view import HomeView
-from hosts.DesktopHostPySide.views.layer_view import LayerView
-from hosts.DesktopHostPySide.views.relation_view import RelationView
-from hosts.DesktopHostPySide.views.source_view import SourceView
 
 
 from hosts.DesktopHostPySide.views.workspaces import CreationWorkspace
@@ -53,13 +48,9 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
     apply_light_theme,
     INK_MUTED,
-    INK_OLIVE_DEEP,
     INK_SOFT,
     INK_STRONG,
     LINE,
-    SESSION_INK,
-    SESSION_LINE,
-    SESSION_TINT,
     SURFACE,
     SURFACE_HI,
 )
@@ -143,13 +134,10 @@ class MainWindow(QMainWindow):
     # ── Views ────────────────────────────────────────────────────────────────
 
     def _build_views(self):
-        # BETA1-H02: only views consumed by Home/Creation are present in the
-        # Desktop runtime. Legacy session/campaign/gallery views were removed.
-        self.corpus_view = CorpusView(self.ctx, self.ec)
-        self.relation_view = RelationView(self.ctx, self.rc)
-        self.candidate_view = CandidateView(self.ctx, self.cc)
-        self.source_view = SourceView(self.ctx, self.src)
-        self.layer_view = LayerView(self.ctx, self.lc)
+        # BETA2-UX-02: las vistas-tabla legacy (Corpus/Relation/Candidate/Source/
+        # Layer) eran inalcanzables (el stack solo monta Home+Creación) y solo
+        # servían de envoltorio para transportar sus controllers. Se eliminaron:
+        # la Creación recibe los controllers directamente.
 
         # Home portal
         self.home_view = HomeView(self.ctx)
@@ -164,14 +152,14 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("ai_settings", self._open_ai_settings)
         # T05/H03: technical toggles are not exposed from Home.
 
-        # Workspaces (preserve existing views inside them)
+        # Workspaces: la Creación recibe los controllers directamente (BETA2-UX-02).
         self.creation_workspace = CreationWorkspace(
             self.ctx,
-            corpus_view=self.corpus_view,
-            relation_view=self.relation_view,
-            candidate_view=self.candidate_view,
-            source_view=self.source_view,
-            layer_view=self.layer_view,
+            entity_controller=self.ec,
+            relation_controller=self.rc,
+            candidate_controller=self.cc,
+            source_controller=self.src,
+            layer_controller=self.lc,
         )
         # BETA1-H02: legacy gallery/session workspace classes were physically
         # removed from views/workspaces.py.
@@ -185,11 +173,8 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Technical top bar: advanced-mode only. Normal Home has no persistent header.
-        topbar = self._build_topbar()
-        self._topbar = topbar
-        topbar.setVisible(False)
-        root.addWidget(topbar)
+        # BETA2-UX-02: la barra técnica superior (topbar) estaba siempre oculta;
+        # se eliminó. Home no tiene cabecera persistente.
 
         # Stack horizontal layout. Los cajones YA NO viven aquí: son overlay
         # (ver abajo), así que el stack ocupa el 100% del ancho y la command bar
@@ -276,45 +261,6 @@ class MainWindow(QMainWindow):
             if drawer is not None:
                 drawer.reposition()
 
-    def _build_topbar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("topbar")
-        bar.setStyleSheet(
-            f"QFrame#topbar {{ background: {SURFACE_HI}; border-bottom: 1px solid {LINE}; }}"
-        )
-        bar.setFixedHeight(40)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 4, 16, 4)
-        layout.setSpacing(10)
-
-        self._top_project = QLabel("Dendro")
-        self._top_project.setStyleSheet(
-            f"font-weight: 700; font-size: 13px; color: {INK_OLIVE_DEEP}; "
-            "background: transparent; border: none;"
-        )
-        layout.addWidget(self._top_project)
-
-        self._top_schema = QLabel("")
-        self._top_schema.setObjectName("mutedLabel")
-        self._top_schema.setStyleSheet("font-size: 11px; background: transparent; border: none;")
-        layout.addWidget(self._top_schema)
-
-        layout.addStretch()
-
-        self._top_ai = QLabel(self.ai.provider_info())
-        self._top_ai.setObjectName("mutedLabel")
-        self._top_ai.setStyleSheet("font-size: 11px; background: transparent; border: none;")
-        layout.addWidget(self._top_ai)
-
-        self._advanced_badge = QLabel("AVANZADO")
-        self._advanced_badge.setStyleSheet(
-            f"font-size: 10px; font-weight: 700; color: {SESSION_INK}; "
-            f"background: {SESSION_TINT}; border: 1px solid {SESSION_LINE}; "
-            "border-radius: 8px; padding: 3px 8px;"
-        )
-        layout.addWidget(self._advanced_badge)
-
-        return bar
 
     def _wrap_space(self, workspace: QWidget, title: str, back_idx: int) -> QWidget:
         """Wrap a workspace with a return button bar at the top."""
@@ -748,11 +694,7 @@ class MainWindow(QMainWindow):
     def _apply_advanced_mode(self, enabled: bool):
         """Propagate advanced/debug visibility to every workspace/view."""
         # BETA1-A02: only runtime widgets (Home/Creation) receive the toggle
-        for widget in [
-            self.creation_workspace,
-            self.corpus_view, self.relation_view, self.candidate_view,
-            self.source_view, self.layer_view, self.home_view,
-        ]:
+        for widget in [self.creation_workspace, self.home_view]:
             if not _qt_widget_alive(widget):
                 continue
             if hasattr(widget, "set_advanced_mode"):
@@ -760,12 +702,6 @@ class MainWindow(QMainWindow):
                     widget.set_advanced_mode(enabled)
                 except Exception as exc:
                     self.log_msg(f"Error aplicando modo avanzado en {type(widget).__name__}: {exc}")
-        if hasattr(self, "_advanced_badge"):
-            # T05: Always hidden from UI
-            self._advanced_badge.setVisible(False)
-        if hasattr(self, "_topbar"):
-            # T05: Always hidden from UI
-            self._topbar.setVisible(False)
         if hasattr(self, "log") and not enabled:
             self.log.setVisible(False)
         # Also propagate worldbuilding to creation workspace
@@ -781,18 +717,9 @@ class MainWindow(QMainWindow):
     # ── Refresh ──────────────────────────────────────────────────────────────
 
     def _refresh(self):
+        # BETA2-UX-02: el topbar técnico (única superficie que consumía estos
+        # contadores) se eliminó; el cascade de refresco lo gestionan las vistas.
         _apptrace("UI refresh cascade")
-        try:
-            c = self.controller.counts()
-            if c:
-                self._top_project.setText(f"Dendro — {c['name']}")
-                self._top_schema.setText(f"schema v{c.get('schema', '?')}")
-            else:
-                self._top_project.setText("Dendro")
-                self._top_schema.setText("")
-            self._top_ai.setText(self.ai.provider_info())
-        except Exception as exc:
-            self.log_msg(f"Refresh error: {exc}")
 
     def _refresh_all_views(self):
         self._refresh()

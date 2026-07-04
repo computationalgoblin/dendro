@@ -1818,23 +1818,22 @@ class CreationWorkspace(QWidget):
         self,
         ctx: AppContext,
         *,
-        corpus_view,
-        relation_view,
-        candidate_view,
-        source_view=None,
-        layer_view=None,
+        entity_controller,
+        relation_controller,
+        candidate_controller,
+        source_controller=None,
+        layer_controller=None,
     ):
         super().__init__()
         self.ctx = ctx
-        self.corpus_view = corpus_view
-        self.relation_view = relation_view
-        self.candidate_view = candidate_view
-        self.source_view = source_view
-        self.layer_view = layer_view
-        self.source_controller = getattr(source_view, "ctrl", None)
-        self.layer_controller = getattr(layer_view, "ctrl", None)
-        self.entity_controller = getattr(corpus_view, "ec", None)
-        self.relation_controller = getattr(relation_view, "rc", None)
+        # BETA2-UX-02: la Creación recibe los controllers directamente. Antes se
+        # inyectaban 5 vistas-tabla legacy inalcanzables solo para extraer sus
+        # controllers; esas vistas se eliminaron.
+        self.entity_controller = entity_controller
+        self.relation_controller = relation_controller
+        self.candidate_controller = candidate_controller
+        self.source_controller = source_controller
+        self.layer_controller = layer_controller
         self.ai_context_controller = None
         self.rag_service = getattr(self.ctx, "rag_service", None) or RAGService()
         self.ctx.rag_service = self.rag_service
@@ -2657,7 +2656,7 @@ class CreationWorkspace(QWidget):
 
     def _pending_foco_candidates(self) -> list:
         """Candidatos PENDIENTES cuyo foco_hint apunta a la entidad enfocada."""
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         foco_widget = getattr(self, "foco", None)
         center = foco_widget.current_entity_id() if foco_widget is not None else ""
         if controller is None or not center:
@@ -2776,8 +2775,8 @@ class CreationWorkspace(QWidget):
         """BETA2-FOCO: tres modos — "foco" (escritorio causal, PRINCIPAL) |
         "concentric" (Mapa global) | "chrono" (Cronología global).
 
-        La elección se sigue persistiendo en QSettings 'creation/active_view'
-        (compat), pero el arranque de la Creación entra SIEMPRE en foco."""
+        El arranque de la Creación entra SIEMPRE en foco; la vista activa ya no
+        se persiste (BETA2-UX-02: escritura QSettings vestigial eliminada)."""
         view = str(view)
         if view not in ("foco", "concentric", "chrono"):
             view = "foco"
@@ -2824,10 +2823,6 @@ class CreationWorkspace(QWidget):
         # FOCO-13: la visibilidad de las Semillas depende de la vista — los
         # chips pulsantes se recalculan al cambiar de modo (idempotente).
         QTimer.singleShot(0, self._rehydrate_seed_notifications)
-        try:
-            QSettings("Dendro", "DesktopHost").setValue("creation/active_view", view)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _on_chrono_milestone(self, hito_id: str) -> None:
         """F3.6: activating a milestone in the chronology view marks it for
@@ -3262,7 +3257,7 @@ class CreationWorkspace(QWidget):
         la revisión/aplicación es solo por la ventana única (atómica). Se marcan
         con ``walk_session_id`` para que la rehidratación no genere semillas.
         """
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         candidates = (result or {}).get("candidates") or []
         created: list[str] = []
         if controller is None:
@@ -4829,7 +4824,7 @@ class CreationWorkspace(QWidget):
     @_qt_safe_slot
     def _auto_stage_and_notify(self, job):
         """Crea los candidatos del job, divide la semilla del grafo en N y notifica."""
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         result = getattr(job, "result", {}) or {}
         candidates = result.get("candidates") or []
         job_id = str(getattr(job, "id", "") or "")
@@ -5025,7 +5020,7 @@ class CreationWorkspace(QWidget):
         ):
             return
         candidate = self._find_candidate(candidate_id)
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         if candidate is None or controller is None:
             self.ctx.log("warning", "No se pudo abrir la revisión de la semilla")
             return
@@ -5129,7 +5124,7 @@ class CreationWorkspace(QWidget):
 
     def _apply_repair_changes(self, changes: list, analysis_cid: str):
         """Aplica los cambios seleccionados a canon vía servicios (acción humana)."""
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         cs = getattr(controller, "cs", None) if controller else None
         # Mismo proyecto e idénticos servicios que usa la aceptación de candidatos:
         # entidades, relaciones e hitos quedan en la misma instancia de proyecto.
@@ -6473,14 +6468,9 @@ class CreationWorkspace(QWidget):
         # layers; explicit view toggles are handled by their own toolbar routes.
 
     def refresh(self):
-        for widget in [
-            self.graph,
-            self.corpus_view,
-            self.relation_view,
-            self.candidate_view,
-            self.source_view,
-            self.layer_view,
-        ]:
+        # BETA2-UX-02: las vistas-tabla legacy se eliminaron; solo el grafo se
+        # refresca aquí (Foco/Cronología se reconstruyen en sus propias rutas).
+        for widget in [self.graph]:
             try:
                 if widget is not None and hasattr(widget, "refresh"):
                     widget.refresh()
@@ -6504,7 +6494,7 @@ class CreationWorkspace(QWidget):
         # notificaciones (esquina) Y las semillas-candidato (en el grafo) de los
         # candidatos pendientes de revisión (idempotente).
         layer = getattr(self, "_seed_notifications", None)
-        controller = getattr(self.candidate_view, "cc", None)
+        controller = self.candidate_controller
         if layer is None or controller is None:
             return
         active_walk = str(getattr(self, "_walk_session_id", None) or "")

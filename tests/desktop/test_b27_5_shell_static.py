@@ -50,7 +50,11 @@ def test_b32_advanced_mode_exists_but_diagnostic_is_not_normal_ui():
     assert "Modo avanzado" in main
     assert "self.log.setVisible(False)" in main
     assert "Diagnóstico" not in main
-    assert "_topbar.setVisible(False)" in main
+    # BETA2-UX-02: el topbar técnico (siempre oculto) se eliminó; el modo
+    # avanzado ya no expone superficie visible (badge/topbar) — solo el log
+    # de diagnóstico, que permanece oculto en modo normal.
+    assert "_build_topbar" not in main
+    assert "_advanced_badge" not in main
 
 
 def test_b27_5_design_system_components_exist():
