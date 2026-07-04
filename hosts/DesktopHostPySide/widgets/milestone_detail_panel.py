@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -43,14 +43,6 @@ from hosts.DesktopHostPySide.widgets.milestone_chronology_view import (
 from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from packages.domain.causal_milestone import CausalMilestoneType
 from packages.domain.result import Error
-
-_STATUS_OPTIONS = [
-    ("candidate", "Semilla"),
-    ("canon", "Canon"),
-    ("hypothesis", "Hipotesis"),
-    ("rejected", "Rechazado"),
-    ("archived", "Archivado"),
-]
 
 
 def _metadata(obj: Any) -> dict[str, Any]:
@@ -108,9 +100,6 @@ class MilestoneDetailPanel(QWidget):
         self.type_combo = QComboBox()
         for member in CausalMilestoneType:
             self.type_combo.addItem(enum_human(member.value), member.value)
-        self.status_combo = QComboBox()
-        for raw, label in _STATUS_OPTIONS:
-            self.status_combo.addItem(label, raw)
         self.year_edit = BotanicalSpinBox()
         self.year_edit.setRange(-999999999, 999999999)
         self.exact_date_picker = CalendarDatePicker(compact=True)
@@ -132,7 +121,6 @@ class MilestoneDetailPanel(QWidget):
 
         form.addRow("Titulo", self.title_edit)
         form.addRow("Tipo", self.type_combo)
-        form.addRow("Estado", self.status_combo)
         form.addRow("Año", self.year_edit)
         form.addRow("Fecha exacta", self.exact_date_picker)
         form.addRow("Fecha / posicion", self.temporal_edit)
@@ -170,7 +158,30 @@ class MilestoneDetailPanel(QWidget):
         buttons.addWidget(self.save_btn)
         root.addLayout(buttons)
 
+        # BETA2-UX-06: autosave (800ms) como en node/relation — modelo de
+        # guardado único. El guard _loading evita autoguardar durante la
+        # repoblación de los widgets en _load.
+        self._loading = False
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(800)
+        self._autosave_timer.timeout.connect(lambda: self._do_save(reload_after=False))
+        self._connect_autosave()
         self._load()
+
+    def _connect_autosave(self) -> None:
+        self.title_edit.textEdited.connect(self._schedule_autosave)
+        self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
+        self.year_edit.valueChanged.connect(self._schedule_autosave)
+        self.temporal_edit.textEdited.connect(self._schedule_autosave)
+        self.summary_edit.textChanged.connect(self._schedule_autosave)
+        self.body_edit.textChanged.connect(self._schedule_autosave)
+        self.participants_list.itemChanged.connect(self._schedule_autosave)
+
+    def _schedule_autosave(self, *args: Any) -> None:
+        if self._loading or self._hito is None:
+            return
+        self._autosave_timer.start()
 
     # ── datos ──────────────────────────────────────────────────────────────
 
@@ -210,19 +221,19 @@ class MilestoneDetailPanel(QWidget):
         return None
 
     def _load(self) -> None:
+        self._loading = True
         hito = self._find_hito()
         self._hito = hito
         if hito is None:
             self.header.setEnabled(False)
             self.save_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
+            self._loading = False
             return
         meta = _metadata(hito)
         self.title_edit.setText(str(getattr(hito, "title", "")))
         type_idx = self.type_combo.findData(_raw_enum(getattr(hito, "milestone_type", "")))
         self.type_combo.setCurrentIndex(type_idx if type_idx >= 0 else 0)
-        status_idx = self.status_combo.findData(_raw_enum(getattr(hito, "status", "candidate")))
-        self.status_combo.setCurrentIndex(status_idx if status_idx >= 0 else 0)
         year = getattr(hito, "year", None)
         if not isinstance(year, int) or isinstance(year, bool):
             chronology = getattr(self._project(), "project_chronology", None)
@@ -256,6 +267,7 @@ class MilestoneDetailPanel(QWidget):
 
         self._refresh_badges(hito)
         self._refresh_links(hito)
+        self._loading = False
 
     def _refresh_badges(self, hito: Any) -> None:
         while self.badge_row.count() > 1:  # conserva el stretch final
@@ -264,10 +276,8 @@ class MilestoneDetailPanel(QWidget):
             if widget is not None:
                 widget.deleteLater()
         type_label = enum_human(_raw_enum(getattr(hito, "milestone_type", "")))
-        status_label = enum_human(_raw_enum(getattr(hito, "status", "")))
         self.badge_row.insertWidget(0, Badge(type_label, "info"))
-        self.badge_row.insertWidget(1, Badge(status_label, "neutral"))
-        self.badge_row.insertWidget(2, Badge(milestone_temporal_label(hito), "gold"))
+        self.badge_row.insertWidget(1, Badge(milestone_temporal_label(hito), "gold"))
 
     def _refresh_links(self, hito: Any) -> None:
         lines: list[str] = []
@@ -298,6 +308,10 @@ class MilestoneDetailPanel(QWidget):
         return result
 
     def _save(self) -> None:
+        # Guardado manual explícito (botón «Guardar»): persiste y recarga.
+        self._do_save(reload_after=True)
+
+    def _do_save(self, reload_after: bool = True) -> None:
         if self._hito is None:
             return
         meta = _metadata(self._hito)
@@ -313,7 +327,9 @@ class MilestoneDetailPanel(QWidget):
         payload = {
             "title": self.title_edit.text().strip() or "Hito sin titulo",
             "milestone_type": str(self.type_combo.currentData() or "origen"),
-            "status": str(self.status_combo.currentData() or "candidate"),
+            # BETA2-UX-06: el estado del hito ya no se edita (canon total); se
+            # preserva por pass-through el que fijan los servicios.
+            "status": _raw_enum(getattr(self._hito, "status", "candidate")) or "candidate",
             "description": self.summary_edit.toPlainText().strip(),
             "rationale": self.body_edit.toPlainText().strip(),
             "year": int(self.year_edit.value()),
@@ -326,7 +342,8 @@ class MilestoneDetailPanel(QWidget):
             return
         if self.on_saved:
             self.on_saved()
-        self._load()
+        if reload_after:
+            self._load()
 
     def _delete(self) -> None:
         if self._hito is None or not hasattr(self.controller, "delete"):
