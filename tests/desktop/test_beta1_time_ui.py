@@ -23,7 +23,7 @@ if HAS_QT:
     from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
     from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
     from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
-    from hosts.DesktopHostPySide.widgets.milestone_chronology_view import (
+    from hosts.DesktopHostPySide.widgets.milestone_labels import (
         milestone_sort_value,
         milestone_temporal_label,
     )

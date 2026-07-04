@@ -18,7 +18,7 @@ from packages.domain.result import Ok
 
 if HAS_QT:
     from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
-    from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
+    from hosts.DesktopHostPySide.widgets.milestone_detail_panel import MilestoneDetailPanel
 
 
 pytestmark = pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")
@@ -81,12 +81,14 @@ def test_milestone_detail_saves_exact_date_from_calendar_picker(qapp):
         causal_milestones=ctrl.hitos,
         project_chronology=chronology,
     )
-    view = MilestoneChronologyView(ctrl, project_getter=lambda: project)
+    # BETA2-UX-08: el picker de fecha exacta vive en el panel de detalle del
+    # hito (la vista-lista MilestoneChronologyView se retiró).
+    ctx = SimpleNamespace(log=lambda *a, **k: None, drawer=None)
+    panel = MilestoneDetailPanel(ctx, ctrl, "hito-1", project_getter=lambda: project)
 
-    view.select_milestone("hito-1")
-    assert not view.exact_date_picker.isHidden()
-    view.exact_date_picker.set_date({"era": "Era Antigua", "year": 120, "month": "Alba", "day": 31})
-    view._save_detail()
+    assert not panel.exact_date_picker.isHidden()
+    panel.exact_date_picker.set_date({"era": "Era Antigua", "year": 120, "month": "Alba", "day": 31})
+    panel._save()
 
     assert ctrl.updated
     metadata = ctrl.updated[0][1]["metadata"]

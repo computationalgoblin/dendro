@@ -27,7 +27,6 @@ pytestmark = pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACES = ROOT / "hosts" / "DesktopHostPySide" / "views" / "workspaces.py"
 SETTINGS = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "settings_panels.py"
-MILESTONE_VIEW = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "milestone_chronology_view.py"
 NODE_PANEL = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "node_detail_panel.py"
 TREE_PANEL = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "tree_detail_panel.py"
 REL_PANEL = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "relation_detail_panel.py"
@@ -146,7 +145,6 @@ def test_project_wizard_collects_and_applies_chronology(qapp):
 def test_h05_sources_are_wired_without_graph_or_physics_changes():
     workspace = WORKSPACES.read_text(encoding="utf-8")
     settings = SETTINGS.read_text(encoding="utf-8")
-    milestone_view = MILESTONE_VIEW.read_text(encoding="utf-8")
     detail_sources = "\n".join([
         NODE_PANEL.read_text(encoding="utf-8"),
         TREE_PANEL.read_text(encoding="utf-8"),
@@ -158,7 +156,6 @@ def test_h05_sources_are_wired_without_graph_or_physics_changes():
     assert "def _suggest_related_milestone" in workspace
     assert "scope_override" in workspace
     assert "ChronologyConfigPanel" in settings
-    assert "ChronologyConfigPanel" in milestone_view
     assert "on_suggest_milestone" in detail_sources
-    assert "GraphNodeItem(" not in milestone_view
-    assert "_physics_enabled" not in milestone_view
+    # BETA2-UX-08: milestone_chronology_view.py se retiró (cronología unificada
+    # en el lienzo lateral); sus aserciones de fuente se eliminaron.

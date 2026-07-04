@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.design_system import Badge, Card, EmptyState, enum_human
-from hosts.DesktopHostPySide.widgets.milestone_chronology_view import (
+from hosts.DesktopHostPySide.widgets.milestone_labels import (
     milestone_primary_entity_id,
     milestone_sort_value,
     milestone_temporal_label,

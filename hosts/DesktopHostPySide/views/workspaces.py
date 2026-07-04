@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -54,9 +56,9 @@ from hosts.DesktopHostPySide.widgets.foco.watering_authorize import (
 )
 from hosts.DesktopHostPySide.widgets.foco.watering_batch import WateringBatchWorker
 from hosts.DesktopHostPySide.widgets.foco.watering_panel import WateringPanel
+from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_temporal_label
 from packages.application.history_service import HistoryService
 from packages.application.watering_service import WateringService
-from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 from hosts.DesktopHostPySide.widgets.chrono_canvas import (
     ChronoCanvasView,
     MilestoneQuickCreatePanel,
@@ -2787,6 +2789,9 @@ class CreationWorkspace(QWidget):
             self.chrono.set_project(self._get_active_project())
             self.chrono.fit_all()
         self.chrono.setVisible(chrono_on)
+        # BETA2-UX-08: gutter «Sin ubicar» de la cronología (hitos sin año/fecha,
+        # invisibles en la línea) — absorbe lo único que la vista-lista aportaba.
+        self._refresh_chrono_gutter(chrono_on)
         # FOCO-19: si Foco mutó datos, el Mapa se reconstruye al entrar (la
         # cronología ya lo hace siempre vía set_project unas líneas arriba).
         if view == "concentric" and getattr(self, "_graph_stale", False):
@@ -3546,6 +3551,67 @@ class CreationWorkspace(QWidget):
         return cluster
 
     @_qt_safe_slot
+    def _build_chrono_gutter(self) -> QFrame:
+        # BETA2-UX-08: overlay lateral con los hitos «Sin ubicar» de la
+        # cronología. Clic → panel de detalle del hito (misma ruta que el lienzo).
+        frame = QFrame(self)
+        frame.setObjectName("chronoUnplacedGutter")
+        frame.setStyleSheet(
+            f"QFrame#chronoUnplacedGutter {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {LINE}; border-radius: 12px; }}"
+        )
+        frame.setFixedWidth(214)
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(12, 10, 12, 12)
+        v.setSpacing(6)
+        self._chrono_gutter_count = QLabel("Sin ubicar")
+        self._chrono_gutter_count.setStyleSheet(
+            f"color: {INK_MUTED}; font-size: 11px; font-weight: 700; "
+            f"background: transparent; border: none;"
+        )
+        v.addWidget(self._chrono_gutter_count)
+        hint = QLabel("Hitos sin año ni fecha — no aparecen en la línea.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"color: {INK_MUTED}; font-size: 10px; background: transparent; border: none;"
+        )
+        v.addWidget(hint)
+        self._chrono_gutter_list = QListWidget()
+        self._chrono_gutter_list.setMaximumHeight(220)
+        self._chrono_gutter_list.itemClicked.connect(
+            lambda it: self._open_milestone_detail_panel(
+                str(it.data(Qt.ItemDataRole.UserRole) or "")
+            )
+        )
+        v.addWidget(self._chrono_gutter_list)
+        return frame
+
+    def _refresh_chrono_gutter(self, chrono_on: bool) -> None:
+        """BETA2-UX-08: puebla/oculta el gutter «Sin ubicar». Solo visible en
+        cronología y si hay hitos sin ubicación temporal."""
+        gutter = getattr(self, "_chrono_gutter", None)
+        if not chrono_on or self._milestone_ctrl is None:
+            if gutter is not None:
+                gutter.setVisible(False)
+            return
+        try:
+            hitos = list(self._milestone_ctrl.list_all() or [])
+        except Exception:  # noqa: BLE001
+            hitos = []
+        unplaced = [h for h in hitos if milestone_temporal_label(h) == "Sin ubicar"]
+        if gutter is None:
+            gutter = self._build_chrono_gutter()
+            self._chrono_gutter = gutter
+        self._chrono_gutter_list.clear()
+        for hito in unplaced:
+            item = QListWidgetItem(str(getattr(hito, "title", "") or "Hito sin título"))
+            item.setData(Qt.ItemDataRole.UserRole, str(getattr(hito, "id", "")))
+            self._chrono_gutter_list.addItem(item)
+        self._chrono_gutter_count.setText(f"Sin ubicar · {len(unplaced)}")
+        gutter.setVisible(bool(unplaced))
+        if unplaced:
+            self._position_floats()
+
     def _position_floats(self):
         """Coloca los clusters a ambos lados de la command bar y el
         breadcrumb de foco arriba a la izquierda."""
@@ -3554,6 +3620,12 @@ class CreationWorkspace(QWidget):
             return
         # R6: raised and static — aligned with the chronology toggle, no sway.
         top = bar.y() - 66
+        # BETA2-UX-08: gutter «Sin ubicar» arriba-derecha, bajo la píldora de modos.
+        gutter = getattr(self, "_chrono_gutter", None)
+        if gutter is not None and gutter.isVisible():
+            gutter.adjustSize()
+            gutter.move(self.width() - gutter.width() - 18, 58)
+            gutter.raise_()
         left = getattr(self, "_float_left", None)
         if left is not None:
             left.adjustSize()
@@ -6366,27 +6438,14 @@ class CreationWorkspace(QWidget):
     def _open_milestone_chronology_view(
         self, target_kind: str = "", target_id: str = "", hito_id: str = ""
     ):
-        """Open the H03 milestone chronology view without touching the graph."""
-        drawer = self.ctx.drawer
-        if self._milestone_ctrl is None or drawer is None:
-            self.ctx.log("error", "No se pudo abrir cronologia: servicio no disponible")
-            return
-        target_kind = str(target_kind or "")
-        target_id = str(target_id or "")
-        panel = MilestoneChronologyView(
-            self._milestone_ctrl,
-            project_getter=self._get_active_project,
-            entity_controller=self.entity_controller,
-            relation_controller=self.relation_controller,
-            layer_controller=self.layer_controller,
-            chronology_controller=self._chronology_ctrl,
-            on_saved=self.refresh,
-            initial_entity_id=target_id if target_kind in {"entity", "branch"} else "",
-            initial_relation_id=target_id if target_kind == "relation" else "",
-            initial_hito_id=str(hito_id or ""),
-        )
-        drawer.set_content(panel, title="Cronologia")
-        drawer.open()
+        """BETA2-UX-08: la cronología unificada vive en el lienzo lateral (modo
+        «chrono»). «Ver hitos» entra en ese modo; si se pide un hito concreto se
+        abre su panel de detalle. La vista-lista (MilestoneChronologyView) se
+        retiró; sus hitos «Sin ubicar» viven ahora en el gutter del lienzo."""
+        self.set_active_view("chrono")
+        hid = str(hito_id or "")
+        if hid:
+            self._open_milestone_detail_panel(hid)
 
     def _suggest_related_milestone(self, target_kind: str, target_id: str) -> bool:
         """Launch a reviewable AI job anchored to one existing detail-panel target."""

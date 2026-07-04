@@ -18,7 +18,6 @@ from packages.domain.result import Ok
 
 if HAS_QT:
     from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
-    from hosts.DesktopHostPySide.widgets.milestone_chronology_view import MilestoneChronologyView
 
 
 pytestmark = pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")
@@ -272,33 +271,10 @@ def test_create_action_is_hidden_without_safe_route(qapp):
     assert panel.findChild(QPushButton, "createLinkedMilestoneButton").isHidden()
 
 
-def test_h03_opens_with_initial_entity_and_relation_filters(qapp):
-    hitos = [
-        CausalMilestone(id="hito-a", title="Aster", affected_entity_ids=["ent-a"]),
-        CausalMilestone(id="hito-r", title="Pacto", caused_relation_ids=["rel-a"]),
-    ]
-    ctrl = FakeMilestoneController(hitos)
-    entities = [entity("ent-a", "Aster"), entity("ent-b", "Bruma")]
-    relations = [relation("rel-a", "ent-a", "ent-b")]
-
-    by_entity = MilestoneChronologyView(
-        ctrl,
-        project_getter=lambda: SimpleNamespace(entities=entities, relations=relations, causal_milestones=ctrl.hitos),
-        entity_controller=FakeEntityController(entities),
-        initial_entity_id="ent-a",
-    )
-    by_relation = MilestoneChronologyView(
-        ctrl,
-        project_getter=lambda: SimpleNamespace(entities=entities, relations=relations, causal_milestones=ctrl.hitos),
-        entity_controller=FakeEntityController(entities),
-        relation_controller=FakeRelationController(relations),
-        initial_relation_id="rel-a",
-        initial_hito_id="hito-r",
-    )
-
-    assert [h.title for h in by_entity.filtered_milestones()] == ["Aster"]
-    assert [h.title for h in by_relation.filtered_milestones()] == ["Pacto"]
-    assert by_relation._selected_hito_id == "hito-r"
+# BETA2-UX-08: MilestoneChronologyView (vista-lista) retirada; la cronología
+# unificada vive en el lienzo lateral. El test de sus filtros iniciales se
+# elimina — «ver hitos» ahora entra en el modo chrono (verificado en el smoke
+# de workspaces).
 
 
 def test_sources_do_not_instantiate_graph_nodes_or_touch_physics():

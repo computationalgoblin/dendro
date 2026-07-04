@@ -37,9 +37,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     enum_human,
     make_scroll_area,
 )
-from hosts.DesktopHostPySide.widgets.milestone_chronology_view import (
-    milestone_temporal_label,
-)
+from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_temporal_label
 from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from packages.domain.causal_milestone import CausalMilestoneType
 from packages.domain.result import Error
