@@ -206,43 +206,40 @@ class WateringPanel(QWidget):
         self._card_ids: list[str] = []
         for candidate in candidates or []:
             candidate_id = str(getattr(candidate, "id", "") or "")
-            if not candidate_id:
-                continue
-            proposed = getattr(candidate, "proposed_data", {}) or {}
-            preview = str(
-                proposed.get("edit_proposed_value") or proposed.get("report") or ""
-            ).strip()
-            card = QWidget(self)
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(8, 6, 8, 6)
-            card_layout.setSpacing(4)
-            card.setStyleSheet(
-                f"QWidget {{ border: 1px dashed {GOLD}; border-radius: 10px; "
-                "background: rgba(255,255,255,0.5); }"
-            )
-            title_label = QLabel(str(getattr(candidate, "title", "") or "Semilla"), card)
-            title_label.setWordWrap(True)
-            title_label.setStyleSheet(
-                f"color: {INK_STRONG}; font-weight: 600; border: none; background: transparent;"
-            )
-            card_layout.addWidget(title_label)
-            preview_label = QLabel(preview[:220] + ("…" if len(preview) > 220 else ""), card)
-            preview_label.setWordWrap(True)
-            preview_label.setStyleSheet(
-                f"color: {INK_SOFT}; font-size: 11px; border: none; background: transparent;"
-            )
-            card_layout.addWidget(preview_label)
-            review_button = QPushButton("Revisar", card)
-            review_button.setStyleSheet(
-                f"QPushButton {{ background: {GOLD}; border: none; border-radius: 8px; "
-                "color: #FCF8EC; padding: 4px 10px; }"
-            )
-            review_button.clicked.connect(
-                lambda _=False, cid=candidate_id: self.reviewRequested.emit(cid)
-            )
-            card_layout.addWidget(review_button, 0, Qt.AlignmentFlag.AlignRight)
-            self.cards_layout.addWidget(card)
-            self._card_ids.append(candidate_id)
+            if candidate_id:
+                self._card_ids.append(candidate_id)
+        if not self._card_ids:
+            return
+        # BETA2-UX-07: en vez de N tarjetas-entrada (una superficie de revisión
+        # duplicada), un único resumen «Revisar semillas» con conteo; la revisión
+        # detallada ocurre en la superficie primaria (semillas del lienzo).
+        n = len(self._card_ids)
+        card = QWidget(self)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 6, 8, 6)
+        card_layout.setSpacing(4)
+        card.setStyleSheet(
+            f"QWidget {{ border: 1px dashed {GOLD}; border-radius: 10px; "
+            "background: rgba(255,255,255,0.5); }"
+        )
+        plural = "semilla de texto pendiente" if n == 1 else "semillas de texto pendientes"
+        title_label = QLabel(f"🌱 {n} {plural}", card)
+        title_label.setWordWrap(True)
+        title_label.setStyleSheet(
+            f"color: {INK_STRONG}; font-weight: 600; border: none; background: transparent;"
+        )
+        card_layout.addWidget(title_label)
+        review_button = QPushButton("Revisar", card)
+        review_button.setStyleSheet(
+            f"QPushButton {{ background: {GOLD}; border: none; border-radius: 8px; "
+            "color: #FCF8EC; padding: 4px 10px; }"
+        )
+        # Abre la más antigua; el resto se revisa en la superficie primaria.
+        review_button.clicked.connect(
+            lambda _=False: self.reviewRequested.emit(self._card_ids[0])
+        )
+        card_layout.addWidget(review_button, 0, Qt.AlignmentFlag.AlignRight)
+        self.cards_layout.addWidget(card)
 
     def card_ids(self) -> list[str]:
         return list(getattr(self, "_card_ids", []))

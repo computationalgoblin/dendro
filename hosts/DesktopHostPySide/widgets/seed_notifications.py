@@ -17,7 +17,7 @@ import math
 
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
@@ -161,6 +161,18 @@ class SeedNotificationLayer(QWidget):
         self._box.setContentsMargins(0, 0, 0, 0)
         self._box.setSpacing(8)
         self._box.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        # BETA2-UX-07: los candidatos ya NO germinan como N dots aquí (esa es la
+        # superficie primaria del lienzo). El rincón muestra UN badge de conteo
+        # sutil; los objetos SeedNotification se conservan ocultos (API + wither).
+        self._count_badge = QPushButton(self)
+        self._count_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._count_badge.setStyleSheet(
+            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
+            "border-radius: 15px; padding: 6px 14px; font-weight: 700; font-size: 12px; }"
+        )
+        self._count_badge.clicked.connect(self._on_count_clicked)
+        self._count_badge.hide()
+        self._box.addWidget(self._count_badge, alignment=Qt.AlignmentFlag.AlignRight)
         if parent is not None:
             parent.installEventFilter(self)
         self.hide()
@@ -177,8 +189,38 @@ class SeedNotificationLayer(QWidget):
         dot = SeedNotification(candidate_id, label, kind=kind, parent=self)
         dot.clicked.connect(self._on_clicked)
         self._notifications[candidate_id] = dot
-        self._box.addWidget(dot, alignment=Qt.AlignmentFlag.AlignRight)
+        if kind == "error":
+            # Los errores (pocos, transitorios) siguen como dot visible que se
+            # descarta al pulsarlo.
+            self._box.addWidget(dot, alignment=Qt.AlignmentFlag.AlignRight)
+        else:
+            # BETA2-UX-07: el candidato se agrega en el badge de conteo; su objeto
+            # se conserva OCULTO (para la API y la animación de marchitado).
+            dot.hide()
+        self._sync_count()
         self._reflow()
+
+    def _candidate_ids(self) -> list[str]:
+        return [cid for cid, dot in self._notifications.items() if dot.kind != "error"]
+
+    def _sync_count(self) -> None:
+        ids = self._candidate_ids()
+        n = len(ids)
+        if n:
+            self._count_badge.setText(f"🌱 {n} " + ("semilla" if n == 1 else "semillas"))
+            self._count_badge.setToolTip(
+                "Semillas pendientes de revisar (germinan en el lienzo) — clic para abrir"
+            )
+            self._count_badge.show()
+        else:
+            self._count_badge.hide()
+
+    def _on_count_clicked(self) -> None:
+        # BETA2-UX-07: una sola entrada — abre la revisión de la más antigua; el
+        # resto se revisa en la superficie primaria (semillas del lienzo).
+        ids = self._candidate_ids()
+        if ids:
+            self.reviewRequested.emit(ids[0])
 
     def remove(self, candidate_id: str, *, withered: bool = False) -> None:
         # SEM02: ``withered`` reproduce la animación de marchitado antes de quitar
@@ -196,9 +238,11 @@ class SeedNotificationLayer(QWidget):
         if dot is None:
             return
         dot.stop()
-        self._box.removeWidget(dot)
+        if dot.kind == "error":
+            self._box.removeWidget(dot)  # los candidatos no estaban montados (badge)
         dot.setParent(None)
         dot.deleteLater()
+        self._sync_count()
         self._reflow()
 
     def clear(self) -> None:
