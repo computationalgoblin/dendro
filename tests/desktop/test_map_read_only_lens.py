@@ -168,3 +168,43 @@ class TestSourcePins:
         assert '"garden_lens", "Lente Jardín' in source
         assert "def _toggle_garden_lens" in source
         assert "self.graph.set_garden_lens(self._garden_lens_on, self._garden_status_map)" in source
+
+
+class TestTimeBarPillDeconflict:
+    """BETA2-FOCO-18: la barra temporal queda DEBAJO de la píldora de modos."""
+
+    def _widget(self, qapp):
+        from hosts.DesktopHostPySide.widgets.graph_canvas import GraphCanvasWidget
+
+        project = SimpleNamespace(world_layers=[], entities=[], relations=[])
+        ctx = SimpleNamespace(
+            project_controller=SimpleNamespace(ps=SimpleNamespace(active_project=project)),
+            advanced_mode=False,
+            creation_layout_mode="concentric_rings",
+            creation_focused_ring_id="",
+            selected_entity_id="",
+            save_preferences=lambda: None,
+            log=lambda *args, **kwargs: None,
+        )
+        widget = GraphCanvasWidget(ctx)
+        widget.resize(1200, 800)
+        return widget
+
+    def test_top_inset_pushes_time_bar_below_pill(self, qapp):
+        widget = self._widget(qapp)
+        widget._position_time_bar()
+        assert widget._time_bar.y() == 14  # sin inset: comportamiento original
+
+        pill_height = 40
+        widget.set_time_bar_top_inset(pill_height + 10)
+        # y = 14 + inset > 14 + pill_height = borde inferior de la píldora.
+        assert widget._time_bar.y() == 14 + pill_height + 10
+        assert widget._time_bar.y() > 14 + pill_height
+
+        widget.set_time_bar_top_inset(0)
+        assert widget._time_bar.y() == 14
+        widget.deleteLater()
+
+    def test_workspace_wires_pill_height_as_inset(self):
+        source = _WORKSPACES.read_text(encoding="utf-8")
+        assert "graph.set_time_bar_top_inset(toggle.height() + 10)" in source

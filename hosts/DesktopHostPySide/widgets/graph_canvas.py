@@ -6168,13 +6168,24 @@ class GraphCanvasWidget(QWidget):
     def view_year(self) -> int | None:
         return self.canvas.view_year()
 
+    def set_time_bar_top_inset(self, inset: int) -> None:
+        """BETA2-FOCO-18: desplazamiento superior extra para la barra temporal.
+
+        El workspace lo fija a la altura de la píldora de modos (que flota
+        centrada en y=14 por encima de este widget) para que ambas no se
+        solapen en el Mapa.
+        """
+        self._time_bar_top_inset = max(0, int(inset))
+        self._position_time_bar()
+
     def _position_time_bar(self):
         bar = getattr(self, "_time_bar", None)
         if bar is None:
             return
         width = max(420, min(self.width() - 80, 760))
         bar.setFixedWidth(width)
-        bar.move((self.width() - width) // 2, 14)
+        inset = getattr(self, "_time_bar_top_inset", 0)
+        bar.move((self.width() - width) // 2, 14 + inset)
         bar.raise_()
 
     def resizeEvent(self, event):  # noqa: N802 (Qt API)

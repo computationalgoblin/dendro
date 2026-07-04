@@ -3558,6 +3558,12 @@ class CreationWorkspace(QWidget):
             toggle.adjustSize()
             toggle.move((self.width() - toggle.width()) // 2, 14)
             toggle.raise_()
+            # BETA2-FOCO-18: la barra temporal del Mapa también se centra en
+            # y=14 dentro del graph canvas — se le pasa la altura de la
+            # píldora para que quede DEBAJO y no se solapen.
+            graph = getattr(self, "graph", None)
+            if graph is not None and hasattr(graph, "set_time_bar_top_inset"):
+                graph.set_time_bar_top_inset(toggle.height() + 10)
         focus = getattr(self, "_float_focus", None)
         if focus is not None and focus.isVisible():
             focus.adjustSize()
