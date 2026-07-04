@@ -55,7 +55,9 @@ def test_d06_detail_panels_expose_single_ai_prompt():
     assert "Destino causal" not in tree_panel
 
     assert "self.ai_generate_btn.setText(\"Consultar\")" in relation_panel
-    assert "self.ai_coherence_btn.setVisible(False)" in relation_panel
+    # BETA2-UX-03: el botón oculto «Analizar coherencia» se eliminó de ambos paneles.
+    assert "ai_coherence_btn" not in relation_panel
+    assert "ai_coherence_btn" not in node_panel
     assert "self.refine_btn.setVisible(True)" in relation_panel
 
 

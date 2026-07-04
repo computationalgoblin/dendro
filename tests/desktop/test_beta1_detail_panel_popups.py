@@ -37,10 +37,11 @@ def test_unmounted_technical_boxes_are_parented_and_never_shown():
     node_panel = _read("hosts/DesktopHostPySide/widgets/node_detail_panel.py")
     relation_panel = _read("hosts/DesktopHostPySide/widgets/relation_detail_panel.py")
 
+    # BETA2-UX-03: las cajas «Datos técnicos» (sin montar, dato-no-UI) se
+    # eliminaron por completo — ya no existe el widget.
     for text in (node_panel, relation_panel):
-        assert "self.technical_box.setParent(self)" in text
-        assert "self.technical_box.hide()" in text
-        assert "self.technical_box.setVisible" not in text
+        assert "technical_box" not in text
+        assert "technical_text" not in text
 
 
 @pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")

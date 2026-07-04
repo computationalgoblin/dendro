@@ -7,19 +7,15 @@ Technical fields remain hidden unless advanced mode is active.
 """
 from __future__ import annotations
 
-import html
-import json
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QColor, QIntValidator, QPixmap
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
-    QColorDialog,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -53,10 +49,8 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
     Badge,
     enum_human,
-    human_ref,
 )
-from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
-from packages.domain.entity import CanonState, EntityType, VisibilityState
+from packages.domain.entity import EntityType
 from packages.domain.entity_taxonomy import (
     BEING_NATURES,
     LEAF_ENTITY_TYPES,
@@ -293,7 +287,6 @@ class NodeDetailPanel(QWidget):
                 getattr(self, "ai_card", None),
                 getattr(self, "ai_prompt_edit", None),
                 getattr(self, "ai_generate_btn", None),
-                getattr(self, "ai_coherence_btn", None),
                 getattr(self, "suggestion_frame", None),
             ):
                 if ai_widget is not None:
@@ -424,14 +417,8 @@ class NodeDetailPanel(QWidget):
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("— Sin anillo —", "")
         first_row.addWidget(self.layer_combo, 2)
-        # UX28: el color del nodo lo decide el TIPO de entidad (paleta de Dendro),
-        # no un selector manual. Se conserva el objeto para refs internas, pero NO
-        # se añade al layout (el canvas ya colorea el contorno por tipo).
-        self.color_btn = QPushButton()
-        self.color_btn.setFixedSize(28, 28)
-        self.color_btn.setToolTip("Color del nodo")
-        self.color_btn.clicked.connect(self._pick_color)
-        self.color_btn.setVisible(False)
+        # UX28/BETA2-UX-03: el color del nodo lo decide el TIPO de entidad
+        # (paleta de Dendro); no hay selector manual de color.
         form_layout.addRow(first_row)
 
         # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo
@@ -523,50 +510,11 @@ class NodeDetailPanel(QWidget):
         self.extended_edit.setStyleSheet(self._editorial_card_ss)
         root.addWidget(self.extended_edit, 1)
 
-        # -- Hidden fields (only in advanced mode) --
-        self._advanced_widgets: list[QWidget] = []
-
-        self.private_notes_edit = QTextEdit()
-        self.private_notes_edit.setMaximumHeight(70)
-        self.exportable_notes_edit = QTextEdit()
-        self.exportable_notes_edit.setMaximumHeight(70)
-        self.visibility_combo = QComboBox()
-        for item in VisibilityState:
-            self.visibility_combo.addItem(enum_human(item.value), item.value)
-
-        # BETA1-H07: notas privadas/exportables y visibilidad no forman parte de
-        # la UI. Los widgets existen sin montar: la carga/guardado los sigue
-        # leyendo y ningún dato se pierde.
-
-        # -- Compact context summary --
-        self.context_box = QGroupBox("Contexto")
-        # BETA1-G07: este box vive SIN montar (dato, no UI — ver más abajo). Un
-        # QGroupBox sin padre, al hacerse visible, se convierte en una VENTANA
-        # flotante (los "pop ups"). Darle padre lo ancla al panel: jamás flota.
-        self.context_box.setParent(self)
-        self.context_box.hide()
-        self.context_box.setStyleSheet(
-            f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
-            f"border: 1px solid #D8D6C8; border-radius: 10px; "
-            f"margin-top: 8px; padding-top: 14px; background: transparent; }}"
-            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}"
-        )
-        context_layout = QVBoxLayout(self.context_box)
-        context_layout.setSpacing(2)
-        self.relations_label = QLabel("Relaciones: —")
-        self.relations_label.setWordWrap(True)
-        # BETA2-FOCO: relaciones CLICABLES — al pulsarlas se abre su panel
-        # adyacente al formulario (decisión de producto; no el drawer derecho).
-        self.relations_label.setTextFormat(Qt.TextFormat.RichText)
-        self.relations_label.setOpenExternalLinks(False)
-        self.relations_label.linkActivated.connect(self._on_relation_link)
-        self.campaigns_label = QLabel("Campañas: —")
-        self.campaigns_label.setWordWrap(True)
-        for w in (self.relations_label, self.campaigns_label):
-            w.setObjectName("mutedLabel")
-            w.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
-            context_layout.addWidget(w)
-        # BETA1-F04: contexto → submenú "Más opciones" (montado más abajo)
+        # BETA2-UX-03: notas privadas/exportables, visibilidad y el resumen de
+        # «Contexto» (relations_label/campaigns_label) eran widgets muertos (sin
+        # montar). Se eliminaron; notas y visibilidad se PRESERVAN por
+        # pass-through en el guardado. La lista viva de relaciones clicables la
+        # construye _build_relations_section/_rebuild_relation_rows.
 
         # FOCO-20: los hitos ya NO viven en el formulario — se muestran y se
         # crean en la cronología local bajo el editor (FocoLifelineBand); el
@@ -604,17 +552,9 @@ class NodeDetailPanel(QWidget):
         prompt_row.addWidget(self.ai_generate_btn)
         ai_layout.addLayout(prompt_row)
 
-        # Coherence analysis button
-        self.ai_coherence_btn = QPushButton("Analizar coherencia")
-        self.ai_coherence_btn.setFixedHeight(28)
-        self.ai_coherence_btn.setToolTip("Analizar coherencia narrativa de esta entidad con su contexto")
-        self.ai_coherence_btn.setEnabled(self.ai_controller is not None)
-        self.ai_coherence_btn.clicked.connect(self._open_coherence)
-        ai_layout.addWidget(self.ai_coherence_btn)
-
-        # BETA1-F00B: las acciones causales antiguas ya no viven en este
-        # panel; se invocan desde command bar/menu contextual.
-        self.ai_coherence_btn.setVisible(False)
+        # BETA2-UX-03: el botón «Analizar coherencia» estaba oculto (las
+        # acciones causales se invocan desde la command bar/menú contextual).
+        # Eliminado.
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -676,23 +616,7 @@ class NodeDetailPanel(QWidget):
         ai_layout.addWidget(self.suggestion_frame)
         root.addWidget(ai_card)
 
-        # -- Technical box (advanced only) --
-        self.technical_box = QGroupBox("Datos técnicos")
-        # BETA1-G07: igual que context_box — anclado al panel para que nunca
-        # flote como ventana (popup) al togglear el modo avanzado.
-        self.technical_box.setParent(self)
-        self.technical_box.hide()
-        self.technical_box.setStyleSheet(
-            f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
-            f"border: 1px solid #D8D6C8; border-radius: 10px; "
-            f"margin-top: 8px; padding-top: 14px; background: transparent; }}"
-            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}"
-        )
-        technical_layout = QVBoxLayout(self.technical_box)
-        self.technical_text = QTextEdit()
-        self.technical_text.setReadOnly(True)
-        self.technical_text.setMaximumHeight(120)
-        technical_layout.addWidget(self.technical_text)
+        # BETA2-UX-03: caja «Datos técnicos» (sin montar, dato-no-UI) eliminada.
 
         # FOCO-20: «Más opciones» desapareció del editor — la Relevancia vive
         # en el formulario principal, los hitos en la cronología local y
@@ -841,19 +765,8 @@ class NodeDetailPanel(QWidget):
         self.image_btn.setText("Cambiar…")
 
     def _update_color_swatch(self, hex_color: str):
+        # BETA2-UX-03: el color deriva del tipo; solo se conserva para el save.
         self._current_color = hex_color
-        self.color_btn.setStyleSheet(
-            f"QPushButton {{ background: {hex_color}; border: 2px solid #D8D6C8; "
-            f"border-radius: 6px; }} "
-            f"QPushButton:hover {{ border-color: #AAA579; }}"
-        )
-        self.color_btn.setToolTip(f"Color: {hex_color}")
-
-    def _pick_color(self):
-        current = QColor(self._current_color)
-        color = QColorDialog.getColor(current, self, "Color del nodo")
-        if color.isValid():
-            self._update_color_swatch(color.name())
 
     def _on_type_changed(self, _index: int = -1):
         """When type changes, update default color if no custom color was set."""
@@ -886,8 +799,6 @@ class NodeDetailPanel(QWidget):
         self.name_edit.textEdited.connect(self._schedule_autosave)
         self.brief_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.extended_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.private_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
-        self.exportable_notes_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.importance_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
@@ -926,8 +837,10 @@ class NodeDetailPanel(QWidget):
         type_value = self.type_combo.currentData() or self.type_combo.currentText().strip() or "entidad"
         brief = self.brief_edit.toPlainText().strip()
         body = self.extended_edit.toPlainText().strip()
-        private_notes = self.private_notes_edit.toPlainText().strip()
-        exportable_notes = self.exportable_notes_edit.toPlainText().strip()
+        # BETA2-UX-03: las notas ya no se editan aquí; se leen de la entidad.
+        _ent = getattr(self, "_entity", None)
+        private_notes = (getattr(_ent, "private_notes", "") or "") if _ent else ""
+        exportable_notes = (getattr(_ent, "exportable_notes", "") or "") if _ent else ""
         instruction = (user_instruction or "").strip()
         layer_name = self.layer_combo.currentText() if self._worldbuilding_active() else "—"
         return (
@@ -1074,24 +987,6 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Coherence analysis
     # ------------------------------------------------------------------
-
-    def _open_coherence(self):
-        """Open coherence analysis panel for this entity."""
-        _apptrace(f"UI node run_coherence_check entity_id={self.entity_id!r}")
-        if self.ai_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "IA contextual no disponible para coherencia")
-            return
-        panel = CoherencePanel(
-            self.ctx,
-            self.ai_controller,
-            self.entity_controller,
-            self.relation_controller,
-            entity_ids=[self.entity_id],
-            relation_ids=[],
-            on_saved=self.on_saved,
-        )
-        self.ctx.drawer.set_content(panel, title="Coherencia")
-        self.ctx.drawer.open()
 
     # ------------------------------------------------------------------
     # B39: Convert to branch (Hoja → Rama)
@@ -1298,8 +1193,6 @@ class NodeDetailPanel(QWidget):
             self._refresh_lifespan_label(entity)
             self.brief_edit.setPlainText(getattr(entity, "brief_description", "") or "")
             self.extended_edit.setPlainText(getattr(entity, "extended_description", "") or "")
-            self.private_notes_edit.setPlainText(getattr(entity, "private_notes", "") or "")
-            self.exportable_notes_edit.setPlainText(getattr(entity, "exportable_notes", "") or "")
 
             # BETA2-FOCO-16 (canon total): el canon no se edita en el panel;
             # solo se refleja el badge de fantasma. El autosave jamás debe
@@ -1311,7 +1204,6 @@ class NodeDetailPanel(QWidget):
                 _enum_value(getattr(entity, "narrative_importance", None), "medio"),
             )
 
-            self._set_combo_value(self.visibility_combo, _enum_value(getattr(entity, "visibility_state", None), ""))
 
             # Color
             meta = getattr(entity, "custom_metadata", {}) or {}
@@ -1324,7 +1216,6 @@ class NodeDetailPanel(QWidget):
             self._refresh_context(entity)
             if self.related_milestones_panel is not None:
                 self.related_milestones_panel.refresh()
-            self._refresh_technical(entity)
             self.set_advanced_mode(self.ctx.advanced_mode)
 
             # B39/FOCO-20: «Convertir en rama» (menú ⋯) solo para hojas; un
@@ -1337,11 +1228,13 @@ class NodeDetailPanel(QWidget):
             self._refreshing = False
 
     def _refresh_context(self, entity):
+        # BETA2-UX-03: el resumen «Contexto» (relations_label/campaigns_label)
+        # era dato-no-UI y se eliminó. Aquí solo se construye la lista VIVA de
+        # relaciones clicables del formulario (_rebuild_relation_rows).
         project = self._project()
         if project is None:
             return
         entity_id = getattr(entity, "id", "")
-        relation_lines = []
         relation_rows: list[tuple[str, str]] = []
         for relation in getattr(project, "relations", []) or []:
             src = getattr(relation, "source_id", "")
@@ -1350,26 +1243,10 @@ class NodeDetailPanel(QWidget):
                 continue
             outgoing = src == entity_id
             other = self._entity_by_id(tgt if outgoing else src)
-            other_ref = (
-                human_ref(
-                    getattr(other, "name", "?"),
-                    enum_human(_enum_value(getattr(other, "entity_type", None), "")),
-                )
-                if other
-                else "Elemento vinculado"
-            )
             kind_text = enum_human(
                 _enum_value(getattr(relation, "relation_type", None), "relación")
             )
-            line_text = f"{kind_text}: {other_ref}"
             relation_id = str(getattr(relation, "id", "") or "")
-            if relation_id:
-                # BETA2-FOCO: enlace clicable — abre el panel adyacente en Foco.
-                relation_lines.append(
-                    f'<a href="{relation_id}" style="color:#6F6A42;">{html.escape(line_text)}</a>'
-                )
-            else:
-                relation_lines.append(html.escape(line_text))
             # FOCO-20: fila real con glifo de dirección (todas, sin tope).
             direction = _enum_value(getattr(relation, "direction", None), "")
             glyph = "↔" if direction == "bidireccional" else ("→" if outgoing else "←")
@@ -1382,47 +1259,15 @@ class NodeDetailPanel(QWidget):
             relation_rows.append(
                 (relation_id, f"{glyph}  {kind_text} · {other_name}{ghost_mark}")
             )
-        self.relations_label.setText(
-            "Relaciones: " + ("; ".join(relation_lines[:6]) if relation_lines else "—")
-        )
         self._rebuild_relation_rows(relation_rows)
-
-        campaigns = []
-        for campaign in getattr(project, "campaigns", []) or []:
-            refs = {getattr(campaign, "world_entity_id", None)} | set(
-                getattr(campaign, "active_location_entity_ids", []) or []
-            )
-            if entity_id in refs:
-                campaigns.append(getattr(campaign, "name", "Campaña"))
-        self.campaigns_label.setText("Campañas: " + ("; ".join(campaigns[:6]) if campaigns else "—"))
-
-    def _refresh_technical(self, entity):
-        payload = {
-            "id": getattr(entity, "id", ""),
-            "aliases": getattr(entity, "aliases", []),
-            "tags": getattr(entity, "tags", []),
-            "domain_ids": getattr(entity, "domain_ids", []),
-            "layer_ids": getattr(entity, "layer_ids", []),
-            "custom_metadata": getattr(entity, "custom_metadata", {}),
-            "custom_type_id": getattr(entity, "custom_type_id", None),
-            "custom_fields": [
-                f.to_dict() if hasattr(f, "to_dict") else f
-                for f in (getattr(entity, "custom_fields", []) or [])
-            ],
-        }
-        self.technical_text.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
     # ------------------------------------------------------------------
     # Advanced mode
     # ------------------------------------------------------------------
 
     def set_advanced_mode(self, enabled: bool):
-        # BETA1-G07: technical_box vive SIN montar (FUERA del producto, F05).
-        # NO se togglea su visibilidad: hacerlo lo abría como ventana flotante
-        # (los "pop ups" al seleccionar en modo avanzado). El texto se sigue
-        # rellenando por _refresh_technical para quien lo lea por código.
-        for w in self._advanced_widgets:
-            w.setVisible(bool(enabled))
+        # BETA2-UX-03: ya no hay widgets técnicos ocultos que togglear (no-op).
+        return
 
     # ------------------------------------------------------------------
     # Save
@@ -1469,8 +1314,9 @@ class NodeDetailPanel(QWidget):
             "entity_type": entity_type_value,
             "brief_description": self.brief_edit.toPlainText().strip(),
             "extended_description": self.extended_edit.toPlainText().strip(),
-            "private_notes": self.private_notes_edit.toPlainText().strip(),
-            "exportable_notes": self.exportable_notes_edit.toPlainText().strip(),
+            # BETA2-UX-03: notas preservadas por pass-through (ya no editables).
+            "private_notes": getattr(self._entity, "private_notes", "") or "",
+            "exportable_notes": getattr(self._entity, "exportable_notes", "") or "",
             # BETA2-FOCO: relevancia narrativa del usuario (calibra el riego).
             "narrative_importance": self.importance_combo.currentData() or "medio",
             "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),

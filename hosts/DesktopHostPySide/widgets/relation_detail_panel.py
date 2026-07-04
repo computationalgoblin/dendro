@@ -8,7 +8,6 @@ editable fields, and non-blocking AI autocomplete.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
@@ -49,9 +48,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     enum_human,
     human_ref,
 )
-from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
-from packages.domain.entity import CanonState, VisibilityState
 from packages.domain.entity_taxonomy import OFFERED_RELATION_TYPES
 from packages.domain.relation import RelationType
 from packages.domain.result import Error
@@ -414,16 +411,9 @@ class RelationDetailPanel(QWidget):
             )
             # BETA1-F04: hitos relacionados → submenú "Más opciones"
 
-        # -- Advanced fields (hidden in normal mode) --
-        self._advanced_widgets: list[QWidget] = []
-
-        # R7: Intensidad / Temporalidad / Causalidad removed from the panel.
-
-        self.visibility_combo = QComboBox()
-        for item in VisibilityState:
-            self.visibility_combo.addItem(enum_human(item.value), item.value)
-        # BETA1-H07: visibilidad deja de ser control de producto. El combo se
-        # conserva sin montar para preservar carga/guardado hasta migración.
+        # BETA2-UX-03: los campos "avanzados" ocultos (combo de visibilidad) eran
+        # widgets muertos sin montar. Eliminados; visibility_state se preserva por
+        # pass-through en el guardado.
 
         # -- AI suggestion section --
         ai_card = QFrame()
@@ -451,14 +441,7 @@ class RelationDetailPanel(QWidget):
         prompt_row.addWidget(self.ai_generate_btn)
         ai_layout.addLayout(prompt_row)
 
-        # Coherence analysis button
-        self.ai_coherence_btn = QPushButton("Analizar coherencia")
-        self.ai_coherence_btn.setFixedHeight(28)
-        self.ai_coherence_btn.setToolTip("Analizar coherencia narrativa de esta relación con su contexto")
-        self.ai_coherence_btn.setEnabled(self.ai_controller is not None)
-        self.ai_coherence_btn.clicked.connect(self._open_coherence)
-        ai_layout.addWidget(self.ai_coherence_btn)
-        self.ai_coherence_btn.setVisible(False)
+        # BETA2-UX-03: botón «Analizar coherencia» estaba oculto — eliminado.
 
         if self.ai_controller is None:
             no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
@@ -565,24 +548,7 @@ class RelationDetailPanel(QWidget):
             self.more_section.body_layout.addWidget(self.related_milestones_panel)
         root.addWidget(self.more_section)
 
-        # -- Technical box (advanced only) --
-        self.technical_box = QGroupBox("Datos técnicos")
-        # BETA1-G07: vive SIN montar (FUERA del producto, F05). Sin padre, al
-        # hacerse visible se abriría como VENTANA flotante (los "pop ups").
-        # Anclarlo al panel lo impide; set_advanced_mode ya no lo muestra.
-        self.technical_box.setParent(self)
-        self.technical_box.hide()
-        self.technical_box.setStyleSheet(
-            f"QGroupBox {{ color: {_LABEL_COLOR}; font-weight: 600; "
-            f"border: 1px solid #D8D6C8; border-radius: 10px; "
-            f"margin-top: 8px; padding-top: 14px; background: transparent; }}"
-            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; }}"
-        )
-        technical_layout = QVBoxLayout(self.technical_box)
-        self.technical_text = QTextEdit()
-        self.technical_text.setReadOnly(True)
-        self.technical_text.setMaximumHeight(120)
-        technical_layout.addWidget(self.technical_text)
+        # BETA2-UX-03: caja «Datos técnicos» (sin montar, dato-no-UI) eliminada.
         # BETA1-F05: datos técnicos FUERA del producto (widget sin montar;
         # _refresh los sigue escribiendo sin coste visual).
 
@@ -856,29 +822,6 @@ class RelationDetailPanel(QWidget):
     # Coherence analysis
     # ------------------------------------------------------------------
 
-    def _open_coherence(self):
-        """Open coherence analysis panel for this relation + its endpoints."""
-        _apptrace(f"UI relation run_coherence_check relation_id={self.relation_id!r}")
-        if self.ai_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "IA contextual no disponible para coherencia")
-            return
-        rel = self._relation
-        if rel is None:
-            self.ctx.log("warning", "Relación no cargada todavía")
-            return
-        entity_ids = [eid for eid in (getattr(rel, "source_id", ""), getattr(rel, "target_id", "")) if eid]
-        panel = CoherencePanel(
-            self.ctx,
-            self.ai_controller,
-            self.entity_controller,
-            self.relation_controller,
-            entity_ids=entity_ids,
-            relation_ids=[self.relation_id],
-            on_saved=self.on_saved,
-        )
-        self.ctx.drawer.set_content(panel, title="Coherencia")
-        self.ctx.drawer.open()
-
     # ------------------------------------------------------------------
     # Cancel
     # ------------------------------------------------------------------
@@ -989,7 +932,6 @@ class RelationDetailPanel(QWidget):
             # BETA2-FOCO: una relación fantasma no se des-fantasma por autosave.
             # BETA2-FOCO-16 (canon total): el canon ya no se edita en el panel.
             self._is_ghost_relation = canon_val.lower() == "fantasma"
-            self._set_combo_value(self.visibility_combo, _enum_value(getattr(relation, "visibility_state", None), ""))
 
             # Color
             stored_color = meta.get("_edge_color")
@@ -998,38 +940,19 @@ class RelationDetailPanel(QWidget):
             else:
                 self._update_color_swatch(_default_color_for_type(kind))
 
-            self._refresh_technical(relation)
             if self.related_milestones_panel is not None:
                 self.related_milestones_panel.refresh()
             self.set_advanced_mode(self.ctx.advanced_mode)
         finally:
             self._refreshing = False
 
-    def _refresh_technical(self, relation):
-        payload = {
-            "id": getattr(relation, "id", ""),
-            "source_id": getattr(relation, "source_id", ""),
-            "target_id": getattr(relation, "target_id", ""),
-            "custom_metadata": getattr(relation, "custom_metadata", {}),
-            "custom_relation_type_id": getattr(relation, "custom_relation_type_id", None),
-            "custom_fields": [
-                f.to_dict() if hasattr(f, "to_dict") else f
-                for f in (getattr(relation, "custom_fields", []) or [])
-            ],
-            "layer_ids": getattr(relation, "layer_ids", []),
-        }
-        self.technical_text.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-
     # ------------------------------------------------------------------
     # Advanced mode
     # ------------------------------------------------------------------
 
     def set_advanced_mode(self, enabled: bool):
-        # BETA1-G07: technical_box vive SIN montar — togglearlo lo abría como
-        # ventana flotante ("pop ups"). No se toca su visibilidad; el texto se
-        # rellena por _refresh_technical para quien lo lea por código.
-        for w in self._advanced_widgets:
-            w.setVisible(bool(enabled))
+        # BETA2-UX-03: ya no hay widgets técnicos ocultos que togglear (no-op).
+        return
 
     # ------------------------------------------------------------------
     # Save
@@ -1118,7 +1041,8 @@ class RelationDetailPanel(QWidget):
             "death_year": _parse_year(self.death_year_edit.text()),
             "validity_conditions": [],
             "tags": [],
-            "visibility_state": self.visibility_combo.currentData() or "visible_usuario",
+            # BETA2-UX-03: visibilidad preservada por pass-through (ya no editable).
+            "visibility_state": _enum_value(getattr(self._relation, "visibility_state", None), "visible_usuario"),
             "custom_metadata": meta,
             "custom_relation_type_id": custom_relation_type_id,
         }

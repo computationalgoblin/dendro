@@ -179,7 +179,8 @@ class TestClickableRelations:
         project_service, ctx, entity_controller, _ = _setup()
         center = _entity(project_service, "Centro")
         panel = _panel(ctx, entity_controller, center.id)
-        assert panel.context_box.isHidden()  # dato interno, jamás UI
+        # BETA2-UX-03: el resumen «Contexto» (context_box) muerto se eliminó.
+        assert not hasattr(panel, "context_box")
         assert not hasattr(panel, "_relations_rows")
 
     def test_editor_has_no_more_options_no_milestones_and_importance_visible(self, qapp):
