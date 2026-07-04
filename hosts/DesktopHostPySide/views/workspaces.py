@@ -3681,7 +3681,7 @@ class CreationWorkspace(QWidget):
             f"background: transparent; border: none; padding-right: 4px;"
         )
         prompt_label.setToolTip(
-            "Las respuestas IA son candidatas revisables; no cambian canon automáticamente."
+            "Las respuestas IA son semillas revisables; no cambian canon automáticamente."
         )
         layout.addWidget(prompt_label)
 
@@ -3708,9 +3708,35 @@ class CreationWorkspace(QWidget):
         # UX3: caption "Cuántas" bajo el stepper para que se entienda qué controla.
         self._count_spin_box = self._captioned_tuner(self._count_spin, "Cuántas")
         layout.addWidget(self._count_spin_box)
-        layout.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
-        layout.addWidget(self._captioned_tuner(self._tokens_tuner, "Longitud respuesta"))
-        layout.addWidget(self._captioned_tuner(self._budget_tuner, "Contexto"))
+        # BETA2-UX-04: los diales expertos (Creatividad, Longitud, Contexto) salen
+        # de la barra permanente a un popover «Avanzado» plegable. Se reparentan
+        # los MISMOS RadialTuner (conservan Auto/manual y el reset por doble-clic);
+        # «Cuántas» permanece en la barra mínima.
+        self._advanced_tuners_popup = QFrame(self, Qt.WindowType.Popup)
+        self._advanced_tuners_popup.setObjectName("advancedTunersPopup")
+        self._advanced_tuners_popup.setStyleSheet(
+            f"QFrame#advancedTunersPopup {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {LINE}; border-radius: 12px; }}"
+        )
+        _adv_row = QHBoxLayout(self._advanced_tuners_popup)
+        _adv_row.setContentsMargins(18, 12, 18, 12)
+        _adv_row.setSpacing(18)
+        _adv_row.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
+        _adv_row.addWidget(self._captioned_tuner(self._tokens_tuner, "Longitud respuesta"))
+        _adv_row.addWidget(self._captioned_tuner(self._budget_tuner, "Contexto"))
+        self._advanced_tuners_btn = QPushButton("Avanzado")
+        self._advanced_tuners_btn.setToolTip(
+            "Ajustes avanzados de IA: creatividad, longitud de respuesta y "
+            "presupuesto de contexto (tokens). Por defecto en Auto."
+        )
+        self._advanced_tuners_btn.setStyleSheet(
+            f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: 18px; min-width: 64px; "
+            f"min-height: 36px; font-size: 12px; font-weight: 700; padding: 0 12px; }} "
+            f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
+        )
+        self._advanced_tuners_btn.clicked.connect(self._toggle_advanced_tuners)
+        layout.addWidget(self._advanced_tuners_btn)
 
         self._command_input = QLineEdit()
         self._command_input.setObjectName("aiCommandInput")
@@ -3810,9 +3836,10 @@ class CreationWorkspace(QWidget):
             "se <b>insertan dentro de ella</b> como miembros; al <b>crear una entidad</b> con "
             "una <b>rama seleccionada</b>, la entidad nace <b>dentro de esa rama</b>. Para solo "
             "<b>referenciar</b> algo sin insertarlo, usa <b>@</b>.<br>"
-            "<b>4 · Diales.</b> Creatividad, longitud y contexto van en <i>Auto</i> "
-            "(recomendado de la tarea). Arrástralos o haz clic para fijar un número exacto; "
-            "doble clic vuelve a Auto.<br>"
+            "<b>4 · Avanzado.</b> «Cuántas» está en la barra; creatividad, longitud "
+            "y contexto viven en el botón <b>Avanzado</b> (plegado por defecto) y van en "
+            "<i>Auto</i>. Arrástralos o haz clic para fijar un número exacto; doble clic "
+            "vuelve a Auto.<br>"
             "<b>Importante:</b> toda salida es una <b>semilla revisable</b> que germina en el "
             "jardín — nunca cambia el canon por sí sola."
         )
@@ -4093,6 +4120,19 @@ class CreationWorkspace(QWidget):
         )
         v.addWidget(label)
         return box
+
+    def _toggle_advanced_tuners(self) -> None:
+        # BETA2-UX-04: muestra/oculta el popover de diales expertos, anclado
+        # encima del botón «Avanzado». Qt.Popup se cierra al pulsar fuera.
+        popup = self._advanced_tuners_popup
+        if popup.isVisible():
+            popup.hide()
+            return
+        popup.adjustSize()
+        btn = self._advanced_tuners_btn
+        anchor = btn.mapToGlobal(btn.rect().topLeft())
+        popup.move(anchor.x(), anchor.y() - popup.height() - 8)
+        popup.show()
 
     def _sync_tuner_recommendations(self) -> None:
         """PA02: muestra el default por tarea como HINT y ajusta topes por tier.
