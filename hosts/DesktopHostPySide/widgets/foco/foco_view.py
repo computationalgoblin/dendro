@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -111,6 +111,10 @@ class FocoView(QWidget):
         self._center_id = ""
         self._history: list[str] = []
         self._form_panel: Any = None
+        # FOCO-23: modo dual (entidad ↔ relación ↔ entidad) en el centro.
+        self._dual: dict | None = None
+        self._dual_card: QFrame | None = None
+        self._dual_panels: list[Any] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -276,6 +280,17 @@ class FocoView(QWidget):
                 (self.height() - self._empty.height()) // 2,
             )
             self._empty.raise_()
+        # FOCO-23: la tarjeta dual ocupa un hueco central AMPLIADO.
+        if self._dual_card is not None and not self._dual_card.isHidden():
+            width = self.width()
+            height = self.height()
+            self._dual_card.setGeometry(
+                int(width * 0.06),
+                int(height * 0.12),
+                int(width * 0.88),
+                int(height * 0.76),
+            )
+            self._dual_card.raise_()
         # FOCO-21: botón «volver» flotante arriba-izquierda, a la derecha del
         # rail de herramientas, fuera del editor.
         if not self._back_button.isHidden():
@@ -333,6 +348,9 @@ class FocoView(QWidget):
         if entity is None:
             self.refresh()
             return
+        # FOCO-23: cualquier recentrado abandona el modo dual.
+        if self._dual is not None:
+            self._teardown_dual()
         if push_history and self._center_id and self._center_id != entity.id:
             self._history.append(self._center_id)
             del self._history[:-_HISTORY_LIMIT]
@@ -550,6 +568,140 @@ class FocoView(QWidget):
         )
         self.open_adjacent_widget(panel, "Relación")
 
+    # ------------------------------------------------------------------
+    # FOCO-23: modo dual — dos entidades separadas por el panel de relación
+    # ------------------------------------------------------------------
+
+    def is_dual_active(self) -> bool:
+        return self._dual is not None
+
+    def _relation_between(self, a_id: str, b_id: str) -> str:
+        project = self._project()
+        for relation in getattr(project, "relations", []) or []:
+            if {relation.source_id, relation.target_id} == {a_id, b_id}:
+                return str(relation.id)
+        return ""
+
+    def enter_dual(self, a_id: str, b_id: str, relation_id: str) -> None:
+        """Abre el centro dual: formulario A | relación | formulario B.
+
+        Se sale con DOBLE CLICK sobre una de las dos tarjetas de entidad (esa
+        pasa a ser el foco único) o con Esc (vuelve a la central previa).
+        """
+        project = self._project()
+        if (
+            not self._form_capable()
+            or self.relation_controller is None
+            or project is None
+            or project.entity_by_id(a_id) is None
+            or project.entity_by_id(b_id) is None
+            or not relation_id
+        ):
+            self.center_entity(b_id or a_id, push_history=False)
+            return
+        from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+        from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
+
+        previous_center = self._center_id
+        self._teardown_dual()
+        self.close_adjacent()
+        self._center_card.hide()
+        self._dual = {"a": a_id, "b": b_id, "relation": relation_id, "previous": previous_center}
+
+        card = QFrame(self)
+        card.setObjectName("focoDualCard")
+        card.setStyleSheet(
+            f"QFrame#focoDualCard {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_LG}px; }}"
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(12, 12, 12, 12)
+        row.setSpacing(10)
+
+        def _mount(widget: Any, stretch: int) -> None:
+            scroll = QScrollArea(card)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            scroll.setWidget(widget)
+            row.addWidget(scroll, stretch)
+
+        self._dual_panels = []
+        panel_a = NodeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            a_id,
+            variant="foco",
+            relation_controller=self.relation_controller,
+            milestone_controller=self.milestone_controller,
+            on_saved=self._on_form_saved,
+        )
+        relation_panel = RelationDetailPanel(
+            self.ctx,
+            self.relation_controller,
+            relation_id,
+            entity_controller=self.entity_controller,
+            milestone_controller=self.milestone_controller,
+            on_saved=self._on_form_saved,
+        )
+        panel_b = NodeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            b_id,
+            variant="foco",
+            relation_controller=self.relation_controller,
+            milestone_controller=self.milestone_controller,
+            on_saved=self._on_form_saved,
+        )
+        _mount(panel_a, 4)
+        _mount(relation_panel, 3)
+        _mount(panel_b, 4)
+        self._dual_panels = [panel_a, relation_panel, panel_b]
+        # Salidas: doble click sobre una tarjeta de entidad / Esc.
+        for widget in (card, panel_a, panel_b, relation_panel):
+            widget.installEventFilter(self)
+
+        # El lienzo se despeja: sin satélites ni banda local mientras dura.
+        self.canvas.set_zones(self._center_id or a_id, {})
+        self.lifeline.hide()
+        self._dual_card = card
+        card.show()
+        card.raise_()
+        self._position_overlays()
+
+    def _teardown_dual(self) -> None:
+        if self._dual_card is not None:
+            self._dual_card.hide()
+            self._dual_card.deleteLater()
+        self._dual_card = None
+        self._dual_panels = []
+        self._dual = None
+
+    def exit_dual(self, focus_id: str = "") -> None:
+        info = dict(self._dual or {})
+        self._teardown_dual()
+        target = focus_id or str(info.get("previous") or "") or self._center_id
+        if target:
+            self.center_entity(target, push_history=False)
+
+    def eventFilter(self, obj: Any, event: Any) -> bool:  # noqa: N802 (API Qt)
+        if self._dual is not None:
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                if len(self._dual_panels) == 3:
+                    if obj is self._dual_panels[0]:
+                        self.exit_dual(str(self._dual.get("a", "")))
+                        return True
+                    if obj is self._dual_panels[2]:
+                        self.exit_dual(str(self._dual.get("b", "")))
+                        return True
+            elif (
+                event.type() == QEvent.Type.KeyPress
+                and getattr(event, "key", lambda: None)() == Qt.Key.Key_Escape
+            ):
+                self.exit_dual()
+                return True
+        return super().eventFilter(obj, event)
+
     def go_back(self) -> None:
         """Historial de foco en memoria: vuelve al centro anterior."""
         while self._history:
@@ -747,11 +899,13 @@ class FocoView(QWidget):
         relation = self.relation_controller.create(
             self._center_id, result.value.id, "esta_relacionado_con"
         )
+        self.dataChanged.emit()
         if isinstance(relation, Error):
             self._log_error(relation.error)
-        self.dataChanged.emit()
-        # La central sigue siendo una (spec): la nueva aparece en su zona.
-        self._recenter()
+            self._recenter()
+            return
+        # FOCO-23: modo dual — detallar ambas entidades y su relación.
+        self.enter_dual(self._center_id, result.value.id, relation.value.id)
 
     def _create_branch(self, payload: dict) -> None:
         if self.entity_controller is None or self.relation_controller is None:
@@ -797,10 +951,19 @@ class FocoView(QWidget):
         if self.relation_controller is None or not self._center_id:
             return
         result = self.relation_controller.create(self._center_id, target_id, "esta_relacionado_con")
-        if isinstance(result, Error):
-            self._log_error(result.error)
         self.dataChanged.emit()
-        self._recenter()
+        if isinstance(result, Error):
+            # Si el par YA está relacionado, se detalla la relación existente
+            # en modo dual en vez de fallar en silencio.
+            existing = self._relation_between(self._center_id, target_id)
+            if existing:
+                self.enter_dual(self._center_id, target_id, existing)
+                return
+            self._log_error(result.error)
+            self._recenter()
+            return
+        # FOCO-23: modo dual también al vincular con una existente.
+        self.enter_dual(self._center_id, target_id, result.value.id)
 
     def _ghost_relate_to(self, target_id: str) -> None:
         if self.ghost_service is None or not self._center_id:
@@ -828,6 +991,12 @@ class FocoView(QWidget):
             self._log_error(result.error)
             return
         self.dataChanged.emit()
+        if ghost_id != self._center_id:
+            relation_id = self._relation_between(self._center_id, ghost_id)
+            if relation_id:
+                # FOCO-23: revisar la conversión en modo dual.
+                self.enter_dual(self._center_id, ghost_id, relation_id)
+                return
         self._recenter(ghost_id if ghost_id == self._center_id else None)
 
     def _link_ghost(self, ghost_id: str, target_id: str) -> None:
@@ -837,8 +1006,14 @@ class FocoView(QWidget):
         if isinstance(result, Error):
             self._log_error(result.error)
             return
+        self.dataChanged.emit()
         # El fantasma desaparece: el foco pasa a la entidad real vinculada.
         if ghost_id == self._center_id:
             self.center_entity(target_id, push_history=False)
-        else:
-            self._recenter()
+            return
+        relation_id = self._relation_between(self._center_id, target_id)
+        if relation_id:
+            # FOCO-23: revisar el vínculo en modo dual.
+            self.enter_dual(self._center_id, target_id, relation_id)
+            return
+        self._recenter()
