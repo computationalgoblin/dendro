@@ -444,6 +444,9 @@ class FocoView(QWidget):
             relation_controller=self.relation_controller,
             milestone_controller=self.milestone_controller,
             on_open_relation=self._open_relation_adjacent,
+            # FOCO-20: el «+» de la sección Relaciones abre el mismo flujo que
+            # la herramienta del rail (buscador + crear-fantasma si no existe).
+            on_create_relation=lambda: self._on_tool("create_relation"),
             on_saved=self._on_form_saved,
         )
         self._form_scroll.setWidget(self._form_panel)

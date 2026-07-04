@@ -130,11 +130,19 @@ def make_panel(kind: str, target_id: str, hitos=None, opened=None, controller=No
     return panel, ctrl, opened
 
 
-def test_node_detail_source_mounts_causes_hitos_section():
+def test_node_detail_source_no_longer_embeds_hitos_section():
+    # BETA2-FOCO-20: los hitos de la ENTIDAD salieron del formulario — viven
+    # en la cronología local bajo el editor (FocoLifelineBand) y su panel se
+    # abre ADYACENTE. El editor no embebe RelatedMilestonesPanel.
     text = NODE_SOURCE.read_text(encoding="utf-8")
 
-    assert "RelatedMilestonesPanel" in text
-    assert 'target_kind="entity"' in text
+    assert "RelatedMilestonesPanel" not in text
+    assert "self.related_milestones_panel = None" in text
+
+    lifeline = (NODE_SOURCE.parent / "foco" / "foco_view.py").read_text(encoding="utf-8")
+    assert (
+        "self.lifeline.milestoneActivated.connect(self._open_milestone_adjacent)" in lifeline
+    )
 
 
 def test_tree_detail_source_mounts_causes_hitos_section():

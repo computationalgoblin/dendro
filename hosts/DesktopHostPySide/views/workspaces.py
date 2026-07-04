@@ -2590,7 +2590,11 @@ class CreationWorkspace(QWidget):
         layout.addWidget(name_label)
         type_value = getattr(entity.entity_type, "value", str(entity.entity_type))
         canon_value = getattr(entity.canon_state, "value", str(entity.canon_state))
-        meta_label = QLabel(f"{enum_human(type_value)} · {enum_human(canon_value)}", card)
+        # FOCO-16/20 (canon total): el único estado visible es «fantasma».
+        meta_text = enum_human(type_value)
+        if str(canon_value).lower() == "fantasma":
+            meta_text += " · Fantasma"
+        meta_label = QLabel(meta_text, card)
         meta_label.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent;")
         layout.addWidget(meta_label)
         brief = " ".join(str(entity.brief_description or "").split())

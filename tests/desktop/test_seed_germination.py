@@ -56,6 +56,11 @@ def _rehydrate_stub(layer, pending):
         candidate_view=SimpleNamespace(cc=_RehydrateController(pending)),
         # SEM04: rehidratación también recrea las semillas-candidato del grafo.
         graph=SimpleNamespace(rehydrate_candidate_seeds=lambda ids: None),
+        # FOCO-13: los chips se saltan las semillas visibles en Foco — el stub
+        # no enfoca nada, así que ninguna es visible; la sincronización
+        # espacial de Foco es un no-op aquí.
+        _foco_visible_candidate_ids=lambda: set(),
+        _sync_foco_seeds=lambda: None,
     )
 
 

@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,20 +37,25 @@ from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_wo
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import (
     ENTITY_KIND_PALETTE,
+    FONT_SERIF,
     GOLD,
     INK,
+    INK_MUTED,
+    INK_SOFT,
+    INK_STRONG,
     INPUT_BG,
     LINE,
+    LINE_SOFT,
     LINE_STRONG,
     SPACE_LG,
     SPACE_MD,
-    AdvancedSection,
+    SURFACE,
+    SURFACE_HI,
     Badge,
     enum_human,
     human_ref,
 )
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
-from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
 from packages.domain.entity import CanonState, EntityType, VisibilityState
 from packages.domain.entity_taxonomy import (
     BEING_NATURES,
@@ -61,11 +68,13 @@ from packages.application.world_layer_causal import get_causal_rank, sort_layers
 # ---------------------------------------------------------------------------
 # Warm palette constants
 # ---------------------------------------------------------------------------
-_BG_DRAWER = "#F8F6ED"
-_TITLE_COLOR = "#5C5A3E"
-_LABEL_COLOR = "#6F6A42"
-_MUTED_COLOR = "#7C806E"
-_SUGGESTION_BG = "#FFFDF7"
+# BETA2-FOCO-20 (Editorial sereno): tokens del design system — los hexes
+# cálidos locales duplicaban la paleta y desentonaban con la tarjeta de Foco.
+_BG_DRAWER = SURFACE_HI
+_TITLE_COLOR = INK_STRONG
+_LABEL_COLOR = INK_SOFT
+_MUTED_COLOR = INK_MUTED
+_SUGGESTION_BG = INPUT_BG
 
 # Default node colours per entity type (mirrors graph_canvas._NODE_COLORS).
 # BETA1-UX04/UX07: paleta BOTÁNICA cálida (antes azules/lavandas frías que
@@ -245,6 +254,7 @@ class NodeDetailPanel(QWidget):
         on_suggest_milestone=None,
         variant: str = "drawer",
         on_open_relation=None,
+        on_create_relation=None,
     ):
         super().__init__()
         self.ctx = ctx
@@ -252,6 +262,8 @@ class NodeDetailPanel(QWidget):
         # formulario (abren panel ADYACENTE) y oculta el bloque IA inline.
         self.variant = str(variant or "drawer")
         self.on_open_relation = on_open_relation
+        # FOCO-20: «+» de la sección Relaciones (abre el flujo de crear relación).
+        self.on_create_relation = on_create_relation
         self._is_ghost = False
         self.entity_controller = entity_controller
         self.entity_id = entity_id
@@ -275,8 +287,10 @@ class NodeDetailPanel(QWidget):
         self._build()
         if self.variant == "foco":
             # BETA2-FOCO: en Foco la IA vive en el drawer de riego (Regar /
-            # Sugerir X); el bloque IA inline del panel se oculta.
+            # Sugerir X); el bloque IA inline se oculta ENTERO (FOCO-20: antes
+            # quedaban el título «IA» y el aviso de no-disponible).
             for ai_widget in (
+                getattr(self, "ai_card", None),
                 getattr(self, "ai_prompt_edit", None),
                 getattr(self, "ai_generate_btn", None),
                 getattr(self, "ai_coherence_btn", None),
@@ -296,27 +310,80 @@ class NodeDetailPanel(QWidget):
         root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)  # UX23: ritmo del scaffold
         root.setSpacing(SPACE_MD)
 
-        # -- Header --
+        # -- Header (FOCO-20: banda única imagen + título + tipo + menú ⋯) --
         head = QHBoxLayout()
+        head.setSpacing(SPACE_MD)
+        # Imagen integrada en la cabecera: miniatura fija; el botón pequeño
+        # debajo importa/cambia (persistencia mínima en custom_metadata).
+        image_column = QVBoxLayout()
+        image_column.setSpacing(4)
+        self.image_preview = QLabel()
+        self.image_preview.setFixedSize(72, 72)
+        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_preview.setScaledContents(True)
+        self.image_preview.setStyleSheet(
+            f"border: 1px dashed {LINE_SOFT}; border-radius: 12px; "
+            "background: rgba(255,255,255,0.45);"
+        )
+        image_column.addWidget(self.image_preview, 0, Qt.AlignmentFlag.AlignTop)
+        self.image_btn = QPushButton("Imagen…")
+        self.image_btn.setFixedHeight(22)
+        self.image_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.image_btn.setStyleSheet(
+            f"QPushButton {{ border: none; background: transparent; color: {_MUTED_COLOR}; "
+            "font-size: 11px; text-align: center; }} "
+            f"QPushButton:hover {{ color: {_TITLE_COLOR}; }}"
+        )
+        self.image_btn.clicked.connect(self._pick_image)
+        image_column.addWidget(self.image_btn)
+        image_column.addStretch(1)
+        head.addLayout(image_column)
+
+        title_column = QVBoxLayout()
+        title_column.setSpacing(2)
         self.title = QLabel("Hoja")
         self.title.setStyleSheet(
-            f"font-size: 18px; font-weight: 700; color: {_TITLE_COLOR}; "
-            f"font-family: Georgia, 'Courier New', serif; background: transparent;"
+            f"font-size: 20px; font-weight: 700; color: {_TITLE_COLOR}; "
+            f"font-family: {FONT_SERIF}; background: transparent;"
         )
         self.title.setWordWrap(True)
-        head.addWidget(self.title, 1)
-        self.type_badge = Badge("Hoja", "info")
-        head.addWidget(self.type_badge)
-        root.addLayout(head)
-        # BETA1-F04: "Enfocar vecindad" fuera del panel editorial (la
-        # navegación vive en el grafo: doble click / menú contextual).
-
-        # -- Compact summary line --
+        title_column.addWidget(self.title)
         self.summary = QLabel("")
         self.summary.setObjectName("mutedLabel")
         self.summary.setWordWrap(True)
         self.summary.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
-        root.addWidget(self.summary)
+        title_column.addWidget(self.summary)
+        title_column.addStretch(1)
+        head.addLayout(title_column, 1)
+
+        badge_column = QVBoxLayout()
+        badge_column.setSpacing(4)
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(6)
+        self.type_badge = Badge("Hoja", "info")
+        badge_row.addWidget(self.type_badge)
+        # FOCO-20: acciones secundarias («Convertir en rama») en un menú ⋯
+        # discreto — «Más opciones» desapareció del editor.
+        self.more_menu_btn = QToolButton()
+        self.more_menu_btn.setText("⋯")
+        self.more_menu_btn.setToolTip("Acciones de la entidad")
+        self.more_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.more_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_menu_btn.setStyleSheet(
+            "QToolButton { border: none; background: transparent; "
+            f"color: {_MUTED_COLOR}; font-size: 16px; padding: 0 4px; }} "
+            f"QToolButton:hover {{ color: {_TITLE_COLOR}; }} "
+            "QToolButton::menu-indicator { image: none; }"
+        )
+        self._more_menu = QMenu(self.more_menu_btn)
+        self.convert_to_branch_action = self._more_menu.addAction("Convertir en rama")
+        self.convert_to_branch_action.triggered.connect(self._convert_to_branch)
+        self.more_menu_btn.setMenu(self._more_menu)
+        badge_row.addWidget(self.more_menu_btn)
+        badge_column.addLayout(badge_row)
+        badge_column.addStretch(1)
+        head.addLayout(badge_column)
+        root.addLayout(head)
 
         # BETA2-FOCO-16: badge de fantasma bajo la cabecera (se crea más abajo
         # junto al resto de widgets de estado y se monta aquí vía placeholder).
@@ -391,32 +458,43 @@ class NodeDetailPanel(QWidget):
             "nace en un año mortal. Solo aplica a personajes y criaturas."
         )
         self.nature_label = QLabel("Naturaleza temporal")
+        self.nature_label.setStyleSheet(_label_ss)
         form_layout.addRow(self.nature_label, self.nature_combo)
+
+        # FOCO-20: «Relevancia narrativa» visible en el formulario principal
+        # (calibra el riego y la invalidación de 2º grado; antes estaba
+        # enterrada en «Más opciones»). Se crea aquí y se conecta al autosave.
+        self.importance_combo = QComboBox()
+        for val in ("critico", "alto", "medio", "bajo", "menor"):
+            self.importance_combo.addItem(enum_human(val), val)
+        self.importance_combo.setToolTip(
+            "Cuánto pesa esta entidad en la trama. Calibra la exigencia del "
+            "riego y qué cambios vecinos la invalidan."
+        )
+        importance_label = QLabel("Relevancia")
+        importance_label.setStyleSheet(_label_ss)
+        form_layout.addRow(importance_label, self.importance_combo)
 
         # Descripción breve: tras la imagen (montada fuera del form) — el
         # widget se crea aquí, se monta más abajo en el orden F05.
         self.brief_edit = QTextEdit()
-        self.brief_edit.setMaximumHeight(64)
+        self.brief_edit.setMaximumHeight(72)
         self.brief_edit.setPlaceholderText("Descripción breve…")
         # BETA1-F05: viñetas protagonistas (breve y cuerpo).
-        # BETA1-UX08: estados coherentes con el sistema central (borde LINE,
-        # hover LINE_STRONG, foco oro 2px) en vez de hexes sueltos.
+        # FOCO-20 (Editorial sereno): serif editorial y cuerpo ≥14px — aquí se
+        # pasa mucho tiempo escribiendo; la superficie debe ser inmersiva.
         _card_ss = (
             f"QTextEdit {{ background: {INPUT_BG}; border: 1px solid {LINE}; "
-            f"border-radius: 12px; padding: 10px; font-size: 13px; color: {INK}; }} "
+            f"border-radius: 12px; padding: 12px; font-size: 14px; color: {INK}; "
+            f"font-family: {FONT_SERIF}; }} "
             f"QTextEdit:hover {{ border-color: {LINE_STRONG}; }} "
-            f"QTextEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 9px; }}"
+            f"QTextEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 11px; }}"
         )
         self.brief_edit.setStyleSheet(_card_ss)
         self._editorial_card_ss = _card_ss
 
         # BETA2-FOCO-16 (canon total): el estado canon ya no se edita — todo es
         # canon salvo fantasma; el combo desapareció del producto.
-        # BETA2-FOCO: «Relevancia narrativa» — la fija el USUARIO; calibra la
-        # exigencia del riego (métrica Relevancia) y la invalidación de 2º grado.
-        self.importance_combo = QComboBox()
-        for val in ("critico", "alto", "medio", "bajo", "menor"):
-            self.importance_combo.addItem(enum_human(val), val)
         # BETA2-FOCO: badge informativo de fantasma (no editable).
         self.ghost_state_label = QLabel("Fantasma — borrador interno, no canon")
         self.ghost_state_label.setStyleSheet(
@@ -427,29 +505,17 @@ class NodeDetailPanel(QWidget):
 
         root.addWidget(form_card)
 
-        # BETA1-F04: imagen opcional (placeholder + importar; persistencia
-        # mínima en custom_metadata — gestión avanzada de assets = deuda)
-        self.image_preview = QLabel()
-        self.image_preview.setVisible(False)
-        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_preview.setStyleSheet("border: 1px solid #D8D6C8; border-radius: 10px; background: rgba(255,255,255,0.4); padding: 4px;")
-        self.image_preview.setMaximumHeight(160)
-        root.addWidget(self.image_preview)
-        image_row = QHBoxLayout()
-        self.image_btn = QPushButton("Añadir imagen…")
-        self.image_btn.setFixedHeight(26)
-        self.image_btn.clicked.connect(self._pick_image)
-        image_row.addWidget(self.image_btn)
-        image_row.addStretch(1)
-        root.addLayout(image_row)
-
-        # BETA1-F05: descripción breve tras la imagen
+        # FOCO-20: la imagen vive integrada en la cabecera; la breve va
+        # directamente tras el formulario.
         root.addWidget(self.brief_edit)
 
         # BETA1-F04: el CUERPO es el centro del panel — sin tope de altura,
         # con prioridad de espacio (~70-80% del panel).
-        body_label = QLabel("Cuerpo")
-        body_label.setStyleSheet(_label_ss)
+        body_label = QLabel("CUERPO")
+        body_label.setStyleSheet(
+            f"color: {_MUTED_COLOR}; background: transparent; font-size: 11px; "
+            "font-weight: 700; letter-spacing: 1px;"
+        )
         root.addWidget(body_label)
         self.extended_edit = QTextEdit()
         self.extended_edit.setMinimumHeight(300)
@@ -502,35 +568,16 @@ class NodeDetailPanel(QWidget):
             context_layout.addWidget(w)
         # BETA1-F04: contexto → submenú "Más opciones" (montado más abajo)
 
+        # FOCO-20: los hitos ya NO viven en el formulario — se muestran y se
+        # crean en la cronología local bajo el editor (FocoLifelineBand); el
+        # atributo queda en None para las rutas que lo consultan.
         self.related_milestones_panel = None
-        if self.milestone_controller is not None:
-            self.related_milestones_panel = RelatedMilestonesPanel(
-                milestone_controller=self.milestone_controller,
-                target_kind="entity",
-                target_id=self.entity_id,
-                project_getter=self._project,
-                entity_controller=self.entity_controller,
-                relation_controller=self.relation_controller,
-                on_open_chronology=self.on_open_milestones,
-                on_suggest_milestone=self.on_suggest_milestone,
-                on_created=self.on_saved,
-            )
-            # BETA1-F04: hitos relacionados → submenú "Más opciones"
-
-        # -- B39: Convert to branch button (hidden by default, wired in T02) --
-        self.convert_to_branch_btn = QPushButton("Convertir en rama")
-        self.convert_to_branch_btn.setFixedHeight(32)
-        self.convert_to_branch_btn.setStyleSheet(
-            "QPushButton { background: #6F6A42; color: #F8F5EA; border: none; "
-            "border-radius: 8px; padding: 4px 12px; font-size: 12px; } "
-            "QPushButton:hover { background: #504B2E; }"
-        )
-        self.convert_to_branch_btn.setVisible(False)
-        self.convert_to_branch_btn.clicked.connect(self._convert_to_branch)
-        # BETA1-F04: convertir en rama → submenú "Más opciones"
+        # FOCO-20: «Convertir en rama» vive en el menú ⋯ de la cabecera
+        # (self.convert_to_branch_action, creado junto al header).
 
         # -- AI suggestion section --
         ai_card = QFrame()
+        self.ai_card = ai_card  # FOCO-20: en foco se oculta el bloque ENTERO
         ai_card.setObjectName("aiCard")
         ai_card.setStyleSheet(
             f"QFrame#aiCard {{ background: transparent; border: none; }}"
@@ -647,33 +694,12 @@ class NodeDetailPanel(QWidget):
         self.technical_text.setMaximumHeight(120)
         technical_layout.addWidget(self.technical_text)
 
-        # BETA1-F04: submenú "Más opciones" — todo lo secundario, plegado.
-        # (Estado/canon, contexto, hitos, convertir en rama, datos técnicos
-        # —estos últimos siguen además sujetos al modo avanzado—.)
-        self.more_section = AdvancedSection("Más opciones")
-        # BETA2-FOCO-16: sin fila de estado canon (canon total); el badge de
-        # fantasma vive junto a la cabecera del formulario.
-        # BETA2-FOCO: relevancia narrativa (editable por el usuario).
-        importance_row = QHBoxLayout()
-        importance_mini_label = QLabel("Relevancia:")
-        importance_mini_label.setStyleSheet(_label_ss)
-        importance_row.addWidget(importance_mini_label)
-        importance_row.addWidget(self.importance_combo, 1)
-        self.more_section.body_layout.addLayout(importance_row)
-        # BETA1-F05: contexto y datos técnicos FUERA del producto (los
-        # widgets viven sin montar; _refresh_context/_refresh_technical
-        # siguen escribiendo en ellos sin coste visual).
-        if self.related_milestones_panel is not None:
-            self.more_section.body_layout.addWidget(self.related_milestones_panel)
-        self.more_section.body_layout.addWidget(self.convert_to_branch_btn)
-        root.addWidget(self.more_section)
+        # FOCO-20: «Más opciones» desapareció del editor — la Relevancia vive
+        # en el formulario principal, los hitos en la cronología local y
+        # «Convertir en rama» en el menú ⋯ de la cabecera. La sección de
+        # RELACIONES es una lista real (todas, clicables → panel adyacente).
         if self.variant == "foco":
-            # BETA2-FOCO: en Foco las relaciones se LISTAN en el formulario
-            # (context_box, desmontado en el drawer desde BETA1-F05) y el
-            # submenú queda expandible como siempre.
-            self.context_box.setTitle("Relaciones")
-            root.addWidget(self.context_box)
-            self.context_box.show()
+            root.addWidget(self._build_relations_section())
 
         # -- Actions --
         actions = QHBoxLayout()
@@ -696,6 +722,78 @@ class NodeDetailPanel(QWidget):
         self.setStyleSheet(f"QWidget#nodeDetailPanel {{ background: {_BG_DRAWER}; }}")
 
         self.set_advanced_mode(self.ctx.advanced_mode)
+
+    # ------------------------------------------------------------------
+    # FOCO-20: sección de Relaciones (lista real, clicable, sin tope)
+    # ------------------------------------------------------------------
+
+    def _build_relations_section(self) -> QFrame:
+        section = QFrame()
+        section.setObjectName("relationsSection")
+        section.setStyleSheet("QFrame#relationsSection { background: transparent; border: none; }")
+        box = QVBoxLayout(section)
+        box.setContentsMargins(0, SPACE_MD, 0, 0)
+        box.setSpacing(4)
+
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        title = QLabel("RELACIONES")
+        title.setStyleSheet(
+            f"color: {_MUTED_COLOR}; background: transparent; font-size: 11px; "
+            "font-weight: 700; letter-spacing: 1px;"
+        )
+        header.addWidget(title)
+        header.addStretch(1)
+        self.add_relation_btn = QToolButton()
+        self.add_relation_btn.setText("+")
+        self.add_relation_btn.setToolTip("Crear relación desde esta entidad")
+        self.add_relation_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_relation_btn.setStyleSheet(
+            f"QToolButton {{ border: 1px solid {LINE_SOFT}; border-radius: 10px; "
+            f"background: transparent; color: {_LABEL_COLOR}; font-size: 14px; "
+            f"padding: 0 7px; }} "
+            f"QToolButton:hover {{ border-color: {GOLD}; color: {_TITLE_COLOR}; }}"
+        )
+        self.add_relation_btn.setVisible(callable(self.on_create_relation))
+        if callable(self.on_create_relation):
+            self.add_relation_btn.clicked.connect(lambda: self.on_create_relation())
+        header.addWidget(self.add_relation_btn)
+        box.addLayout(header)
+
+        self._relations_rows = QVBoxLayout()
+        self._relations_rows.setSpacing(2)
+        box.addLayout(self._relations_rows)
+        self.relations_empty_label = QLabel("Sin relaciones todavía.")
+        self.relations_empty_label.setStyleSheet(
+            f"color: {_MUTED_COLOR}; background: transparent; font-style: italic;"
+        )
+        box.addWidget(self.relations_empty_label)
+        return section
+
+    def _rebuild_relation_rows(self, entries: list[tuple[str, str]]) -> None:
+        """entries = [(relation_id, texto)] — una fila-botón por relación."""
+        rows = getattr(self, "_relations_rows", None)
+        if rows is None:
+            return
+        while rows.count():
+            item = rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.relations_empty_label.setVisible(not entries)
+        for relation_id, text in entries:
+            row = QPushButton(text)
+            row.setCursor(Qt.CursorShape.PointingHandCursor)
+            row.setStyleSheet(
+                f"QPushButton {{ border: none; border-radius: 8px; background: transparent; "
+                f"color: {_LABEL_COLOR}; text-align: left; padding: 6px 8px; font-size: 13px; }} "
+                f"QPushButton:hover {{ background: {SURFACE}; color: {_TITLE_COLOR}; }}"
+            )
+            if relation_id:
+                row.clicked.connect(
+                    lambda _=False, rid=relation_id: self._on_relation_link(rid)
+                )
+            rows.addWidget(row)
 
     # ------------------------------------------------------------------
     # Colour helpers
@@ -722,18 +820,25 @@ class NodeDetailPanel(QWidget):
         self.ctx.log("info", "Imagen asociada a la hoja")
 
     def _show_image(self, path: str):
+        # FOCO-20: miniatura integrada en la cabecera — siempre visible; sin
+        # imagen queda el marco punteado como placeholder.
         from pathlib import Path as _Path
         if not path or not _Path(path).exists():
-            self.image_preview.setVisible(False)
-            self.image_btn.setText("Añadir imagen…")
+            self.image_preview.clear()
+            self.image_btn.setText("Imagen…")
             return
         pixmap = QPixmap(path)
         if pixmap.isNull():
-            self.image_preview.setVisible(False)
+            self.image_preview.clear()
             return
-        self.image_preview.setPixmap(pixmap.scaledToHeight(150, Qt.TransformationMode.SmoothTransformation))
-        self.image_preview.setVisible(True)
-        self.image_btn.setText("Cambiar imagen…")
+        self.image_preview.setPixmap(
+            pixmap.scaled(
+                self.image_preview.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.image_btn.setText("Cambiar…")
 
     def _update_color_swatch(self, hex_color: str):
         self._current_color = hex_color
@@ -1181,9 +1286,9 @@ class NodeDetailPanel(QWidget):
             b39_label = "Rama" if kind.lower() in BRANCH_TYPES else "Hoja"
             self.type_badge.setText(b39_label)
             canon_val = _enum_value(getattr(entity, "canon_state", None), "")
-            self.summary.setText(
-                f"{enum_human(kind)} · {enum_human(canon_val)}"
-            )
+            # FOCO-20 + canon total: la línea resumen muestra el TIPO; el único
+            # estado que existe de cara al usuario es «fantasma» (badge propio).
+            self.summary.setText(enum_human(kind))
             self._refresh_layer_combo(entity)
 
             self.name_edit.setText(getattr(entity, "name", ""))
@@ -1222,9 +1327,12 @@ class NodeDetailPanel(QWidget):
             self._refresh_technical(entity)
             self.set_advanced_mode(self.ctx.advanced_mode)
 
-            # B39: Show "Convertir en rama" only for non-container entities
+            # B39/FOCO-20: «Convertir en rama» (menú ⋯) solo para hojas; un
+            # fantasma se convierte primero en entidad real (rail de Foco).
             is_branch = kind.lower() in BRANCH_TYPES or kind.lower() == "contenedor"
-            self.convert_to_branch_btn.setVisible(not is_branch)
+            self.convert_to_branch_action.setVisible(not is_branch)
+            self.convert_to_branch_action.setEnabled(not self._is_ghost)
+            self.more_menu_btn.setVisible(not is_branch)
         finally:
             self._refreshing = False
 
@@ -1234,12 +1342,14 @@ class NodeDetailPanel(QWidget):
             return
         entity_id = getattr(entity, "id", "")
         relation_lines = []
+        relation_rows: list[tuple[str, str]] = []
         for relation in getattr(project, "relations", []) or []:
             src = getattr(relation, "source_id", "")
             tgt = getattr(relation, "target_id", "")
             if entity_id not in {src, tgt}:
                 continue
-            other = self._entity_by_id(tgt if src == entity_id else src)
+            outgoing = src == entity_id
+            other = self._entity_by_id(tgt if outgoing else src)
             other_ref = (
                 human_ref(
                     getattr(other, "name", "?"),
@@ -1248,10 +1358,10 @@ class NodeDetailPanel(QWidget):
                 if other
                 else "Elemento vinculado"
             )
-            line_text = (
-                f"{enum_human(_enum_value(getattr(relation, 'relation_type', None), 'relación'))}: "
-                f"{other_ref}"
+            kind_text = enum_human(
+                _enum_value(getattr(relation, "relation_type", None), "relación")
             )
+            line_text = f"{kind_text}: {other_ref}"
             relation_id = str(getattr(relation, "id", "") or "")
             if relation_id:
                 # BETA2-FOCO: enlace clicable — abre el panel adyacente en Foco.
@@ -1260,9 +1370,22 @@ class NodeDetailPanel(QWidget):
                 )
             else:
                 relation_lines.append(html.escape(line_text))
+            # FOCO-20: fila real con glifo de dirección (todas, sin tope).
+            direction = _enum_value(getattr(relation, "direction", None), "")
+            glyph = "↔" if direction == "bidireccional" else ("→" if outgoing else "←")
+            ghost_mark = (
+                "  ·  fantasma"
+                if _enum_value(getattr(relation, "canon_state", None), "") == "fantasma"
+                else ""
+            )
+            other_name = getattr(other, "name", "?") if other else "Elemento vinculado"
+            relation_rows.append(
+                (relation_id, f"{glyph}  {kind_text} · {other_name}{ghost_mark}")
+            )
         self.relations_label.setText(
             "Relaciones: " + ("; ".join(relation_lines[:6]) if relation_lines else "—")
         )
+        self._rebuild_relation_rows(relation_rows)
 
         campaigns = []
         for campaign in getattr(project, "campaigns", []) or []:

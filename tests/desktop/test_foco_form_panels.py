@@ -4,6 +4,7 @@ panel adyacente (BETA2-FOCO-09). Widgets REALES offscreen."""
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -128,11 +129,15 @@ class TestGhostSafety:
 
 
 class TestClickableRelations:
-    def test_foco_variant_mounts_relations_and_links_open_adjacent(self, qapp):
+    def test_foco_variant_lists_all_relations_as_clickable_rows(self, qapp):
+        # FOCO-20: lista REAL (una fila-botón por relación, sin tope de 6);
+        # click en la fila → panel adyacente.
+        from PySide6.QtWidgets import QPushButton
+
         project_service, ctx, entity_controller, _ = _setup()
         center = _entity(project_service, "Centro")
-        friend = _entity(project_service, "Aliada")
-        relation = _relate(project_service, center, friend)
+        friends = [_entity(project_service, f"Aliada {i}") for i in range(8)]
+        relations = [_relate(project_service, center, friend) for friend in friends]
         opened: list[str] = []
         panel = _panel(
             ctx,
@@ -142,16 +147,56 @@ class TestClickableRelations:
             on_open_relation=opened.append,
         )
 
-        assert not panel.context_box.isHidden()  # listado EN el formulario
-        assert relation.id in panel.relations_label.text()  # enlace con href al id
-        panel.relations_label.linkActivated.emit(relation.id)
-        assert opened == [relation.id]
+        rows = [
+            panel._relations_rows.itemAt(i).widget()
+            for i in range(panel._relations_rows.count())
+        ]
+        rows = [r for r in rows if isinstance(r, QPushButton)]
+        assert len(rows) == 8  # TODAS las relaciones (antes: cap de 6)
+        assert panel.relations_empty_label.isHidden()
+        assert any("Aliada 0" in r.text() for r in rows)
+        assert all(r.text().startswith(("→", "←", "↔")) for r in rows)
 
-    def test_drawer_variant_keeps_context_unmounted(self, qapp):
+        rows[0].click()
+        assert opened == [relations[0].id]
+
+    def test_relations_plus_button_triggers_create_flow(self, qapp):
+        project_service, ctx, entity_controller, _ = _setup()
+        center = _entity(project_service, "Centro")
+        created: list[bool] = []
+        panel = _panel(
+            ctx,
+            entity_controller,
+            center.id,
+            variant="foco",
+            on_create_relation=lambda: created.append(True),
+        )
+        assert not panel.add_relation_btn.isHidden()
+        panel.add_relation_btn.click()
+        assert created == [True]
+
+    def test_drawer_variant_has_no_relations_section(self, qapp):
         project_service, ctx, entity_controller, _ = _setup()
         center = _entity(project_service, "Centro")
         panel = _panel(ctx, entity_controller, center.id)
-        assert panel.context_box.isHidden()
+        assert panel.context_box.isHidden()  # dato interno, jamás UI
+        assert not hasattr(panel, "_relations_rows")
+
+    def test_editor_has_no_more_options_no_milestones_and_importance_visible(self, qapp):
+        # FOCO-20: «Más opciones» desapareció; hitos fuera del formulario;
+        # Relevancia en el formulario principal; convertir en rama en menú ⋯.
+        project_service, ctx, entity_controller, _ = _setup()
+        center = _entity(project_service, "Centro")
+        panel = _panel(ctx, entity_controller, center.id, variant="foco")
+        assert not hasattr(panel, "more_section")
+        assert panel.related_milestones_panel is None
+        assert panel.importance_combo.parent() is not None  # montada en el form
+        assert panel.convert_to_branch_action.isVisible()
+        source = Path("hosts/DesktopHostPySide/widgets/node_detail_panel.py").read_text(
+            encoding="utf-8"
+        )
+        assert "AdvancedSection" not in source
+        assert "FONT_SERIF" in source  # escritura serif editorial
 
     def test_foco_variant_hides_inline_ai_block(self, qapp):
         project_service, ctx, entity_controller, _ = _setup()

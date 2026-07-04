@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
 from hosts.DesktopHostPySide.widgets.design_system import (
+    FONT_SERIF,
     AdvancedSection,
     Badge,
     SectionHeader,
@@ -119,6 +120,13 @@ class MilestoneDetailPanel(QWidget):
         self.summary_edit.setMaximumHeight(80)
         self.body_edit = QTextEdit()
         self.body_edit.setMaximumHeight(110)
+        # FOCO-20 (Editorial sereno): serif editorial en los cuerpos de
+        # escritura del hito, como en hoja/rama/relación.
+        _serif_ss = (
+            f"QTextEdit {{ font-family: {FONT_SERIF}; font-size: 14px; }}"
+        )
+        self.summary_edit.setStyleSheet(_serif_ss)
+        self.body_edit.setStyleSheet(_serif_ss)
         self.participants_list = QListWidget()
         self.participants_list.setMaximumHeight(150)
 

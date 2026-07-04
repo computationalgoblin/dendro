@@ -31,9 +31,19 @@ from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import (
+    FONT_SERIF,
+    GOLD,
+    INK,
+    INK_MUTED,
+    INK_SOFT,
+    INK_STRONG,
+    INPUT_BG,
+    LINE,
+    LINE_STRONG,
     RELATION_KIND_PALETTE,
     SPACE_LG,
     SPACE_MD,
+    SURFACE_HI,
     AdvancedSection,
     Badge,
     enum_human,
@@ -47,13 +57,14 @@ from packages.domain.relation import RelationType
 from packages.domain.result import Error
 
 # ---------------------------------------------------------------------------
-# Warm palette constants (mirrors node_detail_panel)
+# BETA2-FOCO-20 (Editorial sereno): tokens del design system (espejo del
+# node_detail_panel — antes hexes cálidos duplicados).
 # ---------------------------------------------------------------------------
-_BG_DRAWER = "#F8F6ED"
-_TITLE_COLOR = "#5C5A3E"
-_LABEL_COLOR = "#6F6A42"
-_MUTED_COLOR = "#7C806E"
-_SUGGESTION_BG = "#FFFDF7"
+_BG_DRAWER = SURFACE_HI
+_TITLE_COLOR = INK_STRONG
+_LABEL_COLOR = INK_SOFT
+_MUTED_COLOR = INK_MUTED
+_SUGGESTION_BG = INPUT_BG
 
 # UX21: paleta cálida de relaciones centralizada (antes este mapa estaba drifteado
 # a azules/púrpuras fríos pese a "mirrors graph_canvas"). Ahora coincide con el arco.
@@ -362,11 +373,14 @@ class RelationDetailPanel(QWidget):
         image_row.addStretch(1)
         root.addLayout(image_row)
 
-        # BETA1-F05: viñetas protagonistas — misma estética que la hoja
+        # FOCO-20 (Editorial sereno): serif y foco dorado, misma superficie
+        # que la hoja — aquí también se escribe largo.
         _card_ss = (
-            "QTextEdit { background: #FFFDF7; border: 1px solid #E7E3D4; "
-            "border-radius: 12px; padding: 10px; font-size: 13px; color: #3F3D2E; } "
-            "QTextEdit:focus { border: 1px solid #C9C0A0; background: #FFFFFF; }"
+            f"QTextEdit {{ background: {INPUT_BG}; border: 1px solid {LINE}; "
+            f"border-radius: 12px; padding: 12px; font-size: 14px; color: {INK}; "
+            f"font-family: {FONT_SERIF}; }} "
+            f"QTextEdit:hover {{ border-color: {LINE_STRONG}; }} "
+            f"QTextEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 11px; }}"
         )
         self.description_edit.setStyleSheet(_card_ss)
         root.addWidget(self.description_edit)
