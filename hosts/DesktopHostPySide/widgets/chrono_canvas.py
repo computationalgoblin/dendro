@@ -1636,8 +1636,10 @@ if HAS_QT:
             self._atmosphere.set_context(ctx)
             # BETA1-UX36: rehidrata el scope recordado (qué contenedores expandió el
             # usuario). Vacío ⇒ todo colapsado (default de primer arranque).
+            # BETA2-UX-09: respetar SIEMPRE el estado persistido (incluido el
+            # conjunto vacío = todo colapsado), no solo cuando hay ids.
             ids = getattr(ctx, "creation_chrono_expanded_ids", None)
-            if ids:
+            if ids is not None:
                 self._expanded_ids = {str(i) for i in ids if str(i)}
 
         def _current_scope(self) -> "ChronoScope":
@@ -2216,6 +2218,14 @@ if HAS_QT:
             # BETA1-UX2D: guardamos el proyecto para poder RECONSTRUIR la escena bajo
             # demanda (única cura observada del artefacto "items que no se pintan").
             self._project = project
+            # BETA2-UX-09: respetar SIEMPRE el colapso persistido al reconstruir
+            # (DC-034-03: no re-aplicar el default sobre ramas que el usuario ya
+            # abrió). El estado vive como preferencia de app (ctx), sin migración.
+            ctx = getattr(self, "_ctx", None)
+            if ctx is not None:
+                ids = getattr(ctx, "creation_chrono_expanded_ids", None)
+                if ids is not None:
+                    self._expanded_ids = {str(i) for i in ids if str(i)}
             # BETA1-UX2D (crash): reconstruir la escena NUNCA debe tumbar la app.
             # Si los datos del proyecto provocan una excepción al construir el
             # layout (años/eras/hitos inesperados), la registramos y dejamos una
@@ -2552,7 +2562,9 @@ if HAS_QT:
                 head = _LifelineHead(lifeline, 8.0 if lifeline.is_tree else 6.5)
                 head.setPos(self._pt(lifeline.x, lifeline.y_birth))
                 head.setCursor(self._drag_cursor())
-                head.setToolTip(f"Arrastra {arrows} para cambiar el año de origen · doble clic: abrir")
+                head.setToolTip(
+                    f"Clic: abrir · Alt+arrastra {arrows} para cambiar el año de origen"
+                )
                 scene.addItem(head)
                 # BETA1-UX2C: mango de fin arrastrable + registro para editar el
                 # lapso estirando el nodo.
@@ -2560,8 +2572,8 @@ if HAS_QT:
                 end_handle.setPos(self._pt(lifeline.x, lifeline.y_end))
                 end_handle.setCursor(self._drag_cursor())
                 end_handle.setToolTip(
-                    f"Arrastra {arrows} para cambiar el año de fin · llévalo al presente "
-                    "para marcar que sigue viva"
+                    f"Clic: abrir · Alt+arrastra {arrows} para cambiar el año de fin "
+                    "(llévalo al presente para marcar que sigue viva)"
                 )
                 scene.addItem(end_handle)
                 self._lifeline_views[lifeline.entity_id] = {
@@ -2967,8 +2979,12 @@ if HAS_QT:
                         event.accept()
                         return
                 self._press_pos = pos  # ancla clic/arrastre (mangos)
+                # BETA2-UX-09: editar el lapso exige Alt+arrastra. Un clic plano
+                # sobre el mango NUNCA edita (evita la edición accidental por el
+                # temblor del clic con la vista alejada): cae a _dispatch_click, que
+                # abre la entidad. Solo con Alt se captura el mango para arrastrar.
                 hit = self._handle_at(event.position().toPoint())
-                if hit is not None:
+                if hit is not None and bool(event.modifiers() & Qt.KeyboardModifier.AltModifier):
                     self._press_handle = hit
                     self._handle_moved = False
                     event.accept()
