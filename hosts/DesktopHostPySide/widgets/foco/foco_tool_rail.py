@@ -1,16 +1,24 @@
-"""Rail de herramientas del Modo Foco (BETA2-FOCO-11).
+"""Rail de herramientas del Modo Foco (BETA2-FOCO-11 · BETA2-UX-05).
 
-Estilo Photoshop: UNA única columna vertical de botones-icono (SVG teñibles,
-tooltips claros, sin texto). Las herramientas actúan al click — sin modo
-herramienta persistente — y se ILUMINAN/deshabilitan según la selección actual
-(``set_selection_context``). Si una herramienta necesita datos, FocoView abre
-un popover junto al botón (``anchor_for``).
+Estilo Photoshop: UNA columna vertical de botones-icono (SVG teñibles, tooltips
+claros, sin texto). Las herramientas actúan al click — sin modo herramienta
+persistente — y se ILUMINAN/deshabilitan según la selección (``set_selection_
+context``). Si una herramienta necesita datos, FocoView abre un popover junto al
+botón (``anchor_for``).
+
+BETA2-UX-05: los clústeres casi-duplicados (los 4 «fantasma» y los 3 de «riego»)
+se agrupan bajo un botón-grupo que despliega un flyout con sus herramientas, para
+que un principiante no tenga que desambiguar 15 iconos por hover. La API pública
+(``toolTriggered`` / ``button`` / ``anchor_for`` / ``enabled_tools`` /
+``set_selection_context``) se conserva por ``tool_id``: los botones agrupados
+siguen existiendo (viven en el flyout) y ``anchor_for`` devuelve el botón-grupo
+visible para anclar sus popovers.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
@@ -20,7 +28,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
 )
 
-# (tool_id, icono, tooltip). El orden es el del rail (spec: herramientas mínimas).
+# (tool_id, icono, tooltip). El orden de referencia (todas las herramientas).
 TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("create_entity", "tool_create_entity", "Crear entidad"),
     ("create_related", "tool_create_related", "Crear entidad relacionada con la del foco"),
@@ -39,6 +47,38 @@ TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("view_chrono", "tool_view_chrono", "Ver esta entidad en la Cronología global"),
 )
 
+# BETA2-UX-05: (group_id, icono, tooltip, (tool_ids…)). Los clústeres casi-
+# duplicados se pliegan bajo un botón-grupo con flyout.
+_TOOL_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    (
+        "ghost",
+        "tool_ghost_node",
+        "Fantasmas: nodo/relación pendiente, convertir y vincular",
+        ("ghost_relation", "ghost_node", "ghost_convert", "ghost_link"),
+    ),
+    (
+        "riego",
+        "tool_water",
+        "Riego: regar (IA), secar y cultivar",
+        ("water", "dry", "cultivate"),
+    ),
+)
+
+# Orden de la COLUMNA (spec: menos afordancias de primer nivel). Cada entrada es
+# un tool_id suelto o ("group", group_id).
+_COLUMN: tuple[object, ...] = (
+    "create_entity",
+    "create_related",
+    "create_relation",
+    ("group", "ghost"),
+    "add_to_branch",
+    "create_branch",
+    "create_milestone",
+    ("group", "riego"),
+    "view_map",
+    "view_chrono",
+)
+
 _BUTTON_STYLE = (
     "QPushButton { background: rgba(255,255,255,0.55); border: 1px solid %(line)s; "
     "border-radius: 16px; padding: 0; } "
@@ -48,7 +88,7 @@ _BUTTON_STYLE = (
 
 
 class FocoToolRail(QFrame):
-    """Columna única de herramientas; emite ``toolTriggered(tool_id)``."""
+    """Columna de herramientas con grupos plegables; emite ``toolTriggered(tool_id)``."""
 
     toolTriggered = Signal(str)  # noqa: N815 — convención Qt de señales
 
@@ -59,28 +99,96 @@ class FocoToolRail(QFrame):
             f"QFrame#focoToolRail {{ background: {SURFACE_HI}; "
             f"border: 1px solid {GOLD_SOFT}; border-radius: 18px; }}"
         )
+        self._style = _BUTTON_STYLE % {"line": "#D8D6C8", "hover": "#ECE4C7", "gold": GOLD_DEEP}
+        self._tooltips = {tid: tip for tid, _icon, tip in TOOL_SPECS}
+        self._icons = {tid: icon for tid, icon, _tip in TOOL_SPECS}
+        self._buttons: dict[str, QPushButton] = {}
+        # tool_id agrupado → (group_id, botón-grupo, flyout)
+        self._group_of: dict[str, str] = {}
+        self._group_buttons: dict[str, QPushButton] = {}
+        self._group_flyouts: dict[str, QFrame] = {}
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 8, 5, 8)
         layout.setSpacing(4)
-        self._buttons: dict[str, QPushButton] = {}
-        style = _BUTTON_STYLE % {"line": "#D8D6C8", "hover": "#ECE4C7", "gold": GOLD_DEEP}
-        for tool_id, icon_name, tooltip in TOOL_SPECS:
-            button = QPushButton(self)
-            button.setFixedSize(32, 32)
-            button.setToolTip(tooltip)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setIcon(icons.icon(icon_name, color=INK_SOFT, size=17))
-            button.setStyleSheet(style)
-            button.clicked.connect(lambda _=False, t=tool_id: self.toolTriggered.emit(t))
-            layout.addWidget(button)
-            self._buttons[tool_id] = button
+
+        groups = {gid: (icon, tip, tools) for gid, icon, tip, tools in _TOOL_GROUPS}
+        for entry in _COLUMN:
+            if isinstance(entry, tuple) and entry[0] == "group":
+                gid = entry[1]
+                icon, tip, tools = groups[gid]
+                layout.addWidget(self._build_group(gid, icon, tip, tools))
+            else:
+                layout.addWidget(self._make_tool_button(str(entry), parent=self))
         layout.addStretch(1)
         self.set_selection_context({})
+
+    # ── construcción ─────────────────────────────────────────────────────────
+
+    def _make_tool_button(self, tool_id: str, parent: QWidget) -> QPushButton:
+        button = QPushButton(parent)
+        button.setFixedSize(32, 32)
+        button.setToolTip(self._tooltips.get(tool_id, tool_id))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setIcon(icons.icon(self._icons.get(tool_id, ""), color=INK_SOFT, size=17))
+        button.setStyleSheet(self._style)
+        button.clicked.connect(lambda _=False, t=tool_id: self.toolTriggered.emit(t))
+        self._buttons[tool_id] = button
+        return button
+
+    def _build_group(
+        self, gid: str, icon: str, tooltip: str, tools: tuple[str, ...]
+    ) -> QPushButton:
+        group_btn = QPushButton(self)
+        group_btn.setFixedSize(32, 32)
+        group_btn.setToolTip(tooltip)
+        group_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        group_btn.setIcon(icons.icon(icon, color=GOLD_DEEP, size=17))
+        group_btn.setStyleSheet(self._style)
+        self._group_buttons[gid] = group_btn
+
+        flyout = QFrame(self, Qt.WindowType.Popup)
+        flyout.setObjectName("focoToolFlyout")
+        flyout.setStyleSheet(
+            f"QFrame#focoToolFlyout {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: 16px; }}"
+        )
+        row = QHBoxLayout(flyout)
+        row.setContentsMargins(6, 6, 6, 6)
+        row.setSpacing(4)
+        for tool_id in tools:
+            btn = self._make_tool_button(tool_id, parent=flyout)
+            # Al elegir una herramienta del grupo, cierra el flyout.
+            btn.clicked.connect(lambda _=False, f=flyout: f.hide())
+            row.addWidget(btn)
+            self._group_of[tool_id] = gid
+        self._group_flyouts[gid] = flyout
+
+        group_btn.clicked.connect(lambda _=False, g=gid: self._toggle_group(g))
+        return group_btn
+
+    def _toggle_group(self, gid: str) -> None:
+        flyout = self._group_flyouts[gid]
+        if flyout.isVisible():
+            flyout.hide()
+            return
+        flyout.adjustSize()
+        anchor = self._group_buttons[gid]
+        top_right = anchor.mapToGlobal(anchor.rect().topRight())
+        flyout.move(top_right.x() + 6, top_right.y())
+        flyout.show()
+
+    # ── API pública (estable por tool_id) ─────────────────────────────────────
 
     def button(self, tool_id: str) -> QPushButton | None:
         return self._buttons.get(tool_id)
 
     def anchor_for(self, tool_id: str) -> QWidget:
+        # Para una herramienta agrupada, el ancla visible es su botón-grupo (el
+        # botón real vive en el flyout, que puede estar cerrado).
+        gid = self._group_of.get(tool_id)
+        if gid is not None:
+            return self._group_buttons.get(gid, self)
         return self._buttons.get(tool_id, self)
 
     def enabled_tools(self) -> list[str]:
@@ -115,3 +223,8 @@ class FocoToolRail(QFrame):
         }
         for tool_id, button in self._buttons.items():
             button.setEnabled(bool(enabled.get(tool_id, False)))
+        # BETA2-UX-05: un botón-grupo se habilita si alguna de sus herramientas lo está.
+        for gid, _icon, _tip, tools in _TOOL_GROUPS:
+            group_btn = self._group_buttons.get(gid)
+            if group_btn is not None:
+                group_btn.setEnabled(any(enabled.get(t, False) for t in tools))
