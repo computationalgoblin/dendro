@@ -88,6 +88,7 @@ from hosts.DesktopHostPySide.controllers.era_controller import EraController
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets import icons
+from hosts.DesktopHostPySide.widgets.settings_panels import _human_error as _human_ai_error
 from hosts.DesktopHostPySide.widgets.design_system import (
     BusyIndicator,
     Card,
@@ -2255,10 +2256,7 @@ class CreationWorkspace(QWidget):
         if service is None or not ids:
             return
         if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
-            self.ctx.log(
-                "error",
-                "IA no configurada: define el proveedor en Ajustes de IA para poder regar.",
-            )
+            self._warn_ai_unconfigured("regar")
             return
         scope = service.entities_in_scope({"selection": ids})
         eligible = getattr(scope, "value", None) or []
@@ -2480,10 +2478,7 @@ class CreationWorkspace(QWidget):
         if service is None or not entity_id:
             return
         if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
-            self.ctx.log(
-                "error",
-                "IA no configurada: define el proveedor en Ajustes de IA para pedir sugerencias.",
-            )
+            self._warn_ai_unconfigured("pedir sugerencias")
             return
         from PySide6.QtWidgets import QInputDialog
 
@@ -5469,7 +5464,10 @@ class CreationWorkspace(QWidget):
     @_qt_safe_slot
     def _on_ai_job_failed(self, job_id: str, error: str):
         self._stop_edit_germination(job_id)  # UX5: cesa el latido de germinación
-        self._job_status_label.setText(f"Error: {error}")
+        # SHIP-01: al usuario le llega el error humanizado (401/403/timeout/…); el
+        # crudo se conserva en ctx.log para depurar.
+        friendly = _human_ai_error(error)
+        self._job_status_label.setText(f"⚠ {friendly}")
         self._job_status_label.setStyleSheet("color: #C0392B; font-size: 11px; font-weight: 700;")
         pulse_feedback(self._job_status_label)
         self._schedule_status_clear(9000)  # WIKI-13: el error también se limpia (más tarde)
@@ -5479,7 +5477,7 @@ class CreationWorkspace(QWidget):
         # SEM04: la semilla germinante se marchita al fallar el job.
         self.graph.wither_seed(job_id)
         # PA-Semillas: notificación de error (se descarta al pulsarla).
-        self._seed_notifications.add(f"error:{job_id}", f"Job fallido: {error}", kind="error")
+        self._seed_notifications.add(f"error:{job_id}", friendly, kind="error")
         # K02/fila32: si el fallo es por falta de proveedor IA, ofrecer instrucciones
         # accionables (una vez por sesión, no en cada intento).
         if self.ai_job_service.provider_unconfigured() and not getattr(
@@ -5490,21 +5488,34 @@ class CreationWorkspace(QWidget):
         # Clear error styling after 8 seconds so it doesn't persist forever
         QTimer.singleShot(8000, self._reset_job_status_style)
 
+    def _warn_ai_unconfigured(self, accion: str) -> None:
+        """SHIP-01: aviso VISIBLE al pedir una función de IA sin proveedor.
+
+        Antes esto iba solo a ctx.log, cuyo panel está oculto: el botón parecía
+        muerto. Ahora: toast de error + diálogo accionable con acceso a Ajustes."""
+        self.ctx.notify(f"IA no configurada: no se puede {accion}.", kind="error")
+        self._show_ai_config_help()
+
     def _show_ai_config_help(self) -> None:
-        """fila 32: instrucciones accionables para configurar un proveedor de IA.
+        """SHIP-01: ayuda accionable para configurar un proveedor de IA in-app.
         Dendro funciona sin IA; estas funciones quedan inactivas hasta configurarla."""
-        QMessageBox.information(
-            self,
-            "Configura la IA",
+        box = QMessageBox(self)
+        box.setWindowTitle("Configura la IA")
+        box.setText(
             "No hay un proveedor de IA configurado, así que Dendro no generará contenido.\n\n"
-            "Define estas variables de entorno antes de abrir la app:\n"
-            "  • NARRATIVE_AI_PROVIDER  (p. ej. openai)\n"
-            "  • NARRATIVE_AI_BASE_URL  (URL del endpoint compatible)\n"
-            "  • NARRATIVE_AI_API_KEY   (tu clave)\n"
-            "  • NARRATIVE_AI_MODEL     (nombre del modelo)\n\n"
-            "Opcional: NARRATIVE_AI_TIMEOUT (segundos).\n"
-            "Dendro funciona sin IA; estas funciones quedan inactivas hasta configurarla.",
+            "En Ajustes de IA elige un proveedor compatible con OpenAI (URL, modelo y "
+            "API key) y pulsa «Probar conexión». El cambio se aplica al momento, sin "
+            "reiniciar.\n\n"
+            "Dendro funciona sin IA; solo regar, sugerencias y Play la necesitan."
         )
+        open_settings = getattr(self.ctx, "open_ai_settings", None)
+        open_btn = None
+        if callable(open_settings):
+            open_btn = box.addButton("Abrir Ajustes de IA", QMessageBox.AcceptRole)
+        box.addButton("Cerrar", QMessageBox.RejectRole)
+        box.exec()
+        if open_btn is not None and box.clickedButton() is open_btn:
+            open_settings()
 
     @_qt_safe_slot
     def _reset_job_status_style(self):
@@ -5513,7 +5524,7 @@ class CreationWorkspace(QWidget):
         )
         # Only reset text if it's still showing an error
         current = self._job_status_label.text()
-        if current.startswith("Error:"):
+        if current.startswith(("Error:", "⚠")):
             self._job_status_label.setText("")
 
     @_qt_safe_slot

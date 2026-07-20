@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.lc = LayerController(project_service=ps)
         # Autoguardado silencioso (sin toast/refresh/diálogo). Lo consume quien lo necesite.
         self.ctx.request_save_silent = self._save_active_project_silent
+        # SHIP-01: cualquier vista puede llevar al usuario a los Ajustes de IA.
+        self.ctx.open_ai_settings = self._open_ai_settings
 
     # ── Views ────────────────────────────────────────────────────────────────
 

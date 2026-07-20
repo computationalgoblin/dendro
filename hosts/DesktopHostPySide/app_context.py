@@ -40,6 +40,9 @@ class AppContext:
     ai_prompt_trace_store: Any = None
     # UX33: guardado SIN UI ruidosa (sin toast/refresh/cierre de cajón ni diálogo). Lo fija MainWindow.
     request_save_silent: Callable[[], bool] | None = None
+    # SHIP-01: abre el panel de Ajustes de IA in-app desde cualquier vista (lo fija
+    # MainWindow). Fail-soft: si es None, la UI degrada a texto sin botón.
+    open_ai_settings: Callable[[], None] | None = None
 
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large

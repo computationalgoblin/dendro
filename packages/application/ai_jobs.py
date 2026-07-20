@@ -1879,9 +1879,9 @@ class AIJobService:
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         if provider_name == "simulated" and not self.allow_simulated:
             msg = (
-                "IA no configurada: define las variables de entorno NARRATIVE_AI_PROVIDER, "
-                "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
-                "la app). No se genera contenido simulado."
+                "IA no configurada: añade un proveedor en Ajustes de IA (en la CLI: "
+                "variables NARRATIVE_AI_PROVIDER, NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY "
+                "y NARRATIVE_AI_MODEL). No se genera contenido simulado."
             )
             self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
             self._record_observability(job, status="error", error_type="provider_unconfigured")
