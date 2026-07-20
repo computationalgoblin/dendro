@@ -14,7 +14,11 @@ from dataclasses import dataclass
 import pytest
 
 from packages.application.candidate_service import CandidateService
-from packages.application.causal_potency import set_basal_potency
+from packages.application.causal_potency import (
+    get_ascending_exception,
+    set_ascending_exception,
+    set_basal_potency,
+)
 from packages.application.entity_service import EntityService
 from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.narrative_memory_service import NarrativeMemoryService
@@ -230,6 +234,142 @@ def test_as_candidate_and_accept_moves_entity():
     res = cs.accept_candidate(cand.id)
     assert isinstance(res, Ok)
     assert p.entity_by_id("guerra").layer_ids == [rings[0]]  # movido aguas-arriba
+
+
+# ── excepciones ascendentes (STRUCT-05) ────────────────────────────────────
+
+
+def _relate(p: Project, rid: str, sid: str, tid: str, rtype: RelationType) -> NarrativeRelation:
+    rel = NarrativeRelation(id=rid, source_id=sid, target_id=tid, relation_type=rtype)
+    p.relations.append(rel)
+    p.touch()
+    return rel
+
+
+def _ascending(findings) -> list:
+    return [f for f in findings if f.kind == "ascending_exception"]
+
+
+@pytest.mark.application
+def test_ascending_exception_detected_for_noncausal_low_to_high():
+    p, rings = _project()
+    # extremo inferior con potencia alta PERO en su banda (para no disparar ring_move):
+    # 2 anillos bastan — potencia 75 → banda 1 de 2... mejor aislar filtrando por kind.
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    rel = _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)  # no causal
+    findings = _ascending(_svc(p).analyze().value)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.target_id == "sierva"
+    assert f.proposed_data["relation_id"] == rel.id
+    assert f.proposed_data["exception_kind"] == "apalancamiento"
+    assert f.fingerprint == f"ascending_exception:sierva:{rel.id}"
+    assert f.confidence >= 0.6
+
+
+@pytest.mark.application
+def test_no_ascending_for_causal_relation():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    _relate(p, "rel1", "sierva", "reina", RelationType.CAUSO)  # ya escala por sí misma
+    assert _ascending(_svc(p).analyze().value) == []
+
+
+@pytest.mark.application
+def test_no_ascending_below_threshold_or_unannotated():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=50)  # bajo umbral
+    _add(p, "reina", rings[0])
+    _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    assert _ascending(_svc(p).analyze().value) == []
+    p2, rings2 = _project()
+    _add(p2, "sierva", rings2[2])  # sin potencia atribuida: silencio honesto
+    _add(p2, "reina", rings2[0])
+    _relate(p2, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    assert _ascending(_svc(p2).analyze().value) == []
+
+
+@pytest.mark.application
+def test_no_ascending_when_already_marked_or_wrong_direction():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    rel = _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    set_ascending_exception(rel, "catalizador")  # ya marcada
+    assert _ascending(_svc(p).analyze().value) == []
+    p2, rings2 = _project()
+    _add(p2, "reina", rings2[0], potency=90)
+    _add(p2, "sierva", rings2[2])
+    _relate(p2, "rel1", "reina", "sierva", RelationType.GOBIERNA)  # alto→bajo: no aplica
+    assert _ascending(_svc(p2).analyze().value) == []
+
+
+@pytest.mark.application
+def test_ascending_dismiss_suppresses():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    svc = _svc(p)
+    f = _ascending(svc.analyze().value)[0]
+    assert isinstance(svc.dismiss(f.fingerprint), Ok)
+    assert _ascending(svc.analyze().value) == []
+
+
+@pytest.mark.application
+def test_ascending_as_candidate_and_accept_marks_relation():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    rel = _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    ps = _FakeProjectService(active_project=p)
+    svc = StructuralAnalysisService(ps)
+    f = _ascending(svc.analyze().value)[0]
+    cand = svc.as_candidate(f)
+    assert cand.candidate_type == CandidateType.RELACION
+    assert cand.proposed_data["kind"] == "ascending_exception"
+    assert set(cand.affected_entity_ids) == {"sierva", "reina"}
+    p.candidates.append(cand)
+
+    cs = CandidateService(
+        project_service=ps,
+        entity_service=EntityService(ps),
+        relation_service=RelationService(ps),
+    )
+    res = cs.accept_candidate(cand.id)
+    assert isinstance(res, Ok)
+    assert get_ascending_exception(rel) == "apalancamiento"
+    # la marca queda registrada como relación editada → propaga impacto a ambos extremos
+    assert res.value.metadata.get("edited_relation_id") == rel.id
+
+
+@pytest.mark.application
+def test_ascending_accept_propagates_impact_to_both_ends():
+    p, rings = _project()
+    _add(p, "sierva", rings[2], potency=90)
+    _add(p, "reina", rings[0])
+    _relate(p, "rel1", "sierva", "reina", RelationType.GOBIERNA)
+    ps = _FakeProjectService(active_project=p)
+    mem = NarrativeMemoryService(ps)
+    for eid in ("sierva", "reina"):
+        mem.upsert_memory(MemoryTargetKind.ENTITY, eid, resumen_editorial="x")
+        mem.set_freshness(MemoryTargetKind.ENTITY, eid, freshness=MemoryFreshness.REGADA)
+    impact = NarrativeImpactService(ps, memory_service=mem)
+    svc = StructuralAnalysisService(ps)
+    cand = svc.as_candidate(_ascending(svc.analyze().value)[0])
+    p.candidates.append(cand)
+    cs = CandidateService(
+        project_service=ps,
+        entity_service=EntityService(ps),
+        relation_service=RelationService(ps),
+    )
+    res = cs.accept_candidate(cand.id, impact_service=impact)
+    assert isinstance(res, Ok)
+    for eid in ("sierva", "reina"):
+        freshness = mem.get_memory(MemoryTargetKind.ENTITY, eid).value.freshness
+        assert freshness == MemoryFreshness.FALTA_REGAR
 
 
 # ── enriquecimiento IA al abrir (provider-optional) ────────────────────────

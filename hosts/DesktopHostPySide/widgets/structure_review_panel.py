@@ -1,8 +1,11 @@
 """BETA2-STRUCT: panel de proyecto «Ajustes estructurales».
 
-Lista dos clases de propuesta, todas revisables (§17 read-only, aceptar/rechazar):
+Lista tres clases de propuesta, todas revisables (§17 read-only, aceptar/rechazar):
 - **Movimientos de anillo** (`ring_move`): detector determinista sobre la potencia atribuida
   por la IA al Regar. Se derivan en lectura (`service.analyze()`).
+- **Excepciones ascendentes** (`ascending_exception`, STRUCT-05): detector determinista sobre
+  relaciones no-causales bajo→alto con extremo inferior de potencia alta (§16). También
+  derive-on-read.
 - **Estructura de anillos** (`ring_create`/`ring_merge`): la IA propone bajo demanda (botón
   «Proponer estructura») crear anillos que faltan o fusionar redundantes — tarea holística y
   abstracta que se delega en la IA (`service.propose_ring_structure()`).
@@ -117,13 +120,19 @@ class StructureReviewPanel(QWidget):
         holder = QWidget()
         rows = QVBoxLayout(holder)
         rows.setContentsMargins(0, 0, 0, 0)
+        moves = [f for f in findings if getattr(f, "kind", "") != "ascending_exception"]
+        ascents = [f for f in findings if getattr(f, "kind", "") == "ascending_exception"]
         if structures:
             rows.addWidget(self._section_label("Estructura de anillos (IA)"))
             for finding in structures:
                 rows.addWidget(self._row(finding, structure=True))
-        if findings:
+        if moves:
             rows.addWidget(self._section_label("Reubicaciones por potencial"))
-            for finding in findings:
+            for finding in moves:
+                rows.addWidget(self._row(finding, structure=False))
+        if ascents:
+            rows.addWidget(self._section_label("Excepciones ascendentes"))
+            for finding in ascents:
                 rows.addWidget(self._row(finding, structure=False))
         rows.addStretch(1)
         scroll.setWidget(holder)

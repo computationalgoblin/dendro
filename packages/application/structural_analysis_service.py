@@ -1,7 +1,9 @@
 """BETA2-STRUCT: análisis estructural determinista del proyecto.
 
 Emite hallazgos ``ring_move`` cuando el **potencial de propagación causal ATRIBUIDO** a una
-entidad no cuadra con su anillo actual. Determinista, coste IA cero, ``Result``-based. La mitad
+entidad no cuadra con su anillo actual, y ``ascending_exception`` (Fase 2, STRUCT-05) cuando
+una relación no-causal bajo→alto con extremo inferior de potencia alta debería poder escalar
+(§16). Determinista, coste IA cero, ``Result``-based. La mitad
 de ACEPTACIÓN ya existe (``CandidateService`` + ``build_ring_move_proposal``, BETA2-MEM-08); la
 de GENERACIÓN es este detector. La IA solo enriquece la justificación al abrir (STRUCT-04).
 
@@ -29,8 +31,13 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.application.causal_potency import build_ring_move_proposal, get_annotated_potency
+from packages.application.causal_potency import (
+    build_ring_move_proposal,
+    get_annotated_potency,
+    is_ascending_exception,
+)
 from packages.application.foco_rings import effective_rank_map, ring_display_info, ring_id_for
+from packages.application.narrative_impact_service import CAUSAL_RELATION_TYPES
 from packages.application.world_layer_causal import get_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateType
 from packages.domain.result import Error, Ok, Result
@@ -39,6 +46,15 @@ _MIN_GAP = 1  # bandas de anillo de diferencia para proponer un movimiento (pote
 # un desajuste de 1 banda ya es señal; incluye colocar una entidad sin anillo). La confianza
 # crece con el gap.
 _MIN_CONFIDENCE = 0.6
+
+# BETA2-STRUCT-05: umbral de potencia atribuida del extremo INFERIOR para proponer una
+# excepción ascendente sobre una relación no-causal bajo→alto. Solo se juzgan relaciones
+# cuyo extremo bajo tiene potencia atribuida (silencio honesto, como en ring_move).
+_ASC_MIN_POTENCY = 70
+# Tipo de excepción por defecto de la PROPUESTA determinista (el más genérico del §16:
+# algo inferior que apalanca influencia hacia arriba). La elección semántica fina entre
+# los 5 tipos es tarea del usuario/IA al revisar, no del detector.
+_DEFAULT_ASC_KIND = "apalancamiento"
 
 # Claves de supresión de decisiones (custom_metadata, schema-safe, sin bump de esquema).
 DISMISS_KEY = "_struct_dismissed"  # list[fingerprint] — hasta que el fingerprint cambie
@@ -80,8 +96,8 @@ _STRUCTURE_SYSTEM = (
 class StructuralFinding:
     """Hallazgo estructural revisable (efímero; se deriva en lectura, no se persiste)."""
 
-    kind: str  # "ring_move" (Fase 1)
-    target_id: str  # entidad afectada
+    kind: str  # "ring_move" (Fase 1) | "ascending_exception" (Fase 2, STRUCT-05)
+    target_id: str  # entidad afectada (en ascending_exception: el extremo INFERIOR)
     proposed_data: dict[str, Any]  # §17, con la forma de build_ring_move_proposal
     confidence: float
     fingerprint: str
@@ -132,11 +148,21 @@ class StructuralAnalysisService:
     def as_candidate(self, finding: StructuralFinding) -> Candidate:
         """Materializa un Candidato transitorio para enrutar por el pipeline de aceptación."""
         pd = dict(finding.proposed_data)
+        if finding.kind == "ascending_exception":
+            ctype = CandidateType.RELACION
+            affected = [
+                str(pd.get("source_entity_id") or ""),
+                str(pd.get("target_entity_id") or ""),
+            ]
+            affected = [a for a in affected if a]
+        else:
+            ctype = CandidateType.ANILLO
+            affected = [finding.target_id]
         return Candidate(
-            candidate_type=CandidateType.ANILLO,
-            title=finding.title or "Reubicar anillo",
+            candidate_type=ctype,
+            title=finding.title or "Ajuste estructural",
             proposed_data=pd,
-            affected_entity_ids=[finding.target_id],
+            affected_entity_ids=affected,
             confidence=finding.confidence,
             source="structural_analysis",
             justification="; ".join(pd.get("reasons") or []),
@@ -386,8 +412,81 @@ class StructuralAnalysisService:
             if holder is not None and self._is_suppressed(holder, finding.fingerprint, current_rev):
                 continue
             findings.append(finding)
+        findings.extend(self._compute_ascending(proj, current_rev))
         findings.sort(key=lambda f: f.confidence, reverse=True)
         return findings
+
+    def _compute_ascending(self, proj, current_rev) -> list[StructuralFinding]:
+        """BETA2-STRUCT-05: excepciones ascendentes como propuesta.
+
+        Patrón: relación NO causal cuyo extremo inferior (posición de anillo mayor)
+        tiene potencia atribuida alta — su influencia real escala hacia el extremo
+        superior, pero el motor de impacto no la propagará mientras la relación no
+        esté marcada como excepción (§16). El detector la propone; el usuario acepta.
+        """
+        if not hasattr(proj, "entity_by_id"):
+            return []
+        pos_cache: dict[str, int] = {}
+
+        def _pos(entity_id: str) -> int:
+            if entity_id not in pos_cache:
+                _, pos, _ = ring_display_info(proj, entity_id)
+                pos_cache[entity_id] = pos
+            return pos_cache[entity_id]
+
+        findings: list[StructuralFinding] = []
+        for rel in getattr(proj, "relations", []) or []:
+            if rel.relation_type in CAUSAL_RELATION_TYPES or is_ascending_exception(rel):
+                continue  # ya escala (causal) o ya está marcada
+            source = proj.entity_by_id(rel.source_id)
+            target = proj.entity_by_id(rel.target_id)
+            if source is None or target is None:
+                continue
+            if not self._eligible(source) or not self._eligible(target):
+                continue
+            potency = get_annotated_potency(source)
+            if potency is None or potency < _ASC_MIN_POTENCY:
+                continue  # silencio honesto: sin potencia alta atribuida, no se juzga
+            if _pos(source.id) <= _pos(target.id):
+                continue  # solo bajo→alto (source más abajo que target)
+            finding = self._build_ascending_finding(rel, source, target, potency)
+            if self._is_suppressed(source, finding.fingerprint, current_rev):
+                continue
+            findings.append(finding)
+        return findings
+
+    def _build_ascending_finding(self, rel, source, target, potency: int) -> StructuralFinding:
+        source_name = getattr(source, "name", "") or source.id
+        target_name = getattr(target, "name", "") or target.id
+        rel_type = getattr(rel.relation_type, "value", rel.relation_type)
+        reasons = [
+            f"«{source_name}» (potencial atribuido {potency}/100) está en un anillo inferior "
+            f"al de «{target_name}», unidos por la relación no-causal «{rel_type}».",
+            "Sin marca de excepción, un cambio en el extremo inferior no escala hacia arriba "
+            f"(contrato §16); su potencial sugiere que sí debería ({_DEFAULT_ASC_KIND}).",
+        ]
+        expected = [
+            f"Los cambios en «{source_name}» podrán marcar «Falta regar» ascendentemente "
+            f"la Memoria de «{target_name}» (y de su cadena causal)."
+        ]
+        proposed = {
+            "kind": "ascending_exception",
+            "relation_id": rel.id,
+            "source_entity_id": source.id,
+            "target_entity_id": target.id,
+            "exception_kind": _DEFAULT_ASC_KIND,
+            "reasons": reasons,
+            "expected_consequences": expected,
+        }
+        confidence = round(min(1.0, _MIN_CONFIDENCE + (potency - _ASC_MIN_POTENCY) * 0.01), 3)
+        return StructuralFinding(
+            kind="ascending_exception",
+            target_id=source.id,
+            proposed_data=proposed,
+            confidence=confidence,
+            fingerprint=f"ascending_exception:{source.id}:{rel.id}",
+            title=f"Excepción ascendente: «{source_name}» ⇗ «{target_name}»",
+        )
 
     @staticmethod
     def _expected_position(potency: int, n: int) -> int:

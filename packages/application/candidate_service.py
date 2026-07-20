@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application.causal_potency import set_ascending_exception
 from packages.application.project_chronology_service import ProjectChronologyService
 from packages.application.world_layer_causal import set_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
@@ -320,7 +321,12 @@ class CandidateService:
                             source_id=container.id, target_id=entity_id,
                             relation_type="contiene", data={},
                         )
-        elif c.candidate_type == CandidateType.RELACION:
+        elif (
+            c.candidate_type == CandidateType.RELACION
+            and c.proposed_data.get("kind") != "ascending_exception"
+        ):
+            # (la guarda deja pasar las propuestas ESTRUCTURALES sobre una relación
+            # existente — kind="ascending_exception" — a su rama por kind, más abajo)
             if not self.relation_service:
                 return Error("RelationService not available")
             # Resolve endpoints: prefer direct IDs, fall back to name lookup
@@ -437,6 +443,21 @@ class CandidateService:
             proj.value.world_layers = [wl for wl in layers if wl.id != src]
             if hasattr(proj.value, "touch"):
                 proj.value.touch()
+        elif c.proposed_data.get("kind") == "ascending_exception":
+            # BETA2-STRUCT-05: marca la relación como excepción ascendente (§16). Al
+            # aceptar, el impacto se propaga a AMBOS extremos vía ("relation", id) en
+            # el bloque to_propagate (edited_stamp), como cualquier relación editada.
+            data = c.proposed_data
+            rel_id = str(data.get("relation_id") or "")
+            rel = next((r for r in proj.value.relations if r.id == rel_id), None)
+            if rel is None:
+                return Error("Propuesta de excepción ascendente sin relación existente")
+            set_ascending_exception(rel, str(data.get("exception_kind") or "apalancamiento"))
+            if hasattr(rel, "touch"):
+                rel.touch()
+            if hasattr(proj.value, "touch"):
+                proj.value.touch()
+            edited_stamp = {"edited_relation_id": rel_id}
         elif c.proposed_data.get("kind") == "project_chronology_suggestion":
             result = ProjectChronologyService(self.project_service).apply_candidate(c.proposed_data)
             if isinstance(result, Error):
