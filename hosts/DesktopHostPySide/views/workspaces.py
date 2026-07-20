@@ -1732,6 +1732,8 @@ class CreationWorkspace(QWidget):
         # Reutiliza los mismos handlers que el Mapa (RingPanel en el cajón).
         self.foco.ringEditRequested.connect(self._open_ring_edit_panel)
         self.foco.ringCreateRequested.connect(self._open_ring_create_panel)
+        # SHIP-02: el CTA del estado vacío de Foco usa el mismo flujo que el del Mapa.
+        self.foco.createFirstRequested.connect(self._create_entity_on_graph)
         layout.addWidget(self.foco, 1)
 
         # BETA2-PLAY: modo Play — la creación cronológica como experiencia

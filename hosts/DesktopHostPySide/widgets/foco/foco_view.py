@@ -203,6 +203,7 @@ class FocoView(QWidget):
     # ringCreateRequested no lleva argumento (botón «Crear anillo» del rail).
     ringEditRequested = Signal(str)  # noqa: N815 — convención Qt de señales
     ringCreateRequested = Signal()  # noqa: N815 — convención Qt de señales
+    createFirstRequested = Signal()  # noqa: N815 — SHIP-02: CTA del estado vacío
 
     def __init__(
         self,
@@ -299,10 +300,13 @@ class FocoView(QWidget):
         self._bottom_sheet = FocoBottomSheet(self)
         self._bottom_sheet.hide()
         self._adjacent_card = self._build_adjacent_card()
+        # SHIP-02: el vacío INVITA — mismo flujo de creación que el CTA del Mapa.
         self._empty = EmptyState(
             "Crea tu primera entidad",
             "El jardín está vacío. Planta la primera entidad con la herramienta "
             "de creación y empieza a cultivarla.",
+            action_text="Crear primera entidad",
+            on_action=self.createFirstRequested.emit,
         )
         self._empty.setParent(self)
         self._empty.hide()

@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QPropertyAnimation, QEasingCurve, QPointF, QSize, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
@@ -578,6 +579,9 @@ class QuietIconButton(QPushButton):
             )
         if icon_name:
             icons.set_button_icon(self, icon_name, color=INK_SOFT, size=18 if icon_only else 16)
+            # SHIP-02: set_button_icon limpia el texto; un botón con etiqueta la conserva.
+            if not icon_only and label:
+                self.setText(label)
 
 
 class _BranchLine(QFrame):
@@ -641,7 +645,20 @@ class HomeView(QWidget):
         title_box.addWidget(self._status_label)
         # PA02: el botón "Continuar con X" se eliminó — el último proyecto se
         # auto-carga al arrancar, así que es redundante.
+        # SHIP-02: recientes visibles — ctx.recent_projects se persistía pero no se
+        # mostraba; cambiar de proyecto exigía encontrar el panel de proyecto.
+        self._recents_title = QLabel("Proyectos recientes")
+        self._recents_title.setStyleSheet(
+            f"font-size: 11px; font-weight: 700; color: {INK_MUTED}; letter-spacing: 1px; "
+            f"background: transparent; border: none; margin-top: 10px;"
+        )
+        self._recents_title.setVisible(False)
+        title_box.addWidget(self._recents_title)
+        self._recents_layout = QVBoxLayout()
+        self._recents_layout.setSpacing(2)
+        title_box.addLayout(self._recents_layout)
         layout.addLayout(title_box)
+        self.refresh_recents()
 
         # Advanced indicator (kept from original, hidden by default)
         self._advanced_indicator = Badge("Avanzado", "warning")
@@ -690,7 +707,10 @@ class HomeView(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
 
-        self._btn_config = QuietIconButton(icon_only=True, icon_name="settings")
+        # SHIP-02: acciones primarias CON etiqueta — los iconos sueltos eran
+        # indescubribles para un usuario nuevo.
+        self._btn_config = QuietIconButton(label="Ajustes", icon_name="settings")
+        self._btn_config.setToolTip("Apariencia, proveedor de IA y preferencias")
         self._btn_config.clicked.connect(lambda: self._action("config_menu"))
         bottom_row.addWidget(self._btn_config)
 
@@ -705,7 +725,8 @@ class HomeView(QWidget):
 
         bottom_row.addStretch(1)
 
-        self._btn_project = QuietIconButton(icon_only=True, icon_name="project")
+        self._btn_project = QuietIconButton(label="Nuevo / abrir proyecto", icon_name="project")
+        self._btn_project.setToolTip("Crear un proyecto nuevo o abrir uno existente")
         self._btn_project.clicked.connect(lambda: self._action("project_menu"))
         bottom_row.addWidget(self._btn_project)
 
@@ -763,6 +784,32 @@ class HomeView(QWidget):
 
     def register_callback(self, name: str, callback: Callable):
         self._callbacks[name] = callback
+
+    def refresh_recents(self) -> None:
+        """SHIP-02: repuebla la lista de proyectos recientes (hasta 5, solo existentes)."""
+        while self._recents_layout.count():
+            item = self._recents_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        recents = [p for p in (self.ctx.recent_projects or []) if Path(p).exists()][:5]
+        self._recents_title.setVisible(bool(recents))
+        for path in recents:
+            btn = QPushButton(f"↳ {Path(path).stem}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(path)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; text-align: left; "
+                f"color: {INK_SOFT}; font-size: 13px; padding: 2px 0px; }} "
+                f"QPushButton:hover {{ color: {INK_STRONG}; text-decoration: underline; }}"
+            )
+            btn.clicked.connect(lambda _=False, p=path: self._open_recent(p))
+            self._recents_layout.addWidget(btn)
+
+    def _open_recent(self, path: str) -> None:
+        cb = self._callbacks.get("open_recent")
+        if cb:
+            cb(path)
 
     def set_advanced_mode(self, enabled: bool):
         # T05: Always hidden from UI — advanced mode kept internal only

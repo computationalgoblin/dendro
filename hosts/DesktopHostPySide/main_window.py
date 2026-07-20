@@ -147,6 +147,8 @@ class MainWindow(QMainWindow):
         # BETA1-A01: navigate_gallery / navigate_session removed from wiring
         self.home_view.register_callback("project_menu", self._open_project_panel)
         self.home_view.register_callback("config_menu", self._open_config_panel)
+        # SHIP-02: los recientes del Home abren el proyecto por ruta a un clic.
+        self.home_view.register_callback("open_recent", self._open_project_path)
         # BETA2-MEM-10: visor editorial de Memoria (función de proyecto).
         self.home_view.register_callback("memory_menu", self._open_memory_panel)
         self.home_view.register_callback("new_project", self._new_project)
@@ -430,34 +432,39 @@ class MainWindow(QMainWindow):
 
     def _refresh_recent_project_option(self):
         # PA02: el botón "Continuar con X" se eliminó (el último proyecto se
-        # auto-carga al arrancar). Este método ahora solo limpia recientes si la
-        # ruta guardada ya no existe.
+        # auto-carga al arrancar). Limpia recientes muertos y repuebla la lista
+        # del Home (SHIP-02).
         path = self.ctx.last_project_path
         if path and not Path(path).exists():
             self.ctx.forget_missing_project(path)
+        if hasattr(self, "home_view"):
+            self.home_view.refresh_recents()
 
     def _open_last_project(self):
         _apptrace(f"UI open_last_project path={self.ctx.last_project_path!r}")
-        path = self.ctx.last_project_path
+        self._open_project_path(self.ctx.last_project_path)
+
+    def _open_project_path(self, path: str):
+        """SHIP-02: abre un proyecto por ruta (auto-carga y recientes del Home)."""
         if not path:
             self._refresh_recent_project_option()
             return
         if not Path(path).exists():
-            self.log_msg("El último proyecto ya no existe; se ha quitado de recientes")
+            self.log_msg("El proyecto ya no existe; se ha quitado de recientes")
             self.ctx.forget_missing_project(path)
             self._refresh_recent_project_option()
             return
         try:
             result = self.controller.open(path)
             if isinstance(result, Error):
-                self.log_msg(f"Error abriendo último proyecto: {result.error}")
+                self.log_msg(f"Error abriendo proyecto: {result.error}")
                 return
             self.ctx.remember_project(path)
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
             self._refresh_all_views()
             self._refresh_recent_project_option()
         except Exception as exc:
-            self.log_msg(f"Error abriendo último proyecto: {exc}")
+            self.log_msg(f"Error abriendo proyecto: {exc}")
 
     def _open_project_panel(self):
         _apptrace("UI open_project_panel")
