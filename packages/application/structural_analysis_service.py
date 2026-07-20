@@ -1,9 +1,11 @@
 """BETA2-STRUCT: análisis estructural determinista del proyecto.
 
 Emite hallazgos ``ring_move`` cuando el **potencial de propagación causal ATRIBUIDO** a una
-entidad no cuadra con su anillo actual, y ``ascending_exception`` (Fase 2, STRUCT-05) cuando
+entidad no cuadra con su anillo actual, ``ascending_exception`` (Fase 2, STRUCT-05) cuando
 una relación no-causal bajo→alto con extremo inferior de potencia alta debería poder escalar
-(§16). Determinista, coste IA cero, ``Result``-based. La mitad
+(§16), y ``branch_move`` (Fase 3, STRUCT-06) cuando la potencia AGREGADA de una rama con
+contenido no cuadra con su anillo (aceptar arrastra el subárbol). Determinista, coste IA
+cero, ``Result``-based. La mitad
 de ACEPTACIÓN ya existe (``CandidateService`` + ``build_ring_move_proposal``, BETA2-MEM-08); la
 de GENERACIÓN es este detector. La IA solo enriquece la justificación al abrir (STRUCT-04).
 
@@ -36,7 +38,12 @@ from packages.application.causal_potency import (
     get_annotated_potency,
     is_ascending_exception,
 )
-from packages.application.foco_rings import effective_rank_map, ring_display_info, ring_id_for
+from packages.application.foco_rings import (
+    contained_descendant_ids,
+    effective_rank_map,
+    ring_display_info,
+    ring_id_for,
+)
 from packages.application.narrative_impact_service import CAUSAL_RELATION_TYPES
 from packages.application.world_layer_causal import get_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateType
@@ -96,7 +103,7 @@ _STRUCTURE_SYSTEM = (
 class StructuralFinding:
     """Hallazgo estructural revisable (efímero; se deriva en lectura, no se persiste)."""
 
-    kind: str  # "ring_move" (Fase 1) | "ascending_exception" (Fase 2, STRUCT-05)
+    kind: str  # ring_move (F1) | ascending_exception (F2, STRUCT-05) | branch_move (F3, STRUCT-06)
     target_id: str  # entidad afectada (en ascending_exception: el extremo INFERIOR)
     proposed_data: dict[str, Any]  # §17, con la forma de build_ring_move_proposal
     confidence: float
@@ -387,6 +394,16 @@ class StructuralAnalysisService:
         current_rev = getattr(proj, "_index_revision", 0)
         findings: list[StructuralFinding] = []
         for entity in entities:
+            if self._is_branch_with_content(proj, entity):
+                # STRUCT-06: una rama CON contenido se juzga como branch_move (mover
+                # arrastrando el subárbol), nunca como ring_move suelto — moverla sola
+                # rompería la contención visual.
+                finding = self._build_branch_finding(proj, entity, n)
+                if finding is not None and not self._is_suppressed(
+                    entity, finding.fingerprint, current_rev
+                ):
+                    findings.append(finding)
+                continue
             potency = get_annotated_potency(entity)
             if potency is None:
                 continue  # silencio honesto: sin métrica atribuida por la IA, no se juzga
@@ -486,6 +503,84 @@ class StructuralAnalysisService:
             confidence=confidence,
             fingerprint=f"ascending_exception:{source.id}:{rel.id}",
             title=f"Excepción ascendente: «{source_name}» ⇗ «{target_name}»",
+        )
+
+    # ── branch_move (STRUCT-06) ─────────────────────────────────────────
+
+    @staticmethod
+    def _is_branch_with_content(proj, entity) -> bool:
+        etype = getattr(getattr(entity, "entity_type", None), "value", "")
+        return etype == "contenedor" and bool(contained_descendant_ids(proj, entity.id))
+
+    def _build_branch_finding(self, proj, container, n: int) -> StructuralFinding | None:
+        """Hallazgo ``branch_move``: la potencia AGREGADA de la rama no cuadra con su anillo.
+
+        Agregado = media de las potencias ATRIBUIDAS de la rama y su contenido transitivo
+        (silencio honesto: sin ninguna potencia atribuida en el subárbol, no se juzga).
+        Aceptar mueve el contenedor Y su contenido (cierre en application, no en la UI).
+        """
+        member_ids = contained_descendant_ids(proj, container.id)
+        values: list[int] = []
+        own = get_annotated_potency(container)
+        if own is not None:
+            values.append(own)
+        for member_id in member_ids:
+            member = proj.entity_by_id(member_id)
+            if member is None:
+                continue
+            pot = get_annotated_potency(member)
+            if pot is not None:
+                values.append(pot)
+        if not values:
+            return None  # silencio honesto para toda la rama
+        aggregate = round(sum(values) / len(values))
+        target_pos = self._expected_position(aggregate, n)
+        _, current_pos, _ = ring_display_info(proj, container.id)
+        current_ring_id = ring_id_for(proj, container.id) or ""
+        rank_map = effective_rank_map(list(getattr(proj, "world_layers", []) or []))
+        target_ring_id = next(
+            (lid for lid, pos in rank_map.items() if pos == target_pos), None
+        )
+        if not target_ring_id or str(target_ring_id) == str(current_ring_id):
+            return None
+        gap = abs(target_pos - current_pos)
+        if gap < _MIN_GAP:
+            return None
+        confidence = self._confidence(gap)
+        if confidence < _MIN_CONFIDENCE:
+            return None
+        name = getattr(container, "name", "") or container.id
+        current_name = self._ring_name(proj, current_ring_id) if current_ring_id else "Sin anillo"
+        target_name = self._ring_name(proj, target_ring_id)
+        reasons = [
+            f"La rama «{name}» y su contenido ({len(member_ids)} elemento(s)) tienen una "
+            f"potencialidad causal agregada de {aggregate}/100 "
+            f"(sobre {len(values)} valor(es) atribuido(s)).",
+            f"Ese potencial corresponde al anillo «{target_name}» (banda {target_pos}/{n}), "
+            f"pero la rama está en «{current_name}» (posición {current_pos}).",
+        ]
+        expected = self._expected_consequences(proj, container.id, target_ring_id)
+        expected.append(
+            f"Se moverán también los {len(member_ids)} elemento(s) contenidos (transitivo)."
+        )
+        proposed = {
+            "kind": "branch_move",
+            "entity_id": container.id,
+            "current_ring_id": current_ring_id,
+            "target_ring_id": target_ring_id,
+            "member_ids": member_ids,
+            "reasons": reasons,
+            "expected_consequences": expected,
+        }
+        return StructuralFinding(
+            kind="branch_move",
+            target_id=container.id,
+            proposed_data=proposed,
+            confidence=confidence,
+            fingerprint=f"branch_move:{container.id}:{current_ring_id}->{target_ring_id}",
+            title=(
+                f"Reubicar rama «{name}» (+{len(member_ids)}): {current_name} → {target_name}"
+            ),
         )
 
     @staticmethod

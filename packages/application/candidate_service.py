@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from packages.application.causal_potency import set_ascending_exception
+from packages.application.foco_rings import contained_descendant_ids
 from packages.application.project_chronology_service import ProjectChronologyService
 from packages.application.world_layer_causal import set_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
@@ -418,6 +419,37 @@ class CandidateService:
                 moved.touch()
                 if hasattr(proj.value, "touch"):
                     proj.value.touch()
+            entity_id = move_id  # dispara impacto (marca dependientes Falta regar)
+        elif c.proposed_data.get("kind") == "branch_move":
+            # BETA2-STRUCT-06: mueve una RAMA de anillo arrastrando su contenido
+            # transitivo (cierre en application: foco_rings.contained_descendant_ids,
+            # no la UI). Mismo swap de layer_ids que ring_move, por cada elemento.
+            data = c.proposed_data
+            move_id = str(data.get("entity_id") or "")
+            target_ring_id = str(data.get("target_ring_id") or "")
+            container = proj.value.entity_by_id(move_id) if move_id else None
+            if container is None or not target_ring_id:
+                return Error("Propuesta de mover-rama sin contenedor o anillo destino")
+            world_ids = {wl.id for wl in getattr(proj.value, "world_layers", []) or []}
+            subtree = [container] + [
+                ent
+                for did in contained_descendant_ids(proj.value, move_id)
+                if (ent := proj.value.entity_by_id(did)) is not None
+            ]
+            for ent in subtree:
+                preserved = [lid for lid in (ent.layer_ids or []) if lid not in world_ids]
+                new_layers = preserved + [target_ring_id]
+                if self.entity_service is not None:
+                    applied = self.entity_service.update_entity(
+                        ent.id, {"layer_ids": new_layers}
+                    )
+                    if isinstance(applied, Error):
+                        return applied
+                else:
+                    ent.layer_ids = new_layers
+                    ent.touch()
+            if self.entity_service is None and hasattr(proj.value, "touch"):
+                proj.value.touch()
             entity_id = move_id  # dispara impacto (marca dependientes Falta regar)
         elif c.proposed_data.get("kind") == "ring_merge":
             # BETA2-STRUCT-07: fusión de anillos — reasigna los miembros del anillo ORIGEN

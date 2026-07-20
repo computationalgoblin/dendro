@@ -241,6 +241,30 @@ def branch_members(project: Project, container_id: str) -> list[str]:
     return sorted(dict.fromkeys(ids), key=_name_key)
 
 
+def contained_descendant_ids(project: Project, container_id: str) -> list[str]:
+    """BETA2-STRUCT-06: cierre transitivo DESCENDENTE de la contención de una rama.
+
+    Ids de TODO el contenido de ``container_id`` (miembros y sub-miembros, todos
+    los niveles), en orden DFS estable, sin el propio contenedor y con guard de
+    ciclos. Es la primitiva de application que usa la aceptación ``branch_move``
+    para mover una rama CON su contenido (este cierre vivía solo en la UI:
+    ``workspaces._contained_descendant_ids``).
+    """
+    ordered: list[str] = []
+    seen: set[str] = {container_id}
+
+    def _visit(current: str) -> None:
+        for member_id in _branch_member_ids(project, current):
+            if not member_id or member_id in seen:
+                continue
+            seen.add(member_id)
+            ordered.append(member_id)
+            _visit(member_id)
+
+    _visit(container_id)
+    return ordered
+
+
 def _containment_related(project: Project, entity_id: str) -> set[str]:
     """Cierre transitivo de la contención alrededor de ``entity_id``.
 

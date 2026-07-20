@@ -20,13 +20,14 @@ from packages.application.causal_potency import (
     set_basal_potency,
 )
 from packages.application.entity_service import EntityService
+from packages.application.foco_rings import contained_descendant_ids
 from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.narrative_memory_service import NarrativeMemoryService
 from packages.application.relation_service import RelationService
 from packages.application.structural_analysis_service import StructuralAnalysisService
 from packages.application.world_layer_causal import set_causal_rank
 from packages.domain.candidate_issue import CandidateType
-from packages.domain.entity import NarrativeEntity
+from packages.domain.entity import EntityType, NarrativeEntity
 from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
 from packages.domain.project import Project
 from packages.domain.relation import NarrativeRelation, RelationType
@@ -370,6 +371,93 @@ def test_ascending_accept_propagates_impact_to_both_ends():
     for eid in ("sierva", "reina"):
         freshness = mem.get_memory(MemoryTargetKind.ENTITY, eid).value.freshness
         assert freshness == MemoryFreshness.FALTA_REGAR
+
+
+# ── branch_move (STRUCT-06): mover ramas con su contenido ──────────────────
+
+
+def _add_branch(p: Project, eid: str, ring_id: str, potency: int | None = None):
+    e = _add(p, eid, ring_id, potency)
+    e.entity_type = EntityType.CONTENEDOR
+    return e
+
+
+def _contain(p: Project, rid: str, container: str, member: str) -> None:
+    _relate(p, rid, container, member, RelationType.CONTIENE)
+
+
+@pytest.mark.application
+def test_contained_descendant_ids_transitive_with_cycle_guard():
+    p, rings = _project()
+    _add_branch(p, "rama", rings[2])
+    _add(p, "hijo", rings[2])
+    _add(p, "nieto", rings[2])
+    _contain(p, "c1", "rama", "hijo")
+    _contain(p, "c2", "hijo", "nieto")
+    _contain(p, "c3", "nieto", "rama")  # ciclo mal formado: no debe colgar
+    assert contained_descendant_ids(p, "rama") == ["hijo", "nieto"]
+
+
+@pytest.mark.application
+def test_branch_with_content_yields_branch_move_not_ring_move():
+    p, rings = _project()
+    _add_branch(p, "guerra", rings[2], potency=95)  # rama potente en el anillo exterior
+    _add(p, "batalla", rings[2], potency=85)
+    _contain(p, "c1", "guerra", "batalla")
+    findings = _svc(p).analyze().value
+    branch = [f for f in findings if f.kind == "branch_move"]
+    assert len(branch) == 1
+    f = branch[0]
+    assert f.target_id == "guerra"
+    assert f.proposed_data["member_ids"] == ["batalla"]
+    assert f.proposed_data["target_ring_id"] == rings[0]  # agregada 90 → aguas-arriba
+    # la rama NO aparece además como ring_move suelto (rompería la contención)
+    assert all(x.target_id != "guerra" for x in findings if x.kind == "ring_move")
+
+
+@pytest.mark.application
+def test_branch_without_any_annotated_potency_is_silent():
+    p, rings = _project()
+    _add_branch(p, "rama", rings[2])
+    _add(p, "hijo", rings[2])
+    _contain(p, "c1", "rama", "hijo")
+    assert [f for f in _svc(p).analyze().value if f.kind == "branch_move"] == []
+
+
+@pytest.mark.application
+def test_branch_aggregate_uses_member_potencies_when_container_unannotated():
+    p, rings = _project()
+    _add_branch(p, "rama", rings[2])  # sin potencia propia
+    _add(p, "evento", rings[2], potency=90)
+    _contain(p, "c1", "rama", "evento")
+    branch = [f for f in _svc(p).analyze().value if f.kind == "branch_move"]
+    assert len(branch) == 1
+    assert branch[0].proposed_data["target_ring_id"] == rings[0]
+
+
+@pytest.mark.application
+def test_branch_move_accept_moves_container_and_subtree():
+    p, rings = _project()
+    _add_branch(p, "guerra", rings[2], potency=95)
+    _add(p, "batalla", rings[2], potency=85)
+    _add(p, "escaramuza", rings[2])
+    _contain(p, "c1", "guerra", "batalla")
+    _contain(p, "c2", "batalla", "escaramuza")
+    ps = _FakeProjectService(active_project=p)
+    svc = StructuralAnalysisService(ps)
+    f = [x for x in svc.analyze().value if x.kind == "branch_move"][0]
+    cand = svc.as_candidate(f)
+    assert cand.candidate_type == CandidateType.ANILLO
+    p.candidates.append(cand)
+    cs = CandidateService(
+        project_service=ps,
+        entity_service=EntityService(ps),
+        relation_service=RelationService(ps),
+    )
+    res = cs.accept_candidate(cand.id)
+    assert isinstance(res, Ok)
+    for eid in ("guerra", "batalla", "escaramuza"):
+        assert p.entity_by_id(eid).layer_ids == [rings[0]]  # todo el subárbol movido
 
 
 # ── enriquecimiento IA al abrir (provider-optional) ────────────────────────
