@@ -144,6 +144,17 @@ class PhysicsEngine:
                 body.vx += math.cos(angle) * 0.8
                 body.vy += math.sin(angle) * 0.8
 
+    def apply_breeze(self, angle: float, strength: float = 0.6):
+        """BETA2-PULIDO-07: ráfaga suave direccional — agita los cuerpos vivos
+        con variación determinista por índice (no se mecen al unísono). Los
+        ``pinned`` (sedientas/secadas del jardín, drags) quedan clavados."""
+        for index, body in enumerate(self.bodies.values()):
+            if body.pinned:
+                continue
+            jitter = 0.7 + 0.3 * math.sin(index * 2.399963)
+            body.vx += math.cos(angle) * strength * jitter
+            body.vy += math.sin(angle) * strength * jitter
+
     # ── simulación ───────────────────────────────────────────────────────
 
     def step(self, dt: float = 1.0) -> float:

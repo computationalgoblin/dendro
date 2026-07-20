@@ -19,18 +19,18 @@ def _read(rel_path: str) -> str:
 
 
 def test_detail_panels_do_not_keep_removed_causal_controls():
+    # BETA2-CLEANUP-PANELES: tree_detail_panel.py se eliminó (edición de ramas
+    # en Foco vía NodeDetailPanel variant="foco").
     node_panel = _read("hosts/DesktopHostPySide/widgets/node_detail_panel.py")
-    tree_panel = _read("hosts/DesktopHostPySide/widgets/tree_detail_panel.py")
     relation_panel = _read("hosts/DesktopHostPySide/widgets/relation_detail_panel.py")
 
-    for text in (node_panel, tree_panel, relation_panel):
+    for text in (node_panel, relation_panel):
         assert "Destino causal" not in text
         assert "Expandir hacia anillo inferior" not in text
         assert "Explicar desde causas superiores" not in text
         assert "_refresh_target_layer_combo" not in text
 
     assert "self.layer_combo" in node_panel
-    assert "self.layer_combo" in tree_panel
 
 
 def test_unmounted_technical_boxes_are_parented_and_never_shown():
@@ -53,7 +53,6 @@ def test_refreshing_detail_panels_does_not_spawn_top_level_popouts():
     from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
     from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
     from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
-    from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
     from packages.application.project_service import ProjectService
     from packages.application.world_layer_service import WorldLayerService
     from packages.domain.result import Ok
@@ -90,7 +89,9 @@ def test_refreshing_detail_panels_does_not_spawn_top_level_popouts():
 
     cases = [
         ("leaf", lambda: NodeDetailPanel(ctx, entity_controller, leaf.id)),
-        ("branch", lambda: TreeDetailPanel(ctx, entity_controller, relation_controller, branch.id)),
+        # BETA2-CLEANUP-PANELES: las ramas se editan con NodeDetailPanel (Foco),
+        # ya no con el retirado TreeDetailPanel.
+        ("branch", lambda: NodeDetailPanel(ctx, entity_controller, branch.id, variant="foco")),
         ("relation", lambda: RelationDetailPanel(ctx, relation_controller, relation.id)),
     ]
     for label, factory in cases:

@@ -133,7 +133,10 @@ class CalendarDatePicker(QWidget):
     def set_calendar(self, metadata: dict[str, Any] | None) -> None:
         self._metadata = dict(metadata or {})
         mode = str(self._metadata.get("mode") or "")
-        self.setEnabled(mode == "full_calendar")
+        # BETA2-CAL: habilita si hay calendario exacto (meses definidos), no solo por el
+        # nombre del modo — el modo se deriva de la presencia de meses+semana.
+        has_months = bool(_str_list(self._metadata.get("months")))
+        self.setEnabled(mode == "full_calendar" or has_months)
         eras = _str_list(self._metadata.get("eras") or self._metadata.get("past_eras")) or ["Actualidad"]
         months = _str_list(self._metadata.get("months")) or list(DEFAULT_MONTHS)
         weekdays = _str_list(self._metadata.get("weekdays")) or list(DEFAULT_WEEKDAYS)
@@ -216,7 +219,9 @@ class CalendarDatePicker(QWidget):
         selected = min(max(1, int(day if day is not None else getattr(self, "_selected_day", 1))), max_day)
         self._selected_day = selected
         self._clear_grid()
-        for column, weekday in enumerate(self._weekdays[:7]):
+        # BETA2-CAL: semana de longitud arbitraria (no gregoriana fija de 7).
+        week_len = len(self._weekdays) or 7
+        for column, weekday in enumerate(self._weekdays[:week_len]):
             label = QLabel(str(weekday)[:3])
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setObjectName("mutedLabel")
@@ -230,7 +235,7 @@ class CalendarDatePicker(QWidget):
             button.setFixedSize(30 if self.compact else 34, 26 if self.compact else 30)
             button.clicked.connect(lambda _=False, value=day_number: self._select_day(value))
             self._buttons.append(button)
-            self.grid.addWidget(button, 1 + index // 7, index % 7)
+            self.grid.addWidget(button, 1 + index // week_len, index % week_len)
         self._update_summary()
         self._emit_changed()
 

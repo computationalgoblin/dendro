@@ -10,11 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 # Current schema version for new projects
-# (v34: BETA2-FOCO-16 — canon total: borrador → canonico en entidades y relaciones)
-CURRENT_SCHEMA_VERSION: int = 34
+# (v39: BETA2-WIKI-02 — página de wiki: NarrativeMemory gana cuerpo/wikilinks/tags)
+CURRENT_SCHEMA_VERSION: int = 39
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 34
+MAX_SUPPORTED_VERSION: int = 39
 
 
 # ---------------------------------------------------------------------------
@@ -1242,6 +1242,196 @@ def _apply_migration_v33_to_v34(data: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _v35_int(value: Any, default: int) -> int:
+    try:
+        if isinstance(value, bool):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _v35_has_real_eras(eras: Any) -> bool:
+    """Una sola era ABIERTA ("Presente") no cuenta como real (contrato chrono_canvas)."""
+    if not isinstance(eras, list) or not eras:
+        return False
+    if len(eras) > 1:
+        return True
+    first = eras[0]
+    return isinstance(first, dict) and first.get("end_year") is not None
+
+
+def _v35_durations(metadata: dict[str, Any]) -> list[tuple[str, int]]:
+    """Deriva ``[(nombre, duración)]`` ordenado desde era_lengths/past_eras/periods."""
+    era_lengths = metadata.get("era_lengths")
+    order = metadata.get("past_eras") or metadata.get("eras") or metadata.get("periods")
+    names = [str(n).strip() for n in order if str(n).strip()] if isinstance(order, list) else []
+    if isinstance(era_lengths, dict) and era_lengths:
+        if not names:
+            names = [str(n).strip() for n in era_lengths.keys() if str(n).strip()]
+        return [(name, max(1, _v35_int(era_lengths.get(name, 1), 1))) for name in names]
+    if names:
+        return [(name, 1) for name in names]
+    return []
+
+
+def _v35_chain_eras(durations: list[tuple[str, int]]) -> list[dict[str, Any]]:
+    """Encadena eras: start = suma previa; todas cerradas salvo la última (abierta)."""
+    from packages.domain.era import Era
+
+    eras: list[dict[str, Any]] = []
+    cursor = 0
+    for index, (name, duration) in enumerate(durations):
+        is_last = index == len(durations) - 1
+        start = cursor
+        end = None if is_last else start + duration - 1
+        eras.append(Era(name=name, start_year=start, end_year=end, order=index).to_dict())
+        cursor += duration
+    return eras
+
+
+def _v35_present_abs(
+    chronology: dict[str, Any],
+    metadata: dict[str, Any],
+    durations: list[tuple[str, int]],
+) -> int:
+    """Deriva el present_year absoluto priorizando current_date (era + año regnal)."""
+    current_date = metadata.get("current_date")
+    if isinstance(current_date, dict):
+        era_name = str(current_date.get("era", "")).strip()
+        year_within = _v35_int(current_date.get("year"), 1)
+        cursor = 0
+        for name, duration in durations:
+            if name == era_name:
+                return cursor + max(0, year_within - 1)
+            cursor += duration
+    existing = chronology.get("present_year")
+    if isinstance(existing, int) and not isinstance(existing, bool) and existing > 0:
+        return existing
+    current_year = metadata.get("current_year")
+    if isinstance(current_year, int) and not isinstance(current_year, bool):
+        return current_year
+    return existing if isinstance(existing, int) and not isinstance(existing, bool) else 0
+
+
+def _apply_migration_v34_to_v35(data: dict[str, Any]) -> dict[str, Any]:
+    """v34 → v35 (BETA2-CAL): calendario unificado por eras encadenadas.
+
+    - Reconstruye eras CANÓNICAS encadenadas desde ``metadata.era_lengths``/periods cuando
+      solo existe la era trivial "Presente" (o ninguna), fijando ``present_year`` coherente.
+    - Normaliza la config de meses/semana bajo ``metadata['calendar']`` con ancla por defecto.
+    - Deja ``mode`` DERIVADO (full_calendar si hay meses+semana; si no vague_periods/none).
+
+    Aditiva y sin pérdida: los proyectos con eras cerradas reales se conservan intactos.
+    """
+    from packages.domain.calendar_math import CalendarConfig
+
+    migrated = dict(data)
+    chronology = migrated.get("project_chronology")
+    if not isinstance(chronology, dict):
+        migrated["schema_version"] = 35
+        return migrated
+    chronology = dict(chronology)
+    metadata = dict(chronology.get("metadata") or {})
+
+    mode = str(metadata.get("mode") or metadata.get("calendar_kind") or "").strip()
+    mode = {
+        "relative": "vague_periods",
+        "narrative": "vague_periods",
+        "custom_calendar": "full_calendar",
+    }.get(mode, mode)
+
+    # 1. Normaliza meses/semana/ancla y deriva el modo.
+    cal = CalendarConfig.from_metadata(metadata)
+    metadata["calendar"] = cal.to_metadata()
+    metadata["week_anchor"] = cal.week_anchor
+    metadata["calendar_configured"] = True
+    durations = _v35_durations(metadata)
+    if cal.supports_exact_dates():
+        new_mode = "full_calendar"
+    elif mode in {"none", ""} and not durations:
+        new_mode = "none"
+    else:
+        new_mode = "vague_periods"
+    metadata["mode"] = new_mode
+    metadata["calendar_kind"] = new_mode
+
+    # 2. Reconstruye eras canónicas si solo existe la trivial.
+    if durations and not _v35_has_real_eras(chronology.get("eras")):
+        chronology["eras"] = _v35_chain_eras(durations)
+        chronology["present_year"] = _v35_present_abs(chronology, metadata, durations)
+
+    chronology["metadata"] = metadata
+    migrated["project_chronology"] = chronology
+    migrated["schema_version"] = 35
+    return migrated
+
+
+def _apply_migration_v35_to_v36(data: dict[str, Any]) -> dict[str, Any]:
+    """v35 → v36 (BETA2-SUB-01): subhitos — contención temporal entre hitos.
+
+    Aditiva y sin pérdida: asegura la clave ``parent_milestone_id`` (None) en
+    cada hito causal, para que los proyectos antiguos carguen con hitos de
+    primer nivel (ningún subhito preexistente).
+    """
+    migrated = dict(data)
+    hitos = migrated.get("causal_milestones")
+    if isinstance(hitos, list):
+        migrated["causal_milestones"] = [
+            {**h, "parent_milestone_id": h.get("parent_milestone_id")}
+            if isinstance(h, dict)
+            else h
+            for h in hitos
+        ]
+    migrated["schema_version"] = 36
+    return migrated
+
+
+def _apply_migration_v36_to_v37(data: dict[str, Any]) -> dict[str, Any]:
+    """v36 → v37 (BETA2-MEM-02): memoria narrativa viva.
+
+    Aditiva y sin pérdida: asegura la colección ``narrative_memories`` (lista
+    vacía). **No autogenera memoria** para proyectos existentes — quedan en
+    estado *Sin memoria* hasta que el usuario Regue o regenere desde
+    Configuración (contrato ``memoria_narrativa.md`` §20).
+    """
+    migrated = dict(data)
+    if not isinstance(migrated.get("narrative_memories"), list):
+        migrated["narrative_memories"] = []
+    migrated["schema_version"] = 37
+    return migrated
+
+
+def _apply_migration_v37_to_v38(data: dict[str, Any]) -> dict[str, Any]:
+    """v37 → v38 (BETA2-MEM-03): @menciones estructuradas.
+
+    Aditiva y sin pérdida: asegura la colección ``structured_references`` (lista
+    vacía). Las referencias se derivan de las @menciones al guardar; no se
+    generan en migración para proyectos existentes.
+    """
+    migrated = dict(data)
+    if not isinstance(migrated.get("structured_references"), list):
+        migrated["structured_references"] = []
+    migrated["schema_version"] = 38
+    return migrated
+
+
+def _apply_migration_v38_to_v39(data: dict[str, Any]) -> dict[str, Any]:
+    """v38 → v39 (BETA2-WIKI-02): la Memoria pasa a ser página de wiki.
+
+    Aditiva y sin pérdida: ``NarrativeMemory`` gana ``cuerpo``/``wikilinks``/``tags``.
+    Los nuevos campos son tolerantes en ``NarrativeMemory.from_dict`` (defaultean a
+    cadena/lista vacía), así que basta con bumpear la versión y asegurar la colección.
+    **No autogenera** cuerpos para proyectos existentes: las páginas quedan con
+    ``cuerpo=""`` hasta el próximo Regar (contrato ``wiki_memoria.md`` §10).
+    """
+    migrated = dict(data)
+    if not isinstance(migrated.get("narrative_memories"), list):
+        migrated["narrative_memories"] = []
+    migrated["schema_version"] = 39
+    return migrated
+
+
 # Structural validation
 # ---------------------------------------------------------------------------
 
@@ -1289,6 +1479,10 @@ def validate_project_structure(data: dict[str, Any]) -> str | None:
         "factions", "fronts",
         "sessions", "saved_graph_views", "causal_milestones",
         "chronology_walk_sessions", "chronology_walk_reports",
+        # Memoria narrativa viva (BETA2-MEM)
+        "narrative_memories",
+        # @menciones estructuradas (BETA2-MEM-03)
+        "structured_references",
     )
     for field in collection_fields:
         if field in data and not isinstance(data[field], list):
@@ -1351,6 +1545,60 @@ def _validate_writing_units(units):
             visited.add(current)
 
     return errors
+
+
+# --- Causal milestone containment validation (BETA2-SUB-01) ---
+
+
+def _validate_causal_milestones(hitos):
+    """Valida la contención temporal de subhitos (``parent_milestone_id``).
+
+    Reglas: el padre debe existir, sin auto-referencia, sin ciclos y de UN
+    solo nivel (el padre de un subhito no puede ser a su vez subhito).
+    Devuelve lista de mensajes de error (vacía = OK).
+    """
+    errors = []
+    if not isinstance(hitos, list):
+        return [f"causal_milestones must be a list, got {type(hitos).__name__}"]
+
+    parent_of = {}
+    for h in hitos:
+        if isinstance(h, dict) and h.get("id"):
+            pid = h.get("parent_milestone_id")
+            parent_of[h["id"]] = pid if isinstance(pid, str) and pid.strip() else None
+
+    for i, h in enumerate(hitos):
+        if not isinstance(h, dict):
+            continue
+        hid = h.get("id")
+        pid = parent_of.get(hid)
+        if pid is None:
+            continue
+        if pid == hid:
+            errors.append(f"causal_milestones[{i}] parent_milestone_id se refiere a sí mismo")
+            continue
+        if pid not in parent_of:
+            errors.append(f"causal_milestones[{i}] parent_milestone_id '{pid}' no existe")
+            continue
+        # 1 nivel: el marco no puede ser a su vez subhito.
+        if parent_of.get(pid) is not None:
+            errors.append(
+                f"causal_milestones[{i}] anidamiento de >1 nivel: el marco '{pid}' ya es subhito"
+            )
+
+    # Detección de ciclos (defensiva, aunque la regla de 1 nivel ya lo impide).
+    for hid in parent_of:
+        visited = set()
+        current = hid
+        while parent_of.get(current) is not None:
+            current = parent_of[current]
+            if current in visited:
+                errors.append(f"causal_milestones ciclo de contención en '{current}'")
+                break
+            visited.add(current)
+
+    return errors
+
 
 # --- Campaign collections structural validation (B20-T02) ---
 

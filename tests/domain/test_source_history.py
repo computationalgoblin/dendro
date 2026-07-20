@@ -24,9 +24,13 @@ class TestSourceState:
 
 
 class TestHistoryEventType:
-    def test_has_20_values(self):
-        # 16 originales (§5.4) + 4 del jardín BETA2-FOCO (riego/secado/cultivo/descarte fantasma).
-        assert len(HistoryEventType) == 20
+    def test_has_26_values(self):
+        # 16 originales (§5.4) + 4 del jardín BETA2-FOCO (riego/secado/cultivo/descarte
+        # fantasma) + 1 de BETA2-PLAY (observación del recorrido cronológico) + 5 de
+        # BETA2-MEM (memoria: actualizada/falta_regar/secada/borrada/propuesta_revision).
+        assert len(HistoryEventType) == 26
+        assert HistoryEventType.OBSERVACION_RECORRIDO.value == "observacion_recorrido"
+        assert HistoryEventType.MEMORIA_ACTUALIZADA.value == "memoria_actualizada"
 
 
 class TestSource:

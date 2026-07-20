@@ -26,7 +26,7 @@ Categorías:
 |---|---|---|
 | `home_view.py` · `HomeView`, `HomeNode`, `QuietIconButton` | RUNTIME | Home BETA 1, solo card Creación |
 | `home_view.py` · `_BranchLine`, método `_branch_line`, tonos `gallery`/`session` en `HomeNode._apply_tone_style` | LEGACY INTERNO | Sin uso tras A01. No cumplen condición de borrado en A03 (decorativos, sin riesgo); borrado propuesto para limpieza post-Fase A |
-| `workspaces.py` · `CreationWorkspace` + paneles (`RingInfoPanel`, `EntityQuickCreatePanel`, `SourceQuickCreatePanel`, `LayerQuickCreatePanel`, `CandidateReviewPanel`, `SuggestionInboxPanel`, `NarrativeWorkbench`, `AIJobsPanel`, `AIJobResultPanel`, `_AIJobWorker`, `CreationSearchPanel`, `CreationFilterPanel`, `_LayerEdgeFlyout`, `CausalMilestonePanel`, `_SuggestWorker`, `_SimpleFormPanel`) | RUNTIME | Núcleo de Creación; incluye integración IA (jobs, sugerencias) |
+| `workspaces.py` · `CreationWorkspace` + paneles (`RingInfoPanel`, `EntityQuickCreatePanel`, `SourceQuickCreatePanel`, `LayerQuickCreatePanel`, `CandidateReviewPanel`, `SuggestionInboxPanel`, `NarrativeWorkbench`, `AIJobsPanel`, `AIJobResultPanel`, `_AIJobWorker`, `_LayerEdgeFlyout`, `CausalMilestonePanel`, `_SuggestWorker`, `_SimpleFormPanel`) | RUNTIME | Núcleo de Creación; incluye integración IA (jobs, sugerencias) |
 | `workspaces.py` · `GalleryWorkspace` | DESCONECTADO (A01) | Sin instanciador desde A01 |
 | `workspaces.py` · `SessionWorkspace`, `SessionPreparationWorkspace`, `SessionOverview` | DESCONECTADO (A01) | `SessionPreparationWorkspace` y `SessionOverview` solo se instancian dentro de `SessionWorkspace` |
 | `corpus_view.py`, `relation_view.py`, `candidate_view.py`, `import_export_view.py`, `source_view.py`, `layer_view.py` | RUNTIME | Consumidas por `CreationWorkspace` |

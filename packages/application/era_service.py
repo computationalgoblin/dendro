@@ -139,6 +139,71 @@ class EraService:
         return Ok(chrono.value.present_year)
 
     # ------------------------------------------------------------------
+    # BETA2-CAL: eras encadenadas por duración
+    # ------------------------------------------------------------------
+
+    def set_eras_from_durations(
+        self,
+        durations: list[tuple[str, int]],
+        present_index: int,
+        present_year_within: int,
+    ) -> Result[int, str]:
+        """Reemplaza las eras por una cadena derivada de ``(nombre, duración)``.
+
+        Las eras se encadenan: ``start`` = suma de duraciones previas; todas cerradas
+        salvo la ÚLTIMA, que queda ABIERTA (``end_year=None``) para preservar la
+        no-atemporalidad. Fija ``present_year`` absoluto a partir de (era + año dentro de
+        la era, estilo regnal) y lo devuelve. Reusa ids/descripciones existentes por
+        posición para no churnear. Contrato G01: siempre ≥1 era.
+        """
+        chrono = self._chronology()
+        if isinstance(chrono, Error):
+            return chrono
+        items = list(durations or [])
+        if not items:
+            return Error("At least one era is required")
+        existing = list(chrono.value.eras)
+        new_eras: list[Era] = []
+        cursor = 0
+        for index, item in enumerate(items):
+            name = str(item[0]).strip()
+            if not name:
+                return Error("Era name cannot be empty")
+            try:
+                duration = int(item[1])
+            except (TypeError, ValueError, IndexError):
+                return Error(f"Invalid duration for era '{name}'")
+            if duration < 1:
+                return Error(f"Era '{name}' duration must be >= 1")
+            is_last = index == len(items) - 1
+            start = cursor
+            end = None if is_last else start + duration - 1
+            if index < len(existing):
+                era = Era(
+                    id=existing[index].id,
+                    name=name,
+                    start_year=start,
+                    end_year=end,
+                    order=index,
+                    description=existing[index].description,
+                )
+            else:
+                era = Era(name=name, start_year=start, end_year=end, order=index)
+            new_eras.append(era)
+            cursor += duration
+        position = min(max(0, int(present_index)), len(new_eras) - 1)
+        present_era = new_eras[position]
+        year_within = max(1, int(present_year_within))
+        if present_era.end_year is not None:
+            span = present_era.end_year - present_era.start_year + 1
+            year_within = min(year_within, span)
+        present_abs = present_era.start_year + (year_within - 1)
+        chrono.value.eras = new_eras
+        chrono.value.present_year = present_abs
+        self._touch()
+        return Ok(present_abs)
+
+    # ------------------------------------------------------------------
     # Derivación
     # ------------------------------------------------------------------
 

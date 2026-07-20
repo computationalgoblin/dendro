@@ -75,6 +75,36 @@ def test_build_layout_milestone_min_gaps_separates_close_years():
     assert dist(wide) >= 220.0          # con reserva, separados ≥ footprint
 
 
+def test_build_layout_milestone_span_maps_end_year():
+    # FOCO-25: un hito con duración (inicio+fin) expone end_year/y_end para que
+    # la vista pinte su franja de lapso; el fin además ancla la escala.
+    from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneStatus
+    from packages.domain.temporal_models import EventTemporality
+
+    proj = _milestone_project([100])
+    proj.causal_milestones = [
+        CausalMilestone(
+            id="h0",
+            title="Guerra larga",
+            year=100,
+            status=CausalMilestoneStatus.CANON,
+            affected_entity_ids=["a"],
+            temporality=EventTemporality(
+                year=100, is_duration=True, duration_value=40, duration_unit="años"
+            ),
+        )
+    ]
+    layout = build_chrono_layout(proj)
+    mark = layout.milestones[0]
+    assert mark.end_year == 140
+    assert mark.y_end is not None and mark.y_end > mark.y
+
+    # Un hito puntual (sin duración) sigue sin fin.
+    proj_point = _milestone_project([100])
+    point_layout = build_chrono_layout(proj_point)
+    assert point_layout.milestones[0].end_year is None
+
+
 def test_build_layout_default_is_unchanged():
     # Sin milestone_min_gaps el layout es idéntico al de siempre (protege la suite).
     proj = _milestone_project([10, 11])

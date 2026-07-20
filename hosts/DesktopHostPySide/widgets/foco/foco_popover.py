@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
     GOLD_SOFT,
+    INK_INVERSE,
     INK_MUTED,
     INK_STRONG,
     LINE_SOFT,
@@ -61,6 +62,26 @@ class Popover(QFrame):
         self.adjustSize()
         top_right = anchor.mapToGlobal(QPoint(anchor.width() + 6, 0))
         self.move(top_right)
+        self.show()
+
+    def open_below(self, anchor: QWidget, *, margin: int = 6) -> None:
+        """BETA2-UI2-10: muestra el popover bajo el ancla, alineado a su borde
+        derecho (para anclas pegadas al lado derecho de un contenedor, como el
+        embudo del pill temporal)."""
+        self.adjustSize()
+        pos = anchor.mapToGlobal(QPoint(anchor.width() - self.width(), anchor.height() + margin))
+        self.move(pos)
+        self.show()
+
+    def open_below_top_center(self, anchor: QWidget, *, margin: int = 10) -> None:
+        """Muestra el popover centrado bajo el borde superior del ancla.
+
+        FOCO-25: la paleta Ctrl+B se abre DENTRO de la app, centrada bajo las
+        píldoras de modo (el ancla es el lienzo, que empieza justo debajo).
+        """
+        self.adjustSize()
+        x_local = max(0, (anchor.width() - self.width()) // 2)
+        self.move(anchor.mapToGlobal(QPoint(x_local, margin)))
         self.show()
 
 
@@ -209,7 +230,7 @@ class QuickCreatePopover(Popover):
         self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.submit_button.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; border: none; border-radius: 10px; "
-            "color: #FCF8EC; font-weight: 600; padding: 6px 12px; }"
+            f"color: {INK_INVERSE}; font-weight: 600; padding: 6px 12px; }}"
         )
         self.submit_button.clicked.connect(self.submit)
         self._layout.addWidget(self.submit_button)

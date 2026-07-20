@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
     GOLD_DEEP,
+    INK_INVERSE,
     INK_MUTED,
     INK_SOFT,
     INK_STRONG,
@@ -75,7 +76,7 @@ class WateringAuthorizePanel(QFrame):
         self.cost_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cost_chip.setStyleSheet(
             f"QLabel {{ background: {_COST_COLORS.get(cost_class, INK_MUTED)}; "
-            "border-radius: 9px; padding: 2px 10px; color: #FCF8EC; font-weight: 700; }"
+            f"border-radius: 9px; padding: 2px 10px; color: {INK_INVERSE}; font-weight: 700; }}"
         )
         cost_row.addWidget(self.cost_chip)
         cost_row.addStretch(1)
@@ -95,7 +96,7 @@ class WateringAuthorizePanel(QFrame):
         self.authorize_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.authorize_button.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; border: none; border-radius: 10px; "
-            "color: #FCF8EC; font-weight: 700; padding: 6px 16px; }"
+            f"color: {INK_INVERSE}; font-weight: 700; padding: 6px 16px; }}"
         )
         self.authorize_button.clicked.connect(self._confirm)
         buttons.addWidget(self.authorize_button)

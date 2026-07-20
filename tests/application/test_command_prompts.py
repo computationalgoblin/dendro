@@ -40,6 +40,15 @@ def test_edit_prompts_ask_only_for_their_edit_key(intent, needle):
     assert "NO crees" in p  # edits never create new elements
 
 
+def test_walk_prompt_asks_for_multicampo_edit_fields():
+    """PLAY-15: el walk pide patches `edit_fields` y prohíbe visibilidad/canon."""
+    p = system_prompt_for_intent("chronology_walk_step")
+    assert "edit_fields" in p
+    assert "PROHIBIDO" in p and "visibilidad" in p
+    # La lista blanca queda enumerada para el modelo.
+    assert "extended_description" in p and "milestone_type" in p
+
+
 def test_analyze_prompt_is_report_only():
     p = system_prompt_for_intent("analyze_coherence")
     assert "ANALIZAR COHERENCIA" in p

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import random
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -17,6 +18,7 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QLineF,
+    QPoint,
     QPointF,
     QRectF,
     Qt,
@@ -28,6 +30,8 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QIntValidator,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPainterPathStroker,
@@ -40,7 +44,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QStyle,
     QStyleOptionGraphicsItem,
-    QStyleOptionSlider,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -56,7 +59,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSlider,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -64,16 +66,22 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.widgets.canvas_atmosphere import CanvasAtmosphere
-from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras, effective_present_year
+from hosts.DesktopHostPySide.widgets.garden_legend import GardenLegend
+from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras, explicit_present_year
 from hosts.DesktopHostPySide.widgets.gpu_viewport import install_gpu_viewport
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive
-from hosts.DesktopHostPySide.widgets import icons
+from hosts.DesktopHostPySide.widgets import icons, portrait_cache
 from hosts.DesktopHostPySide.widgets.design_system import (
     ENTITY_KIND_PALETTE,
     RELATION_KIND_PALETTE,
     TICK_INTERVAL,
     EmptyState,
+    canvas_vignette_brush,
     enum_human,
+    EARTH,
+    EARTH_GREY,
+    EARTH_GREY_TINT,
+    EARTH_TINT,
     GOLD,
     GOLD_DEEP,
     GOLD_SOFT,
@@ -83,10 +91,12 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     INK_STRONG,
     LINE,
     RADIUS_LG,
+    SAGE,
     SPACE_2XL,
     SURFACE,
     SURFACE_HI,
 )
+from packages.application.portrait_crop import parse_crop
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.world_layer import default_world_layers
 from packages.ui.graph_physics import (
@@ -209,15 +219,11 @@ _NODE_COLORS = ENTITY_KIND_PALETTE
 # UX21: paleta cálida de relaciones (UX05) centralizada en el design system.
 _EDGE_COLORS = RELATION_KIND_PALETTE
 
-_STATUS_COLORS = {
-    "canonico": "#6CCB8E",
-    "canon": "#6CCB8E",
-    # BETA2-FOCO-14: nodo fantasma — borrador interno (translúcido en el lienzo).
-    "fantasma": "#B9B29A",
-    "borrador": "#E0C46C",
-    "propuesto": "#DCA35F",
-    "archivado": "#8993A5",
-}
+# BETA2-JARDIN-01: tinte del ciclo de riego — sedienta (marrón tierra) y
+# secada (gris-tierra). El umbral débil es el mismo 60 del drawer de riego.
+_WATERING_TINT_FILL = {"sedienta": EARTH_TINT, "secada": EARTH_GREY_TINT}
+_WATERING_TINT_BORDER = {"sedienta": EARTH, "secada": EARTH_GREY}
+_GARDEN_WEAK_THRESHOLD = 60.0
 
 _VISIBILITY_COLORS = {
     "oculto": "#D46A6A",
@@ -258,6 +264,11 @@ class _NodeView:
     # BETA1-I70: el nodo es un EVENTO → se dibuja como vórtice (campo de gravedad) y la
     # física lo trata como pozo que atrae a sus entidades relacionadas (I71).
     is_event: bool = False
+    # BETA2-IMG: retrato de la entidad. ``image_path`` = custom_metadata
+    # ``_image_path`` (relativa al asset store; absoluta = legacy F04) e
+    # ``image_crop`` = encuadre como tupla hashable (cx, cy, zoom) o None.
+    image_path: str = ""
+    image_crop: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -375,6 +386,39 @@ def interval_contains_year(birth: int | None, death: int | None, year: int) -> b
     return death is None or year <= int(death)
 
 
+def interval_overlaps_range(
+    birth: int | None, death: int | None, lo: int, hi: int
+) -> bool:
+    """BETA2-UI2-10: ¿el intervalo [birth, death] solapa con [lo, hi]? (puro, testeable).
+
+    - ``birth is None`` → sin fecha conocida: no se oculta nunca.
+    - ``death is None`` → intervalo abierto (sigue existiendo).
+    - Con ``lo == hi`` equivale a :func:`interval_contains_year`.
+    """
+    if birth is None:
+        return True
+    if int(birth) > hi:
+        return False
+    return death is None or int(death) >= lo
+
+
+def _item_portrait_pixmap(item, size: float):
+    """BETA2-IMG: retrato cacheado de un item del lienzo, o None.
+
+    La carpeta de assets vive en la escena (``set_assets_root``); sin ella
+    solo se resuelven rutas legacy absolutas. Nunca carga del disco dentro de
+    ``paint()`` más allá del primer acceso (portrait_cache).
+    """
+    node = getattr(item, "node", None)
+    stored = str(getattr(node, "image_path", "") or "")
+    if not stored:
+        return None
+    scene = item.scene()
+    assets_root = getattr(scene, "_portrait_assets_root", None) if scene is not None else None
+    resolved = portrait_cache.resolve_stored(assets_root, stored)
+    return portrait_cache.portrait_pixmap(resolved, getattr(node, "image_crop", None), size)
+
+
 def _entity_view(entity: Any) -> _NodeView:
     kind = _enum_value(getattr(entity, "entity_type", None), "entidad")
     subtitle = (
@@ -383,6 +427,11 @@ def _entity_view(entity: Any) -> _NodeView:
         or getattr(entity, "description", None)
         or "Sin descripción breve"
     )
+    # BETA2-IMG: retrato desde custom_metadata (encuadre → tupla hashable).
+    meta = dict(getattr(entity, "custom_metadata", {}) or {})
+    image_path = str(meta.get("_image_path", "") or "")
+    raw_crop = meta.get("_image_crop")
+    image_crop = parse_crop(raw_crop).as_tuple() if raw_crop else None
     return _NodeView(
         entity=entity,
         entity_id=str(getattr(entity, "id", "")),
@@ -394,6 +443,8 @@ def _entity_view(entity: Any) -> _NodeView:
         layer_id=str((getattr(entity, "layer_ids", []) or [""])[0] or ""),
         birth_year=_parse_optional_year(getattr(entity, "birth_year", None)),
         death_year=_parse_optional_year(getattr(entity, "death_year", None)),
+        image_path=image_path,
+        image_crop=image_crop,
     )
 
 
@@ -483,6 +534,10 @@ def _fit_text(text: str, max_chars: int) -> str:
 # Semillas (SEM02): margen extra del boundingRect para que el glow de germinación
 # se repinte sin dejar artefactos, y duración de la animación de bloom.
 _BLOOM_MARGIN = 30.0
+
+# UI2-05: margen extra del boundingRect mientras pulsa el anillo savia del
+# riego en curso (crece hasta rect + 6px + ancho de pluma).
+_WATERING_PULSE_MARGIN = 10.0
 
 
 def _paint_bloom_rings(
@@ -627,12 +682,12 @@ class GraphNodeItem(QGraphicsEllipseItem):
         type_label.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
         self._type_item = type_label  # BETA1-L01: ref para update-in-place
 
-        # UX28: se retiran las "bolitas" de estado/visibilidad del nodo — el detalle
-        # ya muestra canon y visibilidad; en el lienzo ensuciaban la hoja.
-        self._status_dot = QGraphicsEllipseItem(-radius + 8, -radius + 8, 10, 10, self)
-        self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
-        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
-        self._status_dot.setVisible(False)
+        # BETA2-JARDIN-01: tinte del ciclo de riego ("" = normal). El punto de
+        # estado de canon (UX28, siempre invisible) se retiró definitivamente.
+        self._watering_tint = ""
+        # UI2-05: anillo savia mientras la entidad se está regando (lote).
+        self._watering_pulse = False
+        self._watering_pulse_phase = 0.0
         # BETA2-FOCO-14: los fantasmas son translúcidos también en el Mapa
         # (borrador interno ≠ entidad real falta-regar, que se pinta sólida).
         if node.canon.lower() == "fantasma":
@@ -667,6 +722,42 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self._bloom_phase = phase
         self.update()
 
+    def set_watering_tint(self, kind: str) -> None:
+        """BETA2-JARDIN-01: tinte del ciclo de riego. "" restaura el aspecto
+        normal; "sedienta" = marrón tierra; "secada" = gris-tierra."""
+        kind = str(kind or "")
+        if kind == self._watering_tint:
+            return
+        self._watering_tint = kind
+        if kind:
+            self.setBrush(QBrush(QColor(_WATERING_TINT_FILL[kind])))
+        else:
+            self.setBrush(QBrush(QColor(255, 255, 253, 250)))
+        self.update()
+
+    def set_watering_pulse(self, active: bool) -> None:
+        """UI2-05: anillo savia mientras ESTA entidad se riega (lote en curso).
+        Pintado a mano en paint() — sin QGraphicsEffect."""
+        active = bool(active)
+        if active == self._watering_pulse:
+            return
+        self.prepareGeometryChange()  # el anillo sobresale del cuerpo
+        self._watering_pulse = active
+        self._watering_pulse_phase = 0.0
+        self.update()
+
+    def set_watering_pulse_phase(self, phase: float) -> None:
+        self._watering_pulse_phase = float(phase)
+        if self._watering_pulse:
+            self.update()
+
+    def set_droopy(self, droopy: bool) -> None:
+        """BETA2-JARDIN-01: caída por Nutrida débil — la hoja se encoge; la
+        física la apoya en la frontera interior de su anillo."""
+        scale = 0.86 if droopy else 1.0
+        if abs(self.scale() - scale) > 1e-6:
+            self.setScale(scale)
+
     def apply_view_update(self, node: _NodeView) -> None:
         """BETA1-L01: refresca los visuales de una HOJA in situ (sin reconstruir
         el grafo). Solo cambia lo visible de una edición de atributos: nombre,
@@ -696,17 +787,31 @@ class GraphNodeItem(QGraphicsEllipseItem):
         base = super().boundingRect()
         if 0.0 < self._bloom_phase < 1.0:
             return base.adjusted(-_BLOOM_MARGIN, -_BLOOM_MARGIN, _BLOOM_MARGIN, _BLOOM_MARGIN)
+        if self._watering_pulse:  # UI2-05: cubrir el anillo savia
+            m = _WATERING_PULSE_MARGIN
+            return base.adjusted(-m, -m, m, m)
         return base
 
     def hoverEnterEvent(self, event):  # noqa: N802 (Qt signature)
         self._hovered = True
+        self._notify_garden_hover(True)
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):  # noqa: N802 (Qt signature)
         self._hovered = False
+        self._notify_garden_hover(False)
         self.update()
         super().hoverLeaveEvent(event)
+
+    def _notify_garden_hover(self, entering: bool) -> None:
+        # JARDIN-02: el lienzo enciende la raíz dorada de la entidad bajo el
+        # cursor (solo la enfocada se anima; el resto del mapa queda sereno).
+        scene = self.scene()
+        for view in scene.views() if scene is not None else []:
+            hook = getattr(view, "_set_garden_hover", None)
+            if hook is not None:
+                hook(self.node.entity_id if entering else None)
 
     def paint(self, painter: QPainter, option, widget=None):
         # BETA1-L01: LOD con tier MEDIO de calidad. Visto de lejos (muchos nodos
@@ -715,9 +820,12 @@ class GraphNodeItem(QGraphicsEllipseItem):
         # zoom extremo se cae a punto liso. Pasa de cientos de ms a una fracción
         # sin el escalón feo del recorte total.
         lod = option.levelOfDetailFromTransform(painter.worldTransform())
+        tint = getattr(self, "_watering_tint", "")
         if lod < _NODE_FULL_LOD:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             halo = getattr(self, "_halo_color", None)
+            if tint:
+                halo = QColor(_WATERING_TINT_BORDER[tint])  # JARDIN-01: tierra manda
             if halo is not None and lod >= _NODE_MIN_LOD:
                 glow = QColor(halo)
                 glow.setAlpha(120)
@@ -744,6 +852,8 @@ class GraphNodeItem(QGraphicsEllipseItem):
         # sobre el contorno y el relleno blanco posterior tapa la mitad
         # interna, dejando solo el resplandor hacia fuera.
         halo = getattr(self, "_halo_color", None)
+        if tint:
+            halo = QColor(_WATERING_TINT_BORDER[tint])  # JARDIN-01: tierra manda
         if halo is not None:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             # UX28: contorno de tipo más presente (antes apenas se percibía).
@@ -758,6 +868,61 @@ class GraphNodeItem(QGraphicsEllipseItem):
         else:
             painter.setPen(QPen(Qt.PenStyle.NoPen))
         painter.drawPath(ellipse)
+        # BETA2-IMG: retrato de la entidad recortado por la hoja, con un
+        # perímetro blanco sutil. Solo en el tier de LOD completo (arriba se
+        # retorna antes) y SIN QGraphicsEffect (viewport GL, ver aviso L01):
+        # el recorte es un simple setClipPath dentro del propio paint.
+        has_portrait = False
+        if self.node.image_path:
+            portrait = _item_portrait_pixmap(self, 2 * self.radius * max(1.0, lod))
+            if portrait is not None:
+                has_portrait = True
+                painter.save()
+                painter.setClipPath(ellipse)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.drawPixmap(self.rect(), portrait, QRectF(portrait.rect()))
+                painter.restore()
+                if not tint:
+                    # UI2-03: con tinte de riego, el aro de estado sustituye
+                    # al perímetro blanco (dos aros concéntricos ensucian).
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.setPen(QPen(QColor(255, 255, 255, 235), 1.5))
+                    painter.drawPath(ellipse)
+        if tint:
+            # JARDIN-01: contorno tierra definido — sedienta/secada se leen
+            # aunque haya retrato o el halo quede tapado por vecinas.
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if has_portrait:
+                # UI2-03: el retrato tapa el relleno de estado; se recupera la
+                # lectura con una media-luna inferior translúcida del color de
+                # tierra + un aro de estado grueso en vez del fino.
+                crescent = QLinearGradient(
+                    self.rect().topLeft(), self.rect().bottomLeft()
+                )
+                base = QColor(_WATERING_TINT_FILL[tint])
+                base.setAlpha(0)
+                crescent.setColorAt(0.55, base)
+                deep = QColor(_WATERING_TINT_FILL[tint])
+                deep.setAlpha(185)
+                crescent.setColorAt(1.0, deep)
+                painter.save()
+                painter.setClipPath(ellipse)
+                painter.fillRect(self.rect(), crescent)
+                painter.restore()
+                painter.setPen(QPen(QColor(_WATERING_TINT_BORDER[tint]), 4.5))
+            else:
+                painter.setPen(QPen(QColor(_WATERING_TINT_BORDER[tint]), 2.4))
+            painter.drawPath(ellipse)
+        if self._watering_pulse:
+            # UI2-05: anillo savia — esta entidad se está regando AHORA. Con el
+            # gate de animación cerrado la fase queda congelada (anillo fijo).
+            wave = abs(math.sin(self._watering_pulse_phase))
+            sap = QColor(SAGE)
+            sap.setAlpha(int(90 + 110 * wave))
+            grow = 4.0 + 2.0 * wave
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(sap, 3.0))
+            painter.drawEllipse(self.rect().adjusted(-grow, -grow, grow, grow))
         if getattr(self, "_drag_highlighted", False):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#EBCB8B"), 3.0))
@@ -903,11 +1068,9 @@ class GraphTreeItem(QGraphicsRectItem):
         self._collapse_indicator.setFont(QFont("", 8))
         self._collapse_indicator.setVisible(False)
 
-        # UX28: se retiran las "bolitas" de estado/visibilidad también en la rama.
-        self._status_dot = QGraphicsEllipseItem(width - 20, 8, 10, 10, self)
-        self._status_dot.setBrush(QBrush(QColor(_STATUS_COLORS.get(node.canon.lower(), "#A4AEC0"))))
-        self._status_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
-        self._status_dot.setVisible(False)
+        # BETA2-JARDIN-01: tinte del ciclo de riego ("" = normal). El punto de
+        # estado de canon (UX28, siempre invisible) se retiró definitivamente.
+        self._watering_tint = ""
         # BETA2-FOCO-14: ramas fantasma igualmente translúcidas.
         if node.canon.lower() == "fantasma":
             self.setOpacity(0.45)
@@ -947,9 +1110,27 @@ class GraphTreeItem(QGraphicsRectItem):
         )
 
     def _reposition_status_dots(self):
-        self._status_dot.setRect(self._width - 20, 8, 10, 10)
         if hasattr(self, "_visibility_dot"):
             self._visibility_dot.setRect(self._width - 36, 8, 10, 10)
+
+    def set_watering_tint(self, kind: str) -> None:
+        """BETA2-JARDIN-01: tinte del ciclo de riego en la rama (contorno y
+        velo tierra); "" restaura el contorno de tipo y el velo blanco."""
+        kind = str(kind or "")
+        if kind == self._watering_tint:
+            return
+        self._watering_tint = kind
+        if kind:
+            border = QColor(_WATERING_TINT_BORDER[kind])
+            border.setAlpha(200)
+            self.setPen(QPen(border, 2.0))
+            veil = QColor(_WATERING_TINT_FILL[kind])
+            veil.setAlpha(90)
+            self.setBrush(QBrush(veil))
+        else:
+            self.setPen(self._normal_pen)
+            self.setBrush(QBrush(QColor(255, 255, 255, 80)))
+        self.update()
 
     def _update_count(self):
         n = len(self._child_nodes)
@@ -1239,7 +1420,6 @@ class GraphTreeItem(QGraphicsRectItem):
             min_x + w - self._type_badge.boundingRect().width() - 46,
             min_y + (_CONTAINER_HEADER_HEIGHT - self._type_badge.boundingRect().height()) / 2,
         )
-        self._status_dot.setRect(min_x + w - 20, min_y + 8, 10, 10)
         if hasattr(self, "_visibility_dot"):
             self._visibility_dot.setRect(min_x + w - 36, min_y + 8, 10, 10)
         self._count_item.setPos(
@@ -1345,6 +1525,28 @@ class GraphTreeItem(QGraphicsRectItem):
         # se dibujaba si era propuesta → las ramas canónicas salían sin color).
         painter.setPen(self._normal_pen)
         painter.drawPath(capsule)
+        # BETA2-IMG: medallón con el retrato de la rama junto al título.
+        if self.node.image_path:
+            portrait = _item_portrait_pixmap(self, 20.0)
+            if portrait is not None:
+                title_pos = self._title_item.pos()
+                diameter = 20.0
+                medallion = QRectF(
+                    title_pos.x() - diameter - 8,
+                    rect.top() + max(6.0, (_CONTAINER_HEADER_HEIGHT - diameter) / 2),
+                    diameter,
+                    diameter,
+                )
+                clip = QPainterPath()
+                clip.addEllipse(medallion)
+                painter.save()
+                painter.setClipPath(clip)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.drawPixmap(medallion, portrait, QRectF(portrait.rect()))
+                painter.restore()
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 235), 1.2))
+                painter.drawEllipse(medallion)
         if getattr(self, "_drag_highlighted", False):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor("#EBCB8B"), 3.0))
@@ -1887,7 +2089,6 @@ class GraphCanvasView(QGraphicsView):
     ringSelected = Signal(str, str)  # ring_id, display_name
     ringFocused = Signal(str, str)  # ring_id, display_name
     ringFocusCleared = Signal()  # BETA1-L02: foco de anillo eliminado (panel resalta)
-    searchRequested = Signal()  # BETA1-L02b: tecla 'd' → barra de búsqueda flotante
     seedClicked = Signal(str)  # SEM04: candidate_id de una semilla germinante pulsada
     # BETA1-B01: context-menu intents. The canvas only emits intent; the
     # CreationWorkspace wires them to its existing creation/deletion routes
@@ -1931,21 +2132,38 @@ class GraphCanvasView(QGraphicsView):
         # "corazón" del mundo (centro de los anillos) recibe una luz suave que
         # se hunde hacia los bordes. Da profundidad e inmersión sin distraer;
         # las hojas blancas y los velos de rama siguen destacando.
-        vignette = QRadialGradient(QPointF(0.0, 0.0), 1500.0)
-        vignette.setColorAt(0.0, QColor("#F3EDDD"))  # corazón del mundo: luz cálida
-        vignette.setColorAt(0.50, QColor("#E6DFCD"))
-        vignette.setColorAt(0.82, QColor("#DBD1B9"))
-        vignette.setColorAt(1.0, QColor("#CFC4A8"))  # los bordes se hunden
-        self.setBackgroundBrush(QBrush(vignette))
+        # PULIDO-07: viñeta compartida del sistema (misma en Mapa/Crono/Foco).
+        self.setBackgroundBrush(canvas_vignette_brush(0.0, 0.0, 1500.0))
         self.scene_obj = QGraphicsScene(self)
         self.scene_obj.setSceneRect(QRectF(-1600, -1100, 3200, 2200))
+        # BETA2-IMG: carpeta de assets del proyecto (retratos). La fija el
+        # workspace vía set_assets_root; los items la leen desde la escena.
+        self.scene_obj._portrait_assets_root = None
         self.setScene(self.scene_obj)
+        # BETA2-HOVER-04: previsualización flotante al hover (retrato + brief entero),
+        # la misma tarjeta reutilizable que Foco/Cronología.
+        from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverPreviewController
+
+        self._hover_preview = HoverPreviewController(self, self._hover_content_at)
         self._nodes: dict[str, GraphNodeItem] = {}
-        # BETA2-FOCO-14: Lente Jardín (estado de riego pintado a mano).
-        self._garden_lens_enabled = False
+        # BETA2-JARDIN-01: estado de riego SIEMPRE visible (pintado a mano).
         self._garden_status_provider = None
         self._garden_overlays: dict[str, dict] = {}
         self._garden_ids_key: tuple | None = None
+        self._garden_frozen: set[str] = set()
+        self._garden_droopy: set[str] = set()
+        # BETA2-JARDIN-02: raíz dorada — luz que recorre las relaciones hacia
+        # anillos interiores, SOLO en la entidad seleccionada o bajo el cursor.
+        self._garden_hover_id: str | None = None
+        self._garden_focus_id: str | None = None
+        self._root_glow_id: str | None = None
+        self._root_glow_inner: list[str] = []
+        self._root_glow_phase = 0.0
+        self._motion_gate = None
+        self._root_glow_timer = QTimer(self)
+        self._root_glow_timer.setInterval(TICK_INTERVAL)
+        self._root_glow_timer.timeout.connect(self._advance_root_glow)
+        self.entitySelected.connect(self._set_garden_focus)
         self._trees: dict[str, GraphTreeItem] = {}
         self._edges: list[GraphEdgeItem] = []
         self._all_nodes: list[_NodeView] = []
@@ -1959,10 +2177,11 @@ class GraphCanvasView(QGraphicsView):
         self._selected_ring_id = ""
         self._focused_ring_id = ""
         self._visual_filter = VisualFilterState()
-        # BETA1-G06: "fotografía temporal". None = atemporal (se ve todo, como
-        # siempre). Un entero = el grafo se filtra al estado del mundo en ese
-        # año: solo entidades vivas y relaciones existentes entonces.
-        self._view_year: int | None = None
+        # BETA1-G06 / BETA2-UI2-10: "fotografía temporal". None = atemporal (se
+        # ve todo, como siempre). Un rango (lo, hi) = el grafo se filtra a lo
+        # que existe en algún punto del intervalo; con lo == hi es el
+        # año-cámara clásico.
+        self._view_range: tuple[int, int] | None = None
         self._membership: dict[str, str] = {}  # entity_id -> tree_entity_id
         self._pending_source: GraphNodeItem | None = None
         self._drag_source: GraphNodeItem | None = None
@@ -2011,6 +2230,12 @@ class GraphCanvasView(QGraphicsView):
         # seguridad/tests. Cada acción (CRUD, layout, colapso, drop) hace
         # reheat, así la física reacciona a cualquier cambio.
         self._physics_enabled = True
+        # BETA2-PULIDO-07: brisa ocasional — cada 10-18 s una ráfaga suave
+        # agita los nodos vivos (las congeladas del jardín ni se inmutan).
+        self._breeze_timer = QTimer(self)
+        self._breeze_timer.setSingleShot(True)
+        self._breeze_timer.timeout.connect(self._blow_breeze)
+        self._breeze_timer.start(int(random.uniform(10_000, 18_000)))
         self._physics_engine = PhysicsEngine()
         # BETA1-L01: presupuesto de frames de la ráfaga de asentamiento (autofreeze).
         # Solo se consume en "modo rendimiento" (grafos grandes); en pequeños la
@@ -2051,6 +2276,14 @@ class GraphCanvasView(QGraphicsView):
         # todo. Se pinta en drawBackground (viewport coords) y se pausa cuando
         # el lienzo no está visible.
         self._atmosphere = CanvasAtmosphere(self, ctx=None, count=11)
+        # UI2-05: pulso savia de la entidad que se está regando (una a la vez,
+        # lote secuencial). Con el gate de animación cerrado no hay timer: el
+        # anillo queda estático.
+        self._watering_active_id = ""
+        self._watering_pulse_phase = 0.0
+        self._watering_pulse_timer = QTimer(self)
+        self._watering_pulse_timer.setInterval(TICK_INTERVAL)
+        self._watering_pulse_timer.timeout.connect(self._watering_pulse_tick)
 
     def drawBackground(self, painter, rect):  # noqa: N802 (Qt API)
         if not _PERF_LOG:
@@ -2093,111 +2326,250 @@ class GraphCanvasView(QGraphicsView):
         self.viewport().update()
 
     # ------------------------------------------------------------------
-    # BETA2-FOCO-14: Lente Jardín (conmutable; provider = WateringService)
+    # BETA2-JARDIN-01: estado del jardín SIEMPRE visible (provider = riego)
     # ------------------------------------------------------------------
 
-    def set_garden_lens(self, enabled: bool, status_provider=None) -> None:
-        """Activa/desactiva la lente. ``status_provider(ids) -> {id: report}``.
+    def set_garden_status_provider(self, status_provider) -> None:
+        """``status_provider(ids) -> {id: report}``. Sin lente conmutable: el
+        estado de riego es el aspecto normal del Mapa.
 
-        El provider se consulta al reconstruir el conjunto de nodos (nunca por
-        frame): WateringService ya cachea por revisión de proyecto.
+        El provider se consulta al reconstruir el conjunto de nodos o en un
+        refresh explícito (nunca por frame): WateringService ya cachea por
+        revisión de proyecto.
         """
-        self._garden_lens_enabled = bool(enabled)
-        if status_provider is not None:
-            self._garden_status_provider = status_provider
-        self._garden_overlays = {}
+        self._garden_status_provider = status_provider
+        self.refresh_garden_status()
+
+    def refresh_garden_status(self) -> None:
+        """Recalcula estados (tras regar/secar/cultivar) y reintegra la física
+        si cambió el conjunto de congeladas (descongelar exige reheat)."""
+        frozen_before = set(self._garden_frozen)
         self._garden_ids_key = None
-        self._apply_garden_lens()
+        self._apply_garden_status()
+        if frozen_before != self._garden_frozen:
+            self._physics_reheat()
+        self._refresh_root_glow()  # JARDIN-02: la elegibilidad pudo cambiar
         self.viewport().update()
 
     def _ensure_garden_overlays(self) -> None:
-        nodes = getattr(self, "_nodes", {}) or {}
-        if tuple(sorted(nodes.keys())) != self._garden_ids_key:
-            self._apply_garden_lens()
+        items = {**(getattr(self, "_nodes", {}) or {}), **(getattr(self, "_trees", {}) or {})}
+        if tuple(sorted(items.keys())) != self._garden_ids_key:
+            self._apply_garden_status()
 
-    def _apply_garden_lens(self) -> None:
-        """Aplica opacidades (Nutrida/secada) y prepara los overlays del halo.
+    def _apply_garden_status(self) -> None:
+        """Estado de riego siempre visible, sin gradientes de opacidad.
 
-        Con la lente OFF restaura el lienzo limpio (solo el fantasma conserva
-        su translucidez, que no es de la lente sino de su naturaleza).
+        ``falta_regar`` (incluye nunca regadas y lecturas obsoletas) → marrón
+        tierra + congelada + métricas OCULTAS aunque existan scores antiguos;
+        ``secada`` → gris-tierra + congelada; ``regada`` → aspecto normal +
+        halo (Iluminada) y caída (Nutrida < umbral). Fantasmas fuera del
+        ciclo (translucidez propia).
         """
-        nodes = getattr(self, "_nodes", {}) or {}
-        if not self._garden_lens_enabled or self._garden_status_provider is None:
-            self._garden_overlays = {}
-            self._garden_ids_key = None
-            for item in nodes.values():
-                canon = str(getattr(getattr(item, "node", None), "canon", "")).lower()
-                item.setOpacity(0.45 if canon == "fantasma" else 1.0)
-            return
-        entity_ids = sorted(nodes.keys())
-        try:
-            reports = self._garden_status_provider(list(entity_ids)) or {}
-        except Exception:  # noqa: BLE001 — la lente jamás rompe el lienzo
-            reports = {}
+        items = {**(getattr(self, "_nodes", {}) or {}), **(getattr(self, "_trees", {}) or {})}
+        entity_ids = sorted(items.keys())
+        reports: dict = {}
+        if self._garden_status_provider is not None and entity_ids:
+            try:
+                reports = self._garden_status_provider(list(entity_ids)) or {}
+            except Exception:  # noqa: BLE001 — el jardín jamás rompe el lienzo
+                reports = {}
         overlays: dict[str, dict] = {}
-        for entity_id, item in nodes.items():
+        frozen: set[str] = set()
+        droopy: set[str] = set()
+        for entity_id, item in items.items():
             canon = str(getattr(getattr(item, "node", None), "canon", "")).lower()
             if canon == "fantasma":
-                item.setOpacity(0.45)
+                item.setOpacity(0.45)  # borrador interno: fuera del ciclo
                 continue
+            item.setOpacity(1.0)
             report = reports.get(entity_id)
-            if report is None:
-                continue
-            latest = getattr(report, "latest", None)
-            scores = dict(getattr(latest, "scores", {}) or {}) if latest is not None else {}
-            status = str(getattr(report, "status", ""))
-            stale = bool(getattr(report, "stale", False))
-            overlays[entity_id] = {
-                "status": status,
-                "stale": stale,
-                "never": latest is None and status == "falta_regar",
-                "iluminada": scores.get("iluminada"),
-            }
-            if status == "secada":
-                item.setOpacity(0.35)  # apagada, estable, sin competir
-            elif latest is None:
-                item.setOpacity(0.8)  # semilla sin cultivar (aún sin métricas)
-            else:
-                nutrida = float(scores.get("nutrida") or 0.0)
-                solid = 0.5 + 0.5 * nutrida / 100.0
-                item.setOpacity(solid * (0.75 if stale else 1.0))
+            status = str(getattr(report, "status", "")) if report is not None else ""
+            tint = ""
+            if status == "falta_regar":
+                tint = "sedienta"
+                frozen.add(entity_id)
+            elif status == "secada":
+                tint = "secada"
+                frozen.add(entity_id)
+            elif status == "regada":
+                latest = getattr(report, "latest", None)
+                scores = dict(getattr(latest, "scores", {}) or {}) if latest is not None else {}
+                iluminada = scores.get("iluminada")
+                arraigo = scores.get("arraigo")
+                if iluminada or arraigo:
+                    overlays[entity_id] = {"iluminada": iluminada, "arraigo": arraigo}
+                nutrida = scores.get("nutrida")
+                if nutrida is not None and float(nutrida) < _GARDEN_WEAK_THRESHOLD:
+                    droopy.add(entity_id)
+            if hasattr(item, "set_watering_tint"):
+                item.set_watering_tint(tint)
+            if hasattr(item, "set_droopy"):
+                item.set_droopy(entity_id in droopy)
         self._garden_overlays = overlays
+        self._garden_frozen = frozen
+        self._garden_droopy = droopy
         self._garden_ids_key = tuple(entity_ids)
+
+    # ------------------------------------------------------------------
+    # BETA2-JARDIN-02: raíz dorada de arraigo (solo selección/hover)
+    # ------------------------------------------------------------------
+
+    def set_motion_gate(self, gate) -> None:
+        """``gate() -> bool``; cerrado (modo sin animación) deja solo el
+        trazo estático de las raíces, sin timer ni punto de luz."""
+        self._motion_gate = gate
+        self._refresh_root_glow()
+
+    # ── UI2-05: riego en curso ─────────────────────────────────────────────
+
+    def set_watering_active(self, entity_id: str) -> None:
+        """Enciende el anillo savia en la entidad que se está regando; ""
+        lo apaga. Con el gate de animación cerrado, anillo estático.
+
+        BETA2-FOCO-39: solo las HOJAS tienen anillo savia
+        (``set_watering_pulse``); las ramas (``GraphTreeItem``) solo tienen
+        tinte. Regar el grafo entero incluye ramas, así que el pulso se salta
+        con guarda cuando el nodo no lo soporta — antes reventaba con
+        ``AttributeError`` y colgaba el slot del lote (sin avisos, badge
+        congelado)."""
+        entity_id = str(entity_id or "")
+        if entity_id == self._watering_active_id:
+            return
+        previous = self._nodes.get(self._watering_active_id)
+        if previous is not None and hasattr(previous, "set_watering_pulse"):
+            previous.set_watering_pulse(False)
+        self._watering_active_id = entity_id
+        self._watering_pulse_phase = 0.0
+        item = self._nodes.get(entity_id)
+        can_pulse = item is not None and hasattr(item, "set_watering_pulse")
+        if can_pulse:
+            item.set_watering_pulse(True)
+        gate = getattr(self, "_motion_gate", None)
+        animate = can_pulse and (gate is None or bool(gate()))
+        if animate and not self._watering_pulse_timer.isActive():
+            self._watering_pulse_timer.start()
+        elif not animate and self._watering_pulse_timer.isActive():
+            self._watering_pulse_timer.stop()
+
+    def _watering_pulse_tick(self) -> None:
+        item = self._nodes.get(self._watering_active_id)
+        if item is None or not hasattr(item, "set_watering_pulse_phase"):
+            self._watering_pulse_timer.stop()
+            return
+        self._watering_pulse_phase += 0.12
+        item.set_watering_pulse_phase(self._watering_pulse_phase)
+
+    def _set_garden_hover(self, entity_id) -> None:
+        self._garden_hover_id = entity_id or None
+        self._refresh_root_glow()
+
+    def _set_garden_focus(self, entity_id) -> None:
+        self._garden_focus_id = entity_id or None
+        self._refresh_root_glow()
+
+    def _rooted_inner_neighbors(self, entity_id) -> list[str]:
+        """Vecinas de anillos INTERIORES (las que dan explicación): aristas
+        de la entidad cuyo otro extremo vive en una corona de radio menor.
+        Sin banda = anillo más exterior (como en el Mapa). Solo concéntrico."""
+        if not entity_id or self._layout_mode_active != "concentric_rings":
+            return []
+        radii = {ring.ring_id: ring.inner_radius for ring in self._ring_visuals}
+        my_radius = radii.get(self._physics_effective_ring(entity_id), float("inf"))
+        inner: list[str] = []
+        for edge_item in self._edges:
+            src = edge_item.edge.source_id
+            tgt = edge_item.edge.target_id
+            if entity_id not in (src, tgt) or src == tgt:
+                continue
+            other = tgt if src == entity_id else src
+            other_radius = radii.get(self._physics_effective_ring(other), float("inf"))
+            if other_radius < my_radius:
+                inner.append(other)
+        return inner
+
+    def _refresh_root_glow(self) -> None:
+        focus = self._garden_hover_id or self._garden_focus_id
+        overlay = self._garden_overlays.get(focus or "")
+        eligible = overlay is not None and (
+            float(overlay.get("arraigo") or 0.0) >= _GARDEN_WEAK_THRESHOLD
+        )
+        inner = self._rooted_inner_neighbors(focus) if eligible else []
+        self._root_glow_id = focus if inner else None
+        self._root_glow_inner = inner
+        gate_open = True if self._motion_gate is None else bool(self._motion_gate())
+        if self._root_glow_id is not None and gate_open:
+            if not self._root_glow_timer.isActive():
+                self._root_glow_phase = 0.0
+                self._root_glow_timer.start()
+        else:
+            self._root_glow_timer.stop()
+        self.viewport().update()
+
+    def _advance_root_glow(self) -> None:
+        # 0..1 recorre la raíz; 1..1.3 pausa en el nodo (intermitente).
+        self._root_glow_phase = (self._root_glow_phase + 0.022) % 1.3
+        self.viewport().update()
 
     def drawForeground(self, painter, rect):  # noqa: N802 (Qt API)
         super().drawForeground(painter, rect)
-        # BETA2-FOCO-14: Lente Jardín — pintura A MANO en primer plano (sin
-        # QGraphicsEffect): halo dorado que crece con Iluminada y marca de
-        # "semilla sin cultivar" bajo las nunca regadas. Suave ("zona
-        # cultivable"), sin rojos; con la lente OFF el mapa queda limpio.
-        if getattr(self, "_garden_lens_enabled", False):
-            self._ensure_garden_overlays()
-            if self._garden_overlays:
+        # BETA2-JARDIN-01: jardín SIEMPRE visible — pintura A MANO en primer
+        # plano (sin QGraphicsEffect): halo dorado que crece con Iluminada,
+        # solo en entidades regadas. Suave ("zona cultivable"), sin rojos.
+        self._ensure_garden_overlays()
+        if self._garden_overlays:
+            painter.save()
+            for entity_id, overlay in self._garden_overlays.items():
+                item = self._nodes.get(entity_id)
+                if item is None or not item.isVisible():
+                    continue
+                bounds = item.sceneBoundingRect()
+                center = bounds.center()
+                radius = max(bounds.width(), 26.0) / 2.0
+                iluminada = overlay.get("iluminada")
+                if iluminada:
+                    strength = max(0.0, min(1.0, float(iluminada) / 100.0))
+                    halo = QColor(GOLD)
+                    halo.setAlphaF(0.14 + 0.30 * strength)
+                    halo_pen = QPen(halo)
+                    halo_pen.setWidthF(1.0 + 2.5 * strength)
+                    painter.setPen(halo_pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    grow = 4.0 + 7.0 * strength
+                    painter.drawEllipse(center, radius + grow, radius + grow)
+            painter.restore()
+        # BETA2-JARDIN-02: raíz dorada — trazo tenue hacia las vecinas
+        # interiores y, con animación abierta, un punto de luz que la entidad
+        # "absorbe" desde sus raíces (intermitente, solo la enfocada).
+        if self._root_glow_id is not None and self._root_glow_inner:
+            target_item = self._nodes.get(self._root_glow_id) or self._trees.get(
+                self._root_glow_id
+            )
+            if target_item is not None and target_item.isVisible():
                 painter.save()
-                for entity_id, overlay in self._garden_overlays.items():
-                    item = self._nodes.get(entity_id)
-                    if item is None or not item.isVisible():
+                p1 = target_item.sceneBoundingRect().center()
+                for other_id in self._root_glow_inner:
+                    other = self._nodes.get(other_id) or self._trees.get(other_id)
+                    if other is None or not other.isVisible():
                         continue
-                    bounds = item.sceneBoundingRect()
-                    center = bounds.center()
-                    radius = max(bounds.width(), 26.0) / 2.0
-                    iluminada = overlay.get("iluminada")
-                    if iluminada:
-                        strength = max(0.0, min(1.0, float(iluminada) / 100.0))
-                        halo = QColor("#8B7A36")
-                        halo.setAlphaF(0.14 + 0.30 * strength)
-                        halo_pen = QPen(halo)
-                        halo_pen.setWidthF(1.0 + 2.5 * strength)
-                        painter.setPen(halo_pen)
-                        painter.setBrush(Qt.BrushStyle.NoBrush)
-                        grow = 4.0 + 7.0 * strength
-                        painter.drawEllipse(center, radius + grow, radius + grow)
-                    if overlay.get("never"):
-                        seed_pen = QPen(QColor("#6E622E"))
-                        seed_pen.setStyle(Qt.PenStyle.DotLine)
-                        painter.setPen(seed_pen)
-                        painter.setBrush(QColor(236, 228, 199, 170))
-                        painter.drawEllipse(center + QPointF(0.0, radius + 10.0), 4.5, 4.5)
+                    p0 = other.sceneBoundingRect().center()
+                    trace = QColor(GOLD)
+                    trace.setAlphaF(0.30)
+                    painter.setPen(QPen(trace, 2.2))
+                    painter.drawLine(p0, p1)
+                    if self._root_glow_timer.isActive():
+                        t = min(self._root_glow_phase, 1.0)  # 1..1.3 = pausa
+                        spark = QColor(GOLD)
+                        spark.setAlphaF(0.85)
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(spark)
+                        painter.drawEllipse(
+                            QPointF(
+                                p0.x() + (p1.x() - p0.x()) * t,
+                                p0.y() + (p1.y() - p0.y()) * t,
+                            ),
+                            4.0,
+                            4.0,
+                        )
                 painter.restore()
         alpha = getattr(self, "_reveal_alpha", 0.0)
         if alpha > 0.0:
@@ -2361,8 +2733,13 @@ class GraphCanvasView(QGraphicsView):
     # atajos de teclado y los botones flotantes (L02) los reutilizan.
 
     def _item_node_at(self, view_pos) -> GraphNodeItem | GraphTreeItem | None:
-        """Find a GraphNodeItem or GraphTreeItem under *view_pos*, ignoring drag overlays."""
-        for item in self.items(view_pos.toPoint()):
+        """Find a GraphNodeItem or GraphTreeItem under *view_pos*, ignoring drag overlays.
+
+        BETA2-HOVER-08: acepta QPoint o QPointF (el resolver de hover pasa QPoint;
+        los click handlers pasan QPointF). Antes asumía QPointF y ``.toPoint()``
+        petaba con QPoint → el AttributeError se tragaba y la tarjeta no salía."""
+        pt = view_pos if isinstance(view_pos, QPoint) else view_pos.toPoint()
+        for item in self.items(pt):
             check = item
             while check is not None:
                 if isinstance(check, (GraphNodeItem, GraphTreeItem)):
@@ -2418,8 +2795,11 @@ class GraphCanvasView(QGraphicsView):
         point because large annular paths overlap in their item shapes/z-order.
         B44 ring activation must use the actual concentric radius, not the first
         item returned by QGraphicsView.items().
+
+        BETA2-HOVER-08: acepta QPoint o QPointF (ver ``_item_node_at``).
         """
-        scene_pos = self.mapToScene(view_pos.toPoint())
+        pt = view_pos if isinstance(view_pos, QPoint) else view_pos.toPoint()
+        scene_pos = self.mapToScene(pt)
         radius = math.hypot(scene_pos.x(), scene_pos.y())
         matches: list[GraphRingItem] = []
         for ring_id, item in self._ring_items.items():
@@ -2429,6 +2809,53 @@ class GraphCanvasView(QGraphicsView):
         if matches:
             return min(matches, key=lambda item: item.ring.outer_radius)
         return None
+
+    # ── Previsualización flotante al hover (BETA2-HOVER-04) ──────────────────
+
+    def _hover_content_at(self, view_pos):
+        """Resuelve el item bajo el cursor a contenido de previsualización
+        (nodo/rama con retrato + brief entero, o anillo). None si no aplica."""
+        node_item = self._item_node_at(view_pos)
+        if node_item is not None:
+            return self._node_hover_content(node_item.node)
+        ring_item = self._item_ring_at(view_pos)
+        if ring_item is not None:
+            return self._ring_hover_content(ring_item.ring)
+        return None
+
+    def _node_hover_content(self, node):
+        from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+
+        if node is None:
+            return None
+        entity = getattr(node, "entity", None)
+        brief = str(getattr(entity, "brief_description", "") or getattr(node, "subtitle", "") or "")
+        kind_str = str(getattr(node, "kind", "") or "")
+        is_branch = kind_str == "contenedor"
+        return HoverContent(
+            title=str(getattr(node, "name", "") or "Sin nombre"),
+            meta=enum_human(kind_str),
+            brief=brief,
+            kind="rama" if is_branch else "entidad",
+            entity_type=kind_str,
+            accent=str(getattr(node, "color", "") or ""),
+            image_path=str(getattr(node, "image_path", "") or ""),
+            image_crop=getattr(node, "image_crop", None),
+            assets_root=getattr(self.scene(), "_portrait_assets_root", None),
+        )
+
+    def _ring_hover_content(self, ring):
+        from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+
+        if ring is None:
+            return None
+        return HoverContent(
+            title=str(getattr(ring, "display_name", "") or "Anillo"),
+            meta="Anillo",
+            brief=str(getattr(ring, "count_label", "") or ""),
+            kind="anillo",
+            accent=str(getattr(ring, "color", "") or ""),
+        )
 
     def _set_single_node_selection(self, node: GraphNodeItem):
         self.clear_selection(emit=False)
@@ -2541,6 +2968,7 @@ class GraphCanvasView(QGraphicsView):
 
     def _rebuild_physics_world(self):
         """Pack current top-level items + relations into the pure engine."""
+        self._ensure_garden_overlays()  # JARDIN-01: congeladas/caídas al día
         bodies: list[Body] = []
         ring_bands: dict[str, tuple[float, float]] = {}
         concentric = self._layout_mode_active == "concentric_rings"
@@ -2571,11 +2999,16 @@ class GraphCanvasView(QGraphicsView):
                     band = (outermost + 34.0, outermost + 34.0 + 240.0)
                 if band is not None:
                     inner, outer = band
-                    target = (inner + outer) / 2.0
                     # margen = extensión del item para que su BORDE respete
                     # la corona, no solo su centro
                     band_inner = inner + min(extent, (outer - inner) / 2.0 - 1.0)
                     band_outer = max(band_inner, outer - min(extent, (outer - inner) / 2.0 - 1.0))
+                    # JARDIN-01: caída — la Nutrida débil reposa en la frontera
+                    # interior de su banda, como fruta al pie del anillo.
+                    if entity_id in self._garden_droopy:
+                        target = band_inner
+                    else:
+                        target = (inner + outer) / 2.0
             child_count = len(getattr(item, "_child_nodes", []) or [])
             bodies.append(
                 Body(
@@ -2584,6 +3017,9 @@ class GraphCanvasView(QGraphicsView):
                     y=center.y(),
                     mass=1.0 + 0.2 * child_count,
                     radius=extent + 18.0,
+                    # JARDIN-01: sedienta/secada clavada — la física no la
+                    # mueve (sigue repeliendo); el usuario sí puede arrastrarla.
+                    pinned=entity_id in self._garden_frozen,
                     target_radius=target,
                     band_inner=band_inner,
                     band_outer=band_outer,
@@ -2797,6 +3233,28 @@ class GraphCanvasView(QGraphicsView):
             if self._layout_mode_active == "concentric_rings":
                 self._refresh_ring_spans()
 
+    def _blow_breeze(self) -> None:
+        """BETA2-PULIDO-07: una ráfaga de brisa y a re-armar la siguiente.
+
+        Solo sopla si la física está activa, no hay drag en curso, la vista se
+        ve y el gate de animación está abierto; los cuerpos ``pinned`` (jardín
+        congelado) no se mueven — el motor los salta."""
+        try:
+            gate_open = True if self._motion_gate is None else bool(self._motion_gate())
+            if (
+                self._physics_enabled
+                and gate_open
+                and self.isVisible()
+                and not self._physics_drag_freeze
+                and getattr(self, "_moving_item", None) is None
+            ):
+                self._physics_engine.apply_breeze(random.uniform(0.0, 2.0 * math.pi))
+                self._physics_frames_left = PHYSICS_SETTLE_FRAME_BUDGET
+                if not self._physics_timer.isActive():
+                    self._physics_timer.start()
+        finally:
+            self._breeze_timer.start(int(random.uniform(10_000, 18_000)))
+
     def _physics_reheat(self):
         """Wake physics after ANY structural change (CRUD, layout, colapso,
         drop). Decisión de producto C05: cualquier acción re-activa la
@@ -2859,12 +3317,8 @@ class GraphCanvasView(QGraphicsView):
             self.reset_to_panorama()  # BETA1-L02c: F SIEMPRE restaura (quita foco + encuadra)
             event.accept()
             return
-        # BETA1-L02b: barra de búsqueda flotante (no abre el drawer); el workspace
-        # la muestra y le da el foco. Funciona en cualquier vista.
-        if key == Qt.Key.Key_D:
-            self.searchRequested.emit()
-            event.accept()
-            return
+        # BETA2-UI2-10: la búsqueda flotante ya no usa la tecla 'd' — se abre
+        # con Ctrl+B (QShortcut del workspace, igual que en el modo Foco).
         # BETA1-L02: saltar entre anillos contiguos (solo en vista concéntrica).
         # [ = hacia dentro (anterior), ] = hacia fuera (siguiente).
         if self._layout_mode_active == "concentric_rings":
@@ -2995,6 +3449,10 @@ class GraphCanvasView(QGraphicsView):
         return menu
 
     def _add_ai_context_menu(self, menu: QMenu) -> None:
+        # BETA2-WIKI-10: las acciones IA del menú contextual (generar hojas/ramas/
+        # relaciones, analizar coherencia) quedan RETIRADAS de la UI. La IA es ahora solo
+        # Regar/Sugerir desde el Foco. Método conservado como no-op (borrado en limpieza).
+        return
         menu.addSeparator()
         ai_menu = QMenu("IA sobre seleccion", menu)
         menu.addMenu(ai_menu)
@@ -3014,7 +3472,9 @@ class GraphCanvasView(QGraphicsView):
     def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
         entity_id = item.node.entity_id
         menu = QMenu(self)
-        menu.addAction("Editar", lambda: self.entitySelected.emit(entity_id))
+        # BETA2-CLEANUP-PANELES: "Editar" abre el Modo Foco (el cajón de detalle
+        # fue retirado); la edición vive en el Foco.
+        menu.addAction("Editar", lambda: self.entityFocusRequested.emit(entity_id))
         menu.addAction(
             "Crear relación desde aquí",
             lambda: self._begin_context_relation(item),
@@ -3061,7 +3521,8 @@ class GraphCanvasView(QGraphicsView):
     def _tree_context_menu(self, item: GraphTreeItem) -> QMenu:
         tree_id = item.node.entity_id
         menu = QMenu(self)
-        menu.addAction("Editar", lambda: self.entitySelected.emit(tree_id))
+        # BETA2-CLEANUP-PANELES: "Editar" abre el Modo Foco (cajón retirado).
+        menu.addAction("Editar", lambda: self.entityFocusRequested.emit(tree_id))
         menu.addAction(
             "Crear relación desde aquí",
             lambda: self._begin_context_relation(item),
@@ -3660,20 +4121,22 @@ class GraphCanvasView(QGraphicsView):
         return parent_id, parent_name, collapsed
 
     def _node_exists_at_view_year(self, node: _NodeView) -> bool:
-        """BETA1-G06: ¿la entidad existe en el año-cámara actual?"""
-        if self._view_year is None:
+        """BETA1-G06: ¿la entidad existe en el rango-cámara actual?"""
+        if self._view_range is None:
             return True
-        return interval_contains_year(node.birth_year, node.death_year, self._view_year)
+        lo, hi = self._view_range
+        return interval_overlaps_range(node.birth_year, node.death_year, lo, hi)
 
     def _edge_exists_at_view_year(self, edge: _EdgeView) -> bool:
-        """BETA1-G06: existencia EXPLÍCITA de la relación en el año-cámara.
+        """BETA1-G06: existencia EXPLÍCITA de la relación en el rango-cámara.
 
         La existencia derivada (extremos vivos) la garantiza el filtro de nodos
         — aquí solo se aplica el intervalo propio si la relación lo declara.
         """
-        if self._view_year is None or edge.birth_year is None:
+        if self._view_range is None or edge.birth_year is None:
             return True
-        return interval_contains_year(edge.birth_year, edge.death_year, self._view_year)
+        lo, hi = self._view_range
+        return interval_overlaps_range(edge.birth_year, edge.death_year, lo, hi)
 
     def _temporal_snapshot(
         self, nodes: list[_NodeView], edges: list[_EdgeView]
@@ -3681,7 +4144,7 @@ class GraphCanvasView(QGraphicsView):
         """BETA1-G06: aplica SOLO la cámara temporal (sin filtros visuales).
 
         Se usa en la rama de foco de anillo, que omite ``_filtered_graph``."""
-        if self._view_year is None:
+        if self._view_range is None:
             return list(nodes), list(edges)
         fnodes = [node for node in nodes if self._node_exists_at_view_year(node)]
         visible = {node.entity_id for node in fnodes}
@@ -3694,13 +4157,34 @@ class GraphCanvasView(QGraphicsView):
         ]
         return fnodes, fedges
 
-    def set_view_year(self, year: int | None):
-        """BETA1-G06: fija el año-cámara (None = atemporal) y reconstruye el
-        grafo como la 'fotografía' del mundo en ese momento."""
-        new_year = None if year is None else int(year)
-        if new_year == self._view_year:
+    def set_assets_root(self, path) -> None:
+        """BETA2-IMG: fija la carpeta de assets del proyecto (retratos).
+
+        La llama el workspace al abrir/crear/guardar-como. None = proyecto sin
+        guardar: solo se resuelven rutas legacy absolutas. Invalida el lienzo
+        para repintar los retratos con la raíz nueva.
+        """
+        from pathlib import Path as _Path
+
+        self.scene_obj._portrait_assets_root = _Path(path) if path else None
+        self.scene_obj.update()
+
+    def set_view_range(self, lo: int | None, hi: int | None = None):
+        """BETA2-UI2-10: fija el rango-cámara [lo, hi] (None = atemporal) y
+        reconstruye el grafo con lo que existe en algún punto del intervalo.
+
+        Normaliza ``lo <= hi`` y es no-op si el rango no cambia (evita
+        reconstrucciones al arrastrar las asas del slider sin moverlas).
+        """
+        if lo is None:
+            new_range = None
+        else:
+            a = int(lo)
+            b = a if hi is None else int(hi)
+            new_range = (min(a, b), max(a, b))
+        if new_range == self._view_range:
             return
-        self._view_year = new_year
+        self._view_range = new_range
         self.set_graph(
             self._all_nodes,
             self._all_edges,
@@ -3708,8 +4192,19 @@ class GraphCanvasView(QGraphicsView):
             layers=self._all_layers,
         )
 
+    def view_range(self) -> tuple[int, int] | None:
+        return self._view_range
+
+    def set_view_year(self, year: int | None):
+        """BETA1-G06 (compat): fija el año-cámara clásico como rango [y, y]."""
+        self.set_view_range(year, year)
+
     def view_year(self) -> int | None:
-        return self._view_year
+        """BETA1-G06 (compat): el año-cámara si el rango es de un solo año."""
+        if self._view_range is None:
+            return None
+        lo, hi = self._view_range
+        return lo if lo == hi else None
 
     def _node_passes_filter(
         self, node: _NodeView, allowed_tree_ids: set[str] | None = None
@@ -4881,7 +5376,7 @@ class GraphCanvasView(QGraphicsView):
         if layout_mode != self._layout_mode_active or (not self._nodes and not self._trees):
             return False
         # 2. Sin filtros / focus de anillo / cámara temporal: lo dibujado == todo.
-        if self._view_year is not None or self._focused_ring_id:
+        if self._view_range is not None or self._focused_ring_id:
             return False
         vf = self._visual_filter
         if getattr(vf, "layer_ids", None) or getattr(vf, "focus_entity_ids", None):
@@ -5793,20 +6288,64 @@ class GraphCanvasView(QGraphicsView):
         self.focus_node(entity_id)
 
 
-class _EraTimeSlider(QSlider):
-    """BETA1-UX feedback: slider de tiempo que dibuja las ERAS proporcionalmente
-    a sus años (una franja cálida por era, sobre el groove, con separadores).
+class _EraRangeSlider(QWidget):
+    """BETA2-UI2-10: slider de rango temporal con DOS asas (desde–hasta).
 
-    El rango del slider ya es lineal en años (min=primer año, max=último), así
-    que mapear start/end de cada era a x es proporcional por construcción.
+    Sustituye al QSlider de un solo año: pinta su propio groove, el tramo
+    seleccionado, la cinta de eras proporcional (heredada del slider clásico
+    BETA1-UX) y dos asas circulares arrastrables. Con ambas asas en el mismo
+    año se comporta como el año-cámara clásico. Valores en años enteros.
     """
 
-    _ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
+    rangeChanged = Signal(int, int)  # noqa: N815 (Qt API)
 
-    def __init__(self, orientation, parent=None):
-        super().__init__(orientation, parent)
+    _ERA_TINTS = ("#C8A24C", "#7E9568", "#A87C53", "#937083", "#B28A3C")
+    _HANDLE_R = 7.0  # radio de cada asa
+    _MARGIN = 10.0  # margen lateral del groove (deja sitio a las asas)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lo = 0
+        self._hi = 0
+        self._va = 0
+        self._vb = 0
         self._era_segments: list[tuple[int, int]] = []
+        self._active_handle: str | None = None  # "a" | "b" durante el arrastre
         self.setMinimumHeight(34)
+        self.setMinimumWidth(220)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    # — rango y valores (años) —
+
+    def set_range(self, lo: int, hi: int) -> None:
+        lo = int(lo)
+        hi = max(int(hi), lo)
+        self._lo, self._hi = lo, hi
+        self._va = min(max(self._va, lo), hi)
+        self._vb = min(max(self._vb, lo), hi)
+        self.update()
+
+    def minimum(self) -> int:
+        return self._lo
+
+    def maximum(self) -> int:
+        return self._hi
+
+    def set_values(self, a: int, b: int) -> None:
+        """Fija ambas asas (clampeadas y normalizadas a <=). Emite rangeChanged
+        solo si algo cambió; se silencia con blockSignals como un QSlider."""
+        a = min(max(int(a), self._lo), self._hi)
+        b = min(max(int(b), self._lo), self._hi)
+        if b < a:
+            a, b = b, a
+        if (a, b) == (self._va, self._vb):
+            return
+        self._va, self._vb = a, b
+        self.update()
+        self.rangeChanged.emit(a, b)
+
+    def values(self) -> tuple[int, int]:
+        return self._va, self._vb
 
     def set_eras(self, eras, lo: int, hi: int) -> None:
         segs: list[tuple[int, int]] = []
@@ -5819,41 +6358,113 @@ class _EraTimeSlider(QSlider):
         self._era_segments = segs
         self.update()
 
+    # — geometría año ↔ x —
+
+    def _groove_rect(self) -> QRectF:
+        return QRectF(self._MARGIN, 20.0, max(self.width() - 2 * self._MARGIN, 1.0), 4.0)
+
+    def _x_for_value(self, value: int) -> float:
+        groove = self._groove_rect()
+        span = self._hi - self._lo
+        if span <= 0:
+            return groove.x()
+        return groove.x() + groove.width() * (value - self._lo) / span
+
+    def _value_for_x(self, x: float) -> int:
+        groove = self._groove_rect()
+        span = self._hi - self._lo
+        if span <= 0 or groove.width() <= 0:
+            return self._lo
+        ratio = (x - groove.x()) / groove.width()
+        return self._lo + round(min(max(ratio, 0.0), 1.0) * span)
+
+    # — pintado —
+
     def paintEvent(self, event):  # noqa: N802 (Qt API)
-        super().paintEvent(event)
-        lo, hi = self.minimum(), self.maximum()
-        if not self._era_segments or hi <= lo:
-            return
-        opt = QStyleOptionSlider()
-        self.initStyleOption(opt)
-        groove = self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self
-        )
-        gx, gw = float(groove.x()), float(groove.width())
-        span = float(hi - lo)
-        # BETA1-UX feedback: ANTES era un filo de 5 px casi invisible. Ahora es
-        # una cinta de eras nítida (un tinte por era, proporcional a sus años)
-        # en la parte alta del slider, con separadores que bajan al groove.
-        ribbon_y = 3.0
-        ribbon_h = 9.0
+        groove = self._groove_rect()
+        gx, gw = groove.x(), groove.width()
+        span = float(max(self._hi - self._lo, 0))
+        enabled = self.isEnabled()
         try:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            for i, (start, end) in enumerate(self._era_segments):
-                x0 = gx + gw * (max(start, lo) - lo) / span
-                x1 = gx + gw * (min(end, hi) - lo) / span
-                width = max(x1 - x0, 2.0)
-                tint = QColor(self._ERA_TINTS[i % len(self._ERA_TINTS)])
-                tint.setAlpha(225)
-                painter.setPen(QPen(Qt.PenStyle.NoPen))
-                painter.setBrush(QBrush(tint))
-                painter.drawRoundedRect(QRectF(x0, ribbon_y, width, ribbon_h), 3.0, 3.0)
-                # Separador fino entre eras, prolongado hasta el groove.
-                painter.setPen(QPen(QColor(120, 112, 82, 150), 1.0))
-                painter.drawLine(QPointF(x0, ribbon_y), QPointF(x0, float(groove.bottom())))
+            # Groove propio.
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+            painter.setBrush(QBrush(QColor(LINE)))
+            painter.drawRoundedRect(groove, 2.0, 2.0)
+            # Tramo seleccionado entre las dos asas.
+            xa, xb = self._x_for_value(self._va), self._x_for_value(self._vb)
+            if enabled:
+                painter.setBrush(QBrush(QColor(GOLD_SOFT)))
+                painter.drawRoundedRect(
+                    QRectF(xa, groove.y(), max(xb - xa, 2.0), groove.height()), 2.0, 2.0
+                )
+            # Cinta de eras (BETA1-UX): un tinte por era, proporcional a sus
+            # años, en la parte alta, con separadores que bajan al groove.
+            ribbon_y = 3.0
+            ribbon_h = 9.0
+            if self._era_segments and span > 0:
+                for i, (start, end) in enumerate(self._era_segments):
+                    x0 = gx + gw * (max(start, self._lo) - self._lo) / span
+                    x1 = gx + gw * (min(end, self._hi) - self._lo) / span
+                    width = max(x1 - x0, 2.0)
+                    tint = QColor(self._ERA_TINTS[i % len(self._ERA_TINTS)])
+                    tint.setAlpha(225)
+                    painter.setPen(QPen(Qt.PenStyle.NoPen))
+                    painter.setBrush(QBrush(tint))
+                    painter.drawRoundedRect(QRectF(x0, ribbon_y, width, ribbon_h), 3.0, 3.0)
+                    painter.setPen(QPen(QColor(120, 112, 82, 150), 1.0))
+                    painter.drawLine(QPointF(x0, ribbon_y), QPointF(x0, groove.bottom()))
+            # Asas: contraste + borde (nunca QGraphicsEffect).
+            handle_fill = QColor(GOLD if enabled else LINE)
+            cy = groove.center().y()
+            painter.setPen(QPen(QColor(SURFACE_HI), 2.0))
+            painter.setBrush(QBrush(handle_fill))
+            for x in (xa, xb):
+                painter.drawEllipse(QPointF(x, cy), self._HANDLE_R, self._HANDLE_R)
             painter.end()
         except Exception:  # noqa: BLE001 - el pulido nunca rompe el slider
             pass
+
+    # — ratón: arrastre de asas —
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt API)
+        if not self.isEnabled() or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        x = float(event.position().x())
+        xa, xb = self._x_for_value(self._va), self._x_for_value(self._vb)
+        # El asa más cercana captura el arrastre (con asas superpuestas, la
+        # dirección del clic decide: a la izquierda → "a", a la derecha → "b").
+        if abs(x - xa) < abs(x - xb) or (xa == xb and x < xa):
+            self._active_handle = "a"
+        else:
+            self._active_handle = "b"
+        self._drag_to(x)
+        event.accept()
+
+    def mouseMoveEvent(self, event):  # noqa: N802 (Qt API)
+        if self._active_handle is None:
+            event.ignore()
+            return
+        self._drag_to(float(event.position().x()))
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 (Qt API)
+        self._active_handle = None
+        event.accept()
+
+    def _drag_to(self, x: float) -> None:
+        value = self._value_for_x(x)
+        a, b = self._va, self._vb
+        if self._active_handle == "a":
+            a = value
+        else:
+            b = value
+        # Si las asas se cruzan, el arrastre continúa con la otra asa.
+        if a > b:
+            self._active_handle = "b" if self._active_handle == "a" else "a"
+        self.set_values(a, b)
 
 
 class GraphCanvasWidget(QWidget):
@@ -5869,7 +6480,9 @@ class GraphCanvasWidget(QWidget):
     ringSelected = Signal(str, str)
     ringFocused = Signal(str, str)
     ringFocusCleared = Signal()  # BETA1-L02
-    searchRequested = Signal()  # BETA1-L02b: tecla 'd' → barra de búsqueda flotante
+    # BETA2-UI2-10: pill temporal — embudo de filtros y año presente editable
+    filterRequested = Signal()
+    presentYearEdited = Signal(int)
     candidateClicked = Signal(str)  # SEM04: semilla germinante pulsada en el grafo
     # BETA1-B01: context-menu intents re-exposed from GraphCanvasView
     contextCreateEntityRequested = Signal()
@@ -5956,6 +6569,13 @@ class GraphCanvasWidget(QWidget):
 
         self.canvas = GraphCanvasView()
         self.canvas._atmosphere.set_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
+        # JARDIN-02: la raíz dorada respeta la intensidad de animación.
+        self.canvas.set_motion_gate(
+            lambda: getattr(self.ctx, "animation_duration", lambda _d: 1)(100) > 0
+        )
+        # PULIDO-06: mini-leyenda del jardín (plegada por defecto), esquina
+        # inferior-izquierda, por encima del lienzo.
+        self.garden_legend = GardenLegend(self)
         self.canvas.entitySelected.connect(self._entity_selected)
         # BETA2-FOCO-14: reenvío del doble click (Mapa → Foco).
         self.canvas.entityFocusRequested.connect(self.entityFocusRequested)
@@ -5967,7 +6587,6 @@ class GraphCanvasWidget(QWidget):
         self.canvas.ringSelected.connect(self.ringSelected.emit)
         self.canvas.ringFocused.connect(self.ringFocused.emit)
         self.canvas.ringFocusCleared.connect(self.ringFocusCleared.emit)
-        self.canvas.searchRequested.connect(self.searchRequested.emit)  # BETA1-L02b
         self.canvas.seedClicked.connect(self.candidateClicked.emit)  # SEM04
         # BETA1-B01: context-menu intents
         self.canvas.contextCreateEntityRequested.connect(self.contextCreateEntityRequested.emit)
@@ -5991,15 +6610,21 @@ class GraphCanvasWidget(QWidget):
 
         # BETA1-G06: scrubber temporal — la "máquina del tiempo" del grafo
         # concéntrico. Overlay flotante (no en el layout) sobre el lienzo.
+        # BETA2-UI2-10: presente None = no configurado (botón deshabilitado).
         self._time_year_range = (0, 0)
-        self._time_present_year = 0
+        self._time_present_year: int | None = None
         self._time_bar = self._build_time_bar()
         self._time_bar.setVisible(False)
 
     # ── BETA1-G06: scrubber temporal ──────────────────────────────────────
 
     def _build_time_bar(self) -> QFrame:
-        """Barra flotante para 'fotografiar' el grafo en cualquier año."""
+        """Barra flotante para 'fotografiar' el grafo en un año o intervalo.
+
+        BETA2-UI2-10: composición
+        ``[◷ toggle] [slider rango] [desde]–[hasta | «Todo el tiempo»]
+        [embudo+badge] [Presente] [año presente]``.
+        """
         bar = QFrame(self)
         bar.setObjectName("timeScrubber")
         bar.setStyleSheet(
@@ -6010,9 +6635,18 @@ class GraphCanvasWidget(QWidget):
         row.setContentsMargins(12, 5, 10, 5)
         row.setSpacing(8)
 
+        year_edit_style = (
+            f"QLineEdit {{ background: transparent; border: 1px solid {LINE}; "
+            f"border-radius: 8px; padding: 1px 4px; color: {INK_STRONG}; "
+            f"font-size: 11px; font-weight: 600; }} "
+            f"QLineEdit:focus {{ border-color: {GOLD_SOFT}; }}"
+        )
+
         self._time_toggle = QPushButton()
         self._time_toggle.setCheckable(True)
-        self._time_toggle.setToolTip("Recorrer el tiempo: ver el grafo tal como estaba en un año")
+        self._time_toggle.setToolTip(
+            "Recorrer el tiempo: ver el grafo tal como estaba en un año o intervalo"
+        )
         self._time_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._time_toggle.setFixedSize(30, 30)
         self._time_toggle.setStyleSheet(
@@ -6024,29 +6658,67 @@ class GraphCanvasWidget(QWidget):
         self._time_toggle.toggled.connect(self._on_time_toggle)
         row.addWidget(self._time_toggle)
 
-        self._time_slider = _EraTimeSlider(Qt.Orientation.Horizontal)
+        self._time_slider = _EraRangeSlider()
         self._time_slider.setObjectName("timeSlider")
         self._time_slider.setEnabled(False)
-        self._time_slider.setMinimumWidth(220)
-        self._time_slider.setStyleSheet(
-            f"QSlider#timeSlider::groove:horizontal {{ height: 4px; border-radius: 2px; background: {LINE}; }} "
-            f"QSlider#timeSlider::sub-page:horizontal {{ background: {GOLD_SOFT}; border-radius: 2px; }} "
-            f"QSlider#timeSlider::handle:horizontal {{ background: {GOLD}; border: 2px solid {SURFACE_HI}; "
-            f"width: 14px; height: 14px; margin: -6px 0; border-radius: 9px; }} "
-            f"QSlider#timeSlider::handle:horizontal:hover {{ background: {GOLD_DEEP}; }} "
-            f"QSlider#timeSlider:disabled {{ }} "
-            f"QSlider#timeSlider::handle:horizontal:disabled {{ background: {LINE}; border-color: {SURFACE_HI}; }}"
-        )
-        self._time_slider.valueChanged.connect(self._on_time_slider)
+        self._time_slider.rangeChanged.connect(self._on_time_range)
         row.addWidget(self._time_slider, 1)
 
+        # Años editables por teclado (desde–hasta); con el modo temporal
+        # apagado se muestra el rótulo "Todo el tiempo" en su lugar.
+        year_validator_limits = (-999_999, 999_999)
+        self._time_from_edit = QLineEdit()
+        self._time_to_edit = QLineEdit()
+        for edit in (self._time_from_edit, self._time_to_edit):
+            edit.setFixedWidth(56)
+            edit.setFixedHeight(24)
+            edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            edit.setStyleSheet(year_edit_style)
+            edit.setValidator(QIntValidator(*year_validator_limits, edit))
+            edit.editingFinished.connect(self._on_year_edited)
+            edit.setVisible(False)
+        self._time_from_edit.setToolTip("Año inicial del intervalo (editable)")
+        self._time_to_edit.setToolTip("Año final del intervalo (editable)")
+        self._time_range_dash = QLabel("–")
+        self._time_range_dash.setStyleSheet(
+            f"color: {INK_MUTED}; font-size: 12px; background: transparent; border: none;"
+        )
+        self._time_range_dash.setVisible(False)
         self._time_readout = QLabel("Todo el tiempo")
         self._time_readout.setStyleSheet(
-            f"color: {INK_STRONG}; font-size: 12px; font-weight: 600; background: transparent; border: none;"
+            f"color: {INK_STRONG}; font-size: 12px; font-weight: 600; "
+            f"background: transparent; border: none;"
         )
-        self._time_readout.setMinimumWidth(120)
-        self._time_readout.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        self._time_readout.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
+        row.addWidget(self._time_from_edit)
+        row.addWidget(self._time_range_dash)
+        row.addWidget(self._time_to_edit)
         row.addWidget(self._time_readout)
+
+        # Embudo de filtros con badge de activos (el popover lo abre el
+        # workspace vía filterRequested — la UI del pill solo emite).
+        self._time_filter_btn = QPushButton()
+        self._time_filter_btn.setToolTip("Filtros visuales del mapa")
+        self._time_filter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._time_filter_btn.setFixedSize(26, 26)
+        self._time_filter_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {LINE}; "
+            f"border-radius: 13px; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; }}"
+        )
+        icons.set_button_icon(self._time_filter_btn, "filter", color=INK_SOFT, size=13)
+        self._time_filter_btn.clicked.connect(self.filterRequested.emit)
+        self._filter_badge = QLabel("0", self._time_filter_btn)
+        self._filter_badge.setObjectName("filterBadge")
+        self._filter_badge.setStyleSheet(
+            f"QLabel#filterBadge {{ background: {GOLD}; color: {INK_STRONG}; "
+            f"border: 1px solid {SURFACE_HI}; border-radius: 6px; "
+            f"font-size: 8px; font-weight: 700; padding: 0px 2px; }}"
+        )
+        self._filter_badge.hide()
+        row.addWidget(self._time_filter_btn)
 
         self._time_present_btn = QPushButton("Presente")
         self._time_present_btn.setToolTip("Saltar al año presente del mundo")
@@ -6055,21 +6727,39 @@ class GraphCanvasWidget(QWidget):
         self._time_present_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {LINE}; "
             f"border-radius: 12px; padding: 2px 10px; color: {INK_SOFT}; font-size: 11px; font-weight: 600; }} "
-            f"QPushButton:hover {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}"
+            f"QPushButton:hover {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }} "
+            f"QPushButton:disabled {{ color: {INK_MUTED}; border-color: {LINE}; }}"
         )
         self._time_present_btn.clicked.connect(self._on_time_present)
         row.addWidget(self._time_present_btn)
+
+        # Año presente editable: solo emite presentYearEdited — la
+        # persistencia (era_controller.set_present_year) vive en el workspace.
+        self._present_edit = QLineEdit()
+        self._present_edit.setFixedWidth(56)
+        self._present_edit.setFixedHeight(24)
+        self._present_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._present_edit.setStyleSheet(year_edit_style)
+        self._present_edit.setValidator(QIntValidator(*year_validator_limits, self._present_edit))
+        self._present_edit.setToolTip("Año presente del mundo (editable)")
+        self._present_edit.setPlaceholderText("presente")
+        self._present_edit.editingFinished.connect(self._on_present_year_edit)
+        row.addWidget(self._present_edit)
+
         bar.adjustSize()
         bar.raise_()
         return bar
 
-    def _project_year_bounds(self, project) -> tuple[int, int, int]:
-        """(min_year, max_year, present_year) a partir del calendario y las vidas."""
+    def _project_year_bounds(self, project) -> tuple[int, int, int | None]:
+        """(min_year, max_year, present_year|None) del calendario y las vidas."""
         # BETA1-UX feedback: usar eras/presente EFECTIVOS (derivados del
         # calendario completo si el dominio no las tiene), igual que la
         # cronológica, para que el slider abarque el rango real del mundo.
-        present = effective_present_year(project)
-        years: list[int] = [present]
+        # BETA2-UI2-10: presente None si no está configurado — antes el 0 de
+        # respaldo entraba en los límites (distorsionándolos) y "Presente"
+        # saltaba al año 0 con el grafo vacío.
+        present = explicit_present_year(project)
+        years: list[int] = [] if present is None else [present]
         for era in effective_eras(project):
             start = _parse_optional_year(getattr(era, "start_year", None))
             if start is not None:
@@ -6088,8 +6778,10 @@ class GraphCanvasWidget(QWidget):
             year = _parse_optional_year(getattr(hito, "year", None))
             if year is not None:
                 years.append(year)
+        if not years:
+            years = [0]
         lo, hi = min(years), max(years)
-        return lo, max(hi, present), present
+        return lo, hi, present
 
     def _era_name_for_year(self, project, year: int) -> str:
         for era in effective_eras(project):
@@ -6102,7 +6794,10 @@ class GraphCanvasWidget(QWidget):
         return ""
 
     def _sync_time_bar(self):
-        """Recalcula el rango del scrubber con el proyecto actual."""
+        """Recalcula el rango del scrubber con el proyecto actual.
+
+        BETA2-UI2-10: solo re-clampea el intervalo del usuario a los límites
+        nuevos — nunca lo resetea (la llama cada refresh())."""
         project = self._project()
         if project is None:
             self._time_bar.setVisible(False)
@@ -6111,55 +6806,145 @@ class GraphCanvasWidget(QWidget):
         self._time_year_range = (lo, hi)
         self._time_present_year = present
         block = self._time_slider.blockSignals(True)
-        self._time_slider.setMinimum(lo)
-        self._time_slider.setMaximum(max(hi, lo))
+        self._time_slider.set_range(lo, max(hi, lo))
         # BETA1-UX feedback: pinta las eras proporcionalmente en el slider.
-        if hasattr(self._time_slider, "set_eras"):
-            self._time_slider.set_eras(effective_eras(project), lo, max(hi, lo))
-        current = self.canvas.view_year()
+        self._time_slider.set_eras(effective_eras(project), lo, max(hi, lo))
+        current = self.canvas.view_range()
         if current is not None:
-            self._time_slider.setValue(max(lo, min(hi, current)))
-        elif lo <= present <= hi:
-            self._time_slider.setValue(present)
+            a, b = current
+            self._time_slider.set_values(max(lo, min(hi, a)), max(lo, min(hi, b)))
+        elif present is not None and lo <= present <= hi:
+            self._time_slider.set_values(present, present)
         self._time_slider.blockSignals(block)
         self._time_slider.setEnabled(self._time_toggle.isChecked() and hi > lo)
+        if not self._present_edit.hasFocus():
+            self._present_edit.setText("" if present is None else str(present))
+        self._time_present_btn.setEnabled(present is not None)
+        self._time_present_btn.setToolTip(
+            "Saltar al año presente del mundo"
+            if present is not None
+            else "Define el año presente (campo de al lado) para saltar aquí"
+        )
         self._update_time_readout()
 
     def _update_time_readout(self):
-        year = self.canvas.view_year()
-        if year is None:
+        """Sincroniza los campos desde–hasta (o el rótulo atemporal) con la vista."""
+        rng = self.canvas.view_range()
+        temporal = rng is not None
+        self._time_from_edit.setVisible(temporal)
+        self._time_range_dash.setVisible(temporal)
+        self._time_to_edit.setVisible(temporal)
+        self._time_readout.setVisible(not temporal)
+        if rng is None:
             self._time_readout.setText("Todo el tiempo")
             return
+        lo, hi = rng
+        if not self._time_from_edit.hasFocus():
+            self._time_from_edit.setText(str(lo))
+        if not self._time_to_edit.hasFocus():
+            self._time_to_edit.setText(str(hi))
         project = self._project()
-        era = self._era_name_for_year(project, year) if project is not None else ""
-        suffix = f" · {era}" if era else ""
-        self._time_readout.setText(f"Año {year}{suffix}")
+        if project is not None:
+            era_lo = self._era_name_for_year(project, lo)
+            era_hi = self._era_name_for_year(project, hi)
+            self._time_from_edit.setToolTip(
+                f"Año inicial del intervalo{f' · {era_lo}' if era_lo else ''}"
+            )
+            self._time_to_edit.setToolTip(
+                f"Año final del intervalo{f' · {era_hi}' if era_hi else ''}"
+            )
 
     def _on_time_toggle(self, checked: bool):
+        lo, hi = self._time_year_range
         if checked:
-            lo, hi = self._time_year_range
             self._time_slider.setEnabled(hi > lo)
-            self.canvas.set_view_year(int(self._time_slider.value()))
+            a, b = self._time_slider.values()
+            self.canvas.set_view_range(a, b)
         else:
             self._time_slider.setEnabled(False)
-            self.canvas.set_view_year(None)
+            self.canvas.set_view_range(None)
         self._update_time_readout()
 
-    def _on_time_slider(self, value: int):
+    def _on_time_range(self, a: int, b: int):
         if self._time_toggle.isChecked():
-            self.canvas.set_view_year(int(value))
+            self.canvas.set_view_range(a, b)
             self._update_time_readout()
 
+    def _on_year_edited(self):
+        """Años tecleados en desde/hasta → clamp, swap si procede, y aplicar."""
+        if not self._time_toggle.isChecked():
+            return
+        lo, hi = self._time_year_range
+        try:
+            a = int(self._time_from_edit.text().strip())
+            b = int(self._time_to_edit.text().strip())
+        except ValueError:
+            self._update_time_readout()  # restaura el último rango válido
+            return
+        a = max(lo, min(hi, a))
+        b = max(lo, min(hi, b))
+        if b < a:
+            a, b = b, a
+        block = self._time_slider.blockSignals(True)
+        self._time_slider.set_values(a, b)
+        self._time_slider.blockSignals(block)
+        self.canvas.set_view_range(a, b)
+        self._update_time_readout()
+
     def _on_time_present(self):
+        """Salta al presente. BETA2-UI2-10: sin presente configurado el botón
+        está deshabilitado (nada de saltar al año 0); con presente, UNA sola
+        reconstrucción (el toggle se activa con señales bloqueadas — antes
+        disparaba set_view_year con el valor viejo del slider)."""
+        if self._time_present_year is None:
+            return
         lo, hi = self._time_year_range
         present = max(lo, min(hi, self._time_present_year))
-        if not self._time_toggle.isChecked():
-            self._time_toggle.setChecked(True)  # activa modo temporal (dispara set_view_year)
         block = self._time_slider.blockSignals(True)
-        self._time_slider.setValue(present)
+        self._time_slider.set_values(present, present)
         self._time_slider.blockSignals(block)
-        self.canvas.set_view_year(present)
+        if not self._time_toggle.isChecked():
+            tblock = self._time_toggle.blockSignals(True)
+            self._time_toggle.setChecked(True)
+            self._time_toggle.blockSignals(tblock)
+            self._time_slider.setEnabled(hi > lo)
+        self.canvas.set_view_range(present, present)
         self._update_time_readout()
+
+    def _on_present_year_edit(self):
+        """Año presente tecleado → emite presentYearEdited (no persiste aquí)."""
+        text = self._present_edit.text().strip()
+        try:
+            year = int(text)
+        except ValueError:
+            self._present_edit.setText(
+                "" if self._time_present_year is None else str(self._time_present_year)
+            )
+            return
+        if year == self._time_present_year:
+            return
+        self.presentYearEdited.emit(year)
+
+    def filter_anchor(self) -> QPushButton:
+        """BETA2-UI2-10: ancla del popover de filtros (el embudo del pill)."""
+        return self._time_filter_btn
+
+    def set_filter_badge_count(self, count: int) -> None:
+        """BETA2-UI2-10: badge de filtros activos sobre el embudo (0 = oculto)."""
+        count = max(0, int(count))
+        if count <= 0:
+            self._filter_badge.hide()
+            return
+        self._filter_badge.setText(str(count))
+        self._filter_badge.adjustSize()
+        btn = self._time_filter_btn
+        self._filter_badge.move(max(0, btn.width() - self._filter_badge.width() - 1), 0)
+        self._filter_badge.show()
+        self._filter_badge.raise_()
+
+    def set_assets_root(self, path) -> None:
+        """BETA2-IMG: passthrough a la vista (retratos de entidad)."""
+        self.canvas.set_assets_root(path)
 
     def set_view_year(self, year: int | None):
         self.canvas.set_view_year(year)
@@ -6167,6 +6952,14 @@ class GraphCanvasWidget(QWidget):
 
     def view_year(self) -> int | None:
         return self.canvas.view_year()
+
+    def set_view_range(self, lo: int | None, hi: int | None = None):
+        """BETA2-UI2-10: passthrough del rango-cámara a la vista."""
+        self.canvas.set_view_range(lo, hi)
+        self._update_time_readout()
+
+    def view_range(self) -> tuple[int, int] | None:
+        return self.canvas.view_range()
 
     def set_time_bar_top_inset(self, inset: int) -> None:
         """BETA2-FOCO-18: desplazamiento superior extra para la barra temporal.
@@ -6193,6 +6986,29 @@ class GraphCanvasWidget(QWidget):
         if getattr(self, "empty", None) is not None and self.empty.isVisible():
             self._position_empty_overlay()
         self._position_time_bar()
+        self._position_garden_legend()
+
+    def set_garden_legend_bottom_inset(self, px: int) -> None:
+        """UI2-02: hueco inferior reservado (píldoras 🌱/💧 + cluster derecho).
+
+        El workspace lo alimenta para que la leyenda quede apilada ENCIMA de
+        esos overlays sin solaparlos (mismo patrón que set_time_bar_top_inset).
+        """
+        self._garden_legend_bottom_inset = max(0, int(px))
+        self._position_garden_legend()
+
+    def _position_garden_legend(self):
+        """UI2-02: leyenda pegada a la esquina inferior-derecha, sobre las píldoras."""
+        legend = getattr(self, "garden_legend", None)
+        if legend is None:
+            return
+        legend.adjustSize()
+        inset = getattr(self, "_garden_legend_bottom_inset", 0)
+        legend.move(
+            max(0, self.width() - legend.width() - 12),
+            max(0, self.height() - legend.height() - 12 - inset),
+        )
+        legend.raise_()
 
     def _project(self):
         pc = self.ctx.project_controller
@@ -6232,9 +7048,17 @@ class GraphCanvasWidget(QWidget):
             self._entity_selected(entity_id)
         return ok
 
-    def set_garden_lens(self, enabled: bool, status_provider=None) -> None:
-        """BETA2-FOCO-14: Lente Jardín (estado de riego pintado en el Mapa)."""
-        self.canvas.set_garden_lens(enabled, status_provider)
+    def set_watering_active(self, entity_id: str) -> None:
+        """UI2-05: anillo savia en la entidad que se está regando (delega)."""
+        self.canvas.set_watering_active(entity_id)
+
+    def set_garden_status_provider(self, status_provider) -> None:
+        """BETA2-JARDIN-01: estado de riego SIEMPRE visible en el Mapa."""
+        self.canvas.set_garden_status_provider(status_provider)
+
+    def refresh_garden_status(self) -> None:
+        """Recalcula el estado del jardín (tras regar/secar/cultivar)."""
+        self.canvas.refresh_garden_status()
 
     def bloom_node(self, entity_id: str) -> bool:
         # SEM02: enfoca el nodo recién germinado y dispara el glow dorado.
@@ -6508,7 +7332,7 @@ class GraphCanvasWidget(QWidget):
         if visible:
             self._position_empty_overlay()
 
-    def refresh(self):
+    def refresh(self, *, full: bool = False):
         project = self._project()
         if project is None:
             _b44trace(f"widget_refresh project=None layout={self._layout_mode!r}")
@@ -6584,9 +7408,14 @@ class GraphCanvasWidget(QWidget):
         # BETA1-L01: atajo incremental para ediciones de atributos (mismos ids,
         # misma estructura) — actualiza items in situ y evita el rebuild O(N).
         # Si no aplica, cae al set_graph completo de siempre.
-        if not self.canvas.try_incremental_refresh(
+        # BETA2-STRUCT (fix smoke): ``full=True`` SALTA el atajo incremental. Un
+        # ring_move de una hoja solo cambia atributos (mismos ids/estructura), así
+        # que el atajo la actualizaría in situ SIN reubicarla a su nuevo anillo; un
+        # rebuild completo recoloca los nodos por anillo.
+        incremental = not full and self.canvas.try_incremental_refresh(
             entities, relations, layout_mode=self._layout_mode, layers=layers
-        ):
+        )
+        if not incremental:
             self.canvas.set_graph(entities, relations, layout_mode=self._layout_mode, layers=layers)
         # BETA1-L01: ajustar la brisa de fondo al tamaño del grafo recién pintado.
         self.canvas._apply_atmosphere_budget()

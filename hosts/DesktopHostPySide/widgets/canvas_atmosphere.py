@@ -73,7 +73,30 @@ class CanvasAtmosphere:
             "drift": self._rng.uniform(0.6, 1.5),
             "sway": self._rng.uniform(0.0, math.tau),
             "alpha": self._rng.uniform(0.05, 0.13),
+            # UI2-09: impulso de ráfaga (viento puntual), decae solo.
+            "wx": 0.0,
+            "wy": 0.0,
         }
+
+    def gust(self, dx: float, dy: float, strength: float = 1.0) -> None:
+        """UI2-09: ráfaga direccional — empuja las hojas en (dx, dy) con
+        impulso inverso al tamaño (las grandes tienen inercia, patrón del
+        viento del menú de inicio). El impulso decae solo en ``_tick``.
+        No-op con el movimiento reducido (gate del ctx)."""
+        if not self._motion_enabled():
+            return
+        self._ensure()
+        norm = math.hypot(dx, dy)
+        if norm <= 0.0:
+            return
+        ux, uy = dx / norm, dy / norm
+        for leaf in self._leaves:
+            impulse = strength * self._rng.uniform(0.010, 0.022) * (8.0 / leaf["size"])
+            leaf["wx"] += ux * impulse
+            leaf["wy"] += uy * impulse
+            leaf["vrot"] += self._rng.uniform(-0.02, 0.02)
+        if not self._timer.isActive():
+            self._timer.start()
 
     def _ensure(self) -> None:
         if not self._leaves:
@@ -88,13 +111,25 @@ class CanvasAtmosphere:
             leaf["sway"] += 0.02
             leaf["x"] += leaf["drift"] * wind + 0.00006 * math.sin(leaf["sway"])
             leaf["y"] += leaf["drift"] * 0.00016 + 0.00004 * math.cos(leaf["sway"] * 0.7)
+            # UI2-09: estela de la ráfaga (decae como el viento del menú).
+            leaf["x"] += leaf["wx"]
+            leaf["y"] += leaf["wy"]
+            leaf["wx"] *= 0.93
+            leaf["wy"] *= 0.93
             leaf["rot"] += leaf["vrot"]
-            # Reciclaje al salir por la derecha o por abajo.
+            # Reciclaje al salir por cualquier borde (la ráfaga puede empujar
+            # hacia la izquierda o hacia arriba).
             if leaf["x"] > 1.06:
                 leaf["x"] = -0.06
                 leaf["y"] = self._rng.uniform(0.0, 1.0)
+            elif leaf["x"] < -0.06:
+                leaf["x"] = 1.06
+                leaf["y"] = self._rng.uniform(0.0, 1.0)
             if leaf["y"] > 1.06:
                 leaf["y"] = -0.06
+                leaf["x"] = self._rng.uniform(0.0, 1.0)
+            elif leaf["y"] < -0.06:
+                leaf["y"] = 1.06
                 leaf["x"] = self._rng.uniform(0.0, 1.0)
         viewport = self._view.viewport()
         if viewport is not None:

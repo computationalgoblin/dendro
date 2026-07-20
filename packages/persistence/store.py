@@ -44,6 +44,11 @@ from packages.persistence.schema import (
     _apply_migration_v31_to_v32,
     _apply_migration_v32_to_v33,
     _apply_migration_v33_to_v34,
+    _apply_migration_v34_to_v35,
+    _apply_migration_v35_to_v36,
+    _apply_migration_v36_to_v37,
+    _apply_migration_v37_to_v38,
+    _apply_migration_v38_to_v39,
     CURRENT_SCHEMA_VERSION,
     _apply_migration_v1_to_v2,
     _apply_migration_v2_to_v3,
@@ -56,6 +61,7 @@ from packages.persistence.schema import (
     detect_schema_version,
     validate_project_structure,
     _validate_writing_units,
+    _validate_causal_milestones,
     _validate_campaigns,
     _validate_player_character_profiles,
     _validate_campaign_clocks,
@@ -485,6 +491,31 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
 
     if version == 33:
         data = _apply_migration_v33_to_v34(data)
+        data["schema_version"] = 34
+        version = 34
+
+    if version == 34:
+        data = _apply_migration_v34_to_v35(data)
+        data["schema_version"] = 35
+        version = 35
+
+    if version == 35:
+        data = _apply_migration_v35_to_v36(data)
+        data["schema_version"] = 36
+        version = 36
+
+    if version == 36:
+        data = _apply_migration_v36_to_v37(data)
+        data["schema_version"] = 37
+        version = 37
+
+    if version == 37:
+        data = _apply_migration_v37_to_v38(data)
+        data["schema_version"] = 38
+        version = 38
+
+    if version == 38:
+        data = _apply_migration_v38_to_v39(data)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
 
     # Step 5: Structural validation
@@ -495,6 +526,11 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     wu_errors = _validate_writing_units(data.get("writing_units", []))
     if wu_errors:
         return Error(" ".join(wu_errors))
+
+    # BETA2-SUB-01: contención de subhitos (referencia, 1 nivel, sin ciclo)
+    hito_errors = _validate_causal_milestones(data.get("causal_milestones", []))
+    if hito_errors:
+        return Error(" ".join(hito_errors))
 
     # Campaign validations
     camp_errors = _validate_campaigns(data.get("campaigns", []))

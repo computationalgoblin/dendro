@@ -66,6 +66,16 @@ class HistoryEventType(str, Enum):
     SECADO_ENTIDAD = "secado_entidad"
     CULTIVO_ENTIDAD = "cultivo_entidad"
     DESCARTE_FANTASMA = "descarte_fantasma"
+    # BETA2-PLAY: observación del recorrido cronológico (lectura de la IA sobre
+    # una entidad afectada de un hito). No muta canon; solo deja traza revisable.
+    OBSERVACION_RECORRIDO = "observacion_recorrido"
+    # BETA2-MEM: memoria narrativa viva. La Memoria es derivada, no canon; estos
+    # eventos trazan su mantenimiento (origen/fecha/causa) sin tocar el canon.
+    MEMORIA_ACTUALIZADA = "memoria_actualizada"
+    MEMORIA_FALTA_REGAR = "memoria_falta_regar"
+    MEMORIA_SECADA = "memoria_secada"
+    MEMORIA_BORRADA = "memoria_borrada"
+    MEMORIA_PROPUESTA_REVISION = "memoria_propuesta_revision"
 
 
 # ═══════════════════════════════════════════════════════════════════════

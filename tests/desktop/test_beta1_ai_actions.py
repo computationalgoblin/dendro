@@ -39,20 +39,15 @@ def test_d06_contextual_ai_actions_route_to_reviewable_jobs():
 
 
 def test_d06_detail_panels_expose_single_ai_prompt():
+    # BETA2-CLEANUP-PANELES: tree_detail_panel.py se eliminó (edición de ramas en
+    # Foco vía NodeDetailPanel); solo se comprueban node y relation.
     node_panel = _read("hosts/DesktopHostPySide/widgets/node_detail_panel.py")
-    tree_panel = _read("hosts/DesktopHostPySide/widgets/tree_detail_panel.py")
     relation_panel = _read("hosts/DesktopHostPySide/widgets/relation_detail_panel.py")
 
     assert "self.ai_generate_btn.setText(\"Consultar\")" in node_panel
     assert "Expandir hacia anillo inferior" not in node_panel
     assert "Explicar desde causas superiores" not in node_panel
     assert "Destino causal" not in node_panel
-
-    assert "self.ai_run_btn = QPushButton(\"Consultar\")" in tree_panel
-    assert "self.ai_prompt_edit" in tree_panel
-    assert "Expandir hacia anillo inferior" not in tree_panel
-    assert "Explicar desde causas superiores" not in tree_panel
-    assert "Destino causal" not in tree_panel
 
     assert "self.ai_generate_btn.setText(\"Consultar\")" in relation_panel
     # BETA2-UX-03: el botón oculto «Analizar coherencia» se eliminó de ambos paneles.

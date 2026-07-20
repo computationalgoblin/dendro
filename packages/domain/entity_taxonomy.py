@@ -73,6 +73,32 @@ BEING_NATURES: tuple[TemporalNature, ...] = (
 )
 
 
+def is_branch_type(entity_type: "EntityType | str | None") -> bool:
+    """¿Este tipo hace que la entidad sea una RAMA (contenedor que agrupa)?
+
+    La ramitud se DERIVA del tipo: los tipos de rama de la taxonomía
+    (`BRANCH_ENTITY_TYPES`) la hacen rama. Se reconoce además el rol legado
+    `CONTENEDOR` (ramas de proyectos antiguos, creadas antes de derivar la
+    ramitud del tipo) para no perder datos ni comportamiento.
+
+    Acepta un `EntityType` o su `value` (string); un tipo personalizado
+    desconocido cuenta como hoja.
+    """
+    if entity_type is None:
+        return False
+    if isinstance(entity_type, str):
+        try:
+            entity_type = EntityType(entity_type.strip().lower())
+        except ValueError:
+            return False  # tipo personalizado → hoja
+    return entity_type in BRANCH_ENTITY_TYPES or entity_type == EntityType.CONTENEDOR
+
+
+def is_branch(entity: object) -> bool:
+    """¿Esta entidad es una rama? Se deriva de su `entity_type`."""
+    return is_branch_type(getattr(entity, "entity_type", None))
+
+
 def has_temporal_nature(entity_type: EntityType) -> bool:
     """¿Este tipo tiene eje de naturaleza temporal (es un ser)?"""
     return entity_type in BEING_TYPES
@@ -140,6 +166,8 @@ __all__ = [
     "OFFERED_ENTITY_TYPES",
     "BEING_TYPES",
     "BEING_NATURES",
+    "is_branch_type",
+    "is_branch",
     "has_temporal_nature",
     "allowed_natures",
     "clamp_nature",

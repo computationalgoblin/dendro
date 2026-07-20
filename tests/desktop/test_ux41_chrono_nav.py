@@ -164,13 +164,13 @@ def test_nav_milestone_por_anio_y_enter_abre(qapp):
     assert emitted.get("m") == "h2"
 
 
-# ── Tab recorre las eras ────────────────────────────────────────────────────
+# ── AvPág/RePág recorren las eras (FOCO-28: Tab/Shift+Tab pasaron a modos) ───
 
-def test_tab_recorre_eras(qapp):
+def test_pagedown_pageup_recorre_eras(qapp):
     v = _view(qapp)
-    QTest.keyClick(v, Qt.Key.Key_Tab)
+    QTest.keyClick(v, Qt.Key.Key_PageDown)
     assert v._focused_era_id == "e0"
-    QTest.keyClick(v, Qt.Key.Key_Tab)
+    QTest.keyClick(v, Qt.Key.Key_PageDown)
     assert v._focused_era_id == "e1"
-    QTest.keyClick(v, Qt.Key.Key_Backtab)  # Shift+Tab → anterior
+    QTest.keyClick(v, Qt.Key.Key_PageUp)  # RePág → anterior
     assert v._focused_era_id == "e0"

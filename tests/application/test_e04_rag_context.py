@@ -144,7 +144,10 @@ def test_e04_context_pack_respects_budget_and_marks_truncation():
     assert pack.tokens_estimated <= 80
 
 
-def test_e04_ai_job_service_sends_context_pack_to_provider():
+def test_e04_ai_job_service_no_longer_sends_rag_pack():
+    # BETA2-WIKI-05: el pipeline dejó de recuperar por RAG. Ya NO se construye ni
+    # envía un rag_context_pack ni secciones de autoridad; el contexto relevante lo
+    # decide la navegación de la wiki (contexto_wiki), inyectada por el consumidor.
     project = _make_project()
     provider = E04Provider()
     service = AIJobService(
@@ -162,19 +165,12 @@ def test_e04_ai_job_service_sends_context_pack_to_provider():
 
     assert isinstance(result, Ok)
     sent = json.loads(provider.calls[0][1])
-    # El pack RAG ya no viaja crudo en contexto_autorizado: se reparte en
-    # secciones etiquetadas por autoridad (canon / candidates / imports / RAG).
-    assert "rag_context_pack" not in json.dumps(sent.get("contexto_autorizado", {}))
-    refs = _authority_refs(sent)
-    assert ("entity", "leaf-1") in refs
-    assert ("relation", "rel-conflict") in refs
-    # Entidades/relaciones del corpus son canon confirmado, con etiqueta visible.
-    assert "CANON CONFIRMADO" in sent["canon_confirmado"]["autoridad"]
-    # El pack crudo sigue disponible en el plan (para traza/observabilidad).
-    assert result.value.plan["context"]["rag_context_pack"]["schema"] == "context_pack/v1"
+    assert _authority_refs(sent) == set()  # sin secciones de autoridad del pack
+    assert "rag_context_pack" not in result.value.plan.get("context", {})
 
 
-def test_e04_missing_project_degrades_with_structured_warning_only():
+def test_e04_missing_project_is_a_noop_for_context():
+    # BETA2-WIKI-05: sin proyecto no hay contexto que inyectar y no se produce pack.
     provider = E04Provider()
     service = AIJobService(
         provider=provider,
@@ -187,8 +183,5 @@ def test_e04_missing_project_degrades_with_structured_warning_only():
 
     assert isinstance(result, Ok)
     sent = json.loads(provider.calls[0][1])
-    # Sin proyecto: pack vacío con warning estructurado → surface en rag_auxiliar.
     assert _authority_refs(sent) == set()
-    assert sent["rag_auxiliar"]["warnings"] == ["rag_project_unavailable"]
-    assert "canon_confirmado" not in sent
-    assert result.value.plan["context"]["rag_context_pack"]["warnings"] == ["rag_project_unavailable"]
+    assert "rag_context_pack" not in result.value.plan.get("context", {})

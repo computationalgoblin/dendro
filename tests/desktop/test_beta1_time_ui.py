@@ -22,7 +22,6 @@ if HAS_QT:
     from hosts.DesktopHostPySide.controllers.entity_controller import EntityController
     from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
     from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
-    from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
     from hosts.DesktopHostPySide.widgets.milestone_labels import (
         milestone_sort_value,
         milestone_temporal_label,
@@ -68,33 +67,35 @@ def _create_entity(ec, name, *, kind="personaje", **extra):
 
 # ── Panel de hoja (BETA1-UX2C: lapso SOLO-LECTURA; se edita en cronología) ──
 
-def test_node_panel_shows_lifespan_readonly(qapp):
+def test_node_panel_has_no_lifespan_text(qapp):
+    # BETA2-FOCO-27: el lapso ya NO se muestra como texto en el formulario — se
+    # define en la cronología del PIE del editor. El panel no expone año editable
+    # inline ni la etiqueta muerta de lapso.
     ctx, ps, ec, _rc = _ctx_with_project()
     entity = _create_entity(ec, "Eldrin", birth_year=-500, death_year=-450)
     panel = NodeDetailPanel(ctx, ec, entity.id, on_saved=lambda: None)
-    # Ya no hay campos editables de año; un label solo-lectura muestra el lapso.
     assert not hasattr(panel, "birth_year_edit")
-    text = panel.lifespan_label.text()
-    assert "-500" in text and "-450" in text and "Antigua" in text
+    assert not hasattr(panel, "lifespan_label")
 
 
-def test_node_panel_undated_shows_por_datar(qapp):
-    # BETA1-J04/J06: una hoja sin fecha YA NO hereda el presente; el panel
-    # muestra el estado 'Por datar' (nunca un presente falso).
+def test_node_panel_undated_loads_without_lifespan_text(qapp):
+    # BETA1-J04/J06 + BETA2-FOCO-27: una hoja sin fecha carga sin etiqueta de
+    # lapso (el estado de datación se visualiza en la cronología, no como texto).
     ctx, ps, ec, _rc = _ctx_with_project()
     entity = _create_entity(ec, "Nueva")  # sin año → pendiente
     panel = NodeDetailPanel(ctx, ec, entity.id, on_saved=lambda: None)
-    text = panel.lifespan_label.text()
-    assert "Por datar" in text
+    assert not hasattr(panel, "lifespan_label")
+    assert ps.active_project.entities[0].birth_year is None
 
 
-def test_node_panel_alive_shows_present(qapp):
-    # Con fecha de inicio y sin fin, el lapso llega "hasta el presente".
+def test_node_panel_syncs_nature_from_lifespan(qapp):
+    # BETA2-FOCO-27: aunque el texto de lapso desapareció, el panel sigue
+    # sincronizando la naturaleza temporal desde el life_span de la entidad.
     ctx, ps, ec, _rc = _ctx_with_project()
     entity = _create_entity(ec, "Nueva", birth_year=100)
     panel = NodeDetailPanel(ctx, ec, entity.id, on_saved=lambda: None)
-    text = panel.lifespan_label.text()
-    assert "100" in text and "presente" in text.lower()
+    assert not hasattr(panel, "lifespan_label")
+    assert panel.nature_combo.currentData() == "mortal"
 
 
 def test_node_panel_save_preserves_lifespan(qapp):
@@ -110,31 +111,27 @@ def test_node_panel_save_preserves_lifespan(qapp):
 
 # ── BETA1-J08: taxonomía curada + naturaleza por tipo ─────────────────────
 
-def test_type_combo_offers_only_curated(qapp):
-    # BETA1-J08-fix: la HOJA solo ofrece tipos de hoja (personaje, criatura,
-    # objeto, tecnologia, idioma); ni ocultos ni tipos de rama.
-    from packages.domain.entity_taxonomy import LEAF_ENTITY_TYPES
+def test_type_combo_offers_all_offered_types(qapp):
+    # UI2-20: cualquier entidad ofrece TODOS los tipos ofrecidos (hoja + rama);
+    # la ramitud se deriva del tipo elegido. Los tipos ocultos siguen fuera.
+    from packages.domain.entity_taxonomy import OFFERED_ENTITY_TYPES
     ctx, ps, ec, _rc = _ctx_with_project()
     entity = _create_entity(ec, "X", birth_year=10)
     panel = NodeDetailPanel(ctx, ec, entity.id, on_saved=lambda: None)
     datas = {panel.type_combo.itemData(i) for i in range(panel.type_combo.count())}
-    assert datas == {t.value for t in LEAF_ENTITY_TYPES}
-    for not_leaf in ("escena", "contenedor", "evento", "nota", "faccion", "localizacion"):
-        assert not_leaf not in datas
+    assert datas == {t.value for t in OFFERED_ENTITY_TYPES}
+    # Los tipos de rama ahora SÍ se ofrecen a cualquier entidad.
+    assert "faccion" in datas
+    assert "localizacion" in datas
+    # Los ocultos (rol 'contenedor', subsistemas, retirados) siguen fuera.
+    for hidden in ("escena", "contenedor", "evento", "nota"):
+        assert hidden not in datas
 
 
-def test_rama_type_combo_uses_branch_set(qapp):
-    # BETA1-J08-fix: la rama ofrece solo tipos de CONTENEDOR (distintos de la
-    # hoja); ni el vocabulario legacy TREE_TYPES ni tipos de hoja.
-    from packages.domain.entity_taxonomy import BRANCH_ENTITY_TYPES
-    ctx, ps, ec, rc = _ctx_with_project()
-    rama = _create_entity(ec, "Orden", kind="contenedor", birth_year=10)
-    panel = TreeDetailPanel(ctx, ec, rc, rama.id, on_saved=lambda: None)
-    texts = {panel.tree_type_combo.itemText(i) for i in range(panel.tree_type_combo.count())}
-    branch = {t.value for t in BRANCH_ENTITY_TYPES}
-    assert branch.issubset(texts)
-    for not_branch in ("reino", "familia", "organizacion", "personaje", "objeto", "idioma"):
-        assert not_branch not in texts
+# BETA2-CLEANUP-PANELES: test_rama_type_combo_uses_branch_set se retiró — el
+# TreeDetailPanel (con su tree_type_combo restringido a ramas) ya no existe; la
+# edición de ramas vive en el Foco (NodeDetailPanel variant="foco" con type_combo
+# unificado).
 
 
 def test_nature_combo_visible_only_for_beings(qapp):
@@ -152,18 +149,9 @@ def test_nature_combo_visible_only_for_beings(qapp):
 
 
 # ── Panel de rama ─────────────────────────────────────────────────────────
-
-def test_tree_panel_shows_and_preserves_lifespan(qapp):
-    ctx, ps, ec, rc = _ctx_with_project()
-    branch = _create_entity(ec, "La Orden", kind="contenedor", birth_year=-700, death_year=-100)
-    panel = TreeDetailPanel(ctx, ec, rc, branch.id, on_saved=lambda: None)
-    assert not hasattr(panel, "birth_year_edit")
-    text = panel.lifespan_label.text()
-    assert "-700" in text and "Antigua" in text
-    panel.name_edit.setText("La Orden Vieja")
-    panel._save()
-    saved = ps.active_project.entities[0]
-    assert saved.birth_year == -700 and saved.death_year == -100
+# BETA2-CLEANUP-PANELES: test_tree_panel_shows_and_preserves_lifespan se retiró.
+# El cajón de rama (TreeDetailPanel, con lifespan_label de solo lectura) ya no
+# existe; en el Foco el lapso de vida se edita en la banda (FocoLifelineBand).
 
 
 # ── Cronología de hitos (H03 + G03) ──────────────────────────────────────

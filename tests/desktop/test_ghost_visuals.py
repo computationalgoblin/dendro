@@ -53,7 +53,7 @@ def _view_with_neighbors():
     from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
 
     view = FocoView(project_provider=lambda: project)
-    view.center_entity(center.id, push_history=False)
+    view.center_entity(center.id)
     return view, normal, ghost
 
 

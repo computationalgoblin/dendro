@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.domain.calendar_math import CalendarConfig
 from packages.domain.project_chronology import ProjectChronology
 from packages.domain.result import Error, Ok, Result
 
@@ -112,6 +113,84 @@ class ProjectChronologyService:
         if isinstance(incoming_meta, dict):
             metadata.update(incoming_meta)
 
+        # BETA2-CAL: la ruta unificada (CalendarService) escribe eras canónicas por
+        # separado; aquí solo normaliza la config de meses/semana/ancla sin el clobber
+        # legacy de era_lengths/current_date. El resto de rutas (apply_candidate/IA/tests
+        # H05/H07) sigue por el camino legacy de los tres modos.
+        if data.get("calendar_configured"):
+            mode = self._apply_unified_calendar(metadata, data)
+        else:
+            mode = self._apply_legacy_calendar(metadata, data)
+
+        chronology.calendar_name = str(data.get("calendar_name", chronology.calendar_name) or "").strip()
+        chronology.description = str(data.get("description", chronology.description) or "").strip()
+        chronology.calendar_system = str(data.get("calendar_system", mode) or mode).strip()
+        chronology.metadata = metadata
+        now = _now_iso()
+        if not chronology.created_at:
+            chronology.created_at = now
+        chronology.updated_at = now
+
+        project = self._project()
+        if isinstance(project, Error):
+            return project
+        if hasattr(project.value, "touch"):
+            project.value.touch()
+        return Ok(chronology)
+
+    def _apply_unified_calendar(self, metadata: dict[str, Any], data: dict[str, Any]) -> str:
+        """Ruta unificada (BETA2-CAL): ``mode`` DERIVADO de si hay meses+semana.
+
+        No aplica el clobber legacy: respeta ``era_lengths``/``current_date`` que envía el
+        servicio (espejo de las eras canónicas). Normaliza la config de meses/semana/ancla
+        bajo ``metadata['calendar']`` y mantiene los espejos que consumen el picker y la
+        vista cronológica.
+        """
+        cal = CalendarConfig.from_metadata(data)
+        has_exact = cal.supports_exact_dates()
+        mode = "full_calendar" if has_exact else "vague_periods"
+        months = cal.month_names()
+        month_lengths = {name: length for name, length in cal.months}
+        if months:
+            months_per_year = max(1, len(months))
+        else:
+            months_per_year = max(1, _int_value(metadata.get("months_per_year"), 1))
+        if "era_lengths" in data:
+            era_lengths = _named_lengths(data.get("era_lengths"), 100)
+        else:
+            era_lengths = dict(metadata.get("era_lengths") or {})
+        if "current_date" in data:
+            current_date = _current_date(data.get("current_date"))
+        else:
+            current_date = _current_date(metadata.get("current_date"))
+        prev_year = _int_value(metadata.get("current_year"), 1)
+        current_year = _int_value(data.get("current_year"), prev_year)
+        default_days = min(month_lengths.values()) if month_lengths else 30
+        metadata.update({
+            "mode": mode,
+            "calendar_kind": mode,
+            "calendar_configured": True,
+            "calendar": cal.to_metadata(),
+            "months": list(months),
+            "month_lengths": month_lengths,
+            "weekdays": list(cal.weekdays),
+            "week_anchor": cal.week_anchor,
+            "era_lengths": era_lengths,
+            "past_eras": list(era_lengths.keys()),
+            "eras": list(era_lengths.keys()),
+            "current_date": current_date,
+            "current_year": current_year,
+            "days_per_month": max(1, _int_value(data.get("days_per_month"), default_days)),
+            "months_per_year": months_per_year,
+            "units": ["era", "ano", "mes", "dia"] if has_exact else ["era", "ano"],
+            "supports_exact_dates": has_exact,
+            "date_resolution": "dia" if has_exact else "ano",
+            "display_format": "{era} {year}, {month} {day}" if has_exact else "{era} {year}",
+        })
+        return mode
+
+    def _apply_legacy_calendar(self, metadata: dict[str, Any], data: dict[str, Any]) -> str:
+        """Ruta legacy de los tres modos (none/vague_periods/full_calendar)."""
         mode = str(data.get("mode", metadata.get("mode", "")) or "none").strip()
         if mode not in {"none", "vague_periods", "full_calendar"}:
             legacy = {
@@ -205,22 +284,7 @@ class ProjectChronologyService:
                 "date_resolution": metadata.get("date_resolution") or "dia",
                 "display_format": metadata.get("display_format") or "{era} {year}, {month} {day}",
             })
-
-        chronology.calendar_name = str(data.get("calendar_name", chronology.calendar_name) or "").strip()
-        chronology.description = str(data.get("description", chronology.description) or "").strip()
-        chronology.calendar_system = str(data.get("calendar_system", mode) or mode).strip()
-        chronology.metadata = metadata
-        now = _now_iso()
-        if not chronology.created_at:
-            chronology.created_at = now
-        chronology.updated_at = now
-
-        project = self._project()
-        if isinstance(project, Error):
-            return project
-        if hasattr(project.value, "touch"):
-            project.value.touch()
-        return Ok(chronology)
+        return mode
 
     def apply_candidate(self, proposal: dict[str, Any]) -> Result[ProjectChronology, str]:
         """Apply a reviewed chronology proposal after explicit user acceptance."""

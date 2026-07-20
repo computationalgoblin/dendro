@@ -2,13 +2,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NODE_PANEL = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "node_detail_panel.py"
-TREE_PANEL = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "tree_detail_panel.py"
 AI_PROVIDER = ROOT / "packages" / "infrastructure" / "ai_provider.py"
 CONTRACT = ROOT / "docs" / "contracts" / "b32-ai-action-boundaries.md"
 
 
 def test_entity_and_tree_inline_ai_use_text_suggestion_only():
-    for path in [NODE_PANEL, TREE_PANEL]:
+    # BETA2-CLEANUP-PANELES: TreeDetailPanel se retiró; la edición de ramas
+    # (incl. IA inline) vive en el Foco vía NodeDetailPanel (variant="foco").
+    for path in [NODE_PANEL]:
         text = path.read_text(encoding="utf-8")
         assert "node_text_suggestion" in text
         assert 'run_node_action("improve_text"' not in text

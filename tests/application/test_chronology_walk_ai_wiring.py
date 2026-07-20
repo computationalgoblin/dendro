@@ -84,12 +84,55 @@ def test_stage_results_produces_milestone_and_edit_candidates():
     out = stage_results(payload, job)
 
     kinds = [c.get("proposed_data", {}).get("kind") for c in out["candidates"]]
-    titles = [c.get("title", "") for c in out["candidates"]]
     assert "causal_milestone" in kinds  # hito staged
-    assert any("Editar body de Devian" in t for t in titles)  # diff de edición
+    # PLAY-15: el formato escalar viejo se normaliza a un patch edit_fields.
+    edit = next(
+        c for c in out["candidates"]
+        if (c.get("proposed_data") or {}).get("edit_kind") == "entity_edits"
+    )
+    assert edit["proposed_data"]["edit_fields"] == {
+        "extended_description": "Sirve por deuda forzada."
+    }
     # El payload crudo (con stop_required, issues, narrative_state) sobrevive intacto.
     assert out["model_payload"]["stop_required"] is True
     assert out["model_payload"]["issues"][0]["kind"] == "motivation_incompatibility"
+
+
+@pytest.mark.application
+def test_stage_results_edit_fields_respects_whitelist():
+    """PLAY-15: patch multi-campo; visibilidad/canon se filtran en normalización."""
+    job = AIJob(
+        type=AIJobType.CHRONOLOGY_WALK_STEP,
+        prompt="Edita",
+        context_scope=_walk_scope("sugerir_reparaciones"),
+    )
+    payload = {
+        "entity_edits": [
+            {
+                "entity_name": "Devian",
+                "edit_fields": {
+                    "name": "Devian el Roto",
+                    "birth_year": -120,
+                    "visibility_state": "oculto_al_jugador",
+                    "canon_state": "canon",
+                    "private_notes": "secreto",
+                },
+                "rationale": "coherencia",
+            }
+        ]
+    }
+
+    out = stage_results(payload, job)
+
+    edit = next(
+        c for c in out["candidates"]
+        if (c.get("proposed_data") or {}).get("edit_kind") == "entity_edits"
+    )
+    # Los prohibidos (visibilidad/canon/secretos) JAMÁS llegan al candidato.
+    assert edit["proposed_data"]["edit_fields"] == {
+        "name": "Devian el Roto",
+        "birth_year": -120,
+    }
 
 
 @pytest.mark.application

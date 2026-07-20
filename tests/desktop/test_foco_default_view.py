@@ -77,7 +77,7 @@ class TestFocoDefault:
         view = _view(project_service)
         view.refresh()
         assert view.current_entity_id() == second.id
-        assert view._name_label.text() == "Segunda"
+        assert view._name_label.full_text() == "Segunda"
         assert not view._center_card.isHidden()
         assert view._empty.isHidden()
 
@@ -117,7 +117,8 @@ class TestWorkspaceWiring:
 
     def test_three_modes_and_default_foco(self):
         source = _WORKSPACES.read_text(encoding="utf-8")
-        assert 'if view not in ("foco", "concentric", "chrono"):' in source
+        # BETA2-PLAY: "play" es el cuarto estado (fuera de la píldora de modos).
+        assert 'if view not in ("foco", "concentric", "chrono", "play"):' in source
         assert 'self.set_active_view("foco")' in source  # arranque SIEMPRE en foco
         assert "self.foco = FocoView(" in source
         assert "def set_active_view" in source
@@ -125,7 +126,8 @@ class TestWorkspaceWiring:
 
     def test_command_bar_hidden_in_chrono(self):
         source = _WORKSPACES.read_text(encoding="utf-8")
-        assert 'bar.setVisible(view != "chrono")' in source
+        # BETA2-PLAY: la command bar también se oculta en la vista inmersiva.
+        assert 'bar.setVisible(view not in ("chrono", "play"))' in source
 
     def test_mode_pill_and_foco_refresh_wiring(self):
         source = _WORKSPACES.read_text(encoding="utf-8")

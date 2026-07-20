@@ -205,7 +205,30 @@ Crear una nueva versión cuando:
 
 ---
 
-## 5. Referencias
+## 5. Claves reservadas de `custom_metadata`
+
+`NarrativeEntity.custom_metadata` es de forma libre, pero algunas claves con
+prefijo `_` tienen contrato de producto (añadirlas NO requiere nueva versión
+de esquema — son campos opcionales, §2):
+
+| Clave | Contenido | Desde |
+|-------|-----------|-------|
+| `_node_color` | Color hex explícito del nodo en el lienzo (vacío = paleta por tipo). | BETA1 |
+| `_image_path` | Retrato de la entidad: ruta **relativa** al asset store del proyecto (`<stem>.assets/`, p. ej. `images/3fa9c2d41b7e88aa.png`). Una ruta **absoluta** es legado BETA1-F04: se sigue leyendo mientras el archivo exista y se normaliza al asset store al reencuadrar. Gestión: `packages/application/image_asset_service.py` (nombres content-addressed `sha256[:16]`; la UI nunca escribe assets directamente). | BETA2-IMG-01 (2026-07-05) |
+| `_image_crop` | Encuadre del retrato: `{"cx": 0..1, "cy": 0..1, "zoom": >=1}` (centro fraccional + zoom sobre el recorte cuadrado máximo). Modelo puro en `packages/application/portrait_crop.py`; ausencia ⇒ encuadre por defecto (0.5, 0.5, 1.0). | BETA2-IMG-01 (2026-07-05) |
+| `_causal_potency_basal` | Potencia causal basal (int 0..100) de una entidad = potencialidad de propagación causal. La **atribuye la IA al Regar** de forma semántica (`potencial_causal` del payload → `set_basal_potency`); el detector estructural (BETA2-STRUCT) la LEE para proponer reubicaciones de anillo. Gestión: `packages/application/causal_potency.py`. | BETA2-MEM-08 · atribución IA BETA2-STRUCT-09 (2026-07-12) |
+| `_causal_ascending_exception` | (En **relaciones**) marca de excepción ascendente (`apalancamiento`/`catalizador`/`vulnerabilidad`/`acumulacion`/`amplificacion`): permite que un cambio inferior escale a un anillo superior en el motor de impacto. | BETA2-MEM-08 |
+| `_struct_dismissed` | Lista de *fingerprints* de ajustes estructurales **rechazados** (se suprimen hasta que el fingerprint cambia por topología). Gestión: `packages/application/structural_analysis_service.py`. | BETA2-STRUCT-01 (2026-07-12) |
+| `_struct_snoozed` | Mapa `{fingerprint: index_revision}` de ajustes estructurales **aplazados** (se suprimen hasta el siguiente cambio de canon). | BETA2-STRUCT-01 (2026-07-12) |
+
+Los binarios de imagen viven FUERA del JSON, en la carpeta hermana
+`<stem>.assets/images/`; mover un proyecto conserva los retratos si la carpeta
+viaja junto al JSON. Archivo ausente ⇒ las superficies degradan al render sin
+imagen (nunca error).
+
+---
+
+## 6. Referencias
 
 - `packages/persistence/schema.py` — implementación actual de versionado
 - `packages/persistence/store.py` — ProjectStore con save/load atómico

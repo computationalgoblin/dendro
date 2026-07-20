@@ -223,17 +223,13 @@ class TestUILabelsShowNewTerms:
         text = self._read("hosts", "DesktopHostPySide", "widgets", "node_detail_panel.py")
         assert '"Anillo:"' in text
 
-    def test_tree_panel_uses_rama(self):
-        text = self._read("hosts", "DesktopHostPySide", "widgets", "tree_detail_panel.py")
-        assert '"Rama"' in text
+    # BETA2-CLEANUP-PANELES: test_tree_panel_uses_rama y
+    # test_tree_panel_has_create_ring_button se retiraron — tree_detail_panel.py
+    # se eliminó (edición de ramas en Foco; «Crear anillo» vive en el rail del Foco).
 
     def test_node_panel_has_convert_button(self):
         text = self._read("hosts", "DesktopHostPySide", "widgets", "node_detail_panel.py")
         assert "Convertir en rama" in text
-
-    def test_tree_panel_has_create_ring_button(self):
-        text = self._read("hosts", "DesktopHostPySide", "widgets", "tree_detail_panel.py")
-        assert "Crear anillo desde rama" in text
 
     def test_ai_prompt_uses_hoja_rama_anillo(self):
         text = self._read("packages", "application", "ai_jobs.py")

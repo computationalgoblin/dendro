@@ -36,31 +36,28 @@ TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("ghost_relation", "tool_ghost_relation", "Crear relación fantasma (vínculo pendiente)"),
     ("add_to_branch", "tool_add_to_branch", "Añadir la entidad en foco a una rama"),
     ("create_branch", "tool_create_branch", "Crear rama contenedora de la entidad en foco"),
-    ("create_milestone", "tool_create_milestone", "Crear hito ligado a la entidad en foco"),
+    ("create_in_branch", "tool_create_entity", "Crear una entidad dentro de esta rama"),
+    # BETA2-CLEANUP-PANELES: crear anillo (estrato del mundo) desde el Foco.
+    # Icono real en disco (no el alias "rings"): worldbuilding = coronas concéntricas.
+    ("create_ring", "worldbuilding", "Crear anillo (estrato del mundo)"),
     ("ghost_node", "tool_ghost_node", "Crear nodo fantasma (borrador interno)"),
     ("ghost_convert", "tool_ghost_convert", "Convertir el fantasma en entidad real"),
     ("ghost_link", "tool_ghost_link", "Vincular el fantasma con una entidad existente"),
-    ("water", "tool_water", "Regar (diagnóstico IA autorizado de la selección)"),
-    ("dry", "tool_dry", "Secar (sacar del ciclo de riego, sin IA)"),
-    ("cultivate", "tool_cultivate", "Cultivar (volver al ciclo de riego, sin IA)"),
     ("view_map", "tool_view_map", "Ver esta entidad en el Mapa global"),
     ("view_chrono", "tool_view_chrono", "Ver esta entidad en la Cronología global"),
 )
 
 # BETA2-UX-05: (group_id, icono, tooltip, (tool_ids…)). Los clústeres casi-
 # duplicados se pliegan bajo un botón-grupo con flyout.
+# BETA2-FOCO-32: el grupo «riego» (regar/secar/cultivar) se retiró del rail — el
+# riego/secado/cultivo vive ahora en el Cuaderno de Cultivo, el chip de siguiente
+# paso y el badge 💧; «Crear hito» también se retiró (obsoleto en el rail).
 _TOOL_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     (
         "ghost",
         "tool_ghost_node",
         "Fantasmas: nodo/relación pendiente, convertir y vincular",
         ("ghost_relation", "ghost_node", "ghost_convert", "ghost_link"),
-    ),
-    (
-        "riego",
-        "tool_water",
-        "Riego: regar (IA), secar y cultivar",
-        ("water", "dry", "cultivate"),
     ),
 )
 
@@ -73,8 +70,8 @@ _COLUMN: tuple[object, ...] = (
     ("group", "ghost"),
     "add_to_branch",
     "create_branch",
-    "create_milestone",
-    ("group", "riego"),
+    "create_in_branch",
+    "create_ring",
     "view_map",
     "view_chrono",
 )
@@ -199,10 +196,8 @@ class FocoToolRail(QFrame):
         has_project = bool(context.get("has_project"))
         center = str(context.get("center_id") or "")
         center_is_ghost = bool(context.get("center_is_ghost"))
-        center_is_paused = bool(context.get("center_is_paused"))
-        selection = list(context.get("selection") or [])
+        center_is_branch = bool(context.get("center_is_branch"))
         ghost_in_scope = center_is_ghost or bool(context.get("selection_has_ghost"))
-        waterable = bool(center) and not center_is_ghost or bool(selection)
 
         enabled: dict[str, bool] = {
             "create_entity": has_project,
@@ -212,12 +207,12 @@ class FocoToolRail(QFrame):
             "ghost_relation": bool(center),
             "add_to_branch": bool(center) and not center_is_ghost,
             "create_branch": bool(center) and not center_is_ghost,
-            "create_milestone": bool(center) and not center_is_ghost,
+            # BETA2-FOCO-32: solo tiene sentido cuando el foco es una rama.
+            "create_in_branch": has_project and center_is_branch and not center_is_ghost,
+            # BETA2-CLEANUP-PANELES: crear anillo no depende del centro.
+            "create_ring": has_project,
             "ghost_convert": ghost_in_scope,
             "ghost_link": ghost_in_scope,
-            "water": has_project and waterable and not center_is_paused,
-            "dry": bool(center) and not center_is_ghost and not center_is_paused,
-            "cultivate": center_is_paused,  # solo aparece útil para Secadas (spec)
             "view_map": bool(center),
             "view_chrono": bool(center),
         }

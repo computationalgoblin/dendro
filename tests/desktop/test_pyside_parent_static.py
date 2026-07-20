@@ -34,7 +34,6 @@ EXPECTED_PARENTLESS_WIDGETS = {
     'hosts/DesktopHostPySide/views/workspaces.py:622:grid_host = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:669:self._layer_section = QWidget()',
     'hosts/DesktopHostPySide/views/workspaces.py:680:self._layer_chips_container = QWidget()',
-    'hosts/DesktopHostPySide/widgets/chronology_walk_runner_panel.py:138:self._changes_container = QWidget()',
     'hosts/DesktopHostPySide/widgets/context_preview_panel.py:107:box = QWidget()',
     'hosts/DesktopHostPySide/widgets/context_preview_panel.py:143:box = QWidget()',
     'hosts/DesktopHostPySide/widgets/context_preview_panel.py:74:content = QWidget()',
@@ -62,9 +61,7 @@ EXPECTED_PARENTLESS_WIDGETS = {
     'hosts/DesktopHostPySide/widgets/relation_detail_panel.py:548:_temp_widget = QWidget()',
     'hosts/DesktopHostPySide/widgets/repair_review_panel.py:69:holder = QWidget()',
     'hosts/DesktopHostPySide/widgets/repair_review_panel.py:97:frame = QFrame()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:256:id_card = QWidget()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:563:self.suggestion_frame = QFrame()',
-    'hosts/DesktopHostPySide/widgets/tree_detail_panel.py:80:frame = QFrame()',
+    # BETA2-CLEANUP-PANELES: tree_detail_panel.py se eliminó (edición de ramas en Foco).
 }
 
 

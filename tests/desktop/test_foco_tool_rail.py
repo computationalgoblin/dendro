@@ -78,29 +78,32 @@ class TestRailBasics:
     def test_enablement_follows_selection_context(self, qapp):
         project_service, view = _setup()
         center = _entity(project_service, "Centro")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
         enabled = set(view.tool_rail.enabled_tools())
-        assert {"create_entity", "create_relation", "water", "dry", "view_map"} <= enabled
+        assert {"create_entity", "create_relation", "view_map"} <= enabled
         assert "ghost_convert" not in enabled
-        assert "cultivate" not in enabled
+        # BETA2-FOCO-32: una hoja no ofrece «crear entidad en la rama».
+        assert "create_in_branch" not in enabled
 
     def test_ghost_center_lights_ghost_tools(self, qapp):
         project_service, view = _setup()
         ghost = _entity(project_service, "¿Sombra?", canon_state=CanonState.FANTASMA)
-        view.center_entity(ghost.id, push_history=False)
+        view.center_entity(ghost.id)
         enabled = set(view.tool_rail.enabled_tools())
         assert {"ghost_convert", "ghost_link"} <= enabled
-        assert "water" not in enabled  # fantasma sin ciclo de riego
-        assert "dry" not in enabled
+        assert "create_in_branch" not in enabled  # un fantasma no crea en rama
 
-    def test_paused_center_only_offers_cultivate(self, qapp):
+    def test_create_in_branch_only_enabled_for_branch(self, qapp):
+        # BETA2-FOCO-32: el tool se ilumina SOLO con una rama enfocada.
         project_service, view = _setup()
-        center = _entity(project_service, "Dormida")
-        project_service.active_project.watering_paused_entity_ids.append(center.id)
-        view.center_entity(center.id, push_history=False)
-        enabled = set(view.tool_rail.enabled_tools())
-        assert "cultivate" in enabled
-        assert "water" not in enabled and "dry" not in enabled
+        leaf = _entity(project_service, "Hoja")
+        branch = _entity(project_service, "Reino", entity_type="contenedor")
+
+        view.center_entity(leaf.id)
+        assert "create_in_branch" not in view.tool_rail.enabled_tools()
+
+        view.center_entity(branch.id)
+        assert "create_in_branch" in view.tool_rail.enabled_tools()
 
     def test_ctrl_click_ghost_selection_lights_ghost_tools(self, qapp):
         project_service, view = _setup()
@@ -114,7 +117,7 @@ class TestRailBasics:
             )
         )
         project_service.active_project.touch()
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
         assert "ghost_convert" not in view.tool_rail.enabled_tools()
 
         view.canvas._on_item_clicked(ghost.id, ctrl=True)  # multiselección ilumina
@@ -161,7 +164,7 @@ class TestToolActions:
     def test_create_entity_centers_the_new_one(self, qapp):
         project_service, view = _setup()
         first = _entity(project_service, "Primera")
-        view.center_entity(first.id, push_history=False)
+        view.center_entity(first.id)
 
         view._create_entity({"name": "Nueva"})
         project = project_service.active_project
@@ -171,7 +174,7 @@ class TestToolActions:
     def test_ghost_and_relate_from_search_popover(self, qapp):
         project_service, view = _setup()
         center = _entity(project_service, "Centro")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
 
         view._ghost_and_relate("¿Mecenas?")
         project = project_service.active_project
@@ -186,7 +189,7 @@ class TestToolActions:
     def test_convert_ghost_tool_matures_center(self, qapp):
         project_service, view = _setup()
         ghost = _entity(project_service, "¿Sombra?", canon_state=CanonState.FANTASMA)
-        view.center_entity(ghost.id, push_history=False)
+        view.center_entity(ghost.id)
 
         view._on_tool("ghost_convert")
         assert ghost.canon_state == CanonState.CANONICO
@@ -195,34 +198,31 @@ class TestToolActions:
         project_service, view = _setup()
         center = _entity(project_service, "Hoja")
         branch = _entity(project_service, "Rama madre", entity_type="contenedor")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
 
         view._add_to_branch(branch.id)
         assert view.canvas.container_ids() == [branch.id]
 
-    def test_water_dry_cultivate_emit_for_workspace(self, qapp):
-        project_service, view = _setup()
-        center = _entity(project_service, "Centro")
-        view.center_entity(center.id, push_history=False)
-        watered: list[list] = []
-        dried: list[str] = []
-        cultivated: list[str] = []
-        view.waterRequested.connect(watered.append)
-        view.dryRequested.connect(dried.append)
-        view.cultivateRequested.connect(cultivated.append)
+    def test_create_in_branch_creates_containment(self, qapp):
+        # BETA2-FOCO-32: crea la entidad y la contiene (CONTIENE rama→nueva); el
+        # foco permanece en la rama y la nueva aparece como contenido.
+        from packages.application.foco_rings import branch_members
 
-        view._on_tool("water")
-        view._on_tool("dry")
-        view._on_tool("cultivate")
-        assert watered == [[center.id]]
-        assert dried == [center.id]
-        assert cultivated == [center.id]
+        project_service, view = _setup()
+        branch = _entity(project_service, "Reino", entity_type="contenedor")
+        view.center_entity(branch.id)
+
+        view._create_in_branch({"name": "Aldea"})
+        project = project_service.active_project
+        created = next(e for e in project.entities if e.name == "Aldea")
+        assert view.current_entity_id() == branch.id  # el foco sigue en la rama
+        assert created.id in branch_members(project, branch.id)
 
     def test_link_ghost_recenters_on_real_entity(self, qapp):
         project_service, view = _setup()
         real = _entity(project_service, "La Orden Real")
         ghost = _entity(project_service, "¿La orden?", canon_state=CanonState.FANTASMA)
-        view.center_entity(ghost.id, push_history=False)
+        view.center_entity(ghost.id)
 
         view._link_ghost(ghost.id, real.id)
         assert project_service.active_project.entity_by_id(ghost.id) is None
@@ -231,7 +231,7 @@ class TestToolActions:
     def test_create_branch_contains_center(self, qapp):
         project_service, view = _setup()
         center = _entity(project_service, "Hoja")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
 
         view._create_branch({"name": "Rama nueva"})
         project = project_service.active_project
@@ -242,7 +242,7 @@ class TestToolActions:
     def test_create_related_keeps_center(self, qapp):
         project_service, view = _setup()
         center = _entity(project_service, "Centro")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
 
         view._create_related({"name": "Compañera"})
         assert view.current_entity_id() == center.id  # la central sigue siendo una
@@ -253,44 +253,13 @@ class TestToolActions:
         assert isinstance(result, Ok)
 
 
-class TestWaterIncludesCenter:
-    """BETA2-FOCO-19: la central se asume SIEMPRE seleccionada al regar."""
-
-    def test_water_unions_selection_with_center(self, qapp):
-        project_service, view = _setup()
-        center = _entity(project_service, "Centro")
-        vecina_a = _entity(project_service, "VecinaA")
-        vecina_b = _entity(project_service, "VecinaB")
-        view.center_entity(center.id, push_history=False)
-        view.canvas._selected = [vecina_a.id, vecina_b.id]
-
-        watered: list[list] = []
-        view.waterRequested.connect(watered.append)
-        view._on_tool("water")
-
-        assert watered == [[center.id, vecina_a.id, vecina_b.id]]
-
-    def test_water_does_not_duplicate_center_if_selected(self, qapp):
-        project_service, view = _setup()
-        center = _entity(project_service, "Centro")
-        vecina = _entity(project_service, "Vecina")
-        view.center_entity(center.id, push_history=False)
-        view.canvas._selected = [center.id, vecina.id]
-
-        watered: list[list] = []
-        view.waterRequested.connect(watered.append)
-        view._on_tool("water")
-
-        assert watered == [[center.id, vecina.id]]
-
-
 class TestDataChangedSignal:
     """BETA2-FOCO-19: toda mutación de Foco avisa para reconstruir el Mapa."""
 
     def test_create_entity_emits_data_changed(self, qapp):
         project_service, view = _setup()
         seed = _entity(project_service, "Base")
-        view.center_entity(seed.id, push_history=False)
+        view.center_entity(seed.id)
         changes: list[bool] = []
         view.dataChanged.connect(lambda: changes.append(True))
 
@@ -304,7 +273,7 @@ class TestDataChangedSignal:
         project_service, view = _setup()
         center = _entity(project_service, "Centro")
         other = _entity(project_service, "Aliada")
-        view.center_entity(center.id, push_history=False)
+        view.center_entity(center.id)
         changes: list[bool] = []
         view.dataChanged.connect(lambda: changes.append(True))
 

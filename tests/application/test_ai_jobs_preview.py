@@ -13,10 +13,6 @@ def _service():
     return AIJobService(provider=SimulatedAIProvider())
 
 
-def _pack(items):
-    return {"schema": "context_pack/v1", "items": items, "warnings": [], "truncated": False}
-
-
 def test_preview_context_does_not_create_a_job():
     service = _service()
     result = service.preview_context(
@@ -46,36 +42,35 @@ def test_preview_context_returns_sections_with_user_prompt():
     assert preview["tier"]
 
 
-def test_preview_context_surfaces_rag_items_as_excludable():
+def test_preview_context_surfaces_contexto_wiki_as_fixed():
+    # BETA2-WIKI-05: el contexto lo aporta la navegación de la wiki (contexto_wiki),
+    # que viaja como sección fija (ya viene acotada por el WikiNavigator).
     service = _service()
-    pack = _pack([
-        {"kind": "entity", "ref_id": "e1", "rendered_text": "Ariadna",
-         "priority": "high", "reason": "sel"},
-    ])
-    result = service.preview_context(
-        AIJobType.SUGGEST_RELATIONS, "relaciona", context_scope={"rag_context_pack": pack}
-    )
-    preview = result.value
-    canon = next(s for s in preview["sections"] if s["key"] == "canon_confirmado")
-    assert canon["fixed"] is False  # excluible por el usuario
-    assert canon["items"][0]["ref_id"] == "e1"
-
-
-def test_preview_context_respects_exclusions():
-    service = _service()
-    pack = _pack([
-        {"kind": "entity", "ref_id": "keep", "rendered_text": "x",
-         "priority": "high", "reason": "r"},
-        {"kind": "entity", "ref_id": "drop", "rendered_text": "y",
-         "priority": "high", "reason": "r"},
-    ])
     result = service.preview_context(
         AIJobType.SUGGEST_RELATIONS,
         "relaciona",
         context_scope={
-            "rag_context_pack": pack,
-            "preview_exclusions": {"sections": [], "item_ids": ["drop"]},
+            "contexto_wiki": {
+                "nota": "x",
+                "paginas": [{"kind": "entity", "id": "e1", "resumen": "Ariadna"}],
+                "canon": [],
+            }
         },
     )
-    canon = next(s for s in result.value["sections"] if s["key"] == "canon_confirmado")
-    assert {it["ref_id"] for it in canon["items"]} == {"keep"}
+    wiki = next(s for s in result.value["sections"] if s["key"] == "contexto_wiki")
+    assert wiki["fixed"] is True
+
+
+def test_preview_context_respects_section_exclusions():
+    # La exclusión a nivel de sección sigue vigente (la de por-ítem del RAG se retiró).
+    service = _service()
+    result = service.preview_context(
+        AIJobType.SUGGEST_RELATIONS,
+        "relaciona",
+        context_scope={
+            "vecindario": {"items": [{"id": "v1", "rendered_text": "vecino"}]},
+            "preview_exclusions": {"sections": ["vecindario"], "item_ids": []},
+        },
+    )
+    keys = {s["key"] for s in result.value["sections"]}
+    assert "vecindario" not in keys

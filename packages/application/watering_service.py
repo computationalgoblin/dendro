@@ -32,6 +32,7 @@ from packages.application.foco_zones import (
     classify_neighbors,
 )
 from packages.domain.entity import CanonState, NarrativeEntity, NarrativeImportance
+from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
 from packages.domain.project import Project
 from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok, Result
@@ -66,6 +67,11 @@ _UNCONFIGURED_AI_MESSAGE = (
     "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL (y reinicia "
     "la app). No se genera contenido simulado."
 )
+
+# BETA2-WIKI-13: métricas cuyas Sugerencias pasan por un ANÁLISIS DE INTENCIÓN previo que
+# decide el mix de output (hojas/ramas/relaciones/hitos/ediciones). El resto (nutrida,
+# calidad) mantiene el job fijo por métrica (edit_entities).
+_INTENT_METRICS = frozenset({"arraigo", "iluminada"})
 
 # Sugerir X → job existente + zona donde germina la Semilla (decisión de producto).
 # El hint viaja en context_scope y ai_jobs lo copia a candidate.metadata.
@@ -152,10 +158,31 @@ class WateringService:
         project_service: Any,
         ai_job_service: Any = None,
         history_service: Any = None,
+        memory_ai_service: Any = None,
+        impact_service: Any = None,
+        navigator: Any = None,
+        intent_service: Any = None,
+        memory_service: Any = None,
     ) -> None:
         self.project_service = project_service
         self.ai_job_service = ai_job_service
         self.history_service = history_service
+        # BETA2-WIKI-13: unificación de frescura — el estado de riego refleja también la
+        # frescura de la PÁGINA de Memoria (si una relacionada la marcó Falta regar, el chip
+        # del jardín también lo muestra: se mueven juntos). Opcional: sin él, riego normal.
+        self.memory_service = memory_service
+        # BETA2-MEM-07: Regar v2 — al regar, el mismo flujo autorizado actualiza la
+        # Memoria editorial de la entidad (auto-aplica). Opcional: sin él, riego normal.
+        self.memory_ai_service = memory_ai_service
+        # BETA2-WIKI-06: tras reescribir la página, propaga Falta regar a las páginas
+        # RELACIONADAS (potencialidad causal). Opcional: sin él, no hay propagación.
+        self.impact_service = impact_service
+        # BETA2-WIKI-08: las Sugerencias navegan la wiki (WikiNavigator) para armar
+        # contexto coherente a partir de la petición del usuario. Opcional.
+        self.navigator = navigator
+        # BETA2-WIKI-13: análisis de intención previo (arraigo/iluminada) que decide el
+        # mix de output. Opcional: sin él, esas métricas caen a su job por defecto.
+        self.intent_service = intent_service
         self._cache_key: tuple[str, int] | None = None
         self._cache: dict[str, WateringStatusReport] = {}
 
@@ -274,7 +301,25 @@ class WateringService:
             return WateringStatusReport(WateringStatus.FALTA_REGAR.value, None, False, "")
         if self._is_stale(project, entity, latest):
             return WateringStatusReport(WateringStatus.FALTA_REGAR.value, latest, True, "")
+        # BETA2-WIKI-13: unificación de frescura. El diagnóstico está vigente, pero si la
+        # PÁGINA de Memoria quedó Falta regar (p. ej. al regar una entidad relacionada, que
+        # propaga por potencialidad causal), el jardín también lo refleja: los dos ejes se
+        # mueven juntos y un solo Regar los revive. SECADA/FANTASMA ya salieron arriba.
+        if self._memory_falta_regar(entity.id):
+            return WateringStatusReport(WateringStatus.FALTA_REGAR.value, latest, True, "")
         return WateringStatusReport(WateringStatus.REGADA.value, latest, False, "")
+
+    def _memory_falta_regar(self, entity_id: str) -> bool:
+        """True si la página de Memoria de la entidad está Falta regar (unificación)."""
+        svc = self.memory_service
+        if svc is None:
+            return False
+        try:
+            got = svc.get_memory(MemoryTargetKind.ENTITY, entity_id)
+        except Exception:  # noqa: BLE001 — la Memoria nunca debe romper el estado de riego
+            return False
+        block = got.value if isinstance(got, Ok) else None
+        return block is not None and block.freshness == MemoryFreshness.FALTA_REGAR
 
     # ------------------------------------------------------------------
     # Estados
@@ -524,10 +569,13 @@ class WateringService:
         previous = [d for d in self._diagnostics_for(project, entity_id) if not d.error]
         if previous:
             last = previous[-1]
+            # BETA2-WIKI-13: no eco de 'relevancia' en los scores — la fija el usuario y el
+            # prompt de riego prohíbe evaluarla (aparecía y contradecía la instrucción).
+            echo_scores = {k: v for k, v in last.scores.items() if k != "relevancia"}
             lines.append(
                 "ÚLTIMO RIEGO ("
                 + last.created_at.date().isoformat()
-                + f"): {self._clip(last.summary, 300)} | scores: {dict(last.scores)}"
+                + f"): {self._clip(last.summary, 300)} | scores: {echo_scores}"
             )
 
         text = "\n".join(lines)
@@ -627,6 +675,15 @@ class WateringService:
         scores = dict(watering.get("scores") or {})
         # Relevancia: SIEMPRE la del usuario; cualquier valor de la IA fue descartado.
         scores["relevancia"] = _IMPORTANCE_SCORE.get(entity.narrative_importance.value, 50)
+        # BETA2-STRUCT-09: la IA atribuye la POTENCIALIDAD DE PROPAGACIÓN CAUSAL de la entidad
+        # (semántica, por su naturaleza). Se guarda en custom_metadata (§14 potencia basal); el
+        # detector estructural la lee para proponer reubicaciones de anillo. Se persiste con el
+        # proyecto (register_diagnostic hace touch). Opcional: si la IA no la devolvió, no toca.
+        potencial = watering.get("potencial_causal")
+        if potencial is not None:
+            from packages.application.causal_potency import set_basal_potency
+
+            set_basal_potency(entity, int(potencial))
         provider = getattr(self.ai_job_service, "provider", None)
         provider_name = str(getattr(provider, "provider_name", "") or "")
         model = str(getattr(provider, "model", "") or os.environ.get("NARRATIVE_AI_MODEL", ""))
@@ -648,18 +705,54 @@ class WateringService:
             origin=origin,
             resulting_status=WateringStatus.REGADA.value,
         )
-        return self.register_diagnostic(diagnostic)
+        registered = self.register_diagnostic(diagnostic)
+        # BETA2-MEM-07: Regar v2 — dentro de la MISMA autorización, actualiza la
+        # Memoria editorial de la entidad (auto-aplica), solo si hace falta.
+        if isinstance(registered, Ok):
+            self._update_memory_on_watering(entity_id, progress_callback=progress_callback)
+        return registered
+
+    def _update_memory_on_watering(self, entity_id: str, *, progress_callback: Any = None) -> None:
+        """Regar v2: genera/actualiza la Memoria del elemento regado (per-entidad).
+
+        Solo corre donde hace falta (sin Memoria o Falta regar/Secada): no regenera
+        una Memoria ya vigente. Nunca rompe el riego (efecto derivado, best-effort).
+        """
+        svc = self.memory_ai_service
+        if svc is None:
+            return
+        try:
+            mem_svc = getattr(svc, "memory_service", None)
+            if mem_svc is not None:
+                got = mem_svc.get_memory(MemoryTargetKind.ENTITY, entity_id)
+                block = got.value if isinstance(got, Ok) else None
+                if block is not None and block.freshness == MemoryFreshness.REGADA:
+                    return  # ya vigente → no re-generar (coste acotado)
+            res = svc.update_memory(
+                MemoryTargetKind.ENTITY, entity_id, mode="regar", progress_callback=progress_callback
+            )
+            # BETA2-WIKI-06: reescrita la página, marca Falta regar las RELACIONADAS
+            # (no la propia) propagando por potencialidad causal (motor de impacto).
+            if isinstance(res, Ok) and self.impact_service is not None:
+                self.impact_service.propagate_change(
+                    MemoryTargetKind.ENTITY, entity_id, cause_hint="regar", include_self=False
+                )
+        except Exception:  # noqa: BLE001 — la Memoria nunca debe romper el riego
+            pass
 
     # ------------------------------------------------------------------
     # Sugerir X → Semillas con hint de zona (FOCO-06)
     # ------------------------------------------------------------------
 
-    def build_suggestion_request(self, entity_id: str, metric: str) -> Result[dict[str, Any], str]:
+    def build_suggestion_request(
+        self, entity_id: str, metric: str, peticion: str = ""
+    ) -> Result[dict[str, Any], str]:
         """Prepara (SIN ejecutar) la petición de Sugerir X: job, prompt y scope.
 
         El host la usa para mostrar su autorización visible y lanzar después el
         job por el pipeline estándar (worker + staging + germinación SEM04).
-        No comprueba proveedor: preparar no consume IA.
+        No comprueba proveedor: preparar no consume IA. ``peticion`` es el texto libre
+        del usuario (BETA2-WIKI-08): encabeza el prompt (única vía creativa con prompt).
         """
         metric_key = str(metric or "").strip().lower()
         spec = _SUGGEST_SPECS.get(metric_key)
@@ -680,7 +773,11 @@ class WateringService:
         context = self.build_watering_context(entity_id)
         if isinstance(context, Error):
             return context
-        lines = [context.value["text"], "", spec["bias"]]
+        peticion = str(peticion or "").strip()
+        lines: list[str] = []
+        if peticion:
+            lines += [f"PETICIÓN DEL USUARIO (prioritaria): {peticion}", ""]
+        lines += [context.value["text"], "", spec["bias"]]
         previous = [d for d in self._diagnostics_for(project, entity_id) if not d.error]
         if previous:
             last = previous[-1]
@@ -699,6 +796,7 @@ class WateringService:
             {
                 "job_type": spec["job"],
                 "prompt": "\n".join(lines),
+                "peticion": peticion,
                 "context_scope": {
                     "selected_entity_ids": [entity_id],
                     "foco_hint": {
@@ -718,6 +816,7 @@ class WateringService:
         entity_id: str,
         metric: str,
         *,
+        peticion: str = "",
         progress_callback: Any = None,
     ) -> Result[Any, str]:
         """Sugerir X: genera Semillas (candidatos) sesgadas a reparar una métrica.
@@ -726,20 +825,81 @@ class WateringService:
         llamar aquí). El hint de zona viaja en ``context_scope["foco_hint"]`` y
         ``ai_jobs`` lo copia a la metadata de cada candidato: la UI de Foco lo
         usa para germinar la Semilla en Raíces/Brotes o como tarjeta del drawer.
-        NUNCA canoniza — la aceptación sigue el flujo humano existente.
+        BETA2-WIKI-08: antes de generar, NAVEGA la wiki (si hay navigator) para armar
+        ``contexto_wiki`` a partir de la petición del usuario. NUNCA canoniza.
         """
-        request = self.build_suggestion_request(entity_id, metric)
+        request = self.build_suggestion_request(entity_id, metric, peticion)
         if isinstance(request, Error):
             return request
         if self.ai_job_service is None or self.ai_job_service.provider_unconfigured():
             return Error(_UNCONFIGURED_AI_MESSAGE)
         payload = request.value
+        context_scope = dict(payload["context_scope"])
+        self._attach_wiki_context(
+            context_scope, payload["job_type"], payload["peticion"], entity_id
+        )
         return self.ai_job_service.run_focused_job(
             payload["job_type"],
             payload["prompt"],
-            context_scope=payload["context_scope"],
+            context_scope=context_scope,
             progress_callback=progress_callback,
         )
+
+    def _attach_wiki_context(
+        self, context_scope: dict, job_type: str, peticion: str, entity_id: str
+    ) -> None:
+        """Navega la wiki y adjunta ``contexto_wiki`` al scope (best-effort, WIKI-08)."""
+        if self.navigator is None:
+            return
+        try:
+            from packages.application.wiki_navigator import NavigationRequest
+
+            res = self.navigator.assemble_context(
+                NavigationRequest(intent=str(job_type), user_text=peticion, focus_ids=[entity_id])
+            )
+            bundle = res.value if isinstance(res, Ok) else None
+            if bundle is not None and not bundle.is_empty():
+                context_scope["contexto_wiki"] = bundle.as_context_dict()
+        except Exception:  # noqa: BLE001 — la navegación nunca rompe la sugerencia
+            pass
+
+    def compose_generation(
+        self, entity_id: str, metric: str, peticion: str = ""
+    ) -> Result[dict[str, Any], str]:
+        """Prepara la generación de una Sugerencia: navega la wiki y, para arraigo/iluminada,
+        corre el ANÁLISIS DE INTENCIÓN (plan) y compone el prompt del job compuesto.
+
+        Devuelve un payload listo para ``run_focused_job`` (``job_type``/``prompt``/
+        ``context_scope``) más ``plan_summary`` (feedback legible). Está pensado para correr
+        FUERA del hilo de UI (encadena hasta 2 llamadas IA: navegación + intención). Para
+        nutrida/calidad no analiza intención: mantiene el job por métrica. Consume IA (la
+        autorización visible es del host, antes de llamar aquí). NUNCA canoniza."""
+        base = self.build_suggestion_request(entity_id, metric, peticion)
+        if isinstance(base, Error):
+            return base
+        payload = dict(base.value)
+        scope = dict(payload["context_scope"])
+        # BETA2-WIKI-08: navega la wiki y adjunta contexto_wiki al scope (best-effort).
+        self._attach_wiki_context(
+            scope, payload["job_type"], payload.get("peticion", ""), entity_id
+        )
+
+        metric_key = str(metric or "").strip().lower()
+        plan_summary = ""
+        if metric_key in _INTENT_METRICS and self.intent_service is not None:
+            plan_res = self.intent_service.plan(
+                entity_id, metric_key, peticion, wiki_context=scope.get("contexto_wiki")
+            )
+            plan = plan_res.value if isinstance(plan_res, Ok) else None
+            if plan is not None and not plan.is_empty():
+                # Un solo job COMPUESTO produce el mix del plan; stage_results lo estadía todo.
+                payload["job_type"] = "suggest_composite"
+                payload["prompt"] = payload["prompt"] + "\n\n" + plan.to_generation_directives()
+                plan_summary = plan.summary_line()
+
+        payload["context_scope"] = scope
+        payload["plan_summary"] = plan_summary
+        return Ok(payload)
 
     # ------------------------------------------------------------------
     # Riego en lote (FOCO-07): pasos persistentes, cancelable ENTRE pasos

@@ -7,10 +7,22 @@ mode while normal mode starts from clean cards/overviews.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, QSize, QStringListModel, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import (
+    QEvent,
+    QSettings,
+    QSize,
+    QStringListModel,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QCompleter,
     QFormLayout,
@@ -22,6 +34,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -49,29 +62,36 @@ from hosts.DesktopHostPySide.widgets.graph_canvas import (
     VisualFilterState,
     relation_family,
 )
+from hosts.DesktopHostPySide.widgets.filter_popover import FilterPopover
 from hosts.DesktopHostPySide.controllers.ghost_controller import GhostController
 from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
+from hosts.DesktopHostPySide.widgets.play.play_view import PlayView
 from hosts.DesktopHostPySide.widgets.foco.watering_authorize import (
     request_watering_authorization,
 )
 from hosts.DesktopHostPySide.widgets.foco.watering_batch import WateringBatchWorker
 from hosts.DesktopHostPySide.widgets.foco.watering_panel import WateringPanel
 from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_temporal_label
+from pathlib import Path
+
 from packages.application.history_service import HistoryService
+from packages.domain.source_history import HistoryEventType
+from packages.application.image_asset_service import assets_root_for
+from packages.application.watering_attention import thirsty_queue, waterable_queue
+from packages.application.structural_analysis_service import StructuralAnalysisService
 from packages.application.watering_service import WateringService
 from hosts.DesktopHostPySide.widgets.chrono_canvas import (
     ChronoCanvasView,
     MilestoneQuickCreatePanel,
 )
 from hosts.DesktopHostPySide.controllers.era_controller import EraController
-from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
-    Badge,
     BusyIndicator,
     Card,
+    ElidedLabel,
     EmptyState,
     SectionHeader,
     enum_human,
@@ -80,18 +100,25 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     pulse_feedback,
     GOLD,
     GOLD_DEEP,
+    GOLD_PRESS,
     GOLD_SOFT,
     GOLD_TINT,
     INK,
+    INK_INVERSE,
     INK_SOFT,
     INK_STRONG,
     INK_MUTED,
     INK_OLIVE,
-    INPUT_BG,
     LINE,
-    LINE_STRONG,
+    POPUP_BG,
+    RADIUS_CAPSULE,
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
     SURFACE,
     SURFACE_HI,
+    TYPE_CAPTION_PX,
 )
 from packages.domain.result import Error
 from packages.domain.world_layer import default_world_layers
@@ -302,23 +329,48 @@ class SourceQuickCreatePanel(_SimpleFormPanel):
         self.on_created()
 
 
-class LayerQuickCreatePanel(_SimpleFormPanel):
-    def __init__(self, controller, on_created):
-        super().__init__("Nuevo anillo", "Organiza el worldbuilding como estratos visuales.")
+class RingPanel(_SimpleFormPanel):
+    """BETA2-CLEANUP-PANELES: panel ÚNICO y minimalista para crear y editar un
+    anillo (world layer). Reemplaza a los dos paneles legado
+    (``LayerQuickCreatePanel`` crear + ``RingEditPanel`` editar).
+
+    Campos: Nombre, Orden y Descripción.
+    - ``ring_id=None`` → modo crear (``controller.create``).
+    - ``ring_id`` dado → modo editar (prefill vía ``controller.get`` +
+      ``controller.update``).
+
+    Al editar, el orden se escribe también en ``metadata.causal_rank`` (la
+    concéntrica ordena los anillos por rango causal), preservando el
+    comportamiento del antiguo ``RingEditPanel``.
+    """
+
+    def __init__(self, controller, on_saved, *, ring_id: str | None = None):
+        editing = bool(ring_id)
+        super().__init__(
+            "Editar anillo" if editing else "Nuevo anillo",
+            "Un estrato del mundo: nómbralo y ordénalo del núcleo al borde.",
+        )
         self.controller = controller
-        self.on_created = on_created
+        self.on_saved = on_saved
+        self.ring_id = str(ring_id or "")
+
         form = QFormLayout()
         self.name = QLineEdit()
         self.name.setPlaceholderText("Nombre del anillo")
+        self.order = BotanicalSpinBox()
+        self.order.setRange(1, 999)
+        self.order.setToolTip("Rango causal: ordena los anillos del núcleo al borde")
         self.description = QTextEdit()
         self.description.setPlaceholderText("Qué representa este anillo")
         self.description.setMinimumHeight(90)
         form.addRow("Nombre", self.name)
-        form.addRow("Descripcion", self.description)
+        form.addRow("Orden", self.order)
+        form.addRow("Descripción", self.description)
         self.layout.addLayout(form)
         self.status = self.add_status()
+
         row = QHBoxLayout()
-        save = QPushButton("Crear anillo")
+        save = QPushButton("Guardar anillo" if editing else "Crear anillo")
         save.setObjectName("primaryButton")
         save.clicked.connect(self._save)
         row.addStretch(1)
@@ -326,293 +378,70 @@ class LayerQuickCreatePanel(_SimpleFormPanel):
         self.layout.addLayout(row)
         self.layout.addStretch(1)
 
-    def _save(self):
-        result = self.controller.create(
-            {
-                "name": self.name.text().strip(),
-                "description": self.description.toPlainText().strip(),
-            }
-        )
-        if isinstance(result, Error):
-            self.status.setText(result.error)
-            return
-        layer = result.value
-        self.status.setText(f"Anillo creado: {getattr(layer, 'name', 'sin nombre')}")
-        self.on_created()
+        if editing:
+            self._load()
+        else:
+            self.order.setValue(self._next_order())
 
+    def _next_order(self) -> int:
+        try:
+            layers = self.controller.list_all()
+        except Exception:  # noqa: BLE001
+            return 1
+        orders = [int(getattr(wl, "order", 0) or 0) for wl in (layers or [])]
+        return (max(orders) + 1) if orders else 1
 
-class RingEditPanel(QWidget):
-    """BETA1-B03 / BETA1-UX: editor de anillo (world layer).
-
-    Reescrito para compartir la MISMA estética que el detalle de entidad
-    (NodeDetailPanel): cabecera grande + insignia, fila de identidad compacta,
-    descripción breve y un CUERPO editorial amplio como protagonista del panel.
-    El orden escribe metadata.causal_rank porque la concéntrica ordena los
-    anillos por rango causal, no por el campo `order` plano.
-    """
-
-    _BG = "#F8F6ED"
-    _TITLE = "#5C5A3E"
-    _LABEL = "#6F6A42"
-    _MUTED = "#7C806E"
-
-    def __init__(self, controller, ring_id: str, on_saved):
-        super().__init__()
-        self.controller = controller
-        self.ring_id = ring_id
-        self.on_saved = on_saved
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 14)
-        root.setSpacing(10)
-
-        # Estilos editoriales compartidos con el detalle de entidad.
-        field_ss = (
-            f"QLineEdit {{ background: {INPUT_BG}; border: 1px solid {LINE}; "
-            f"border-radius: 10px; padding: 8px 10px; font-size: 14px; color: {INK}; }} "
-            f"QLineEdit:hover {{ border-color: {LINE_STRONG}; }} "
-            f"QLineEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 7px 9px; }}"
-        )
-        body_ss = (
-            f"QTextEdit {{ background: {INPUT_BG}; border: 1px solid {LINE}; "
-            f"border-radius: 12px; padding: 10px; font-size: 13px; color: {INK}; }} "
-            f"QTextEdit:hover {{ border-color: {LINE_STRONG}; }} "
-            f"QTextEdit:focus {{ border: 2px solid {GOLD}; background: #FFFFFF; padding: 9px; }}"
-        )
-        label_ss = f"color: {self._LABEL}; background: transparent; font-weight: 600;"
-
-        # — Cabecera: título grande + insignia (igual que NodeDetailPanel) —
-        head = QHBoxLayout()
-        self.title = QLabel("Anillo")
-        self.title.setStyleSheet(
-            f"font-size: 18px; font-weight: 700; color: {self._TITLE}; "
-            f"font-family: Georgia, 'Courier New', serif; background: transparent;"
-        )
-        self.title.setWordWrap(True)
-        head.addWidget(self.title, 1)
-        head.addWidget(Badge("Estrato", "info"))
-        root.addLayout(head)
-
-        self.summary = QLabel("Corona concéntrica del mundo · no modifica canon")
-        self.summary.setStyleSheet(f"color: {self._MUTED}; background: transparent;")
-        self.summary.setWordWrap(True)
-        root.addWidget(self.summary)
-
-        # — Fila de identidad: Nombre (protagonista) + Orden —
-        ident = QHBoxLayout()
-        ident.setSpacing(10)
-        name_col = QVBoxLayout()
-        name_col.setSpacing(4)
-        name_lbl = QLabel("Nombre")
-        name_lbl.setStyleSheet(label_ss)
-        self.name = QLineEdit()
-        self.name.setPlaceholderText("Nombre del estrato")
-        self.name.setStyleSheet(field_ss)
-        name_col.addWidget(name_lbl)
-        name_col.addWidget(self.name)
-        ident.addLayout(name_col, 3)
-        order_col = QVBoxLayout()
-        order_col.setSpacing(4)
-        order_lbl = QLabel("Orden")
-        order_lbl.setToolTip("Rango causal: ordena los anillos del núcleo al borde")
-        order_lbl.setStyleSheet(label_ss)
-        self.order = BotanicalSpinBox()
-        self.order.setRange(1, 999)
-        self.order.setMinimumHeight(38)
-        order_col.addWidget(order_lbl)
-        order_col.addWidget(self.order)
-        ident.addLayout(order_col, 1)
-        root.addLayout(ident)
-
-        # — Descripción breve —
-        brief_lbl = QLabel("Descripción breve")
-        brief_lbl.setStyleSheet(label_ss)
-        root.addWidget(brief_lbl)
-        self.brief = QLineEdit()
-        self.brief.setPlaceholderText("Una línea que resuma el estrato…")
-        self.brief.setStyleSheet(field_ss)
-        root.addWidget(self.brief)
-
-        # — Cuerpo: protagonista del panel (amplio, como en el detalle) —
-        body_lbl = QLabel("Descripción")
-        body_lbl.setStyleSheet(label_ss)
-        root.addWidget(body_lbl)
-        self.description = QTextEdit()
-        self.description.setPlaceholderText(
-            "¿Qué representa esta capa del mundo? Su materia, su tono, qué la "
-            "distingue de los anillos vecinos…"
-        )
-        self.description.setMinimumHeight(280)
-        self.description.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.description.setStyleSheet(body_ss)
-        root.addWidget(self.description, 1)
-
-        # — Carga de datos —
-        current = controller.get(ring_id) if hasattr(controller, "get") else None
+    def _load(self) -> None:
+        current = self.controller.get(self.ring_id) if hasattr(self.controller, "get") else None
         layer = getattr(current, "value", None)
-        if layer is not None:
-            self.title.setText(str(getattr(layer, "name", "") or "Anillo"))
-            self.name.setText(str(getattr(layer, "name", "")))
-            meta = getattr(layer, "metadata", {}) or {}
-            rank = str(meta.get("causal_rank", "") or getattr(layer, "order", 1))
-            try:
-                self.order.setValue(int(rank))
-            except (TypeError, ValueError):
-                self.order.setValue(int(getattr(layer, "order", 1) or 1))
-            self.brief.setText(str(meta.get("brief", "")))
-            self.description.setPlainText(str(getattr(layer, "description", "") or ""))
+        if layer is None:
+            self.status.setText("Anillo no encontrado")
+            return
+        self.name.setText(str(getattr(layer, "name", "")))
+        meta = getattr(layer, "metadata", {}) or {}
+        rank = str(meta.get("causal_rank", "") or getattr(layer, "order", 1))
+        try:
+            self.order.setValue(int(rank))
+        except (TypeError, ValueError):
+            self.order.setValue(int(getattr(layer, "order", 1) or 1))
+        self.description.setPlainText(str(getattr(layer, "description", "") or ""))
 
-        self.status = QLabel("")
-        self.status.setObjectName("mutedLabel")
-        self.status.setWordWrap(True)
-        root.addWidget(self.status)
-
-        # — Acciones —
-        row = QHBoxLayout()
-        row.addStretch(1)
-        save = QPushButton("Guardar anillo")
-        save.setObjectName("primaryButton")
-        save.clicked.connect(self._save)
-        row.addWidget(save)
-        root.addLayout(row)
-
-        # Fondo cálido del panel, SCOPED al objectName para no sangrar a los hijos.
-        self.setObjectName("ringEditPanel")
-        self.setStyleSheet(f"QWidget#ringEditPanel {{ background: {self._BG}; }}")
-
-    def _save(self):
+    def _save(self) -> None:
         name = self.name.text().strip()
         if not name:
-            self.status.setText("El nombre no puede estar vacio")
+            self.status.setText("El nombre no puede estar vacío")
             return
         order = int(self.order.value())
-        result = self.controller.update(
-            self.ring_id,
-            {
-                "name": name,
-                "order": order,
-                "description": self.description.toPlainText().strip(),
-                "metadata": {"causal_rank": str(order), "brief": self.brief.text().strip()},
-            },
-        )
+        description = self.description.toPlainText().strip()
+        if self.ring_id:
+            result = self.controller.update(
+                self.ring_id,
+                {
+                    "name": name,
+                    "order": order,
+                    "description": description,
+                    "metadata": {"causal_rank": str(order)},
+                },
+            )
+        else:
+            result = self.controller.create(
+                {"name": name, "description": description, "order": order}
+            )
         if isinstance(result, Error):
             self.status.setText(result.error)
             return
-        self.status.setText("Anillo actualizado")
+        layer = getattr(result, "value", None)
+        if self.ring_id:
+            self.status.setText("Anillo actualizado")
+        else:
+            self.status.setText(f"Anillo creado: {getattr(layer, 'name', 'sin nombre')}")
         self.on_saved()
 
 
-class _EraFormMixin:
-    """BETA1-G03: campos comunes de los paneles de era."""
-
-    def _build_era_form(self):
-        form = QFormLayout()
-        self.name = QLineEdit()
-        self.start = BotanicalSpinBox()
-        self.start.setRange(-999999999, 999999999)
-        self.open_ended = QCheckBox("Era abierta (sin año final)")
-        self.open_ended.setChecked(True)
-        self.end = BotanicalSpinBox()
-        self.end.setRange(-999999999, 999999999)
-        self.end.setEnabled(False)
-        self.open_ended.toggled.connect(lambda on: self.end.setEnabled(not on))
-        form.addRow("Nombre", self.name)
-        form.addRow("Año inicial", self.start)
-        form.addRow("", self.open_ended)
-        form.addRow("Año final", self.end)
-        self.layout.addLayout(form)
-
-    def _era_payload(self) -> dict:
-        return {
-            "name": self.name.text().strip(),
-            "start_year": int(self.start.value()),
-            "end_year": None if self.open_ended.isChecked() else int(self.end.value()),
-        }
-
-
-class EraQuickCreatePanel(_SimpleFormPanel, _EraFormMixin):
-    """BETA1-G03: crear era desde el panel de filtros (patrón Anillos)."""
-
-    def __init__(self, controller, on_created):
-        super().__init__(
-            "Nueva era", "Un estrato temporal del mundo (los años pueden ser negativos)."
-        )
-        self.controller = controller
-        self.on_created = on_created
-        self._build_era_form()
-        self.status = self.add_status()
-        row = QHBoxLayout()
-        save = QPushButton("Crear era")
-        save.setObjectName("primaryButton")
-        save.clicked.connect(self._save)
-        row.addStretch(1)
-        row.addWidget(save)
-        self.layout.addLayout(row)
-        self.layout.addStretch(1)
-
-    def _save(self):
-        payload = self._era_payload()
-        if not payload["name"]:
-            self.status.setText("El nombre no puede estar vacio")
-            return
-        result = self.controller.create(payload)
-        if isinstance(result, Error):
-            self.status.setText(result.error)
-            return
-        self.status.setText("Era creada")
-        self.on_created()
-
-
-class EraEditPanel(_SimpleFormPanel, _EraFormMixin):
-    """BETA1-G03: editar/eliminar una era."""
-
-    def __init__(self, controller, era_id: str, on_saved):
-        super().__init__("Editar era", "Nombre y límites del estrato temporal.")
-        self.controller = controller
-        self.era_id = era_id
-        self.on_saved = on_saved
-        self._build_era_form()
-        current = controller.get(era_id) if hasattr(controller, "get") else None
-        era = getattr(current, "value", None)
-        if era is not None:
-            self.name.setText(str(getattr(era, "name", "")))
-            self.start.setValue(int(getattr(era, "start_year", 0) or 0))
-            end = getattr(era, "end_year", None)
-            self.open_ended.setChecked(end is None)
-            if end is not None:
-                self.end.setValue(int(end))
-        self.status = self.add_status()
-        row = QHBoxLayout()
-        delete = QPushButton("Eliminar era")
-        delete.clicked.connect(self._delete)
-        row.addWidget(delete)
-        row.addStretch(1)
-        save = QPushButton("Guardar era")
-        save.setObjectName("primaryButton")
-        save.clicked.connect(self._save)
-        row.addWidget(save)
-        self.layout.addLayout(row)
-        self.layout.addStretch(1)
-
-    def _save(self):
-        payload = self._era_payload()
-        if not payload["name"]:
-            self.status.setText("El nombre no puede estar vacio")
-            return
-        result = self.controller.update(self.era_id, payload)
-        if isinstance(result, Error):
-            self.status.setText(result.error)
-            return
-        self.status.setText("Era actualizada")
-        self.on_saved()
-
-    def _delete(self):
-        result = self.controller.delete(self.era_id)
-        if isinstance(result, Error):
-            self.status.setText(result.error)
-            return
-        self.status.setText("Era eliminada")
-        self.on_saved()
+# BETA2-CAL: se retiraron los antiguos paneles de crear/editar UNA era por años
+# absolutos en aislado (eran un modelo paralelo). Ahora todas las eras se crean y editan
+# encadenadas por duración en el editor de calendario unificado (ChronologyConfigPanel →
+# CalendarEditor). El present_year se sigue editando en el pill temporal vía era_controller.
 
 
 class NarrativeWorkbench(QWidget):
@@ -889,6 +718,13 @@ _NO_SEED_JOB_TYPES = {"improve_text", "generate_text", "repair_coherence"}
 # UX5: jobs de edición → las entidades seleccionadas germinan mientras corre el job.
 _EDIT_JOB_TYPES = {"edit_entities", "edit_relation", "edit_ring", "edit_milestone"}
 
+# BETA2-WIKI-10: la superficie de IA legada (command bar Acción×Ámbito + texto libre,
+# acciones IA del menú contextual, barras IA de los paneles de detalle, generación suelta
+# de la toolbar, coherencia y texto inline) queda RETIRADA de la UI. La IA sobrevive solo
+# como Regar + Sugerencias (con petición) + wiki + creación cronológica. Se conserva el
+# código (legacy) tras este guard para borrarlo en la limpieza posterior (WIKI-11+).
+_LEGACY_AI_UI = False
+
 
 class _AIJobWorker(QThread):
     """Run an AI job outside the UI thread."""
@@ -954,6 +790,35 @@ class _WalkStepWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class _PlayPrefetchWorker(QThread):
+    """PLAY-08: analiza el hito siguiente SIN mutar la sesión (prefetch).
+
+    El resultado viaja con el epoch de canon con el que se lanzó; el receptor
+    lo descarta si el canon cambió entre el lanzamiento y la llegada (los
+    QThread no se cancelan de forma fiable, así que se invalida por epoch).
+    """
+
+    finishedOk = Signal(str, int, object)  # milestone_id, epoch, dict resultado
+    failed = Signal(str)
+
+    def __init__(self, controller, session_id: str, milestone_id: str, epoch: int):
+        super().__init__()
+        self.controller = controller
+        self.session_id = session_id
+        self.milestone_id = milestone_id
+        self.epoch = epoch
+
+    def run(self):
+        try:
+            res = self.controller.analyze_at(self.session_id, self.milestone_id)
+            if isinstance(res, Error):
+                self.failed.emit(res.error)
+                return
+            self.finishedOk.emit(self.milestone_id, self.epoch, res.value)
+        except Exception as exc:  # pragma: no cover - defensive thread boundary
+            self.failed.emit(str(exc))
+
+
 class _ContextPreviewWorker(QThread):
     """UX3: calcula la vista previa de contexto fuera del hilo de UI.
 
@@ -983,73 +848,56 @@ class _ContextPreviewWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class CreationSearchPanel(_SimpleFormPanel):
-    """B37-T01 clean graph search panel inside the right drawer."""
+class _StatusLabel(QLabel):
+    """QLabel que avisa a un callback cuando cambia su texto.
 
-    def __init__(self, workspace: "CreationWorkspace"):
-        super().__init__(
-            "Buscar en Creación", "Encuentra nodos, árboles o relaciones sin tablas técnicas."
-        )
-        self.workspace = workspace
-        self.search = QLineEdit()
-        self.search.setPlaceholderText(
-            "Buscar por nombre, tipo, descripción, rama, relación o anillo"
-        )
-        self.search.textChanged.connect(self._run_search)
-        self.layout.addWidget(self.search)
-        self.status = self.add_status()
-        self.results_layout = QVBoxLayout()
-        self.results_layout.setSpacing(6)
-        self.layout.addLayout(self.results_layout)
-        self.layout.addStretch(1)
-        self._run_search("")
+    BETA2-WIKI-10: el indicador de estado de IA vivía dentro de la command bar (ahora
+    retirada). Al moverlo a un floater propio necesitamos mostrar/ocultar el contenedor
+    cuando el texto aparece/desaparece SIN tener que tocar los ~15 puntos de llamada a
+    setText repartidos por el workspace; este QLabel lo centraliza."""
 
-    def _clear_results(self):
-        while self.results_layout.count():
-            item = self.results_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    def __init__(self, on_change=None, parent=None):
+        super().__init__("", parent)
+        self._on_change = on_change
 
-    def _run_search(self, text: str):
-        _apptrace(f"WS run_search query={text[:60]}")
-        self._clear_results()
-        query = (text or "").strip()
-        if not query:
-            self.status.setText("Escribe para buscar en el grafo actual.")
-            return
-        results = self.workspace.graph.search(query)
-        if not results:
-            self.status.setText("Sin resultados.")
-            return
-        self.status.setText(f"{len(results)} resultado(s). Selecciona uno para enfocarlo.")
-        for result in results:
-            self.results_layout.addWidget(self._result_button(result))
+    def setText(self, text):  # noqa: N802 (API Qt)
+        super().setText(text)
+        cb = self._on_change
+        if cb is not None:
+            try:
+                cb()
+            except Exception:  # noqa: BLE001 — el feedback nunca debe romper el flujo
+                pass
 
-    def _result_button(self, result: GraphSearchResult) -> QPushButton:
-        title, details, summary = result.display_lines()
-        collapsed_hint = (
-            "\nDentro de árbol colapsado: se expandirá la ruta al enfocar."
-            if result.is_inside_collapsed_tree
-            else ""
-        )
-        button = QPushButton(f"{title}\n{details}{collapsed_hint}\n{summary}".strip())
-        button.setStyleSheet(
-            "QPushButton { text-align: left; background: #F8F5EA; border: 1px solid #D8D2BF; "
-            "border-radius: 10px; padding: 8px; color: #4F4D38; } "
-            "QPushButton:hover { background: #FFFDF6; border-color: #AFA77A; }"
-        )
-        button.clicked.connect(lambda _=False, r=result: self._focus_result(r))
-        return button
 
-    def _focus_result(self, result: GraphSearchResult):
-        ok = self.workspace.focus_search_result(result)
-        if ok:
-            self.status.setText(f"Enfocado: {result.title}")
-        else:
-            self.status.setText(
-                "No se pudo enfocar. Puede estar oculto por filtros activos; limpia filtros e inténtalo de nuevo."
-            )
+# BETA2-WIKI-13: métricas cuyas Sugerencias corren un análisis de intención (feedback).
+_INTENT_METRICS_UI = frozenset({"arraigo", "iluminada"})
+
+
+class _SuggestionPrepWorker(QThread):
+    """BETA2-WIKI-13: prepara una Sugerencia FUERA del hilo de UI.
+
+    Encadena la navegación de la wiki (WIKI-08) y, para arraigo/iluminada, el análisis de
+    intención (WIKI-13) vía ``WateringService.compose_generation`` — hasta dos llamadas IA
+    que no deben congelar la UI. Emite el payload compuesto ({job_type/prompt/context_scope/
+    plan_summary}) o ``None`` (best-effort: la sugerencia sigue con el payload base)."""
+
+    done = Signal(object)  # dict payload de compose_generation o None
+
+    def __init__(self, watering_service, entity_id: str, metric: str, peticion: str):
+        super().__init__()
+        self.svc = watering_service
+        self.entity_id = entity_id
+        self.metric = metric
+        self.peticion = peticion
+
+    def run(self):
+        try:
+            res = self.svc.compose_generation(self.entity_id, self.metric, self.peticion)
+            payload = getattr(res, "value", None) if not isinstance(res, Error) else None
+            self.done.emit(payload)
+        except Exception:  # pragma: no cover - defensive thread boundary
+            self.done.emit(None)
 
 
 class CreationRingPanel(_SimpleFormPanel):
@@ -1104,7 +952,7 @@ class CreationRingPanel(_SimpleFormPanel):
         if active:
             return (
                 f"QPushButton {{ text-align: left; background: {GOLD}; border: none; "
-                f"border-radius: 10px; padding: 8px; color: #FCF8EC; font-weight: 700; }}"
+                f"border-radius: 10px; padding: 8px; color: {INK_INVERSE}; font-weight: 700; }}"
             )
         return (
             "QPushButton { text-align: left; background: #F8F5EA; border: 1px solid #D8D2BF; "
@@ -1146,10 +994,14 @@ class _SearchLineEdit(QLineEdit):
 
 
 class _FloatingSearchBar(QFrame):
-    """BETA1-L02b: barra de búsqueda flotante ligera sobre el lienzo (tecla 'd').
-    No abre el drawer. Al teclear, el workspace busca (entidades del grafo + hitos
-    de la cronología) y salta EN VIVO a la mejor coincidencia. Esc cierra; Enter
-    confirma y cierra; clic en un resultado navega a él."""
+    """BETA1-L02b: barra de búsqueda flotante ligera sobre el lienzo (Ctrl+B,
+    BETA2-UI2-10 — mismo atajo que la paleta del Foco). No abre el drawer. Al
+    teclear, el workspace busca (entidades del grafo + hitos de la cronología)
+    y salta EN VIVO a la mejor coincidencia. Esc cierra; Enter confirma y
+    cierra; clic en un resultado navega a él.
+
+    Sigue siendo un overlay hijo (NO Qt.Popup): el salto en vivo mueve el foco
+    entre vistas y un Popup se autocerraría. Estética alineada con Popover."""
 
     def __init__(self, workspace: "CreationWorkspace"):
         super().__init__(workspace)
@@ -1158,7 +1010,7 @@ class _FloatingSearchBar(QFrame):
         # horizontalmente la barra (antes el campo "saltaba" al teclear).
         self.setFixedWidth(420)
         self.setStyleSheet(
-            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {LINE}; border-radius: 12px; }}"
+            f"QFrame {{ background: {POPUP_BG}; border: 1px solid {GOLD_SOFT}; border-radius: 12px; }}"
         )
         col = QVBoxLayout(self)
         col.setContentsMargins(10, 8, 10, 8)
@@ -1215,286 +1067,6 @@ class _FloatingSearchBar(QFrame):
         return button
 
 
-class CreationFilterPanel(_SimpleFormPanel):
-    """B37-T02 visual filters. Ephemeral: never writes project/canon."""
-
-    def __init__(self, workspace: "CreationWorkspace"):
-        super().__init__(
-            "Filtros visuales", "Reduce la vista sin modificar el proyecto ni el canon."
-        )
-        self.workspace = workspace
-        self.status = self.add_status()
-        form = QFormLayout()
-        self.entity_type = QComboBox()
-        self.relation_type = QComboBox()
-        self.relation_family = QComboBox()
-        self.tree = QComboBox()
-        self.layer = QComboBox()
-        self.canon = QComboBox()
-        self.show_relations = QCheckBox("Mostrar relaciones")
-        self.show_relations.setChecked(True)
-        for combo in (
-            self.entity_type,
-            self.relation_type,
-            self.relation_family,
-            self.tree,
-            self.layer,
-            self.canon,
-        ):
-            combo.addItem("- Cualquiera -", "")
-        for label, value in (
-            ("Pertenencia estructural", "estructural"),
-            ("Narrativa", "narrativa"),
-            ("Causal", "causal"),
-            ("Coherencia/incidencias", "coherencia"),
-        ):
-            self.relation_family.addItem(label, value)
-        self._populate()
-        form.addRow("Tipo", self.entity_type)
-        form.addRow("Tipo relación", self.relation_type)
-        form.addRow("Familia relación", self.relation_family)
-        form.addRow("Rama", self.tree)
-        form.addRow("Anillo", self.layer)
-        form.addRow("Estado", self.canon)
-        form.addRow("Relaciones", self.show_relations)
-        self.layout.addLayout(form)
-        for widget in (
-            self.entity_type,
-            self.relation_type,
-            self.relation_family,
-            self.tree,
-            self.layer,
-            self.canon,
-        ):
-            widget.currentIndexChanged.connect(self._apply)
-        self.show_relations.toggled.connect(self._apply)
-        row = QHBoxLayout()
-        clear = QPushButton("Limpiar filtros")
-        clear.clicked.connect(self._clear)
-        row.addStretch(1)
-        row.addWidget(clear)
-        self.layout.addLayout(row)
-        # BETA1-F02/F03 (revisión): el menú de anillos vive INTEGRADO aquí —
-        # lista con edición directa + creación. Más ordenado que un panel
-        # técnico aparte.
-        self._build_rings_section()
-        # BETA1-G03: las eras y el año presente viven aquí (patrón Anillos).
-        # El tiempo aplica SIEMPRE — sin gate de worldbuilding.
-        self._build_eras_section()
-        self.layout.addStretch(1)
-        self._sync_status()
-
-    def _build_rings_section(self):
-        header = QLabel("Anillos")
-        header.setStyleSheet(
-            "color: #6F6A42; font-size: 11px; font-weight: 700; letter-spacing: 1px; "
-            "text-transform: uppercase; background: transparent; border: none; padding-top: 8px;"
-        )
-        self.layout.addWidget(header)
-        controller = getattr(self.workspace, "layer_controller", None)
-        rings = []
-        if controller is not None:
-            try:
-                rings = list(controller.list_all())
-            except Exception:  # noqa: BLE001
-                rings = []
-        for ring in rings:
-            row = QHBoxLayout()
-            name = QLabel(str(getattr(ring, "name", "Anillo")))
-            name.setStyleSheet(
-                "color: #504B2E; font-size: 12px; background: transparent; border: none;"
-            )
-            row.addWidget(name, 1)
-            edit = QPushButton("Editar")
-            edit.setFixedHeight(24)
-            edit.setToolTip("Nombre y orden del anillo")
-            edit.clicked.connect(
-                lambda _=False, rid=str(getattr(ring, "id", "")): (
-                    self.workspace._open_ring_edit_panel(rid)
-                )
-            )
-            row.addWidget(edit)
-            self.layout.addLayout(row)
-        actions = QHBoxLayout()
-        new_btn = QPushButton("Nuevo anillo")
-        new_btn.clicked.connect(self.workspace._open_ring_create_panel)
-        actions.addWidget(new_btn)
-        flyout_btn = QPushButton("Vista de anillos")
-        flyout_btn.setToolTip("Chips de anillos sobre el grafo (filtrado rápido)")
-        flyout_btn.clicked.connect(self.workspace._toggle_layer_drawer)
-        actions.addWidget(flyout_btn)
-        actions.addStretch(1)
-        self.layout.addLayout(actions)
-
-    def _worldbuilding_active(self) -> bool:
-        project = self.workspace._get_active_project()
-        return (
-            bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
-        )
-
-    def _build_eras_section(self):
-        """BETA1-G03: CRUD de eras + año presente del mundo."""
-        controller = getattr(self.workspace, "era_controller", None)
-        if controller is None:
-            return
-        header = QLabel("Eras")
-        header.setStyleSheet(
-            "color: #6F6A42; font-size: 11px; font-weight: 700; letter-spacing: 1px; "
-            "text-transform: uppercase; background: transparent; border: none; padding-top: 8px;"
-        )
-        self.layout.addWidget(header)
-        try:
-            eras = list(controller.list_all() or [])
-        except Exception:  # noqa: BLE001
-            eras = []
-        for era in eras:
-            row = QHBoxLayout()
-            name = QLabel(str(getattr(era, "name", "Era")))
-            name.setStyleSheet(
-                "color: #504B2E; font-size: 12px; background: transparent; border: none;"
-            )
-            row.addWidget(name, 1)
-            end = getattr(era, "end_year", None)
-            span = QLabel(f"{getattr(era, 'start_year', 0)} → {end if end is not None else '…'}")
-            span.setStyleSheet(
-                "color: #7C806E; font-size: 11px; background: transparent; border: none;"
-            )
-            row.addWidget(span)
-            edit = QPushButton("Editar")
-            edit.setFixedHeight(24)
-            edit.setToolTip("Nombre y límites de la era")
-            edit.clicked.connect(
-                lambda _=False, eid=str(getattr(era, "id", "")): (
-                    self.workspace._open_era_edit_panel(eid)
-                )
-            )
-            row.addWidget(edit)
-            self.layout.addLayout(row)
-        actions = QHBoxLayout()
-        new_btn = QPushButton("Nueva era")
-        new_btn.clicked.connect(self.workspace._open_era_create_panel)
-        actions.addWidget(new_btn)
-        actions.addStretch(1)
-        self.layout.addLayout(actions)
-        present_row = QHBoxLayout()
-        present_label = QLabel("Año presente")
-        present_label.setStyleSheet(
-            "color: #504B2E; font-size: 12px; background: transparent; border: none;"
-        )
-        present_row.addWidget(present_label, 1)
-        self.present_year_spin = BotanicalSpinBox()
-        self.present_year_spin.setRange(-999999999, 999999999)
-        try:
-            self.present_year_spin.setValue(int(controller.present_year()))
-        except Exception:  # noqa: BLE001
-            self.present_year_spin.setValue(0)
-        self.present_year_spin.editingFinished.connect(self._apply_present_year)
-        present_row.addWidget(self.present_year_spin)
-        self.layout.addLayout(present_row)
-
-    def _apply_present_year(self):
-        controller = getattr(self.workspace, "era_controller", None)
-        if controller is None:
-            return
-        result = controller.set_present_year(int(self.present_year_spin.value()))
-        if isinstance(result, Error):
-            self.status.setText(result.error)
-            return
-        self.status.setText("Año presente actualizado")
-        self.workspace.refresh()
-
-    def _add_unique(self, combo: QComboBox, label: str, value: str, seen: set[str]):
-        value = str(value or "").lower()
-        if not value or value in seen:
-            return
-        seen.add(value)
-        combo.addItem(label, value)
-
-    def _populate(self):
-        project = self.workspace._get_active_project()
-        entities = list(getattr(project, "entities", []) or []) if project is not None else []
-        relations = list(getattr(project, "relations", []) or []) if project is not None else []
-        seen_entity: set[str] = set()
-        seen_canon: set[str] = set()
-        seen_vis: set[str] = set()
-        for entity in entities:
-            kind = str(
-                getattr(
-                    getattr(entity, "entity_type", None),
-                    "value",
-                    getattr(entity, "entity_type", ""),
-                )
-                or ""
-            )
-            self._add_unique(self.entity_type, enum_human(kind), kind, seen_entity)
-            canon = str(
-                getattr(
-                    getattr(entity, "canon_state", None),
-                    "value",
-                    getattr(entity, "canon_state", ""),
-                )
-                or ""
-            )
-            self._add_unique(self.canon, enum_human(canon), canon, seen_canon)
-            if kind.lower() == "contenedor":
-                self.tree.addItem(
-                    str(getattr(entity, "name", "Rama")), str(getattr(entity, "id", ""))
-                )
-        seen_rel: set[str] = set()
-        for relation in relations:
-            kind = str(
-                getattr(
-                    getattr(relation, "relation_type", None),
-                    "value",
-                    getattr(relation, "relation_type", ""),
-                )
-                or ""
-            )
-            self._add_unique(self.relation_type, enum_human(kind), kind, seen_rel)
-        for layer in list(getattr(project, "world_layers", []) or []):
-            if getattr(layer, "is_visible", True):
-                self.layer.addItem(
-                    str(getattr(layer, "name", "Anillo")), str(getattr(layer, "id", ""))
-                )
-
-    def _state(self) -> VisualFilterState:
-        def one(combo: QComboBox) -> tuple[str, ...]:
-            value = str(combo.currentData() or "")
-            return (value,) if value else ()
-
-        return VisualFilterState(
-            entity_types=one(self.entity_type),
-            relation_types=one(self.relation_type),
-            relation_families=one(self.relation_family),
-            tree_id=str(self.tree.currentData() or ""),
-            layer_ids=one(self.layer),
-            canon_states=one(self.canon),
-            visibility_states=(),
-            show_relations=bool(self.show_relations.isChecked()),
-        )
-
-    def _apply(self):
-        _apptrace("WS filter_apply")
-        self.workspace.apply_creation_filter(self._state())
-        self._sync_status()
-
-    def _clear(self):
-        _apptrace("WS filter_clear")
-        self.entity_type.setCurrentIndex(0)
-        self.relation_type.setCurrentIndex(0)
-        self.relation_family.setCurrentIndex(0)
-        self.tree.setCurrentIndex(0)
-        self.layer.setCurrentIndex(0)
-        self.canon.setCurrentIndex(0)
-        self.show_relations.setChecked(True)
-        self.workspace.clear_creation_filters()
-        self._sync_status()
-
-    def _sync_status(self):
-        count = self.workspace.graph.active_filter_count()
-        self.status.setText(f"{count} filtro(s) activo(s)." if count else "Sin filtros activos.")
-
-
 # Left-edge layer flyout
 
 
@@ -1542,7 +1114,7 @@ class _LayerEdgeFlyout(QFrame):
 
         hint = QLabel("Clic para enfocar anillo · contador visible")
         hint.setStyleSheet(
-            f"font-size: 10px; color: {self.MUTED}; background: transparent; "
+            f"font-size: {TYPE_CAPTION_PX}px; color: {self.MUTED}; background: transparent; "
             f"border: none; font-style: italic;"
         )
         layout.addWidget(hint)
@@ -1582,7 +1154,8 @@ class _LayerEdgeFlyout(QFrame):
         self._clear_btn = QPushButton("Quitar filtro")
         self._clear_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {self.LAYER_BORDER}; "
-            f"border-radius: 8px; padding: 4px 10px; color: {self.MUTED}; font-size: 10px; }} "
+            f"border-radius: 8px; padding: 4px 10px; color: {self.MUTED}; "
+            f"font-size: {TYPE_CAPTION_PX}px; }} "
             f"QPushButton:hover {{ background: {self.CHIP_HOVER_BG}; color: {self.TEXT_COLOR}; }}"
         )
         self._clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1845,13 +1418,16 @@ class CreationWorkspace(QWidget):
         self.ctx.ai_prompt_trace_store = self.prompt_trace_store
         # Resolve the configured provider (real if NARRATIVE_AI_* is set) instead
         # of the simulated default, so the command bar uses the user's provider.
+        # BETA2-WIKI-11: el RAG léxico queda RETIRADO del pipeline. El AIJobService ya
+        # no recibe rag_service (el contexto lo decide la navegación de la wiki); se
+        # conserva project_provider para las inyecciones deterministas + la wiki.
         self.ai_job_service = AIJobService(
             provider=get_provider(),
-            rag_service=self.rag_service,
             project_provider=self._get_active_project,
             prompt_trace_store=self.prompt_trace_store,
         )
         self._ai_workers = {}
+        self._wiki_nav_workers: set = set()  # BETA2-WIKI-08: workers de navegación en curso
         # Semillas (Fase A): notificaciones palpitantes abajo-derecha + campana zen.
         self._zen_bell = ZenBell()
         self._seed_notifications = SeedNotificationLayer(self)
@@ -1859,6 +1435,27 @@ class CreationWorkspace(QWidget):
         # con z-order por encima, para que no solape los botones ni pierda los clics.
         self._seed_notifications.set_reflow_callback(self._position_seed_layer)
         self._seed_notifications.reviewRequested.connect(self._open_candidate_review)
+        # BETA2-JARDIN-03: badge «💧 N» — cada clic recorre las sedientas en
+        # Foco. El recómputo va con debounce: el autosave toca la revisión del
+        # proyecto en cada guardado y statuses_for recorre todo el jardín.
+        self._seed_notifications.thirstyRequested.connect(self._on_thirsty_requested)
+        # UI2-04: clic primario del badge de riego — regar TODAS las sedientas
+        # (reutiliza la autorización visible + lote secuencial existentes).
+        self._seed_notifications.waterAllRequested.connect(self._on_foco_water)
+        # BETA2-FOCO-34: aviso «revisar en Cultivo» tras regar → enfoca + abre Cultivo.
+        self._seed_notifications.cultivoReviewRequested.connect(self._on_cultivo_review)
+        # BETA2-FOCO-35: clic en «Regando x/y» → popover de detalle del lote.
+        self._seed_notifications.waterProgressRequested.connect(self._open_watering_progress)
+        self._thirsty_debounce = QTimer(self)
+        self._thirsty_debounce.setSingleShot(True)
+        self._thirsty_debounce.setInterval(400)
+        self._thirsty_debounce.timeout.connect(self._refresh_thirsty_badge)
+        # BETA2-STRUCT-02: mismo patrón derive-on-read para los ajustes estructurales.
+        self._structural_debounce = QTimer(self)
+        self._structural_debounce.setSingleShot(True)
+        self._structural_debounce.setInterval(400)
+        self._structural_debounce.timeout.connect(self._refresh_structural_badge)
+        self._float_structure = None
         self._active_layer_id = ""
         self._advanced_mode = bool(ctx.advanced_mode)
         project_controller = getattr(ctx, "project_controller", None)
@@ -1879,17 +1476,20 @@ class CreationWorkspace(QWidget):
             self._chronology_ctrl = None
             self.era_controller = None
             self.chronology_walk_controller = None
-        # CRON: sesión de recorrido en curso (id) y su panel runner.
+        # CRON: sesión de recorrido en curso (id); su cara es la vista Play.
         self._walk_session_id: str | None = None
-        self._walk_runner = None
         self._walk_step_worker = None
+        # PLAY-12: token de INTENTO de paso — «Reintentar» lo incrementa y el
+        # resultado del intento viejo se descarta en la guarda (los QThread no
+        # se cancelan de forma fiable). No confundir con _play_epoch (canon).
+        self._walk_step_token = 0
         self._walk_workers: set = set()  # mantiene vivos los QThread del recorrido
         self._walk_analyzing = False  # guarda determinista contra pasos solapados
         self._walk_step_candidate_ids: list[str] = []
-        # CRON: perro guardián — si la llamada al modelo se cuelga, recupera la UI
-        # (no deja los botones deshabilitados para siempre = "congelada").
+        # CRON: perro guardián — PLAY-12: ya no «cancela»; a los 60 s avisa de
+        # que la IA tarda (aviso + Reintentar) y se sigue esperando.
         self._walk_watchdog: QTimer | None = None
-        self._walk_watchdog_ms = 120000
+        self._walk_watchdog_ms = 60000
 
         self._build_ui()
 
@@ -1914,7 +1514,8 @@ class CreationWorkspace(QWidget):
         # Graph canvas (takes all space)
         self.graph = GraphCanvasWidget(self.ctx)
         self.graph.set_ai_controller(self.ai_context_controller)
-        self.graph.entitySelected.connect(self._open_node_panel)
+        # BETA2-CLEANUP-PANELES: el clic simple ya NO abre el cajón de detalle
+        # (retirado); la edición vive en el Foco (doble clic / "Editar" → Foco).
         # BETA2-FOCO-14: doble click en el Mapa (solo lectura) → entrar a Foco.
         self.graph.entityFocusRequested.connect(self._on_map_entity_to_foco)
         self.graph.candidateClicked.connect(self._open_candidate_review)  # SEM04
@@ -1926,7 +1527,10 @@ class CreationWorkspace(QWidget):
         self.graph.ringSelected.connect(self._on_ring_selected)
         self.graph.ringFocused.connect(self._on_ring_focused)
         self.graph.ringFocusCleared.connect(self._on_ring_focus_cleared)
-        self.graph.searchRequested.connect(self._open_search_overlay)  # BETA1-L02b ('d')
+        # BETA2-UI2-10: embudo del pill temporal → popover de filtros; año
+        # presente editable → persistencia vía era_controller (solo aquí).
+        self.graph.filterRequested.connect(self._open_filter_popover)
+        self.graph.presentYearEdited.connect(self._on_present_year_edited)
         # BETA1-B01: context-menu intents -> existing creation/deletion routes
         self.graph.contextCreateEntityRequested.connect(self._create_entity_on_graph)
         self.graph.contextCreateTreeRequested.connect(self._create_tree_on_graph)
@@ -1952,7 +1556,10 @@ class CreationWorkspace(QWidget):
         self.chrono = ChronoCanvasView()
         self.chrono.set_atmosphere_context(self.ctx)  # BETA1-G08: respeta movimiento reducido
         self.chrono.setVisible(False)
-        self.chrono.entityActivated.connect(self._open_panel_for_entity)
+        # BETA2-SUB-02: clic en una entidad de la cronología → Modo Foco
+        # (descripción) de esa entidad, como el doble-clic del Mapa. Antes abría
+        # el panel Node/Tree en el drawer (patrón antiguo).
+        self.chrono.entityActivated.connect(self._on_map_entity_to_foco)
         self.chrono.milestoneActivated.connect(self._on_chrono_milestone)
         self.chrono.walkRequested.connect(self._start_or_continue_walk)  # CRON
         self.chrono.lifespanEdited.connect(self._on_lifespan_edited)  # BETA1-UX2C
@@ -1960,15 +1567,32 @@ class CreationWorkspace(QWidget):
             self._on_chrono_create_milestone
         )  # BETA1-HITO-MULTI
         self.chrono.eraActivated.connect(self._open_era_edit_panel)  # BETA1-HITO-MULTI
+        # BETA2-UI2-10: "Crear era…" desde el menú contextual de la Cronología.
+        self.chrono.eraCreateRequested.connect(self._open_era_create_panel)
+        # BETA2-FOCO-33: embudo de filtros de la Cronología (réplica del Mapa).
+        self.chrono.filterRequested.connect(self._open_chrono_filter_popover)
         self.chrono.milestoneEntityLinkRequested.connect(
             self._on_chrono_link_entity
         )  # BETA1-HITO-MULTI
         layout.addWidget(self.chrono, 1)
 
+        # BETA2-UI2-10: Ctrl+B abre la búsqueda flotante unificada en Mapa y
+        # Cronología (mismo atajo que la paleta del Foco). Los shortcuts van
+        # anclados a graph/chrono — NUNCA al workspace: FocoView es hijo y ya
+        # tiene su propio Ctrl+B con WidgetWithChildrenShortcut; dos matches
+        # en el mismo ámbito serían ambiguos y ninguno dispararía.
+        for host in (self.graph, self.chrono):
+            shortcut = QShortcut(QKeySequence("Ctrl+B"), host)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._open_search_overlay)
+
         # BETA2-FOCO: Modo Foco — escritorio causal centrado en una entidad.
         # Es la vista PRINCIPAL de Creación; el grafo (Mapa) y la cronología
         # pasan a ser vistas globales de orientación/revisión del jardín.
         _foco_ps = getattr(getattr(self.ctx, "project_controller", None), "ps", None)
+        # BETA2-PLAY-18: provider de observaciones del recorrido para el Cuaderno
+        # de Cultivo (solo lectura del historial filtrado por entidad + origen).
+        _foco_history = HistoryService(_foco_ps) if _foco_ps is not None else None
         self.foco = FocoView(
             project_provider=self._get_active_project,
             last_entity_getter=(
@@ -1985,29 +1609,113 @@ class CreationWorkspace(QWidget):
             milestone_controller=self._milestone_ctrl,
             # FOCO-11: fantasmas por controller (mismos métodos que GhostService).
             ghost_service=(GhostController(_foco_ps) if _foco_ps is not None else None),
+            history_provider=(
+                (
+                    lambda eid: _foco_history.get_history(
+                        entity_id=eid, event_type=HistoryEventType.OBSERVACION_RECORRIDO
+                    )
+                )
+                if _foco_history is not None
+                else None
+            ),
         )
         self.foco.setVisible(False)
         self.foco.openInMapRequested.connect(self._foco_open_in_map)
         self.foco.openInChronoRequested.connect(self._foco_open_in_chrono)
         # FOCO-10: la banda local reutiliza los slots de la cronología global.
         self.foco.lifespanEdited.connect(self._on_lifespan_edited)
-        self.foco.milestoneCreateRequested.connect(self._on_chrono_create_milestone)
+        # FOCO-25: desde la banda local el hito nace vinculado a la entidad en foco.
+        self.foco.milestoneCreateRequested.connect(self._on_foco_create_milestone)
+        # FOCO-26: rango dibujado en la banda ⇒ hito con inicio y fin.
+        self.foco.milestoneRangeCreateRequested.connect(self._on_foco_create_milestone_range)
+        # BETA2-MEM: Memoria narrativa viva. Servicio determinista (CRUD) + servicio
+        # IA (update_memory). Regar v2 (MEM-07) actualiza Memoria en el mismo flujo.
+        from packages.application.memory_ai_service import MemoryAIService
+        from packages.application.narrative_impact_service import NarrativeImpactService
+        from packages.application.narrative_memory_service import NarrativeMemoryService
+        from packages.application.suggestion_intent_service import SuggestionIntentService
+        from packages.application.wiki_navigator import WikiNavigator
+
+        self.memory_service = (
+            NarrativeMemoryService(_foco_ps, HistoryService(_foco_ps))
+            if _foco_ps is not None
+            else None
+        )
+        self.memory_ai_service = (
+            MemoryAIService(_foco_ps, self.ai_job_service, memory_service=self.memory_service)
+            if _foco_ps is not None
+            else None
+        )
+        # BETA2-WIKI: motor de impacto (propaga Falta regar al Regar) + navegador de la
+        # wiki (las Sugerencias navegan el índice para armar contexto coherente).
+        self.impact_service = (
+            NarrativeImpactService(_foco_ps, memory_service=self.memory_service)
+            if _foco_ps is not None
+            else None
+        )
+        # BETA2-STRUCT: detector estructural determinista (coste IA cero). Propone
+        # reubicaciones de anillo por potencial de propagación causal; deriva en lectura
+        # (como el badge de sed). La IA solo enriquece la justificación al abrir.
+        self.structural_service = (
+            StructuralAnalysisService(
+                _foco_ps,
+                impact_service=self.impact_service,
+                ai_job_service=self.ai_job_service,
+            )
+            if _foco_ps is not None
+            else None
+        )
+        self.wiki_navigator = (
+            WikiNavigator(
+                _foco_ps, ai_job_service=self.ai_job_service, memory_service=self.memory_service
+            )
+            if _foco_ps is not None
+            else None
+        )
+        # BETA2-WIKI-13: análisis de intención previo para Sugerencias de arraigo/iluminada
+        # (decide el mix de output; nutrida/calidad siguen fijas por métrica).
+        self.suggestion_intent_service = (
+            SuggestionIntentService(_foco_ps, ai_job_service=self.ai_job_service)
+            if _foco_ps is not None
+            else None
+        )
+        # BETA2-WIKI-09: el recorrido cronológico (Play/walk) también navega la wiki.
+        if self.chronology_walk_controller is not None and self.wiki_navigator is not None:
+            self.chronology_walk_controller.svc.navigator = self.wiki_navigator
         # FOCO-12: riego — servicio real + drawer dedicado + autorización SIEMPRE.
         self.watering_service = (
             WateringService(
                 _foco_ps,
                 ai_job_service=self.ai_job_service,
                 history_service=HistoryService(_foco_ps),
+                memory_ai_service=self.memory_ai_service,  # MEM-07: Regar v2
+                impact_service=self.impact_service,  # WIKI-06: propaga Falta regar
+                navigator=self.wiki_navigator,  # WIKI-08: Sugerencias navegan la wiki
+                intent_service=self.suggestion_intent_service,  # WIKI-13: análisis de intención
+                memory_service=self.memory_service,  # WIKI-13: frescura riego⇄página unificada
             )
             if _foco_ps is not None
             else None
         )
         self.foco.watering_service = self.watering_service
+        # BETA2-MEM-09: la pestaña Cultivo del Foco muestra el estado de Memoria.
+        self.foco.memory_service = self.memory_service
+        # BETA2-JARDIN-01: el Mapa muestra SIEMPRE el estado de riego (sin
+        # lente conmutable). El provider lee watering_service perezosamente.
+        self.graph.set_garden_status_provider(self._garden_status_map)
         self._watering_panel: WateringPanel | None = None
         self._watering_worker: WateringBatchWorker | None = None
+        # BETA2-FOCO-35: estado del lote de riego para el popover de progreso
+        # (id → "pending"/"watering"/"done"/"error").
+        self._batch_state: dict[str, str] = {}
+        self._batch_total = 0
+        # BETA2-FOCO-39: popover de progreso vivo (se refresca en cada paso).
+        self._watering_progress_popover = None
         self.foco.waterRequested.connect(self._on_foco_water)
         self.foco.dryRequested.connect(self._on_foco_dry)
         self.foco.cultivateRequested.connect(self._on_foco_cultivate)
+        # FOCO-26: «Sugerir X» desde el Cuaderno de cultivo del editor.
+        self.foco.suggestRequested.connect(self._on_foco_suggest)
         self.foco.entityCentered.connect(self._sync_watering_panel_entity)
         # FOCO-13: semillas de la entidad enfocada germinan en zona/drawer; el
         # resto conserva su chip pulsante (nada se pierde, nada se duplica).
@@ -2018,27 +1726,65 @@ class CreationWorkspace(QWidget):
         # aparecía hasta un refresh completo).
         self._graph_stale = False
         self.foco.dataChanged.connect(self._mark_graph_stale)
+        # BETA2-CLEANUP-PANELES: panel de anillo (unificado) abierto desde el Foco
+        # — click en el banner (editar) y botón «Crear anillo» del rail (crear).
+        # Reutiliza los mismos handlers que el Mapa (RingPanel en el cajón).
+        self.foco.ringEditRequested.connect(self._open_ring_edit_panel)
+        self.foco.ringCreateRequested.connect(self._open_ring_create_panel)
         layout.addWidget(self.foco, 1)
+
+        # BETA2-PLAY: modo Play — la creación cronológica como experiencia
+        # inmersiva (escena por hito). Cuarto estado de vista, fuera de la
+        # píldora de modos; se entra desde la configuración del recorrido.
+        self.play = PlayView(project_provider=self._get_active_project)
+        self.play.setVisible(False)
+        self.play.exitRequested.connect(self._exit_play)
+        # PLAY-04: el ciclo del recorrido reusa los handlers existentes del walk.
+        self.play.continueRequested.connect(self._advance_walk)
+        self.play.stopRequested.connect(self._stop_walk)
+        # PLAY-05: los desvíos causales piden escenas deterministas al servicio.
+        self.play.set_scene_getter(self._play_scene_for)
+        # PLAY-06: la escena es editable; el canon lo escribe el controller.
+        self.play.editCommitted.connect(self._on_play_edit)
+        # PLAY-07: aplazar problemas duros / aplicar candidatos del paso.
+        self.play.deferRequested.connect(self._defer_walk)
+        self.play.applyRequested.connect(self._on_walk_apply)
+        # PLAY-12: reintento del análisis (descarta el intento en vuelo).
+        self.play.retryRequested.connect(self._retry_walk_step)
+        # PLAY-17: revisión de una propuesta en el preview del panel real.
+        self.play.set_preview_factory(self._build_proposal_preview)
+        # PLAY-08: prefetch del paso N+1 — cache por hito + epoch de canon.
+        self._play_prefetch_cache: dict[str, dict] = {}
+        self._play_prefetch_worker: _PlayPrefetchWorker | None = None
+        self._play_epoch = 0
+        self._play_adopt_step = False  # el prefetch en vuelo ES el paso actual
+        self._play_step_queued = False  # paso pendiente hasta que muera un prefetch rancio
+        layout.addWidget(self.play, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
         # Command bar area replaces the old bottom button toolbar.
-        self._command_bar = self._build_command_bar()
-        command_bar = self._command_bar
-        layout.addWidget(command_bar)
+        # BETA2-WIKI-10: la command bar (Acción×Ámbito + texto libre) queda RETIRADA de la
+        # UI. La única vía creativa de IA con prompt libre es ahora Sugerir (petición en Foco).
+        if _LEGACY_AI_UI:
+            self._command_bar = self._build_command_bar()
+            layout.addWidget(self._command_bar)
+        else:
+            self._command_bar = None
 
-        # BETA1-F02 (revisión): clusters flotantes a ambos lados, sobre la
-        # command bar. Símbolos monocromos, minimalistas, con leve vaivén.
-        self._float_left = self._build_float_cluster(
-            [
-                ("search", "Buscar y enfocar elementos", self._open_search_panel),
-                ("filter", "Filtros, anillos y eras", self._open_filter_panel),
-                # BETA2-FOCO-14: Lente Jardín conmutable (estado del riego en el Mapa).
-                ("garden_lens", "Lente Jardín: estado de riego en el Mapa", self._toggle_garden_lens),
-            ]
-        )
+        # BETA2-UI2-10: el cluster flotante izquierdo desapareció — la búsqueda
+        # es Ctrl+B (sin botón) y los filtros viven en el embudo del pill
+        # temporal. La Lente Jardín ya se retiró en BETA2-JARDIN-01.
         # UX29: el guardar usa el MISMO formato de píldora que el alternador central
         # (icono + texto), abajo-derecha, en vez de un círculo dorado que no se veía.
         self._float_right = self._build_save_pill()
+        # BETA2-WIKI-10: indicador de estado de IA SIEMPRE presente (el que había vivía
+        # dentro de la command bar retirada). Sin él, `_job_status_label`/`_busy_indicator`
+        # no existían y Sugerencias/riego reventaban al referenciarlos (Sugerir se caía en
+        # silencio, sin feedback). Solo se crea cuando NO hay command bar (mutuamente
+        # excluyentes: la command bar trae los suyos).
+        self._float_status = None
+        if self._command_bar is None:
+            self._float_status = self._build_status_floater()
         # BETA1-G04: ◷ deja de abrir el panel de cronología — es el alternador
         # de vista (concéntrica ↔ cronológica), en posición central prominente.
         # El detalle H03 sigue accesible: doble click en un hito de la vista.
@@ -2051,28 +1797,29 @@ class CreationWorkspace(QWidget):
         focus_layout = QHBoxLayout(self._float_focus)
         focus_layout.setContentsMargins(12, 4, 8, 4)
         focus_layout.setSpacing(6)
-        self._float_focus_label = QLabel("")
+        self._float_focus_label = ElidedLabel("")
+        self._float_focus_label.setMaximumWidth(260)
         self._float_focus_label.setStyleSheet(
             f"color: {INK_SOFT}; font-size: 11px; font-weight: 600; background: transparent; border: none;"
         )
         focus_layout.addWidget(self._float_focus_label)
         # BETA1-L02b: saltar al anillo contiguo se hace por teclado ([ / ]); sin botones.
         focus_exit = QPushButton("Salir")
-        focus_exit.setIcon(icons.icon("close", color="#FCF8EC", size=13))
+        focus_exit.setIcon(icons.icon("close", color=INK_INVERSE, size=13))
         focus_exit.setIconSize(QSize(13, 13))
         focus_exit.setToolTip("Salir del anillo / volver a mostrar todo el grafo (Esc)")
         focus_exit.setCursor(Qt.CursorShape.PointingHandCursor)
         focus_exit.setFixedHeight(24)
         focus_exit.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; border: none; border-radius: 12px; "
-            f"color: #FCF8EC; font-size: 11px; font-weight: 700; padding: 0 12px; }} "
+            f"color: {INK_INVERSE}; font-size: 11px; font-weight: 700; padding: 0 12px; }} "
             f"QPushButton:hover {{ background: {GOLD_DEEP}; }}"
         )
         focus_exit.clicked.connect(self.clear_focus_scope)
         focus_layout.addWidget(focus_exit)
         self._float_focus.setVisible(False)
 
-        # BETA1-L02b: barra de búsqueda flotante ligera (tecla 'd'). No abre el
+        # BETA1-L02b: barra de búsqueda flotante ligera (Ctrl+B). No abre el
         # drawer: aparece sobre el lienzo y salta EN VIVO a la mejor coincidencia
         # mientras se escribe (entidades del grafo + hitos de la cronología).
         # Esc la cierra y devuelve el foco al lienzo.
@@ -2148,9 +1895,9 @@ class CreationWorkspace(QWidget):
             self._open_coherence_panel,
             enabled=False,
         )
-        icon_btn("Buscar", "Buscar y enfocar elementos", self._open_search_panel)
+        # BETA2-UI2-10: sin botones "Buscar" (Ctrl+B) ni "Filtro" (embudo del
+        # pill temporal, con badge de activos).
         icon_btn("Anillos", "Selector de anillos: recorrer las capas", self._open_ring_panel)
-        self._filter_btn = icon_btn("Filtro", "Filtros visuales", self._open_filter_panel)
         self._jobs_btn = icon_btn("Tareas", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
         self._jobs_btn.setStyleSheet(text_btn_style)
         self._jobs_btn.setFixedWidth(74)
@@ -2182,8 +1929,9 @@ class CreationWorkspace(QWidget):
             self._summary_btn,
         ):
             ai_button.setVisible(False)
-        # BETA1-F02: la gestión de anillos se integra en el panel de filtros
-        # (_open_filter_panel ofrece "Gestionar anillos"); sin botón fijo.
+        # BETA2-UI2-10: la gestión de anillos/eras es contextual — clic derecho
+        # en un anillo del Mapa (editar/crear/eliminar) y clic en la banda de
+        # era de la Cronología (editar) o su menú contextual (crear).
         # BETA1-F02: hitos/cronología fuera del modo normal — deuda Fase F
         # (pendiente de decisión visual). Vista y rutas intactas en código.
 
@@ -2223,28 +1971,103 @@ class CreationWorkspace(QWidget):
         pill = QFrame(self)
         # UX33: marrón (como el resto de acciones), no la píldora clara.
         pill.setStyleSheet(
-            f"QFrame {{ background: {GOLD_DEEP}; border: 1px solid {GOLD_DEEP}; border-radius: 19px; }}"
+            f"QFrame {{ background: {GOLD_DEEP}; border: 1px solid {GOLD_DEEP}; "
+            f"border-radius: {RADIUS_CAPSULE}px; }}"
         )
         row = QHBoxLayout(pill)
         row.setContentsMargins(6, 3, 6, 3)
         row.setSpacing(0)
         self._save_btn = QPushButton("  Guardar")
-        self._save_btn.setIcon(icons.icon("save", color="#FCF8EC", size=15))
+        self._save_btn.setIcon(icons.icon("save", color=INK_INVERSE, size=15))
         self._save_btn.setIconSize(QSize(15, 15))
         self._save_btn.setToolTip("Guardar el proyecto")
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._save_btn.setFixedHeight(32)
         self._save_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none; border-radius: 16px; "
-            f"color: #FCF8EC; font-size: 13px; font-weight: 700; padding: 0 16px; }} "
-            f"QPushButton:hover {{ background: {GOLD}; color: #FCF8EC; }} "
-            f"QPushButton:pressed {{ background: #5E5427; }}"
+            f"color: {INK_INVERSE}; font-size: 13px; font-weight: 700; padding: 0 16px; }} "
+            f"QPushButton:hover {{ background: {GOLD}; color: {INK_INVERSE}; }} "
+            f"QPushButton:pressed {{ background: {GOLD_PRESS}; }}"
         )
         self._save_btn.clicked.connect(self._save_project_from_canvas)
         row.addWidget(self._save_btn)
         pill.adjustSize()
         pill.raise_()
         return pill
+
+    def _build_status_floater(self) -> QFrame:
+        """BETA2-WIKI-10: floater de estado de IA (punto de actividad + texto),
+        SIEMPRE disponible e independiente de la command bar retirada.
+
+        Crea `self._busy_indicator` y `self._job_status_label` (un `_StatusLabel` que
+        muestra/oculta este floater al cambiar el texto). Antes vivían en la command
+        bar y su ausencia rompía Sugerencias/riego. Anclado abajo-centro sobre el
+        lienzo; invisible mientras no haya texto."""
+        floater = QFrame(self)
+        floater.setObjectName("aiStatusFloater")
+        floater.setStyleSheet(
+            f"QFrame#aiStatusFloater {{ background: {SURFACE_HI}; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_CAPSULE}px; }}"
+        )
+        row = QHBoxLayout(floater)
+        row.setContentsMargins(14, 6, 16, 6)
+        row.setSpacing(8)
+        self._busy_indicator = BusyIndicator(diameter=16)
+        self._busy_indicator.set_period_ms(self.ctx.animation_duration(900))
+        self._busy_indicator.setToolTip("Dendro está trabajando…")
+        row.addWidget(self._busy_indicator)
+        self._job_status_label = _StatusLabel(on_change=self._sync_status_floater, parent=floater)
+        self._job_status_label.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: 12px; font-weight: 600; "
+            f"background: transparent; border: none;"
+        )
+        self._job_status_label.setToolTip(
+            "Estado de las tareas IA. Todo resultado queda pendiente de revisión."
+        )
+        row.addWidget(self._job_status_label)
+        floater.setVisible(False)
+        return floater
+
+    def _sync_status_floater(self) -> None:
+        """Muestra el floater de estado solo cuando hay texto y lo recoloca abajo-centro.
+
+        Lo invoca `_StatusLabel.setText` (cualquier punto que ponga estado de IA) y
+        también `_position_floats` al redimensionar. Fail-soft en construcción temprana."""
+        floater = getattr(self, "_float_status", None)
+        label = getattr(self, "_job_status_label", None)
+        if floater is None or label is None:
+            return
+        has_text = bool(label.text().strip())
+        floater.setVisible(has_text)
+        if has_text:
+            floater.adjustSize()
+            floater.move(
+                max(12, (self.width() - floater.width()) // 2),
+                max(12, self.height() - floater.height() - 22),
+            )
+            floater.raise_()
+
+    def _schedule_status_clear(self, delay_ms: int = 6000) -> None:
+        """BETA2-WIKI-13: borra el estado flotante tras un rato si NADIE lo pisó.
+
+        Los mensajes terminales (resultado/error de un job) se quedaban fijos abajo-centro.
+        Se limpia solo si el texto sigue siendo el mismo (un job posterior lo respeta)."""
+        label = getattr(self, "_job_status_label", None)
+        if label is None:
+            return
+        current = label.text()
+        if not current.strip():
+            return
+
+        def _maybe_clear() -> None:
+            lbl = getattr(self, "_job_status_label", None)
+            try:
+                if lbl is not None and lbl.text() == current:
+                    lbl.setText("")
+            except RuntimeError:  # widget Qt ya destruido
+                pass
+
+        QTimer.singleShot(delay_ms, _maybe_clear)
 
     def _build_view_toggle(self) -> QFrame:
         """BETA2-FOCO: barra superior de modos — Foco | Mapa | Cronología.
@@ -2254,7 +2077,8 @@ class CreationWorkspace(QWidget):
         Se ancla arriba-centro (spec: "barra superior de modos")."""
         pill = QFrame(self)
         pill.setStyleSheet(
-            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; border-radius: 19px; }}"
+            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; "
+            f"border-radius: {RADIUS_CAPSULE}px; }}"
         )
         row = QHBoxLayout(pill)
         row.setContentsMargins(6, 3, 6, 3)
@@ -2379,6 +2203,7 @@ class CreationWorkspace(QWidget):
         self.ctx.drawer.set_content(panel, title="Riego")
         self.ctx.drawer.open()
 
+    @_qt_safe_slot
     def _sync_watering_panel_entity(self, entity_id: str) -> None:
         panel = self._watering_panel
         if panel is not None and panel.isVisible():
@@ -2394,7 +2219,11 @@ class CreationWorkspace(QWidget):
             return
         self.ctx.request_save_silent()
         self.foco._refresh_tool_context()
-        self._open_watering_drawer(entity_id)
+        # FOCO-26: el estado vive en el Cuaderno de cultivo del editor — secar
+        # ya no abre el drawer (que queda para el riego por lotes).
+        self.foco.refresh_cultivation()
+        self.graph.refresh_garden_status()  # JARDIN-01: la secada se apaga en el Mapa
+        self._request_thirsty_refresh()
 
     def _on_foco_cultivate(self, entity_id: str) -> None:
         """Cultivar: sin IA; la entidad vuelve al ciclo como Falta regar."""
@@ -2406,7 +2235,10 @@ class CreationWorkspace(QWidget):
             return
         self.ctx.request_save_silent()
         self.foco._refresh_tool_context()
-        self._open_watering_drawer(entity_id)
+        # FOCO-26: refresco en sitio (Cuaderno), sin drawer.
+        self.foco.refresh_cultivation()
+        self.graph.refresh_garden_status()  # JARDIN-01: vuelve al ciclo en el Mapa
+        self._request_thirsty_refresh()
 
     def _on_watering_pause_toggled(self, pause: bool) -> None:
         panel = self._watering_panel
@@ -2463,17 +2295,21 @@ class CreationWorkspace(QWidget):
     def _run_watering_batch(self, entity_ids: list) -> None:
         if self.watering_service is None or not entity_ids:
             return
-        worker = WateringBatchWorker(self.watering_service, list(entity_ids))
+        ids = [str(entity_id) for entity_id in entity_ids if entity_id]
+        worker = WateringBatchWorker(self.watering_service, ids)
+        worker.entityStarted.connect(self._on_watering_entity_started)  # UI2-05
         worker.entityDone.connect(self._on_watering_entity_done)
         worker.progressChanged.connect(self._on_watering_progress)
         worker.finishedOk.connect(self._on_watering_finished)
         worker.finished.connect(lambda: setattr(self, "_watering_worker", None))
         self._watering_worker = worker
         track_worker(worker)  # apagado ordenado al cerrar la app (AUDIT-02)
-        panel = self._ensure_watering_panel()
-        if panel is not None:
-            panel.set_batch_running(True, f"Regando 0/{len(entity_ids)}…")
-        self._open_watering_drawer(str(entity_ids[0]))
+        # BETA2-FOCO-35: el lote ya NO abre el drawer «Riego» por-entidad (era
+        # confuso —mostraba UNA entidad— y su borrado al navegar colgaba el lote).
+        # El progreso se sigue en el badge «Regando x/y» → popover de detalle.
+        self._batch_state = {eid: "pending" for eid in ids}
+        self._batch_total = len(ids)
+        self._seed_notifications.set_watering_progress(0, len(ids))  # UI2-04
         worker.start()
 
     def _cancel_watering_batch(self) -> None:
@@ -2482,30 +2318,163 @@ class CreationWorkspace(QWidget):
             worker.request_cancel()
             self.ctx.log("info", "Riego: cancelando entre pasos (los parciales se conservan).")
 
-    def _on_watering_entity_done(self, entity_id: str, ok: bool, error: str) -> None:
-        # Parciales SIEMPRE persistidos (guardado silencioso desde el hilo UI).
-        self.ctx.request_save_silent()
-        if not ok:
-            self.ctx.log("error", f"Riego fallido ({entity_id}): {error}")
+    def _batch_progress_entries(self) -> tuple[list[dict], int]:
+        """BETA2-FOCO-35/39: (entradas, hechas) del lote para el popover de
+        progreso — nombre + estado + resumen del último informe por entidad."""
+        project = self._get_active_project()
+        service = self.watering_service
+        reports = {}
+        if service is not None and self._batch_state:
+            reports = getattr(service.statuses_for(list(self._batch_state)), "value", None) or {}
+        entries: list[dict] = []
+        done = 0
+        for entity_id, status in self._batch_state.items():
+            if status in ("done", "error"):
+                done += 1
+            entity = project.entity_by_id(entity_id) if project is not None else None
+            name = str(getattr(entity, "name", "") or "") or entity_id
+            report = reports.get(entity_id)
+            latest = getattr(report, "latest", None) if report is not None else None
+            summary = str(getattr(latest, "summary", "") or "")[:60] if latest is not None else ""
+            entries.append({"name": name, "status": status, "summary": summary})
+        return entries, done
+
+    def _open_watering_progress(self) -> None:
+        """BETA2-FOCO-35/39: popover de detalle del lote anclado al badge «Regando
+        x/y». Se REFRESCA EN VIVO por los slots del worker mientras siga abierto
+        (antes era un snapshot: quedaba congelado si el usuario lo dejaba abierto)."""
+        if not self._batch_state:
+            return
+        from hosts.DesktopHostPySide.widgets.foco.watering_progress_popover import (
+            WateringProgressPopover,
+        )
+
+        entries, done = self._batch_progress_entries()
+        self._watering_progress_popover = WateringProgressPopover(
+            entries, done, self._batch_total, parent=self
+        )
+        self._watering_progress_popover.open_above(self._seed_notifications.progress_anchor())
+
+    def _refresh_watering_progress_popover(self, *, finished: bool = False) -> None:
+        """BETA2-FOCO-39: si el popover sigue vivo y visible, lo actualiza en sitio
+        (sin reabrirlo) para que el detalle siga el avance del lote."""
+        popover = getattr(self, "_watering_progress_popover", None)
+        if popover is None or not _qt_alive(popover) or not popover.isVisible():
+            return
+        entries, done = self._batch_progress_entries()
+        total = self._batch_total or len(entries)
+        popover.update_progress(entries, done, total, finished=finished)
+
+    def _run_batch_cosmetics(self, *thunks) -> None:
+        """BETA2-FOCO-39: ejecuta refrescos cosméticos del lote AISLADOS — un fallo
+        (pulso de una rama sin ``set_watering_pulse``, canvas efímero) se registra
+        pero NO aborta el resto ni cuelga el lote. Lo esencial (estado, avisos,
+        badge, popover) ya corrió antes de llamar aquí."""
+        for thunk in thunks:
+            try:
+                thunk()
+            except Exception as exc:  # noqa: BLE001 — un cosmético caído no cuelga el lote
+                self.ctx.log("warning", f"Riego: refresco parcial omitido ({exc})")
+
+    def _refresh_focused_cultivation(self, entity_id: str) -> None:
+        """FOCO-26: si la regada es la enfocada, refresca su Cuaderno in situ."""
         if entity_id == self.foco.current_entity_id():
             self.foco._refresh_tool_context()
-        if self._watering_panel is not None:
-            self._watering_panel.refresh()
+            self.foco.refresh_cultivation()
 
+    @_qt_safe_slot
+    def _on_watering_entity_started(self, entity_id: str) -> None:
+        """UI2-05: feedback vivo — el nodo pulsa en el Mapa y el Foco lo señala."""
+        self._batch_state[entity_id] = "watering"
+        self._refresh_watering_progress_popover()
+        self._run_batch_cosmetics(
+            lambda: self.graph.set_watering_active(entity_id),
+            lambda: self.foco.set_watering_active(entity_id),
+        )
+
+    @_qt_safe_slot
+    def _on_watering_entity_done(self, entity_id: str, ok: bool, error: str) -> None:
+        # BETA2-FOCO-39: lo ESENCIAL primero (estado del lote, aviso, popover) y
+        # los cosméticos DESPUÉS y AISLADOS. Antes, un cosmético que reventaba
+        # (p. ej. el pulso de una rama en el Mapa) abortaba el slot ANTES del aviso
+        # y dejaba el lote sin avisos y el badge congelado.
+        self._batch_state[entity_id] = "done" if ok else "error"
+        if ok:
+            self._raise_cultivo_aviso(entity_id)  # FOCO-34/36: aviso agregado
+        else:
+            self.ctx.log("error", f"Riego fallido ({entity_id}): {error}")
+        self._refresh_watering_progress_popover()
+        self._run_batch_cosmetics(
+            lambda: self.graph.set_watering_active(""),  # UI2-05: apagar el pulso
+            lambda: self.foco.set_watering_active(""),
+            self.ctx.request_save_silent,  # parciales persistidos (hilo UI)
+            self.graph.refresh_garden_status,  # JARDIN-01: la regada revive en el Mapa
+            self._request_thirsty_refresh,
+            lambda: self._refresh_focused_cultivation(entity_id),
+        )
+
+    @_qt_safe_slot
     def _on_watering_progress(self, done: int, total: int) -> None:
-        if self._watering_panel is not None:
-            self._watering_panel.set_batch_running(True, f"Regando {done}/{total}…")
-        self._job_status_label.setText(f"Regando {done}/{total}…")
+        self._seed_notifications.set_watering_progress(done, total)  # UI2-04 (esencial)
+        self._refresh_watering_progress_popover()
+        self._run_batch_cosmetics(
+            lambda: self._job_status_label.setText(f"Regando {done}/{total}…"),
+        )
 
+    @_qt_safe_slot
     def _on_watering_finished(self) -> None:
-        if self._watering_panel is not None:
-            self._watering_panel.set_batch_running(False)
-            self._watering_panel.refresh()
-        self._job_status_label.setText("")
+        # BETA2-FOCO-39: ESENCIAL primero — refresco final del popover y RESET del
+        # badge/lote SIEMPRE, aunque un refresco del Mapa/Foco lance. Antes el reset
+        # iba al final tras cosméticos que podían reventar → badge congelado en x/y.
+        self._refresh_watering_progress_popover(finished=True)  # usa _batch_state aún vivo
+        self._seed_notifications.set_watering_progress(0, 0)  # UI2-04: restaura el badge
+        self._batch_state = {}
+        self._batch_total = 0
         self.ctx.log("info", "Riego completado: diagnósticos persistidos.")
+        self._run_batch_cosmetics(
+            lambda: self.graph.set_watering_active(""),  # por si se canceló con pulso
+            lambda: self.foco.set_watering_active(""),
+            self.foco.refresh_cultivation,  # FOCO-26: informe vigente al Cuaderno
+            self.graph.refresh_garden_status,  # JARDIN-01: estado final al Mapa
+            self._request_thirsty_refresh,
+            lambda: self._job_status_label.setText(""),
+        )
+
+    def _raise_cultivo_aviso(self, entity_id: str) -> None:
+        """BETA2-FOCO-34: aviso «revisar en Cultivo» por una entidad regada."""
+        layer = getattr(self, "_seed_notifications", None)
+        if layer is None or not entity_id:
+            return
+        project = self._get_active_project()
+        entity = project.entity_by_id(entity_id) if project is not None else None
+        name = str(getattr(entity, "name", "") or "") if entity is not None else ""
+        label = (
+            f"{name} actualizada en Cultivo — revisar"
+            if name
+            else "Entidad actualizada en Cultivo — revisar"
+        )
+        layer.add(entity_id, label, kind="cultivo")
+
+    def _on_cultivo_review(self, entity_id: str) -> None:
+        """BETA2-FOCO-34: clic en el aviso → Foco sobre la entidad + pestaña Cultivo."""
+        if not entity_id:
+            return
+        self.set_active_view("foco")
+        foco = getattr(self, "foco", None)
+        if foco is None:
+            return
+        foco.center_entity(entity_id)
+        open_cultivo = getattr(foco, "open_cultivo_tab", None)
+        if callable(open_cultivo):
+            open_cultivo()
 
     def _on_foco_suggest(self, metric: str) -> None:
-        """Sugerir X: autorización visible → pipeline estándar de jobs (Semillas)."""
+        """Sugerir X (BETA2-WIKI-08): petición del usuario + navegación de la wiki.
+
+        La única vía creativa de IA que acepta prompt libre. Un campo opcional de
+        petición/matiz encabeza el prompt; antes de generar, la wiki se navega (en un
+        hilo) para armar contexto coherente. Resultado: Semillas revisables.
+        """
         service = self.watering_service
         entity_id = self.foco.current_entity_id()
         if service is None or not entity_id:
@@ -2516,31 +2485,80 @@ class CreationWorkspace(QWidget):
                 "IA no configurada: define el proveedor en Ajustes de IA para pedir sugerencias.",
             )
             return
-        request = service.build_suggestion_request(entity_id, metric)
+        from PySide6.QtWidgets import QInputDialog
+
+        peticion, ok = QInputDialog.getMultiLineText(
+            self,
+            f"Sugerir {metric}",
+            "Petición o matiz (opcional). Déjalo vacío para una sugerencia guiada solo "
+            "por las métricas del jardín:",
+        )
+        if not ok:
+            return
+        request = service.build_suggestion_request(entity_id, metric, str(peticion).strip())
         if isinstance(request, Error):
             self.ctx.log("error", request.error)
             return
         payload = request.value
         lines = [
             f"Entidad afectada: {payload['entity_name']}.",
-            "Se enviará su contexto compacto (ficha + zonas + hitos + última lectura).",
+            "Se navegará la wiki para traer el contexto relevante (páginas + canon).",
             f"Tokens de entrada estimados: ~{payload['estimated_input_tokens']}.",
             "Resultado esperado: semillas revisables para reparar la métrica. "
             "Nada se integra al canon sin tu aceptación.",
         ]
+        # BETA2-WIKI-13: arraigo/iluminada analizan la petición para decidir el mix a crear.
+        if str(metric).lower() in _INTENT_METRICS_UI:
+            lines.insert(
+                1,
+                "Se analizará tu petición para decidir qué proponer (hojas, ramas, "
+                "relaciones, hitos o ediciones).",
+            )
         request_watering_authorization(
             getattr(self.ctx, "modal_overlay", None),
             title=f"Sugerir {metric}",
             lines=lines,
             cost_class=str(payload["cost_class"]),
             confirm_text="Autorizar y sugerir",
-            on_confirm=lambda: self._launch_toolbar_ai_job(
-                payload["prompt"],
-                f"Sugerir {metric}…",
-                payload["job_type"],
-                scope_override=payload["context_scope"],
-            ),
+            on_confirm=lambda: self._launch_suggestion(payload, entity_id, metric),
         )
+
+    def _launch_suggestion(self, payload: dict, entity_id: str, metric: str) -> None:
+        """WIKI-08/13: prepara la Sugerencia en un hilo (navega la wiki + análisis de
+        intención para arraigo/iluminada) y lanza la generación con el resultado.
+
+        El plan viaja de vuelta como feedback (``plan_summary``) al indicador de estado."""
+        svc = self.watering_service
+        if svc is None:
+            return
+        analyzing = str(metric).lower() in _INTENT_METRICS_UI
+        # Feedback inmediato: preparar puede tardar (hasta dos llamadas IA).
+        self._job_status_label.setText(
+            "Analizando la petición…" if analyzing else "Navegando la wiki…"
+        )
+
+        def _launch(prepared: dict) -> None:
+            summary = str(prepared.get("plan_summary") or "").strip()
+            status = f"Sugerir {metric} · {summary}" if summary else f"Sugerir {metric}…"
+            self._launch_toolbar_ai_job(
+                prepared["prompt"],
+                status,
+                prepared["job_type"],
+                scope_override=prepared.get("context_scope"),
+            )
+
+        worker = _SuggestionPrepWorker(svc, entity_id, metric, payload.get("peticion", ""))
+
+        def _on_prep(prepared: object) -> None:
+            # Best-effort: si la preparación falló, cae al payload base de la autorización.
+            use = prepared if isinstance(prepared, dict) and prepared.get("prompt") else payload
+            _launch(use)
+
+        worker.done.connect(_on_prep)
+        worker.finished.connect(lambda: self._wiki_nav_workers.discard(worker))
+        self._wiki_nav_workers.add(worker)
+        track_worker(worker)
+        worker.start()
 
     # ------------------------------------------------------------------
     # FOCO-14: Mapa solo lectura, Lente Jardín y riego por lotes desde el Mapa
@@ -2555,6 +2573,21 @@ class CreationWorkspace(QWidget):
         if foco_widget is not None:
             foco_widget.center_entity(entity_id)
 
+    def _focus_new_entity(self, entity_id: str) -> None:
+        """BETA2-CLEANUP-PANELES: tras crear hoja/rama desde el Mapa, entrar en
+        Modo Foco sobre la nueva entidad y abrir su editor Ficha. La edición ya
+        no vive en el cajón derecho (retirado); vive en el Foco."""
+        if not entity_id:
+            return
+        self.set_active_view("foco")
+        foco_widget = getattr(self, "foco", None)
+        if foco_widget is None:
+            return
+        foco_widget.center_entity(entity_id)
+        open_editor = getattr(foco_widget, "open_editor", None)
+        if callable(open_editor):
+            open_editor()
+
     def _garden_status_map(self, entity_ids: list) -> dict:
         service = self.watering_service
         if service is None:
@@ -2562,95 +2595,182 @@ class CreationWorkspace(QWidget):
         result = service.statuses_for(list(entity_ids))
         return getattr(result, "value", None) or {}
 
-    def _toggle_garden_lens(self) -> None:
-        """Lente Jardín conmutable; apagada deja el Mapa limpio (spec)."""
-        self._garden_lens_on = not getattr(self, "_garden_lens_on", False)
-        self.graph.set_garden_lens(self._garden_lens_on, self._garden_status_map)
-        self.ctx.log(
-            "info",
-            "Lente Jardín activada" if self._garden_lens_on else "Lente Jardín desactivada",
-        )
+    # ------------------------------------------------------------------
+    # BETA2-JARDIN-03: badge global «💧 N» y recorrido de sedientas
+    # ------------------------------------------------------------------
 
-    def _open_map_summary(self, entity_id: str) -> None:
-        """Ficha resumida NO editable del Mapa + riego por lotes (esta/anillo/grafo)."""
-        drawer = self.ctx.drawer
-        project = self._get_active_project()
-        entity = project.entity_by_id(entity_id) if project is not None else None
-        if drawer is None or entity is None:
+    def _request_thirsty_refresh(self) -> None:
+        """Recomputa el badge con debounce (~400 ms): nunca por evento crudo."""
+        timer = getattr(self, "_thirsty_debounce", None)
+        if timer is not None:
+            timer.start()
+        # BETA2-STRUCT-02: los ajustes estructurales comparten la misma cadencia.
+        struct_timer = getattr(self, "_structural_debounce", None)
+        if struct_timer is not None:
+            struct_timer.start()
+
+    @_qt_safe_slot
+    def _refresh_thirsty_badge(self) -> None:
+        layer = getattr(self, "_seed_notifications", None)
+        if layer is None:
             return
-        card = QFrame()
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-        name_label = QLabel(entity.name, card)
-        name_label.setWordWrap(True)
-        name_label.setStyleSheet(
-            f"color: {INK_STRONG}; font-family: Georgia, serif; "
-            "font-size: 17px; font-weight: 700; background: transparent;"
+        project = self._get_active_project()
+        service = self.watering_service
+        if project is None or service is None:
+            layer.set_waterable([], [])
+            return
+        reports = getattr(service.statuses_for(None), "value", None) or {}
+        # BETA2-FOCO-34: sedientas para el recorrido + regables (incl. regadas)
+        # para que el badge no desaparezca y permita «Regar de nuevo».
+        layer.set_waterable(thirsty_queue(project, reports), waterable_queue(project, reports))
+
+    def _on_thirsty_requested(self, entity_id: str) -> None:
+        """Clic en «💧»: Foco sobre la sedienta (recorrido, la más antigua 1º)."""
+        if not entity_id:
+            return
+        self.set_active_view("foco")
+        foco_widget = getattr(self, "foco", None)
+        if foco_widget is not None:
+            foco_widget.center_entity(entity_id)
+
+    # ------------------------------------------------------------------
+    # BETA2-STRUCT: ajustes estructurales (reubicación de anillos)
+    # ------------------------------------------------------------------
+
+    def _ensure_structure_badge(self):
+        """Píldora ambiental «⚙ N ajustes estructurales» (perezosa, abre el panel)."""
+        badge = getattr(self, "_float_structure", None)
+        if badge is not None:
+            return badge
+        badge = QPushButton("", self)
+        badge.setObjectName("structureBadge")
+        badge.setToolTip("Revisar reubicaciones de anillo propuestas por potencial causal")
+        try:
+            badge.setCursor(Qt.PointingHandCursor)
+        except Exception:  # noqa: BLE001 — el cursor no es crítico
+            pass
+        badge.clicked.connect(self._open_structure_panel)
+        badge.hide()
+        self._float_structure = badge
+        return badge
+
+    @_qt_safe_slot
+    def _refresh_structural_badge(self) -> None:
+        """Recomputa el contador determinista (coste IA cero) y actualiza la píldora.
+
+        BETA2-STRUCT-08: entrada FIJA — la píldora está SIEMPRE visible con un proyecto
+        cargado (aunque haya 0 ajustes), para que la función sea descubrible y el panel
+        accesible; el texto refleja si hay o no propuestas.
+        """
+        svc = getattr(self, "structural_service", None)
+        project = self._get_active_project()
+        available = svc is not None and project is not None
+        count = 0
+        if available:
+            try:
+                count = svc.count()
+            except Exception:  # noqa: BLE001 — el badge nunca rompe el flujo
+                count = 0
+        badge = self._ensure_structure_badge()
+        if badge is None:
+            return
+        if not available:
+            badge.setVisible(False)
+            return
+        if count > 0:
+            badge.setText(f"⚙ {count} ajuste(s) estructural(es)")
+            badge.setProperty("hasItems", True)
+        else:
+            badge.setText("⚙ Estructura")
+            badge.setProperty("hasItems", False)
+        badge.setVisible(True)
+        badge.adjustSize()
+        self._position_floats()
+
+    def _open_structure_panel(self) -> None:
+        """Abre el panel de proyecto «Ajustes estructurales»."""
+        svc = getattr(self, "structural_service", None)
+        if svc is None:
+            return
+        from hosts.DesktopHostPySide.widgets.structure_review_panel import StructureReviewPanel
+
+        panel = StructureReviewPanel(
+            svc,
+            on_accept=self._accept_structural_finding,
+            on_close=self._close_structure_panel,
+            log=self.ctx.log,
         )
-        layout.addWidget(name_label)
-        type_value = getattr(entity.entity_type, "value", str(entity.entity_type))
-        canon_value = getattr(entity.canon_state, "value", str(entity.canon_state))
-        # FOCO-16/20 (canon total): el único estado visible es «fantasma».
-        meta_text = enum_human(type_value)
-        if str(canon_value).lower() == "fantasma":
-            meta_text += " · Fantasma"
-        meta_label = QLabel(meta_text, card)
-        meta_label.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent;")
-        layout.addWidget(meta_label)
-        brief = " ".join(str(entity.brief_description or "").split())
-        brief_label = QLabel(brief[:400] + ("…" if len(brief) > 400 else ""), card)
-        brief_label.setWordWrap(True)
-        brief_label.setStyleSheet(f"color: {INK_SOFT}; font-size: 12px; background: transparent;")
-        layout.addWidget(brief_label)
-        if self.watering_service is not None:
-            report = getattr(self.watering_service.status_of(entity_id), "value", None)
-            if report is not None:
-                status_label = QLabel(f"Riego: {report.status.replace('_', ' ')}", card)
-                status_label.setStyleSheet(
-                    f"color: {INK_SOFT}; font-size: 11px; background: transparent;"
-                )
-                layout.addWidget(status_label)
+        modal = getattr(self.ctx, "modal_overlay", None)
+        if modal is not None:
+            modal.open_widget(panel)
+            return
+        drawer = getattr(self.ctx, "drawer", None)
+        if drawer is not None:
+            drawer.set_content(panel, title="Ajustes estructurales")
+            drawer.open()
 
-        def _button(text: str, handler) -> QPushButton:
-            button = QPushButton(text, card)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setStyleSheet(
-                "QPushButton { background: transparent; border: 1px solid #BBAA66; "
-                "border-radius: 10px; color: #6E622E; padding: 6px 10px; }"
-            )
-            button.clicked.connect(handler)
-            layout.addWidget(button)
-            return button
+    def _close_structure_panel(self) -> None:
+        """Cierra el panel de ajustes estructurales (modal o cajón)."""
+        modal = getattr(self.ctx, "modal_overlay", None)
+        if modal is not None and getattr(modal, "is_open", False):
+            try:
+                modal.dismiss()
+            except Exception:  # noqa: BLE001 — cerrar el modal no es crítico
+                pass
+        drawer = getattr(self.ctx, "drawer", None)
+        if drawer is not None:
+            try:
+                drawer.close()
+            except Exception:  # noqa: BLE001 — cerrar el cajón no es crítico
+                pass
 
-        _button("Abrir en Foco (editar)", lambda: self._on_map_entity_to_foco(entity_id))
-        _button("Regar esta entidad", lambda: self._on_foco_water([entity_id]))
-        ring_id = (entity.layer_ids or [""])[0]
-        if ring_id and self.watering_service is not None:
-            _button(
-                "Regar su anillo",
-                lambda: self._on_foco_water(
-                    getattr(
-                        self.watering_service.entities_in_scope({"ring_id": ring_id}),
-                        "value",
-                        None,
-                    )
-                    or []
-                ),
-            )
-        if self.watering_service is not None:
-            _button(
-                "Regar todo el grafo",
-                lambda: self._on_foco_water(
-                    getattr(
-                        self.watering_service.entities_in_scope({"graph": True}), "value", None
-                    )
-                    or []
-                ),
-            )
-        layout.addStretch(1)
-        drawer.set_content(card, title="Entidad (Mapa)")
-        drawer.open()
+    def _accept_structural_finding(self, finding) -> None:
+        """Materializa el hallazgo como Candidato y lo acepta por el pipeline existente."""
+        svc = getattr(self, "structural_service", None)
+        project = self._get_active_project()
+        controller = getattr(self, "candidate_controller", None)
+        if svc is None or project is None or controller is None:
+            return
+        candidate = svc.as_candidate(finding)
+        project.candidates.append(candidate)
+        result = controller.accept(candidate.id)
+        if isinstance(result, Error):
+            self.ctx.log("error", getattr(result, "error", "No se pudo aplicar el ajuste"))
+            return
+        # PERSISTIR: aceptar movió la entidad de anillo en memoria; hay que guardar
+        # (como riego/sugerencias). Sin esto el cambio se perdía y "no pasaba nada".
+        save = getattr(self.ctx, "request_save_silent", None)
+        if callable(save):
+            save()
+        notify = getattr(self.ctx, "notify", None)
+        if callable(notify):
+            notify("Ajuste estructural aplicado", "success")
+        # Reconstruye Mapa y Cronología COMPLETOS y AL INSTANTE, sin expulsar de la
+        # vista actual (fix smoke): un ring_move reubica el nodo a otro anillo y un
+        # ring_create/merge cambia/reordena las bandas. Se fuerza `full=True` porque
+        # el atajo incremental dejaría el nodo en su anillo viejo; y la Cronología se
+        # reconstruye aunque no esté activa (antes solo se rehacía si era la vista
+        # visible, así que quedaba obsoleta). No se llama a `refresh()` porque este
+        # arrastra `set_active_view("foco")` y sacaba al usuario del Mapa/Cronología.
+        proj = self._get_active_project()
+        try:
+            if getattr(self, "graph", None) is not None:
+                self.graph.refresh(full=True)
+                self._graph_stale = False
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            if getattr(self, "chrono", None) is not None:
+                self.chrono.set_project(proj)
+        except (RuntimeError, AttributeError):
+            pass
+        self._request_thirsty_refresh()
+        self._refresh_structural_badge()
+
+    # UI2-22: el drawer «Entidad (Mapa)» (_open_map_summary) se eliminó — era un
+    # menú obsoleto que aparecía al clicar cualquier nodo del Mapa. Ahora el clic
+    # simple solo selecciona y el doble clic abre en el Foco; el riego per-entidad/
+    # anillo/grafo sigue en el badge global 💧, el rail del Foco y el clic derecho.
 
     # ------------------------------------------------------------------
     # FOCO-13: Semillas en Foco — germinación por zonas y chips no-visibles
@@ -2772,6 +2892,51 @@ class CreationWorkspace(QWidget):
     def _mark_graph_stale(self):
         # FOCO-19: mutación fuera del Mapa → reconstruir al volver a entrar.
         self._graph_stale = True
+        self._request_thirsty_refresh()  # JARDIN-03: editar puede dar sed
+
+    def view_toggle_widget(self) -> QWidget:
+        """FOCO-28: la píldora de modos, para reparentarla al banner superior
+        (main_window._wrap_space). Sigue siendo dueña de ``_mode_buttons``, así
+        que ``_update_mode_pill`` mantiene el resaltado sin recablear."""
+        return self._float_view_toggle
+
+    # FOCO-28: orden del ciclo de modos con Tab/Shift+Tab (Play queda fuera).
+    _MODE_CYCLE = ("foco", "concentric", "chrono")
+    # Tipos de campo donde Tab conserva su recorrido nativo (no cambia de modo).
+    _TAB_FIELD_TYPES = (
+        QLineEdit,
+        QTextEdit,
+        QPlainTextEdit,
+        QComboBox,
+        QAbstractSpinBox,
+        QAbstractItemView,
+    )
+
+    def _cycle_mode(self, delta: int) -> None:
+        """FOCO-28: avanza/retrocede por los modos de Creación."""
+        order = self._MODE_CYCLE
+        current = self._active_view if self._active_view in order else order[0]
+        self.set_active_view(order[(order.index(current) + delta) % len(order)])
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        """FOCO-28: Tab/Shift+Tab cambian de modo en toda la Creación. Se respeta
+        el recorrido nativo de Tab dentro de campos (line/text/combo/spin/listas)
+        y de diálogos ajenos al workspace."""
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if (
+                key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
+                and self.isVisible()
+                and self._active_view in self._MODE_CYCLE
+            ):
+                fw = QApplication.focusWidget()
+                blocked = fw is not None and (
+                    not self.isAncestorOf(fw) or isinstance(fw, self._TAB_FIELD_TYPES)
+                )
+                if not blocked:
+                    self._cycle_mode(1 if key == Qt.Key.Key_Tab else -1)
+                    return True
+        return super().eventFilter(obj, event)
 
     def set_active_view(self, view: str):
         """BETA2-FOCO: tres modos — "foco" (escritorio causal, PRINCIPAL) |
@@ -2780,11 +2945,12 @@ class CreationWorkspace(QWidget):
         El arranque de la Creación entra SIEMPRE en foco; la vista activa ya no
         se persiste (BETA2-UX-02: escritura QSettings vestigial eliminada)."""
         view = str(view)
-        if view not in ("foco", "concentric", "chrono"):
+        if view not in ("foco", "concentric", "chrono", "play"):
             view = "foco"
         self._active_view = view
         chrono_on = view == "chrono"
         foco_on = view == "foco"
+        play_on = view == "play"  # BETA2-PLAY: recorrido inmersivo (sin píldora)
         if chrono_on:
             self.chrono.set_project(self._get_active_project())
             self.chrono.fit_all()
@@ -2800,19 +2966,27 @@ class CreationWorkspace(QWidget):
         self.graph.setVisible(view == "concentric")
         foco_widget = getattr(self, "foco", None)
         if foco_widget is not None:
+            # FOCO-26: mostrar ANTES de refrescar — el layout determinista del
+            # lienzo lee el tamaño del viewport; refrescar oculto lo calculaba
+            # con geometría rancia y el Foco aparecía descolocado al cambiar
+            # desde el Mapa hasta un resize manual.
+            foco_widget.setVisible(foco_on)
             if foco_on:
                 foco_widget.refresh()
-            foco_widget.setVisible(foco_on)
-        # Command bar visible en Foco y Mapa; oculta en Cronología (decisión de producto).
+        # BETA2-PLAY: la vista inmersiva ocupa todo el workspace.
+        play_widget = getattr(self, "play", None)
+        if play_widget is not None:
+            play_widget.setVisible(play_on)
+        # Command bar visible en Foco y Mapa; oculta en Cronología y Play.
         bar = getattr(self, "_command_bar", None)
         if bar is not None:
-            bar.setVisible(view != "chrono")
+            bar.setVisible(view not in ("chrono", "play"))
         walk_btn = getattr(self, "_walk_toggle_btn", None)
         if walk_btn is not None:
             walk_btn.setVisible(chrono_on)  # CRON: entrada al recorrido solo en cronológica
         self._update_mode_pill(view)
         # UX25: transición suave (velo) solo entre las vistas de lienzo global.
-        if not foco_on:
+        if view in ("concentric", "chrono"):
             self._play_view_transition(chrono_on)
         # BETA1-UX8: alternar vista reflowa el área central; reposiciona los
         # floats (migas/clusters/barra de modos) diferido para que no queden en
@@ -2868,6 +3042,8 @@ class CreationWorkspace(QWidget):
             on_start_walk=(
                 self.start_chronology_walk if self.chronology_walk_controller is not None else None
             ),
+            # BETA2-SUB-01: doble-clic en un subhito → abre su propio panel.
+            on_open_milestone=self._open_milestone_detail_panel,
         )
         drawer.set_content(panel, title="Hito")
         drawer.open()
@@ -2882,17 +3058,12 @@ class CreationWorkspace(QWidget):
             return
         active = ctrl.active()
         if not isinstance(active, Error):
-            # Hay un recorrido en curso → reabrir su ventana única y continuar.
+            # PLAY-04: hay un recorrido en curso → se reabre en la vista
+            # inmersiva y se re-analiza el hito actual para repoblar la escena.
             self._walk_session_id = active.value.id
             ctrl.resume(active.value.id)
-            # Si el runner fue destruido al cerrar el cajón, se recrea y se
-            # re-analiza el hito actual para repoblar la ventana.
-            if not _qt_alive(self._walk_runner):
-                self._walk_runner = None
-                self._open_walk_runner()
-                self._run_walk_step()
-            else:
-                self._focus_walk_runner()
+            self._open_play_view()
+            self._run_walk_step()
             self.ctx.log("info", "Recorrido cronológico reanudado.")
             return
         self.start_chronology_walk(str(hito_id or ""))
@@ -2934,42 +3105,60 @@ class CreationWorkspace(QWidget):
             self.ctx.log("error", res.error)
             return
         self._walk_session_id = res.value.id
-        self._open_walk_runner()
+        self._open_play_view()
         self._run_walk_step()
 
-    def _open_walk_runner(self) -> None:
+    # ── BETA2-PLAY: vista inmersiva del recorrido ─────────────────────────
+    def _open_play_view(self) -> None:
+        """Entra en el modo Play y muestra la escena del hito actual."""
         drawer = getattr(self.ctx, "drawer", None)
-        if drawer is None:
+        if drawer is not None:
+            drawer.close()  # la config vivía en el cajón; la escena es a pantalla completa
+        self.set_active_view("play")
+        self._refresh_play_scene()
+
+    @_qt_safe_slot
+    def _exit_play(self) -> None:
+        """Sale de Play sin terminar el recorrido (queda reanudable)."""
+        self.set_active_view("chrono")
+
+    def _play_scene_for(self, milestone_id: str | None = None) -> dict | None:
+        """Escena determinista de un hito para Play (None si no es posible)."""
+        ctrl = self.chronology_walk_controller
+        sid = self._walk_session_id
+        if ctrl is None or not sid:
+            return None
+        res = ctrl.scene(sid, milestone_id)
+        if isinstance(res, Error):
+            self.ctx.log("warning", res.error)
+            return None
+        return res.value
+
+    def _on_play_edit(self, milestone_id: str, patch: dict) -> None:
+        """PLAY-06: edición inline de la escena → CausalMilestoneService."""
+        if self._milestone_ctrl is None or not milestone_id:
             return
-        from hosts.DesktopHostPySide.widgets.chronology_walk_runner_panel import (
-            ChronologyWalkRunnerPanel,
-        )
+        res = self._milestone_ctrl.update(str(milestone_id), dict(patch or {}))
+        if isinstance(res, Error):
+            self.ctx.log("error", res.error)
+            self._refresh_play_scene()  # revierte el eco local de la vista
+            return
+        self._mark_graph_stale()
+        self._invalidate_play_prefetch()  # PLAY-08: la edición cambia canon
+        self._refresh_play_scene()
 
-        runner = ChronologyWalkRunnerPanel()
-        runner.advanceRequested.connect(self._advance_walk)
-        runner.stopRequested.connect(self._stop_walk)
-        runner.decisionRequested.connect(self._decide_walk)
-        runner.applyRequested.connect(self._on_walk_apply)
-        # Si Qt destruye el runner (al cerrar/reemplazar el cajón), olvida la
-        # referencia para que la re-entrada lo recree en vez de usar uno muerto.
-        runner.destroyed.connect(self._on_walk_runner_destroyed)
-        self._walk_runner = runner
-        drawer.set_content(runner, title="Recorrido cronológico")
-        drawer.open()
-
-    def _on_walk_runner_destroyed(self, *_args) -> None:
-        self._walk_runner = None
-
-    def _focus_walk_runner(self) -> bool:
-        """CRON: reabre/enfoca la ventana única del paso. True si el runner vive."""
-        runner = self._walk_runner
-        drawer = getattr(self.ctx, "drawer", None)
-        if not _qt_alive(runner) or drawer is None:
-            self._walk_runner = None
-            return False
-        drawer.set_content(runner, title="Recorrido cronológico")
-        drawer.open()
-        return True
+    def _refresh_play_scene(self, milestone_id: str | None = None) -> None:
+        """Alimenta la escena de Play con datos deterministas (sin IA)."""
+        play = getattr(self, "play", None)
+        if play is None:
+            return
+        scene = self._play_scene_for(milestone_id)
+        if scene is None:
+            return
+        controller = getattr(self.ctx, "project_controller", None)
+        current_path = getattr(controller, "current_path", None)
+        play.set_assets_root(assets_root_for(Path(current_path)) if current_path else None)
+        play.show_scene(scene)
 
     @_qt_safe_slot
     def _run_walk_step(self) -> None:
@@ -2981,26 +3170,68 @@ class CreationWorkspace(QWidget):
         if self._walk_analyzing:
             self.ctx.log("info", "Análisis en curso; espera a que termine.")
             return
+        # PLAY-08: si el análisis del hito actual ya llegó por prefetch, se
+        # pliega al instante (commit_step) y no se lanza ningún hilo.
+        active = ctrl.active()
+        mid_now = (
+            str(getattr(active.value, "current_milestone_id", "") or "")
+            if not isinstance(active, Error)
+            else ""
+        )
+        if self._active_view == "play" and mid_now:
+            cached = self._play_prefetch_cache.pop(mid_now, None)
+            if cached is not None:
+                committed = ctrl.commit(sid, mid_now, cached)
+                if not isinstance(committed, Error):
+                    self._clear_walk_step_seeds()
+                    self._walk_step_candidate_ids = []
+                    self._refresh_play_scene()
+                    self._on_walk_step_done(committed.value)
+                    return
+            prefetching = self._play_prefetch_worker
+            if _qt_alive(prefetching) and prefetching.isRunning():
+                self._refresh_play_scene()
+                self.play.set_busy(True)
+                if (
+                    prefetching.milestone_id == mid_now
+                    and prefetching.epoch == self._play_epoch
+                ):
+                    # El prefetch en vuelo ES este paso: se adopta su resultado.
+                    self._walk_analyzing = True
+                    self._play_adopt_step = True
+                    self._start_walk_watchdog()
+                else:
+                    # Prefetch rancio en vuelo: NUNCA dos análisis vivos — el
+                    # paso se relanza cuando ese hilo termine (epoch lo descarta).
+                    self._play_step_queued = True
+                return
         self._walk_analyzing = True
         # Semillas transitorias: limpia las del paso anterior antes de analizar el nuevo.
         self._clear_walk_step_seeds()
         self._walk_step_candidate_ids = []
         # Hito actual (antes de analizar): la cámara se enfoca y emite un PULSO
         # sostenido desde su posición mientras la IA trabaja.
-        active = ctrl.active()
-        if not isinstance(active, Error):
-            mid = str(getattr(active.value, "current_milestone_id", "") or "")
-            if mid:
-                try:
-                    self.chrono.start_walk_pulse(mid)
-                except Exception:  # noqa: BLE001 — la animación no es crítica
-                    pass
-        if _qt_alive(self._walk_runner):
-            self._walk_runner.set_busy(True)
+        if mid_now:
+            try:
+                self.chrono.start_walk_pulse(mid_now)
+            except Exception:  # noqa: BLE001 — la animación no es crítica
+                pass
+        # PLAY-04: en la vista inmersiva, la escena del hito actual se muestra
+        # ya (datos deterministas) mientras la IA analiza en segundo plano.
+        if self._active_view == "play":
+            self._refresh_play_scene()
+            self.play.set_busy(True)
         # Análisis en hilo aparte para no congelar la UI durante la llamada al modelo.
+        # PLAY-12: cada intento captura su token; un resultado con token viejo
+        # (el usuario reintentó) muere en la guarda de _on_walk_step_done/_failed.
+        self._walk_step_token += 1
         worker = _WalkStepWorker(ctrl, sid)
-        worker.finishedOk.connect(self._on_walk_step_done)
-        worker.failed.connect(self._on_walk_step_failed)
+        worker.finishedOk.connect(
+            lambda result, token=self._walk_step_token: self._on_walk_step_done(result, token)
+        )
+        worker.failed.connect(
+            lambda error, token=self._walk_step_token: self._on_walk_step_failed(error, token)
+        )
         worker.finished.connect(self._on_walk_worker_stopped)
         self._walk_step_worker = worker
         self._walk_workers.add(worker)  # keep-alive hasta que termine
@@ -3029,27 +3260,27 @@ class CreationWorkspace(QWidget):
 
     @_qt_safe_slot
     def _on_walk_watchdog_timeout(self) -> None:
-        """La llamada al modelo no respondió a tiempo: recupera la UI sin colgar."""
+        """PLAY-12: la llamada tarda — avisar SIN cancelar (decisión del smoke).
+
+        El worker sigue vivo y su resultado sigue siendo bienvenido (nada de
+        mensajes contradictorios); el usuario puede seguir esperando o pulsar
+        «Reintentar», que descarta el intento en vuelo por token.
+        """
         self._walk_watchdog = None
         if not self._walk_analyzing:
             return
-        self._walk_analyzing = False
-        try:
-            self.chrono.stop_walk_pulse()
-        except Exception:  # noqa: BLE001
-            pass
-        self.ctx.log(
-            "warning",
-            "El análisis del hito tardó demasiado y se canceló; pulsa 'Avanzar' o reinténtalo.",
-        )
-        if _qt_alive(self._walk_runner):
-            self._walk_runner.set_busy(False)
-            self._walk_runner.set_status(
-                "El análisis tardó demasiado y se canceló. Reinténtalo o pulsa 'Avanzar'."
+        self.ctx.log("info", "El análisis del hito está tardando más de lo normal.")
+        if self._active_view == "play":
+            self.play.show_waiting_notice(
+                "La IA está tardando más de lo normal; puedes seguir esperando o reintentar."
             )
 
     @_qt_safe_slot
-    def _on_walk_step_done(self, result) -> None:
+    def _on_walk_step_done(self, result, token=None) -> None:
+        # PLAY-12: intento descartado por «Reintentar» — el resultado tardío
+        # de un token viejo no debe pisar el estado del intento vigente.
+        if token is not None and token != self._walk_step_token:
+            return
         self._walk_analyzing = False
         self._stop_walk_watchdog()
         try:
@@ -3075,11 +3306,13 @@ class CreationWorkspace(QWidget):
             self._walk_step_candidate_ids = list(created)
         else:
             self._walk_step_candidate_ids = []
-        if _qt_alive(self._walk_runner):
-            self._walk_runner.set_busy(False)
-            self._walk_runner.show_step(result)
-            # Ventana única: tarjetas editables de TODOS los cambios del paso.
-            self._walk_runner.set_changes(self._build_step_changes(self._walk_step_candidate_ids))
+        # PLAY-04: la escena inmersiva pliega el análisis (congela ante duros).
+        if self._active_view == "play":
+            self.play.show_analysis(result)
+            # PLAY-07: los candidatos del paso son tarjetas aceptar/rechazar.
+            self.play.set_changes(self._build_step_changes(self._walk_step_candidate_ids))
+            # PLAY-08: mientras se lee esta escena, la siguiente ya se analiza.
+            self._maybe_prefetch_next()
         # El análisis NO cambia canon (solo stagea): refresco LIGERO (solo cronología),
         # no el rebuild completo del grafo (evita congelación por paso).
         self._refresh_chrono_only()
@@ -3160,6 +3393,25 @@ class CreationWorkspace(QWidget):
                         ],
                     }
                 )
+            elif isinstance(pd.get("edit_fields"), dict) and pd.get("edit_fields"):
+                # PLAY-17: propuesta de edición multi-campo → revisable en el
+                # preview del panel real. Se resuelve el objetivo para montarlo.
+                edit_kind = str(pd.get("edit_kind") or "entity_edits")
+                target_id, target_name = self._resolve_edit_target(project, pd)
+                changes.append(
+                    {
+                        "candidate_id": cid,
+                        "kind": "edit",
+                        "apply": "flat",
+                        "reviewable": bool(target_id),
+                        "edit_kind": edit_kind,
+                        "target_id": target_id,
+                        "target_name": target_name,
+                        "edit_fields": dict(pd.get("edit_fields") or {}),
+                        "header": str(getattr(cand, "title", None) or "Editar canon"),
+                        "fields": [],
+                    }
+                )
             elif pd.get("edit_proposed_value"):
                 changes.append(
                     {
@@ -3205,6 +3457,73 @@ class CreationWorkspace(QWidget):
                     return str(getattr(m, "description", "") or getattr(m, "rationale", "") or "")
         return ""
 
+    @staticmethod
+    def _resolve_edit_target(project, pd: dict) -> tuple[str, str]:
+        """PLAY-17: (id, nombre) del objetivo de una edición multi-campo.
+
+        Los hitos se resuelven por id estable primero (renombrados no rompen);
+        las entidades por nombre. id vacío ⇒ no montable en preview.
+        """
+        kind = str(pd.get("edit_kind") or "entity_edits")
+        name = str(pd.get("edit_target_name") or "").strip()
+        if kind == "milestone_edits":
+            tid = str(pd.get("edit_target_id") or "").strip()
+            for m in getattr(project, "causal_milestones", []) or []:
+                if tid and str(getattr(m, "id", "")) == tid:
+                    return str(m.id), str(getattr(m, "title", ""))
+            low = name.lower()
+            for m in getattr(project, "causal_milestones", []) or []:
+                if str(getattr(m, "title", "")).strip().lower() == low:
+                    return str(m.id), str(getattr(m, "title", ""))
+            return "", name
+        low = name.lower()
+        for e in getattr(project, "entities", []) or []:
+            if str(getattr(e, "name", "")).strip().lower() == low:
+                return str(e.id), str(getattr(e, "name", ""))
+        return "", name
+
+    def _build_proposal_preview(self, descriptor: dict):
+        """PLAY-17: monta el panel de edición REAL en modo preview.
+
+        Devuelve ``(widget, get_payload)``: el panel con el patch de la IA
+        aplicado y un callable que da el diff editado. La UI no escribe canon —
+        el guardado del panel queda neutralizado (``on_preview_save`` no-op) y
+        el diff se lee bajo demanda al aceptar.
+        """
+        edit_kind = str(descriptor.get("edit_kind") or "entity_edits")
+        target_id = str(descriptor.get("target_id") or "")
+        patch = dict(descriptor.get("edit_fields") or {})
+        if not target_id:
+            return None
+        if edit_kind == "milestone_edits":
+            from hosts.DesktopHostPySide.widgets.milestone_detail_panel import (
+                MilestoneDetailPanel,
+            )
+
+            if self._milestone_ctrl is None:
+                return None
+            panel = MilestoneDetailPanel(
+                self.ctx,
+                self._milestone_ctrl,
+                target_id,
+                project_getter=self._get_active_project,
+                preview_patch=patch,
+                on_preview_save=lambda _payload: None,
+            )
+            return panel, panel.preview_payload
+        from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
+
+        panel = NodeDetailPanel(
+            self.ctx,
+            self.entity_controller,
+            target_id,
+            variant="foco",
+            preview_patch=patch,
+            on_preview_save=lambda _payload: None,
+        )
+        panel.refresh()  # NodeDetailPanel no auto-carga en __init__
+        return panel, panel.preview_payload
+
     @_qt_safe_slot
     def _on_walk_apply(self, items: list) -> None:
         ctrl = self.chronology_walk_controller
@@ -3214,8 +3533,7 @@ class CreationWorkspace(QWidget):
         # No aplicar mientras un análisis sigue vivo (evita mutar el proyecto desde
         # el hilo de UI a la vez que el worker lo toca).
         if self._walk_analyzing:
-            if _qt_alive(self._walk_runner):
-                self._walk_runner.set_status("Espera a que termine el análisis para aplicar.")
+            self.ctx.log("info", "Espera a que termine el análisis para aplicar.")
             return
         res = ctrl.apply_step(sid, list(items or []))
         if isinstance(res, Error):
@@ -3230,13 +3548,20 @@ class CreationWorkspace(QWidget):
             self._zen_bell.play_one()
         for fail in failed:
             self.ctx.log("warning", f"No se pudo aplicar: {fail.get('error', '')}")
-        if _qt_alive(self._walk_runner):
-            self._walk_runner.mark_applied(len(applied))
+        # PLAY-07: aplicar resuelve el paso → la escena se descongela y refleja
+        # el canon nuevo (refresh primero; mark_applied repone el estado del ciclo).
+        self._invalidate_play_prefetch()  # PLAY-08: aplicar cambia canon
+        if self._active_view == "play":
+            self._refresh_play_scene()
+            self.play.mark_applied(len(applied))
+            self._maybe_prefetch_next()  # re-anticipa el siguiente con el canon nuevo
         # Aplicar SÍ cambia canon → refresco completo (grafo + cronología).
         self._refresh_after_walk()
 
     @_qt_safe_slot
-    def _on_walk_step_failed(self, error: str) -> None:
+    def _on_walk_step_failed(self, error: str, token=None) -> None:
+        if token is not None and token != self._walk_step_token:
+            return  # PLAY-12: fallo de un intento ya descartado
         self._walk_analyzing = False
         self._stop_walk_watchdog()
         try:
@@ -3244,8 +3569,9 @@ class CreationWorkspace(QWidget):
         except Exception:  # noqa: BLE001
             pass
         self.ctx.log("error", str(error))
-        if _qt_alive(self._walk_runner):
-            self._walk_runner.set_busy(False)
+        # PLAY-04: sin proveedor/fallo, la escena sigue legible y navegable.
+        if self._active_view == "play":
+            self.play.show_error(str(error))
 
     @_qt_safe_slot
     def _on_walk_worker_stopped(self) -> None:
@@ -3304,8 +3630,9 @@ class CreationWorkspace(QWidget):
         res = ctrl.advance(sid)
         if isinstance(res, Error):
             self.ctx.log("warning", res.error)
-            if _qt_alive(self._walk_runner):
-                self._walk_runner.set_status(res.error)
+            # PLAY-04: el bloqueo por problema duro es un estado visible, no silencio.
+            if self._active_view == "play":
+                self.play.show_error(res.error)
             return
         session = res.value
         status = str(getattr(getattr(session, "status", ""), "value", "") or "")
@@ -3313,6 +3640,110 @@ class CreationWorkspace(QWidget):
             self._open_walk_report(sid)
             return
         self._run_walk_step()
+
+    # ── PLAY-08: prefetch del paso N+1 ────────────────────────────────────
+    def _invalidate_play_prefetch(self) -> None:
+        """El canon cambió: todo análisis anticipado (cacheado o en vuelo) es
+        rancio. Aplazar o avanzar NO invalidan (no tocan canon)."""
+        self._play_epoch += 1
+        self._play_prefetch_cache.clear()
+
+    def _maybe_prefetch_next(self) -> None:
+        ctrl = self.chronology_walk_controller
+        sid = self._walk_session_id
+        if self._active_view != "play" or ctrl is None or not sid:
+            return
+        if self._walk_analyzing:
+            return  # regla (a): nunca dos análisis vivos
+        worker = self._play_prefetch_worker
+        if _qt_alive(worker) and worker.isRunning():
+            return
+        scene = self._play_scene_for(None)
+        next_mid = str((scene or {}).get("next_milestone_id") or "")
+        if not next_mid or next_mid in self._play_prefetch_cache:
+            return
+        worker = _PlayPrefetchWorker(ctrl, sid, next_mid, self._play_epoch)
+        worker.finishedOk.connect(self._on_prefetch_done)
+        worker.failed.connect(self._on_prefetch_failed)
+        worker.finished.connect(self._on_prefetch_worker_stopped)
+        self._play_prefetch_worker = worker
+        self._walk_workers.add(worker)  # keep-alive hasta que termine
+        track_worker(worker)  # apagado ordenado al cerrar la app
+        worker.start()
+
+    @_qt_safe_slot
+    def _on_prefetch_done(self, milestone_id, epoch, result) -> None:
+        milestone_id = str(milestone_id)
+        if int(epoch) != self._play_epoch:
+            # Canon cambiado en vuelo: resultado rancio. Si era el paso adoptado,
+            # se relanza el análisis con el canon vigente.
+            if self._play_adopt_step:
+                self._play_adopt_step = False
+                self._walk_analyzing = False
+                self._stop_walk_watchdog()
+                self._run_walk_step()
+            return
+        if self._play_adopt_step:
+            self._play_adopt_step = False
+            ctrl = self.chronology_walk_controller
+            sid = self._walk_session_id
+            if ctrl is None or not sid:
+                self._walk_analyzing = False
+                return
+            committed = ctrl.commit(sid, milestone_id, dict(result or {}))
+            if isinstance(committed, Error):
+                self._on_walk_step_failed(committed.error)
+                return
+            self._clear_walk_step_seeds()
+            self._walk_step_candidate_ids = []
+            self._on_walk_step_done(committed.value)
+            return
+        self._play_prefetch_cache[milestone_id] = dict(result or {})
+
+    @_qt_safe_slot
+    def _on_prefetch_failed(self, error: str) -> None:
+        if self._play_adopt_step:
+            self._play_adopt_step = False
+            self._on_walk_step_failed(str(error))
+            return
+        # El prefetch es mejor-esfuerzo: al llegar de verdad, análisis normal.
+        self.ctx.log("info", f"Prefetch del siguiente hito falló: {error}")
+
+    @_qt_safe_slot
+    def _on_prefetch_worker_stopped(self) -> None:
+        worker = self._play_prefetch_worker
+        if worker is not None and (not _qt_alive(worker) or not worker.isRunning()):
+            self._play_prefetch_worker = None
+        self._walk_workers = {w for w in self._walk_workers if _qt_alive(w) and w.isRunning()}
+        if self._play_step_queued:
+            self._play_step_queued = False
+            if not self._walk_analyzing:
+                self._run_walk_step()
+
+    @_qt_safe_slot
+    def _retry_walk_step(self) -> None:
+        """PLAY-12: descarta el análisis en vuelo (token) y relanza el paso."""
+        self._walk_step_token += 1  # el resultado del intento viejo muere en la guarda
+        self._walk_analyzing = False
+        self._play_adopt_step = False
+        self._stop_walk_watchdog()
+        self._run_walk_step()
+
+    def _defer_walk(self) -> None:
+        """PLAY-07: aplazar los problemas del hito actual (PLAY-02 en el servicio)."""
+        ctrl = self.chronology_walk_controller
+        sid = self._walk_session_id
+        if ctrl is None or not sid:
+            return
+        res = ctrl.defer(sid)
+        if isinstance(res, Error):
+            self.ctx.log("warning", res.error)
+            if self._active_view == "play":
+                self.play.show_error(res.error)
+            return
+        self.ctx.log("info", "Problemas aplazados; reaparecerán en el informe final.")
+        if self._active_view == "play":
+            self.play.mark_deferred()
 
     def _decide_walk(self, decision: str) -> None:
         ctrl = self.chronology_walk_controller
@@ -3338,8 +3769,7 @@ class CreationWorkspace(QWidget):
 
     def _open_walk_report(self, session_id: str) -> None:
         ctrl = self.chronology_walk_controller
-        drawer = getattr(self.ctx, "drawer", None)
-        if ctrl is None or drawer is None:
+        if ctrl is None:
             return
         project = self._get_active_project()
         report = None
@@ -3348,25 +3778,22 @@ class CreationWorkspace(QWidget):
                 report = rep
         if report is None:
             return
-        from hosts.DesktopHostPySide.widgets.chronology_walk_report_view import (
-            ChronologyWalkReportView,
-        )
-
-        view = ChronologyWalkReportView()
-        view.show_report(report)
-        view.closed.connect(lambda: drawer.close())
         # Cierre del recorrido: retira las semillas del último paso y el resalte.
         self._clear_walk_step_seeds()
         self._walk_step_candidate_ids = []
         self._walk_session_id = None
-        self._walk_runner = None
         self._walk_analyzing = False
         self._stop_walk_watchdog()
+        self._play_prefetch_cache.clear()
         try:
             self.chrono.clear_walk_highlight()
         except Exception:  # noqa: BLE001
             pass
-        drawer.set_content(view, title="Informe de recorrido")
+        # PLAY-09/10: el informe SIEMPRE es el epílogo inmersivo de Play; el
+        # botón «Volver al lienzo» (exitRequested) devuelve a la Cronología.
+        if getattr(self, "_active_view", "") != "play":
+            self.set_active_view("play")
+        self.play.show_epilogue(report, project)
         drawer.open()
 
     @_qt_safe_slot
@@ -3387,6 +3814,14 @@ class CreationWorkspace(QWidget):
 
     @_qt_safe_slot
     def _refresh_after_walk(self) -> None:
+        # PLAY-13: dentro de Play, JAMÁS el refresco completo — `refresh()`
+        # fuerza la vista Foco y expulsaba al usuario del recorrido al aplicar.
+        # Mismo contrato que la edición inline (PLAY-06): grafo marcado stale
+        # (se reconstruye al salir de Play) + refresco ligero de la cronología.
+        if getattr(self, "_active_view", "") == "play":
+            self._mark_graph_stale()
+            self._refresh_chrono_only()
+            return
         # Refresco COMPLETO (tras aplicar: canon cambió). Incluye grafo, semillas
         # y cronología; re-enfoca el hito actual para mantener el contexto.
         try:
@@ -3395,33 +3830,21 @@ class CreationWorkspace(QWidget):
             pass
         self._refresh_chrono_only()
 
-    def _open_panel_for_entity(self, entity_id: str):
-        """BETA1-G04: doble click en una cabeza de línea de vida → su panel
-        editorial (hoja u rama), coherente con la vista concéntrica."""
-        project = self._get_active_project()
-        for entity in getattr(project, "entities", []) or []:
-            if str(getattr(entity, "id", "")) != str(entity_id):
-                continue
-            kind = str(
-                getattr(
-                    getattr(entity, "entity_type", None),
-                    "value",
-                    getattr(entity, "entity_type", ""),
-                )
-                or ""
-            ).lower()
-            if kind == "contenedor":
-                self._open_tree_panel(entity_id)
-            else:
-                self._open_node_panel(entity_id)
-            return
-
-    def _on_chrono_create_milestone(self, default_year: int, era_name: str) -> None:
+    def _on_chrono_create_milestone(
+        self,
+        default_year: int,
+        era_name: str,
+        extra_payload: dict | None = None,
+        default_end_year: int | None = None,
+    ) -> None:
         """BETA1-HITO-MULTI: clic derecho sobre una era en la cronología →
         muestra el panel de creación como overlay DENTRO de la app (ModalOverlay,
-        no una ventana del SO). Al confirmar, crea el hito por el controller."""
+        no una ventana del SO). Al confirmar, crea el hito por el controller.
+        ``extra_payload`` se fusiona al payload confirmado (FOCO-25: vincular);
+        ``default_end_year`` precarga el fin (FOCO-26: rango dibujado en banda)."""
         if self._milestone_ctrl is None:
             return
+        extra = dict(extra_payload or {})
         chrono_meta = {}
         chron = getattr(self._get_active_project(), "project_chronology", None)
         cal = getattr(chron, "metadata", None)
@@ -3431,16 +3854,46 @@ class CreationWorkspace(QWidget):
             default_year=int(default_year),
             calendar_meta=chrono_meta,
             era_name=str(era_name or ""),
+            default_end_year=default_end_year,
         )
         overlay = getattr(self.window(), "modal_overlay", None)
         if overlay is None:  # respaldo defensivo: crea con el año sugerido
-            self._create_milestone_from_payload({"title": "Nuevo hito", "year": int(default_year)})
+            self._create_milestone_from_payload(
+                {"title": "Nuevo hito", "year": int(default_year), **extra}
+            )
             return
         panel.cancelled.connect(overlay.dismiss)
         panel.submitted.connect(
-            lambda payload: (overlay.dismiss(), self._create_milestone_from_payload(payload))
+            lambda payload: (
+                overlay.dismiss(),
+                self._create_milestone_from_payload({**payload, **extra}),
+            )
         )
         overlay.open_widget(panel)
+
+    def _on_foco_create_milestone(self, default_year: int, era_name: str) -> None:
+        """FOCO-25: un hito creado desde la banda local del Foco nace VINCULADO
+        a la entidad en foco (affected_entity_ids) — antes se creaba suelto y
+        ``list_for_leaf`` no lo devolvía, así que jamás aparecía en la banda."""
+        foco = getattr(self, "foco", None)
+        center_id = str(foco.current_entity_id() or "") if foco is not None else ""
+        self._on_chrono_create_milestone(
+            default_year,
+            era_name,
+            extra_payload={"affected_entity_ids": [center_id]} if center_id else None,
+        )
+
+    def _on_foco_create_milestone_range(self, start_year: int, end_year: int) -> None:
+        """FOCO-26: rango dibujado en la banda local ⇒ hito con inicio y fin,
+        vinculado a la entidad en foco."""
+        foco = getattr(self, "foco", None)
+        center_id = str(foco.current_entity_id() or "") if foco is not None else ""
+        self._on_chrono_create_milestone(
+            start_year,
+            "",
+            extra_payload={"affected_entity_ids": [center_id]} if center_id else None,
+            default_end_year=int(end_year),
+        )
 
     @_qt_safe_slot
     def _create_milestone_from_payload(self, payload: dict) -> None:
@@ -3464,6 +3917,16 @@ class CreationWorkspace(QWidget):
                 chrono = getattr(self, "chrono", None)
                 if chrono is not None and hasattr(chrono, "bloom_milestone"):
                     chrono.bloom_milestone(milestone_id)
+                # BETA2-FOCO-27: si el hito se creó desde el editor del Foco
+                # («+ hito» en la cronología editable), ábrelo en el cajón inferior
+                # para editarlo al momento.
+                foco = getattr(self, "foco", None)
+                if (
+                    foco is not None
+                    and callable(getattr(foco, "is_editor_open", None))
+                    and foco.is_editor_open()
+                ):
+                    foco.open_milestone_editable(milestone_id)
 
         _qt_safe_timer(self, 0, _after)
 
@@ -3523,33 +3986,6 @@ class CreationWorkspace(QWidget):
         # cuando el evento ya se ha desenrollado por completo.
         _qt_safe_timer(self, 0, self.refresh)
 
-    def _build_float_cluster(self, actions: list[tuple[str, str, object]]) -> QFrame:
-        """BETA1-F02: cluster flotante de iconos monocromos sobre la command
-        bar. Estética común: redondos, sin color, calmados."""
-        cluster = QFrame(self)
-        # R4: transparent holder — the buttons themselves are GOLD pills (like
-        # "Crear"), so no surrounding frame to clip them.
-        cluster.setStyleSheet("QFrame { background: transparent; border: none; }")
-        row = QHBoxLayout(cluster)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        for icon_name, tip, callback in actions:
-            button = QPushButton()
-            button.setToolTip(tip)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setFixedSize(40, 40)
-            button.setStyleSheet(
-                f"QPushButton {{ background: {GOLD}; border: none; border-radius: 20px; }} "
-                f"QPushButton:hover {{ background: {GOLD_DEEP}; }} "
-                f"QPushButton:pressed {{ background: #5E5427; }}"
-            )
-            icons.set_button_icon(button, icon_name, color="#FCF8EC", size=19)
-            button.clicked.connect(callback)
-            row.addWidget(button)
-        cluster.adjustSize()
-        cluster.raise_()
-        return cluster
-
     @_qt_safe_slot
     def _build_chrono_gutter(self) -> QFrame:
         # BETA2-UX-08: overlay lateral con los hitos «Sin ubicar» de la
@@ -3573,7 +4009,8 @@ class CreationWorkspace(QWidget):
         hint = QLabel("Hitos sin año ni fecha — no aparecen en la línea.")
         hint.setWordWrap(True)
         hint.setStyleSheet(
-            f"color: {INK_MUTED}; font-size: 10px; background: transparent; border: none;"
+            f"color: {INK_MUTED}; font-size: {TYPE_CAPTION_PX}px; "
+            f"background: transparent; border: none;"
         )
         v.addWidget(hint)
         self._chrono_gutter_list = QListWidget()
@@ -3616,40 +4053,29 @@ class CreationWorkspace(QWidget):
         """Coloca los clusters a ambos lados de la command bar y el
         breadcrumb de foco arriba a la izquierda."""
         bar = getattr(self, "_command_bar", None)
-        if bar is None:
-            return
         # R6: raised and static — aligned with the chronology toggle, no sway.
-        top = bar.y() - 66
+        # BETA2-WIKI-10: la command bar se retiró (era el ancla de `top`). Antes esta
+        # función hacía `return` si no existía y dejaba la píldora Guardar/💧 y la
+        # leyenda del jardín en (0,0) — arriba-izquierda. Sin command bar, `top` se
+        # ancla abajo-derecha (como el resto de floats del Mapa).
+        top = (bar.y() - 66) if bar is not None else max(58, self.height() - 62)
         # BETA2-UX-08: gutter «Sin ubicar» arriba-derecha, bajo la píldora de modos.
         gutter = getattr(self, "_chrono_gutter", None)
         if gutter is not None and gutter.isVisible():
             gutter.adjustSize()
             gutter.move(self.width() - gutter.width() - 18, 58)
             gutter.raise_()
-        left = getattr(self, "_float_left", None)
-        if left is not None:
-            left.adjustSize()
-            left.move(18, top)
-            left.raise_()
         right = getattr(self, "_float_right", None)
         if right is not None:
             right.adjustSize()
             right.move(self.width() - right.width() - 18, top)
             right.raise_()
-        # BETA2-FOCO: barra superior de modos (Foco | Mapa | Cronología),
-        # anclada arriba-centro (spec "barra superior"; antes flotaba junto a
-        # la command bar como alternador binario).
-        toggle = getattr(self, "_float_view_toggle", None)
-        if toggle is not None:
-            toggle.adjustSize()
-            toggle.move((self.width() - toggle.width()) // 2, 14)
-            toggle.raise_()
-            # BETA2-FOCO-18: la barra temporal del Mapa también se centra en
-            # y=14 dentro del graph canvas — se le pasa la altura de la
-            # píldora para que quede DEBAJO y no se solapen.
-            graph = getattr(self, "graph", None)
-            if graph is not None and hasattr(graph, "set_time_bar_top_inset"):
-                graph.set_time_bar_top_inset(toggle.height() + 10)
+        # BETA2-FOCO-28: la barra de modos ya NO flota aquí — vive en el banner
+        # superior (main_window._wrap_space la reparenta). El Mapa recupera el
+        # borde superior para su barra temporal (sin píldora que esquivar).
+        graph = getattr(self, "graph", None)
+        if graph is not None and hasattr(graph, "set_time_bar_top_inset"):
+            graph.set_time_bar_top_inset(10)
         focus = getattr(self, "_float_focus", None)
         if focus is not None and focus.isVisible():
             focus.adjustSize()
@@ -3661,8 +4087,16 @@ class CreationWorkspace(QWidget):
             search.adjustSize()
             search.move((self.width() - search.width()) // 2, 14)
             search.raise_()
+        # BETA2-STRUCT-02: píldora de ajustes estructurales, abajo-izquierda.
+        struct = getattr(self, "_float_structure", None)
+        if struct is not None and struct.isVisible():
+            struct.adjustSize()
+            struct.move(18, max(58, self.height() - struct.height() - 16))
+            struct.raise_()
         # SEM04: la capa de semillas se ancla encima del cluster derecho.
         self._position_seed_layer()
+        # BETA2-WIKI-10: recoloca el floater de estado de IA (abajo-centro) al redimensionar.
+        self._sync_status_floater()
 
     @_qt_safe_slot
     def _position_seed_layer(self):
@@ -3670,7 +4104,8 @@ class CreationWorkspace(QWidget):
         de botones derecho (con z-order por encima), para que no los solapen ni
         intercepten sus clics."""
         layer = getattr(self, "_seed_notifications", None)
-        if layer is None or not layer.notifications:
+        if layer is None or (not layer.notifications and not layer.thirsty_ids):
+            self._update_garden_legend_inset()
             return
         layer.adjustSize()
         right = getattr(self, "_float_right", None)
@@ -3685,13 +4120,51 @@ class CreationWorkspace(QWidget):
             y = top - layer.height() - 10
         layer.move(max(0, x), max(0, y))
         layer.reanchor()  # show + raise por encima de los clusters
+        self._update_garden_legend_inset()
+
+    def _update_garden_legend_inset(self):
+        """UI2-02: reserva hueco bajo la leyenda del jardín (esquina inferior
+        derecha del Mapa) para que quede apilada ENCIMA de las píldoras 🌱/💧
+        y del cluster derecho sin solaparlos."""
+        graph = getattr(self, "graph", None)
+        if graph is None or not hasattr(graph, "set_garden_legend_bottom_inset"):
+            return
+        tops: list[int] = []
+        right = getattr(self, "_float_right", None)
+        if right is not None and right.isVisible():
+            tops.append(right.y())
+        layer = getattr(self, "_seed_notifications", None)
+        if layer is not None and layer.isVisible():
+            tops.append(layer.y())
+        if not tops:
+            graph.set_garden_legend_bottom_inset(0)
+            return
+        inset = max(0, graph.geometry().bottom() - min(tops)) + 10
+        graph.set_garden_legend_bottom_inset(inset)
 
     def showEvent(self, event):  # noqa: N802 (Qt API)
         super().showEvent(event)
         self._position_floats()
+        # FOCO-28: filtro de app para Tab/Shift+Tab de modos (los lienzos toman el
+        # foco, así que un QShortcut de widget no bastaría). Se retira en hideEvent.
+        if not getattr(self, "_tab_filter_installed", False):
+            app = QApplication.instance()
+            if app is not None:
+                app.installEventFilter(self)
+                self._tab_filter_installed = True
         # UX3: onboarding de 1ª vez del flujo IA (diferido para que haya geometría;
         # Qt omite el callback si el widget se destruye antes de dispararse).
         QTimer.singleShot(0, self._maybe_show_ai_coachmark)
+
+    def hideEvent(self, event):  # noqa: N802 (Qt API)
+        # FOCO-28: retira el filtro de Tab al ocultar la Creación (simétrico a
+        # showEvent), para no interceptar Tab desde otras superficies (Home).
+        if getattr(self, "_tab_filter_installed", False):
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self)
+            self._tab_filter_installed = False
+        super().hideEvent(event)
 
     def _toggle_float_panel(self, key: str, build_panel, title: str) -> None:
         """R5: a float button opens its drawer panel, or closes it if that same
@@ -3744,8 +4217,8 @@ class CreationWorkspace(QWidget):
         # BETA1-G08: separación por borde + superficie sólida (sin efecto
         # gráfico, que cacheaba el render y ocultaba botones al actualizar).
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(44, 11, 44, 11)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_XL + SPACE_LG, SPACE_MD, SPACE_XL + SPACE_LG, SPACE_MD)
+        layout.setSpacing(SPACE_SM)
 
         prompt_label = QLabel("Dendro")
         prompt_label.setStyleSheet(
@@ -3791,7 +4264,7 @@ class CreationWorkspace(QWidget):
             f"border: 1px solid {LINE}; border-radius: 12px; }}"
         )
         _adv_row = QHBoxLayout(self._advanced_tuners_popup)
-        _adv_row.setContentsMargins(18, 12, 18, 12)
+        _adv_row.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
         _adv_row.setSpacing(18)
         _adv_row.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
         _adv_row.addWidget(self._captioned_tuner(self._tokens_tuner, "Longitud respuesta"))
@@ -3803,7 +4276,7 @@ class CreationWorkspace(QWidget):
         )
         self._advanced_tuners_btn.setStyleSheet(
             f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: 18px; min-width: 64px; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_CAPSULE}px; min-width: 64px; "
             f"min-height: 36px; font-size: 12px; font-weight: 700; padding: 0 12px; }} "
             f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
         )
@@ -3823,7 +4296,7 @@ class CreationWorkspace(QWidget):
         )
         self._command_input.setStyleSheet(
             f"QLineEdit#aiCommandInput {{ background: #FFFFFF; "
-            f"border: 1px solid {LINE}; border-radius: 20px; padding: 9px 16px; "
+            f"border: 1px solid {LINE}; border-radius: {RADIUS_CAPSULE}px; padding: 9px 16px; "
             f"font-size: 13px; color: {INK}; }} "
             f"QLineEdit#aiCommandInput:hover {{ border-color: {GOLD_SOFT}; }} "
             f"QLineEdit#aiCommandInput:focus {{ border: 2px solid {GOLD}; padding: 8px 15px; background: #FFFFFF; }}"
@@ -3842,7 +4315,7 @@ class CreationWorkspace(QWidget):
         )
         self._command_preview_btn.setStyleSheet(
             f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: 18px; min-width: 64px; "
+            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_CAPSULE}px; min-width: 64px; "
             f"min-height: 36px; font-size: 12px; font-weight: 700; padding: 0 12px; }} "
             f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
         )
@@ -3859,10 +4332,11 @@ class CreationWorkspace(QWidget):
         self._command_submit_btn = QPushButton("Crear")
         self._command_submit_btn.setToolTip("Crear una tarea IA revisable")
         self._command_submit_btn.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
-            f"border-radius: 18px; min-width: 64px; min-height: 36px; font-size: 12px; font-weight: 700; }} "
+            f"QPushButton {{ background: {GOLD}; color: {INK_INVERSE}; border: none; "
+            f"border-radius: {RADIUS_CAPSULE}px; min-width: 64px; min-height: 36px; "
+            f"font-size: 12px; font-weight: 700; }} "
             f"QPushButton:hover {{ background: {GOLD_DEEP}; }} "
-            f"QPushButton:pressed {{ background: #5E5427; padding-top: 2px; }}"
+            f"QPushButton:pressed {{ background: {GOLD_PRESS}; padding-top: 2px; }}"
         )
         self._command_submit_btn.clicked.connect(self._submit_ai_command)
         layout.addWidget(self._command_submit_btn)
@@ -3889,7 +4363,7 @@ class CreationWorkspace(QWidget):
             f"border: 1px solid {GOLD_SOFT}; border-radius: 12px; }}"
         )
         col = QVBoxLayout(pop)
-        col.setContentsMargins(16, 14, 16, 14)
+        col.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
         col.setSpacing(8)
         title = QLabel("Cómo funcionan los prompts de Dendro")
         title.setStyleSheet(
@@ -4011,7 +4485,7 @@ class CreationWorkspace(QWidget):
         col.addWidget(label)
         btn = QPushButton("Entendido" if last else "Siguiente")
         btn.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
+            f"QPushButton {{ background: {GOLD}; color: {INK_INVERSE}; border: none; "
             f"border-radius: 14px; min-height: 28px; padding: 0 14px; "
             f"font-size: 12px; font-weight: 700; }} "
             f"QPushButton:hover {{ background: {GOLD_DEEP}; }}"
@@ -4188,7 +4662,8 @@ class CreationWorkspace(QWidget):
         label = QLabel(caption, box)
         label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         label.setStyleSheet(
-            f"font-size: 9px; color: {INK_MUTED}; background: transparent; border: none;"
+            f"font-size: {TYPE_CAPTION_PX}px; color: {INK_MUTED}; "
+            f"background: transparent; border: none;"
         )
         v.addWidget(label)
         return box
@@ -4920,6 +5395,7 @@ class CreationWorkspace(QWidget):
         )
         self._job_status_label.setText(job.message or "Resultado listo")
         pulse_feedback(self._job_status_label)
+        self._schedule_status_clear()  # WIKI-13: no dejar el resultado fijo abajo-centro
         self._sync_jobs_indicator()
         self._refresh_ai_jobs_panel_if_open()
         # UX8: una reparación de coherencia NO crea semillas: abre el panel de cambios
@@ -4996,6 +5472,7 @@ class CreationWorkspace(QWidget):
         self._job_status_label.setText(f"Error: {error}")
         self._job_status_label.setStyleSheet("color: #C0392B; font-size: 11px; font-weight: 700;")
         pulse_feedback(self._job_status_label)
+        self._schedule_status_clear(9000)  # WIKI-13: el error también se limpia (más tarde)
         self.ctx.log("error", f"Job IA fallido {job_id}: {error}")
         self._sync_jobs_indicator()
         self._refresh_ai_jobs_panel_if_open()
@@ -5122,14 +5599,12 @@ class CreationWorkspace(QWidget):
         return None
 
     def _open_candidate_review(self, candidate_id: str):
-        # CRON: durante un recorrido, la notificación de un candidato del paso
-        # actual reabre la VENTANA ÚNICA (diffs editables + aplicación atómica),
-        # no el panel por-candidato suelto (evita aceptación desordenada).
-        if (
-            self._walk_session_id
-            and str(candidate_id) in (self._walk_step_candidate_ids or [])
-            and self._focus_walk_runner()
-        ):
+        # PLAY-10: durante un recorrido, la notificación de un candidato del
+        # paso actual reabre la vista Play (tarjetas del paso + aplicación
+        # atómica), no el panel por-candidato suelto (evita aceptación
+        # desordenada).
+        if self._walk_session_id and str(candidate_id) in (self._walk_step_candidate_ids or []):
+            self._open_play_view()
             return
         candidate = self._find_candidate(candidate_id)
         controller = self.candidate_controller
@@ -5332,7 +5807,7 @@ class CreationWorkspace(QWidget):
                     and getattr(self, "foco", None) is not None
                     and self.foco.current_entity_id()
                 ):
-                    self.foco.center_entity(self.foco.current_entity_id(), push_history=False)
+                    self.foco.center_entity(self.foco.current_entity_id())
                     self._sync_foco_seeds()
             except Exception:  # noqa: BLE001 — el diferido nunca rompe el flujo
                 pass
@@ -5427,13 +5902,36 @@ class CreationWorkspace(QWidget):
         if hasattr(self.graph, "canvas") and hasattr(self.graph.canvas, "clear_visual_filters"):
             self.graph.canvas.clear_visual_filters()
 
-    def _open_search_panel(self):
-        _apptrace("WS open_search_panel")
-        self._toggle_float_panel("search", lambda: CreationSearchPanel(self), "Buscar")
+    def _open_filter_popover(self):
+        """BETA2-UI2-10: popover de filtros anclado al embudo del pill temporal.
 
-    def _open_filter_panel(self):
-        _apptrace("WS open_filter_panel")
-        self._toggle_float_panel("filter", lambda: CreationFilterPanel(self), "Filtros")
+        Se construye fresco en cada apertura (combos al día con el proyecto) y
+        restaura el estado activo del canvas. Referencia viva para que Qt no lo
+        recoja mientras está abierto (patrón FocoView._popover).
+        """
+        _apptrace("WS open_filter_popover")
+        popover = FilterPopover(
+            project_provider=self._get_active_project,
+            initial_state=self.graph.canvas.get_filter_state(),
+            on_apply=self.apply_creation_filter,
+            on_clear=self.clear_creation_filters,
+            parent=self,
+        )
+        self._filter_popover = popover
+        popover.open_below(self.graph.filter_anchor())
+
+    def _on_present_year_edited(self, year: int):
+        """BETA2-UI2-10: año presente tecleado en el pill → persiste vía
+        era_controller (la UI del pill solo emite; portado del antiguo
+        CreationFilterPanel._apply_present_year)."""
+        controller = getattr(self, "era_controller", None)
+        if controller is None:
+            return
+        result = controller.set_present_year(int(year))
+        if isinstance(result, Error):
+            _apptrace(f"WS present_year_edit error={result.error}")
+            return
+        self.refresh()
 
     def _open_ring_panel(self):
         _apptrace("WS open_ring_panel")
@@ -5460,16 +5958,8 @@ class CreationWorkspace(QWidget):
         self.refresh()
 
     def _sync_filter_indicator(self):
-        btn = getattr(self, "_filter_btn", None)
-        if btn is None:
-            return
-        count = self.graph.active_filter_count()
-        if count:
-            btn.setText(f"Filtros {count}")
-            btn.setToolTip(f"Filtros visuales ({count} activo(s))")
-        else:
-            btn.setText("Filtros")
-            btn.setToolTip("Filtros visuales")
+        # BETA2-UI2-10: el indicador es el badge del embudo del pill temporal.
+        self.graph.set_filter_badge_count(self.graph.active_filter_count())
 
     def apply_creation_filter(self, filter_state: VisualFilterState):
         self.graph.apply_visual_filter(filter_state)
@@ -5479,6 +5969,37 @@ class CreationWorkspace(QWidget):
         self.graph.clear_visual_filters()
         self._sync_filter_indicator()
 
+    # BETA2-FOCO-33: filtros de la Cronología (réplica del Mapa, campos aplicables).
+    def _open_chrono_filter_popover(self):
+        # BETA2-FOCO-38: la Cronología solo filtra por Tipo y Anillo.
+        snap = self.chrono.filter_snapshot()
+        initial = VisualFilterState(
+            entity_types=tuple(snap["entity_types"]),
+            layer_ids=tuple(snap["ring_ids"]),
+        )
+        popover = FilterPopover(
+            project_provider=self._get_active_project,
+            initial_state=initial,
+            on_apply=self._apply_chrono_filter,
+            on_clear=self._clear_chrono_filter,
+            mode="chrono",
+            parent=self,
+        )
+        self._chrono_filter_popover = popover
+        popover.open_below(self.chrono.filter_anchor())
+
+    def _apply_chrono_filter(self, filter_state: VisualFilterState):
+        # BETA2-FOCO-38: solo Tipo (entity_types) y Anillo (layer_ids).
+        self.chrono.apply_scope_filter(
+            entity_types=filter_state.entity_types,
+            ring_ids=filter_state.layer_ids,
+        )
+        self.chrono.set_filter_badge_count(self.chrono.active_filter_count())
+
+    def _clear_chrono_filter(self):
+        self.chrono.clear_scope_filter()
+        self.chrono.set_filter_badge_count(self.chrono.active_filter_count())
+
     def focus_search_result(self, result: GraphSearchResult) -> bool:
         if result.item_kind == "relation":
             return self.graph.focus_relation(result.item_id)
@@ -5486,7 +6007,7 @@ class CreationWorkspace(QWidget):
             return self.graph.focus_tree(result.item_id)
         return self.graph.focus_node(result.item_id)
 
-    # ── BETA1-L02b: barra de búsqueda flotante (tecla 'd') ───────────────────
+    # ── BETA1-L02b / BETA2-UI2-10: barra de búsqueda flotante (Ctrl+B) ───────
 
     def _open_search_overlay(self):
         """Muestra la barra de búsqueda flotante y le da el foco (no abre el drawer)."""
@@ -6124,8 +6645,8 @@ class CreationWorkspace(QWidget):
         # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         # that yanked the camera on every contextual creation.
         self.graph.canvas.reveal_entity(entity_id)
-        # Open detail panel for editing
-        self._open_node_panel(entity_id, is_new=True)
+        # BETA2-CLEANUP-PANELES: la edición vive en el Foco (no en el cajón).
+        self._focus_new_entity(entity_id)
         return entity_id
 
     def _create_entity_with_payload(self, data: dict, *, open_panel: bool = True) -> str:
@@ -6142,7 +6663,7 @@ class CreationWorkspace(QWidget):
         self.refresh()
         self.graph.canvas.reveal_entity(entity_id)
         if open_panel:
-            self._open_node_panel(entity_id, is_new=True)
+            self._focus_new_entity(entity_id)
         return entity_id
 
     def _create_tree_on_graph(self) -> str:
@@ -6173,7 +6694,8 @@ class CreationWorkspace(QWidget):
         self.refresh()
         # BETA1-B02: reveal without zooming - focus_entity did a fitInView
         self.graph.canvas.reveal_entity(entity_id)
-        self._open_tree_panel(entity_id, is_new=True)
+        # BETA2-CLEANUP-PANELES: la edición de ramas vive en el Foco.
+        self._focus_new_entity(entity_id)
         return entity_id
 
     def _create_entity_in_tree(self, tree_id: str):
@@ -6192,7 +6714,7 @@ class CreationWorkspace(QWidget):
         entity_id = self._create_entity_with_payload(payload, open_panel=False)
         if entity_id and tree_id:
             self._assign_node_to_tree(entity_id, tree_id)
-            self._open_node_panel(entity_id, is_new=True)
+            self._focus_new_entity(entity_id)
 
     def _create_subtree_in_tree(self, tree_id: str):
         """BETA1-B01 'Crear subrama': create tree + assign to parent tree."""
@@ -6219,7 +6741,7 @@ class CreationWorkspace(QWidget):
         self.graph.canvas.reveal_entity(entity_id)
         if entity_id and tree_id:
             self._assign_node_to_tree(entity_id, tree_id)
-            self._open_tree_panel(entity_id, is_new=True)
+            self._focus_new_entity(entity_id)
 
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
@@ -6254,66 +6776,55 @@ class CreationWorkspace(QWidget):
         self.refresh()
 
     def _open_ring_create_panel(self):
-        """BETA1-B03: 'Crear anillo...' - reuses the existing layer panel."""
+        """BETA2-CLEANUP-PANELES: 'Crear anillo' → RingPanel unificado (crear)."""
         if self.layer_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
             return
-        panel = LayerQuickCreatePanel(self.layer_controller, on_created=self.refresh)
+        panel = RingPanel(self.layer_controller, self.refresh)
         self.ctx.drawer.set_content(panel, title="Nuevo anillo")
         self.ctx.drawer.open()
 
     def _open_ring_edit_panel(self, ring_id: str):
-        """BETA1-B03: 'Editar anillo...' - name and order via LayerController."""
+        """BETA2-CLEANUP-PANELES: 'Editar anillo' → RingPanel unificado (editar)."""
         if self.layer_controller is None or self.ctx.drawer is None:
             self.ctx.log("error", "No se pudo editar anillo: servicio no disponible")
             return
-        panel = RingEditPanel(self.layer_controller, ring_id, on_saved=self.refresh)
+        panel = RingPanel(self.layer_controller, self.refresh, ring_id=ring_id)
         self.ctx.drawer.set_content(panel, title="Editar anillo")
         self.ctx.drawer.open()
 
     def _open_era_create_panel(self):
-        """BETA1-G03: 'Nueva era' desde el panel de filtros."""
-        if self.era_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo crear era: servicio no disponible")
-            return
-        panel = EraQuickCreatePanel(self.era_controller, on_created=self.refresh)
-        self.ctx.drawer.set_content(panel, title="Nueva era")
-        self.ctx.drawer.open()
+        """BETA2-CAL: 'Crear era…' abre el editor de calendario unificado (las eras se
+        crean por duración encadenada, no por años absolutos sueltos)."""
+        self._open_calendar_editor("Nueva era")
 
-    def _open_era_edit_panel(self, era_id: str):
-        """BETA1-G03: 'Editar era' — nombre y límites via EraController.
+    def _open_era_edit_panel(self, era_id: str):  # noqa: ARG002 - firma estable del signal
+        """BETA2-CAL: cualquier era se edita en el editor de calendario unificado.
 
-        Las eras de CALENDARIO COMPLETO se derivan del calendario (viven en
-        metadata.era_lengths) y NO tienen una Era de dominio que editar: su
-        era_id llega vacío. Editarlas = abrir la configuración del calendario,
-        que es donde se definen. (Antes el clic moría: EraEditPanel con id vacío
-        no encontraba nada y, como esas bandas cubren todo el lienzo, el lienzo
-        entero quedaba 'muerto' al clic — BETA1-UX8.)"""
-        if self.ctx.drawer is None:
-            return
-        if not str(era_id or "").strip():
-            if self._chronology_ctrl is None:
-                self.ctx.log(
-                    "info",
-                    "Las eras de este proyecto se definen en la configuración del calendario",
-                )
-                return
-            from hosts.DesktopHostPySide.widgets.chronology_config_panel import (
-                ChronologyConfigPanel,
+        Ya no existe un editor de una-era que escriba años absolutos directos (evitaba
+        el modelo paralelo): todas las eras se definen encadenadas por duración en un
+        único sitio. El clic en cualquier banda abre la configuración del calendario.
+        """
+        self._open_calendar_editor("Calendario y eras")
+
+    def _open_calendar_editor(self, title: str) -> None:
+        if self._chronology_ctrl is None:
+            self.ctx.log(
+                "info",
+                "Las eras de este proyecto se definen en la configuración del calendario",
             )
+            return
+        from hosts.DesktopHostPySide.widgets.calendar_editor_dialog import (
+            CalendarEditorDialog,
+        )
 
-            panel = ChronologyConfigPanel(
-                self._chronology_ctrl, on_saved=self.refresh, compact=True
-            )
-            self.ctx.drawer.set_content(panel, title="Calendario y eras")
-            self.ctx.drawer.open()
-            return
-        if self.era_controller is None:
-            self.ctx.log("error", "No se pudo editar era: servicio no disponible")
-            return
-        panel = EraEditPanel(self.era_controller, era_id, on_saved=self.refresh)
-        self.ctx.drawer.set_content(panel, title="Editar era")
-        self.ctx.drawer.open()
+        # BETA2-CAL-06: el calendario se edita en un diálogo ancho centrado (la
+        # timeline y las rejillas de meses/semana se recortaban en el cajón).
+        dialog = CalendarEditorDialog(
+            self._chronology_ctrl, on_saved=self.refresh, parent=self
+        )
+        dialog.setWindowTitle(title)
+        dialog.exec()
 
     def _delete_ring(self, ring_id: str):
         """BETA1-B03: 'Eliminar anillo' - soft delete (hide_layer) after
@@ -6396,32 +6907,10 @@ class CreationWorkspace(QWidget):
         self.ctx.log("info", "Elemento extraído de la rama")
         self.refresh()
 
-    def _on_node_converted_to_branch(self, entity_id: str):
-        """Callback after a leaf entity is converted to branch (container/rama).
-        Opens the tree detail panel so the user can configure the new branch."""
-        self._open_tree_panel(entity_id)
-
-    def _open_tree_panel(self, entity_id: str, *, is_new: bool = False):
-        if self.entity_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo abrir el panel de rama")
-            return
-        from hosts.DesktopHostPySide.widgets.tree_detail_panel import TreeDetailPanel
-
-        panel = TreeDetailPanel(
-            self.ctx,
-            self.entity_controller,
-            self.relation_controller,
-            entity_id,
-            on_saved=self.refresh,
-            ai_controller=self.ai_context_controller,
-            is_new=is_new,
-            on_focus_tree=self.focus_tree_scope,
-            milestone_controller=self._milestone_ctrl,
-            on_open_milestones=self._open_milestone_chronology_view,
-            on_suggest_milestone=self._suggest_related_milestone,
-        )
-        self.ctx.drawer.set_content(panel, title="Rama")
-        self.ctx.drawer.open()
+    # BETA2-CLEANUP-PANELES: retirados _on_node_converted_to_branch y
+    # _open_tree_panel — la edición de ramas vive en el Foco (NodeDetailPanel
+    # variant="foco"); la conversión hoja→rama se hace desde el selector de
+    # tipo de la Ficha en el Foco.
 
     # Existing workspace methods (preserved)
 
@@ -6567,6 +7056,20 @@ class CreationWorkspace(QWidget):
         # layers; explicit view toggles are handled by their own toolbar routes.
 
     def refresh(self):
+        # BETA2-IMG: la carpeta de assets (retratos) sigue a la ruta actual del
+        # proyecto — se refija en cada refresh (abrir/crear/guardar-como).
+        current = getattr(self.ctx.project_controller, "current_path", None)
+        assets_root = assets_root_for(Path(current)) if current else None
+        try:
+            self.graph.set_assets_root(assets_root)
+        except RuntimeError:
+            pass
+        # BETA2-HOVER-03: la cronología resuelve retratos para su tarjeta flotante
+        # de hover (misma carpeta de assets que el Mapa/Foco).
+        try:
+            self.chrono.set_assets_root(assets_root)
+        except (RuntimeError, AttributeError):
+            pass
         # BETA2-UX-02: las vistas-tabla legacy se eliminaron; solo el grafo se
         # refresca aquí (Foco/Cronología se reconstruyen en sus propias rutas).
         for widget in [self.graph]:
@@ -6582,7 +7085,13 @@ class CreationWorkspace(QWidget):
             self.chrono.set_project(self._get_active_project())
         # BETA2-FOCO: refrescar la Creación con proyecto activo entra en Foco
         # (vista principal), centrando la última entidad trabajada.
-        if getattr(self, "foco", None) is not None and self._get_active_project() is not None:
+        # PLAY-13: salvo en pleno recorrido — un refresh entrante (autosave de
+        # un panel, guardado del proyecto) no debe expulsar al usuario de Play.
+        if (
+            getattr(self, "foco", None) is not None
+            and self._get_active_project() is not None
+            and self._active_view != "play"
+        ):
             self.set_active_view("foco")
         self._load_project_budget_default()
         self._rehydrate_seed_notifications()  # SEM02: semillas pendientes al recargar
@@ -6620,6 +7129,7 @@ class CreationWorkspace(QWidget):
                 layer.add(cid, label)
         self.graph.rehydrate_candidate_seeds(pending_ids)  # SEM04: semillas en el grafo
         self._sync_foco_seeds()  # FOCO-13: rehidratación espacial en Foco (idempotente)
+        self._request_thirsty_refresh()  # JARDIN-03: badge «💧 N» al día
 
     def open_graph(self):
         """Graph is always visible - this is now a no-op."""
@@ -6659,49 +7169,14 @@ class CreationWorkspace(QWidget):
         if self.layer_controller is None or drawer is None:
             self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
             return
-        panel = LayerQuickCreatePanel(self.layer_controller, on_created=self.refresh)
+        panel = RingPanel(self.layer_controller, self.refresh)
         drawer.set_content(panel, title="Nuevo anillo")
         drawer.open()
 
-    def _open_node_panel(self, entity_id: str, *, is_new: bool = False):
-        # BETA2-FOCO-14: el Mapa es SOLO LECTURA (decisión de producto): click
-        # → ficha resumida no editable; la edición vive en Foco (doble click).
-        if getattr(self, "_active_view", "") == "concentric" and not is_new:
-            self._open_map_summary(entity_id)
-            return
-        self._open_node_panel_editor(entity_id, is_new=is_new)
-
-    def _open_node_panel_editor(self, entity_id: str, *, is_new: bool = False):
-        if self.entity_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo abrir el panel de nodo")
-            return
-        # Route contenedor entities to tree detail panel
-        entity = self._entity_by_id(entity_id)
-        if entity is not None:
-            etype = str(
-                getattr(
-                    getattr(entity, "entity_type", ""), "value", getattr(entity, "entity_type", "")
-                )
-            )
-            if etype == "contenedor":
-                self._open_tree_panel(entity_id)
-                return
-        panel = NodeDetailPanel(
-            self.ctx,
-            self.entity_controller,
-            entity_id,
-            on_saved=self.refresh,
-            ai_controller=self.ai_context_controller,
-            relation_controller=self.relation_controller,
-            milestone_controller=self._milestone_ctrl,
-            is_new=is_new,
-            on_focus_neighborhood=lambda eid=entity_id: self.focus_neighborhood(eid, kind="entity"),
-            on_convert_to_branch=self._on_node_converted_to_branch,
-            on_open_milestones=self._open_milestone_chronology_view,
-            on_suggest_milestone=self._suggest_related_milestone,
-        )
-        self.ctx.drawer.set_content(panel, title="Nodo")
-        self.ctx.drawer.open()
+    # BETA2-CLEANUP-PANELES: retirados _open_node_panel y _open_node_panel_editor
+    # (cajón «Nodo»/«Rama», obsoleto). Toda la edición de entidades vive en el
+    # Modo Foco (ver _focus_new_entity y _on_map_entity_to_foco). NodeDetailPanel
+    # sigue vivo, pero solo como pestaña Ficha del Foco (variant="foco").
 
     def _open_relation_panel(self, relation_id: str, *, is_new: bool = False):
         if self.relation_controller is None or self.ctx.drawer is None:
@@ -6723,7 +7198,9 @@ class CreationWorkspace(QWidget):
             self.relation_controller,
             relation_id,
             on_saved=self.refresh,
-            ai_controller=self.ai_context_controller,
+            # BETA2-WIKI-10: la barra IA del panel de relación (generar/refinar sugerencia
+            # de texto) y la sugerencia de hito quedan RETIRADAS de la UI.
+            ai_controller=self.ai_context_controller if _LEGACY_AI_UI else None,
             entity_controller=self.entity_controller,
             milestone_controller=self._milestone_ctrl,
             is_new=is_new,
@@ -6731,7 +7208,7 @@ class CreationWorkspace(QWidget):
                 rid, kind="relation"
             ),
             on_open_milestones=self._open_milestone_chronology_view,
-            on_suggest_milestone=self._suggest_related_milestone,
+            on_suggest_milestone=self._suggest_related_milestone if _LEGACY_AI_UI else None,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()

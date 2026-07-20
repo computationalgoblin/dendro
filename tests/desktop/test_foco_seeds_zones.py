@@ -38,7 +38,7 @@ def _view_with_center():
     from hosts.DesktopHostPySide.widgets.foco.foco_view import FocoView
 
     view = FocoView(project_provider=lambda: project_service.active_project)
-    view.center_entity(center.id, push_history=False)
+    view.center_entity(center.id)
     return project_service, view, center
 
 
@@ -140,7 +140,7 @@ class TestWorkspaceWiring:
         assert "foco_widget.canvas.bloom_seed(candidate_id)" in source
         assert "foco_widget.canvas.wither_seed(candidate_id)" in source
         # Aceptar mantiene el foco: recentra la MISMA entidad (sin push).
-        keep_focus = "self.foco.center_entity(self.foco.current_entity_id(), push_history=False)"
+        keep_focus = "self.foco.center_entity(self.foco.current_entity_id())"
         assert keep_focus in source
 
     def test_review_routes_and_mode_switch_resync(self):

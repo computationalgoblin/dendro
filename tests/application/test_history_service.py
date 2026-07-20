@@ -30,6 +30,36 @@ class TestHistoryService:
         assert hasattr(p, 'history_entries')
         assert isinstance(p.history_entries, list)
 
+    def test_observation_recorrido_round_trips(self):
+        """PLAY-18: el tipo nuevo se graba, filtra y round-trippea sin migración."""
+        from packages.domain.source_history import HistoryEntry as DomainEntry
+        from packages.domain.source_history import HistoryEventType
+
+        p = Project(name="Test"); ps = MagicMock(spec=ProjectService); ps.active_project = p
+        hs = HistoryService(project_service=ps)
+        hs.record(
+            HistoryEventType.OBSERVACION_RECORRIDO,
+            "Lectura del hito",
+            affected_entity_ids=["e1"],
+            change_origin="recorrido_cronologico",
+            metadata={"milestone_id": "h1"},
+        )
+        entries = hs.get_history(
+            entity_id="e1", event_type=HistoryEventType.OBSERVACION_RECORRIDO
+        )
+        assert len(entries) == 1
+        revived = DomainEntry.from_dict(entries[0].to_dict())
+        assert revived.event_type is HistoryEventType.OBSERVACION_RECORRIDO
+        assert revived.change_origin == "recorrido_cronologico"
+
+    def test_unknown_event_type_falls_back_without_error(self):
+        """PLAY-18: un dict con event_type desconocido (proyecto viejo) no explota."""
+        from packages.domain.source_history import HistoryEntry as DomainEntry
+        from packages.domain.source_history import HistoryEventType
+
+        revived = DomainEntry.from_dict({"event_type": "tipo_futuro_desconocido"})
+        assert revived.event_type is HistoryEventType.CREACION_ENTIDAD  # fallback tolerante
+
 class TestRelationTypeExtended:
     def test_11_new_values(self):
         values = RelationType._value2member_map_

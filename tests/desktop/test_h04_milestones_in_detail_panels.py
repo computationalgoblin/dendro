@@ -25,7 +25,6 @@ pytestmark = pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")
 ROOT = Path(__file__).resolve().parents[2]
 RELATED_SOURCE = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "related_milestones_panel.py"
 NODE_SOURCE = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "node_detail_panel.py"
-TREE_SOURCE = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "tree_detail_panel.py"
 REL_SOURCE = ROOT / "hosts" / "DesktopHostPySide" / "widgets" / "relation_detail_panel.py"
 WORKSPACES = ROOT / "hosts" / "DesktopHostPySide" / "views" / "workspaces.py"
 
@@ -138,17 +137,17 @@ def test_node_detail_source_no_longer_embeds_hitos_section():
     assert "RelatedMilestonesPanel" not in text
     assert "self.related_milestones_panel = None" in text
 
+    # BETA2-FOCO-27: clicar un hito abre según el modo — panel compacto de lectura
+    # a la derecha (descripción) o cajón inferior editable (edición).
     lifeline = (NODE_SOURCE.parent / "foco" / "foco_view.py").read_text(encoding="utf-8")
     assert (
-        "self.lifeline.milestoneActivated.connect(self._open_milestone_adjacent)" in lifeline
+        "self.lifeline.milestoneActivated.connect(self._open_milestone_for_mode)" in lifeline
     )
 
 
-def test_tree_detail_source_mounts_causes_hitos_section():
-    text = TREE_SOURCE.read_text(encoding="utf-8")
-
-    assert "RelatedMilestonesPanel" in text
-    assert 'target_kind="branch"' in text
+# BETA2-CLEANUP-PANELES: test_tree_detail_source_mounts_causes_hitos_section se
+# retiró — tree_detail_panel.py se eliminó; en el Foco los hitos de la rama viven
+# en la banda de línea de vida (FocoLifelineBand), no en un RelatedMilestonesPanel.
 
 
 def test_relation_detail_source_mounts_causes_hitos_section():
@@ -281,7 +280,6 @@ def test_sources_do_not_instantiate_graph_nodes_or_touch_physics():
     text = "\n".join([
         RELATED_SOURCE.read_text(encoding="utf-8"),
         NODE_SOURCE.read_text(encoding="utf-8"),
-        TREE_SOURCE.read_text(encoding="utf-8"),
         REL_SOURCE.read_text(encoding="utf-8"),
         WORKSPACES.read_text(encoding="utf-8"),
     ])

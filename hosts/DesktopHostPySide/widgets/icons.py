@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 from hosts.DesktopHostPySide.widgets.design_system import INK_SOFT
+from packages.domain.entity_taxonomy import is_branch_type
 
 _ICONS_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons"
 _RENDER_SCALE = 2  # render a 2x para nitidez en pantallas HiDPI
@@ -82,6 +83,23 @@ def pixmap(name: str, *, size: int = 20, color: str | None = INK_SOFT) -> QPixma
 def icon(name: str, *, color: str | None = INK_SOFT, size: int = 20) -> QIcon:
     """Devuelve un QIcon del icono *name*, teñido a *color*."""
     return QIcon(pixmap(name, size=size, color=color))
+
+
+def entity_glyph_name(entity_type: object) -> str:
+    """Nombre del icono según sea rama o hoja (FOCO-28).
+
+    Rama (facción, cultura, religión, institución, sistema mágico, localización,
+    contenedor) ⇒ ``entity_branch``; el resto (personaje, criatura, objeto,
+    tecnología, idioma…) ⇒ ``entity_leaf``. Deriva de la taxonomía del dominio.
+    """
+    return "entity_branch" if is_branch_type(entity_type) else "entity_leaf"
+
+
+def entity_glyph_pixmap(
+    entity_type: object, *, size: int = 16, color: str | None = INK_SOFT
+) -> QPixmap:
+    """QPixmap del glifo rama/hoja del *entity_type* dado, teñido a *color*."""
+    return pixmap(entity_glyph_name(entity_type), size=size, color=color)
 
 
 def set_button_icon(button, name: str, *, color: str | None = INK_SOFT, size: int = 18) -> None:

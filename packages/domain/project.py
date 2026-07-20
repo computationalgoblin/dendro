@@ -18,6 +18,8 @@ from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.narrative_framework import NarrativeFramework
 from packages.domain.project_chronology import ProjectChronology
 from packages.domain.chronology_walk import ChronologyWalkReport, ChronologyWalkSession
+from packages.domain.narrative_memory import NarrativeMemory
+from packages.domain.structured_reference import StructuredReference
 from packages.domain.temporal_models import TimelineEvent
 from packages.domain.writing_models import WritingUnit
 from packages.domain.campaign_models import Campaign, PlayerCharacterProfile, CampaignClock
@@ -156,6 +158,18 @@ class Project:
     # ── Modo Creación Cronológica (CRON) ──
     chronology_walk_sessions: list[ChronologyWalkSession] = field(default_factory=list)
     chronology_walk_reports: list[ChronologyWalkReport] = field(default_factory=list)
+
+    # ── Memoria narrativa viva (BETA2-MEM) ──
+    # Estado editorial DERIVADO del canon (resúmenes, contradicciones, huecos,
+    # causalidad) por nivel: proyecto/entidad/relación/hito/anillo/rama + contexto.
+    # No es canon: la IA nunca lo convierte en canon. Ver docs/contracts/memoria_narrativa.md.
+    narrative_memories: list[NarrativeMemory] = field(default_factory=list)
+
+    # ── @menciones estructuradas (BETA2-MEM-03) ──
+    # Referencias resueltas (sidecar) derivadas de las @menciones que el usuario
+    # escribe en campos de prosa: puntero estable (target_kind, target_id) por id,
+    # resistente a renombrado. Alimenta backlinks/impacto/RAG. No es canon.
+    structured_references: list[StructuredReference] = field(default_factory=list)
 
     # ── Jardín narrativo: riego de entidades (BETA2-FOCO) ──
     # Historial de diagnósticos IA por entidad. El "secado" vive a nivel de
@@ -300,6 +314,10 @@ class Project:
             "project_chronology": self.project_chronology.to_dict(),
             "chronology_walk_sessions": [s.to_dict() for s in self.chronology_walk_sessions],
             "chronology_walk_reports": [r.to_dict() for r in self.chronology_walk_reports],
+            # ── Memoria narrativa viva (BETA2-MEM) ──
+            "narrative_memories": [m.to_dict() for m in self.narrative_memories],
+            # ── @menciones estructuradas (BETA2-MEM-03) ──
+            "structured_references": [r.to_dict() for r in self.structured_references],
             # ── Jardín narrativo: riego (BETA2-FOCO) ──
             "watering_diagnostics": [d.to_dict() for d in self.watering_diagnostics],
             "watering_paused_entity_ids": list(self.watering_paused_entity_ids),
@@ -505,6 +523,24 @@ class Project:
                     if isinstance(r, dict)
                 ]}
                 if "chronology_walk_reports" in data else {}
+            ),
+            # ── Memoria narrativa viva (BETA2-MEM) ──
+            **(
+                {"narrative_memories": [
+                    NarrativeMemory.from_dict(m)
+                    for m in data.get("narrative_memories", [])
+                    if isinstance(m, dict)
+                ]}
+                if "narrative_memories" in data else {}
+            ),
+            # ── @menciones estructuradas (BETA2-MEM-03) ──
+            **(
+                {"structured_references": [
+                    StructuredReference.from_dict(r)
+                    for r in data.get("structured_references", [])
+                    if isinstance(r, dict)
+                ]}
+                if "structured_references" in data else {}
             ),
             # ── Jardín narrativo: riego (BETA2-FOCO) ──
             **(

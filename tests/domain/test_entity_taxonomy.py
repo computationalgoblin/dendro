@@ -51,6 +51,33 @@ def test_leaf_and_branch_are_distinct_subsets():
     )
 
 
+def test_is_branch_type_derives_from_type():
+    # UI2-20: la ramitud se deriva del tipo. Los 6 tipos de rama SON rama.
+    for branch in tax.BRANCH_ENTITY_TYPES:
+        assert tax.is_branch_type(branch)
+        assert tax.is_branch_type(branch.value)  # acepta también el string
+    # El rol legado CONTENEDOR se sigue reconociendo (proyectos antiguos).
+    assert tax.is_branch_type(EntityType.CONTENEDOR)
+    assert tax.is_branch_type("contenedor")
+    # Las hojas y los tipos personalizados NO son rama.
+    for leaf in tax.LEAF_ENTITY_TYPES:
+        assert not tax.is_branch_type(leaf)
+    assert not tax.is_branch_type("personaje")
+    assert not tax.is_branch_type("un_tipo_personalizado")
+    assert not tax.is_branch_type(None)
+
+
+def test_is_branch_reads_entity_type():
+    from packages.domain.entity import NarrativeEntity
+
+    rama = NarrativeEntity(name="Facción", entity_type=EntityType.FACCION)
+    contenedor = NarrativeEntity(name="Orden", entity_type=EntityType.CONTENEDOR)
+    hoja = NarrativeEntity(name="Héroe", entity_type=EntityType.PERSONAJE)
+    assert tax.is_branch(rama)
+    assert tax.is_branch(contenedor)
+    assert not tax.is_branch(hoja)
+
+
 def test_beings_are_leaf_only():
     # Los seres (con naturaleza temporal) solo son hoja, nunca rama.
     for being in tax.BEING_TYPES:

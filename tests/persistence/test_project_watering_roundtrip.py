@@ -13,6 +13,7 @@ from packages.domain.entity import CanonState, NarrativeEntity
 from packages.domain.project import Project
 from packages.domain.result import Ok
 from packages.domain.watering import WateringDiagnostic
+from packages.persistence.schema import CURRENT_SCHEMA_VERSION
 from packages.persistence.store import ProjectStore
 
 
@@ -92,14 +93,14 @@ class TestWateringRoundtrip:
         assert loaded.watering_paused_entity_ids == []
         assert loaded.entities[0].name == "Eldrin"
 
-    def test_v34_roundtrip_without_migration(self, tmp_path):
-        # Guardar (v34) y recargar: no debe pasar por migración ni perder nada.
+    def test_current_version_roundtrip_without_migration(self, tmp_path):
+        # Guardar (versión actual) y recargar: no debe pasar por migración ni perder nada.
         store = ProjectStore()
         path = tmp_path / "nuevo.json"
         store.save(_project_with_watering(), path)
 
         raw = json.loads(path.read_text(encoding="utf-8"))
-        assert raw["schema_version"] == 34
+        assert raw["schema_version"] == CURRENT_SCHEMA_VERSION
 
         reloaded = store.load(path)
         assert isinstance(reloaded, Ok)

@@ -29,14 +29,13 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from hosts.DesktopHostPySide.widgets.calendar_date_picker import CalendarDatePicker
+from hosts.DesktopHostPySide.widgets.calendar_editor import CalendarEditor
 from hosts.DesktopHostPySide.widgets.creative_config_panel import (
     FORMATO_SUGERENCIAS,
     GENERO_SUGERENCIAS,
@@ -60,10 +59,12 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
 )
 from hosts.DesktopHostPySide.widgets.field_help import FieldHelp
+from types import SimpleNamespace
+
+from packages.application.calendar_service import CalendarService
 from packages.domain.creative_config import ESTADO_OPCIONES
 from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
 from packages.domain.project import Project
-from packages.domain.project_chronology import ProjectChronology
 
 
 def _names_from_length_text(text: str) -> list[str]:
@@ -482,102 +483,24 @@ class ProjectWizard(QFrame):
 
     def _step_chronology(self) -> QWidget:
         page, box = self._page()
-        self.chrono_mode = QComboBox()
-        for raw, label in [
-            ("none", "Sin calendario"),
-            ("vague_periods", "Periodos vagos (Antigüedad, Actualidad…)"),
-            ("full_calendar", "Calendario completo (eras, meses, días)"),
-        ]:
-            self.chrono_mode.addItem(label, raw)
-        self.chrono_mode.currentIndexChanged.connect(self._sync_chrono_visibility)
-        box.addWidget(_field_block("¿Cómo mide el tiempo tu mundo?", self.chrono_mode))
+        intro = QLabel(
+            "Define el tiempo de tu mundo: crea eras y su duración, marca la era presente "
+            "y, si quieres, despliega Meses y Semana para un calendario exacto."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color: {INK_MUTED}; background: transparent; border: none;")
+        box.addWidget(intro)
 
-        self.chrono_name = QLineEdit()
-        self.chrono_name.setPlaceholderText("Nombre del calendario")
-        self._chrono_name_block = _field_block("Nombre del calendario", self.chrono_name)
-        box.addWidget(self._chrono_name_block)
-
-        self.chrono_desc = _make_textarea("", 56)
-        self.chrono_desc.setPlaceholderText("Reglas temporales o contexto del calendario")
-        self._chrono_desc_block = _field_block("Descripción", self.chrono_desc)
-        box.addWidget(self._chrono_desc_block)
-
-        self.chrono_periods = _make_textarea("", 74)
-        self.chrono_periods.setPlaceholderText("Antigüedad\nHistoria reciente\nActualidad")
-        self._periods_block = _field_block("Periodos vagos", self.chrono_periods, "Uno por línea.")
-        box.addWidget(self._periods_block)
-
-        self.chrono_eras = _make_textarea("", 74)
-        self.chrono_eras.setPlaceholderText("Era Antigua: 900\nEra Imperial: 1200\nEra de la Ruptura: 40")
-        self.chrono_eras.textChanged.connect(self._sync_chrono_picker)
-        self._eras_block = _field_block("Eras pasadas", self.chrono_eras, "Nombre: duración (años).")
-        box.addWidget(self._eras_block)
-
-        self.chrono_months = _make_textarea("", 84)
-        self.chrono_months.setPlaceholderText("Enero: 31\nFebrero: 28\nMarzo: 31…")
-        self.chrono_months.textChanged.connect(self._sync_chrono_picker)
-        self._months_block = _field_block("Meses", self.chrono_months, "Nombre: días.")
-        box.addWidget(self._months_block)
-
-        self.chrono_weekdays = _make_textarea("", 62)
-        self.chrono_weekdays.setPlaceholderText("Lunes\nMartes\nMiércoles…")
-        self._weekdays_block = _field_block("Días de la semana", self.chrono_weekdays)
-        box.addWidget(self._weekdays_block)
-
-        self.chrono_days = QSpinBox()
-        self.chrono_days.setRange(1, 999)
-        self.chrono_days.setValue(30)
-        self._days_block = _field_block("Días por mes (por defecto)", self.chrono_days)
-        box.addWidget(self._days_block)
-
-        self.chrono_year = QSpinBox()
-        self.chrono_year.setRange(-999999, 999999)
-        self.chrono_year.setValue(1)
-        self._year_block = _field_block("Año actual", self.chrono_year)
-        box.addWidget(self._year_block)
-
-        self.chrono_date = CalendarDatePicker(compact=True)
-        self.chrono_date.setObjectName("wizardCurrentCalendarDatePicker")
-        self._date_block = _field_block("Fecha actual", self.chrono_date)
-        box.addWidget(self._date_block)
+        self.chrono_editor = CalendarEditor(show_identity=True)
+        self.chrono_editor.setObjectName("wizardCalendarEditor")
+        box.addWidget(self.chrono_editor)
 
         note = QLabel("La IA podrá sugerir cambios después, pero nada se aplica sin tu revisión.")
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;")
         box.addWidget(note)
         box.addStretch(1)
-        self._sync_chrono_visibility()
         return page
-
-    def _sync_chrono_visibility(self):
-        mode = str(self.chrono_mode.currentData() or "none")
-        vague = mode == "vague_periods"
-        full = mode == "full_calendar"
-        for blk in (self._chrono_name_block, self._chrono_desc_block):
-            blk.setVisible(mode != "none")
-        self._periods_block.setVisible(vague)
-        for blk in (self._eras_block, self._months_block, self._weekdays_block,
-                    self._days_block, self._year_block, self._date_block):
-            blk.setVisible(full)
-        if full:
-            self._sync_chrono_picker()
-
-    def _sync_chrono_picker(self):
-        if not hasattr(self, "chrono_date"):
-            return
-        current = self.chrono_date.date()
-        eras = _names_from_length_text(self.chrono_eras.toPlainText())
-        months = _names_from_length_text(self.chrono_months.toPlainText())
-        weekdays = _names_from_length_text(self.chrono_weekdays.toPlainText())
-        self.chrono_date.set_calendar({
-            "mode": "full_calendar",
-            "eras": eras, "past_eras": eras, "months": months, "weekdays": weekdays,
-            "era_lengths": self.chrono_eras.toPlainText(),
-            "month_lengths": self.chrono_months.toPlainText(),
-            "days_per_month": self.chrono_days.value(),
-            "current_year": self.chrono_year.value(),
-        })
-        self.chrono_date.set_date(current)
 
     # ── recogida de datos ─────────────────────────────────────────────────
 
@@ -608,33 +531,8 @@ class ProjectWizard(QFrame):
         }
 
     def _collect_chronology(self) -> dict:
-        mode = str(self.chrono_mode.currentData() or "none")
-        periods = [line.strip() for line in self.chrono_periods.toPlainText().splitlines() if line.strip()]
-        eras = _names_from_length_text(self.chrono_eras.toPlainText())
-        months = _names_from_length_text(self.chrono_months.toPlainText())
-        weekdays = _names_from_length_text(self.chrono_weekdays.toPlainText())
-        return {
-            "calendar_name": self._t(self.chrono_name),
-            "description": self._t(self.chrono_desc),
-            "calendar_system": mode,
-            "metadata": {
-                "mode": mode,
-                "periods": periods or (["Antiguedad", "Historia reciente", "Actualidad"] if mode == "vague_periods" else []),
-                "eras": eras,
-                "past_eras": eras,
-                "era_lengths": self.chrono_eras.toPlainText(),
-                "months": months,
-                "month_lengths": self.chrono_months.toPlainText(),
-                "weekdays": weekdays,
-                "days_per_month": self.chrono_days.value(),
-                "months_per_year": len(months),
-                "current_year": self.chrono_year.value(),
-                "current_date": self.chrono_date.date(),
-                "units": ["era", "ano", "mes", "dia"] if mode == "full_calendar" else (["periodo narrativo"] if mode == "vague_periods" else []),
-                "supports_exact_dates": mode == "full_calendar",
-                "date_resolution": "dia" if mode == "full_calendar" else ("periodo" if mode == "vague_periods" else ""),
-            },
-        }
+        # BETA2-CAL: payload del editor unificado para CalendarService.configure.
+        return self.chrono_editor.value()
 
     # ── volcado al proyecto ────────────────────────────────────────────────
 
@@ -670,47 +568,13 @@ class ProjectWizard(QFrame):
     def _truthy(value) -> bool:
         return bool(value)
 
-    def _apply_chronology(self, project: Project, chronology_data: dict) -> None:
-        if not isinstance(chronology_data, dict):
+    def _apply_chronology(self, project: Project, payload: dict) -> None:
+        # BETA2-CAL: reutiliza CalendarService (envolviendo el proyecto aún sin servicio
+        # activo) para escribir eras canónicas encadenadas + present_year + metadata.
+        if not isinstance(payload, dict) or not payload.get("eras"):
             return
-        current = getattr(project, "project_chronology", None) or ProjectChronology()
-        current.calendar_name = chronology_data.get("calendar_name", current.calendar_name)
-        current.description = chronology_data.get("description", current.description)
-        current.calendar_system = chronology_data.get("calendar_system", current.calendar_system)
-        metadata = dict(getattr(current, "metadata", {}) or {})
-        incoming_meta = chronology_data.get("metadata")
-        if isinstance(incoming_meta, dict):
-            metadata.update(incoming_meta)
-        mode = str(metadata.get("mode") or chronology_data.get("calendar_system") or "none")
-        if mode == "vague_periods":
-            periods = metadata.get("periods") or ["Antiguedad", "Historia reciente", "Actualidad"]
-            metadata.update({
-                "periods": list(periods), "eras": list(periods),
-                "units": ["periodo narrativo"], "supports_exact_dates": False,
-                "date_resolution": "periodo",
-            })
-        elif mode == "full_calendar":
-            months = metadata.get("months") or [
-                "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-            ]
-            weekdays = metadata.get("weekdays") or [
-                "Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo",
-            ]
-            metadata.update({
-                "months": list(months), "weekdays": list(weekdays),
-                "month_lengths": metadata.get("month_lengths") or {str(m): 30 for m in months},
-                "era_lengths": metadata.get("era_lengths") or {str(e): 100 for e in metadata.get("eras", [])},
-                "current_date": metadata.get("current_date") or {
-                    "era": str((metadata.get("eras") or ["Actualidad"])[-1]),
-                    "year": metadata.get("current_year", 1),
-                    "month": str(months[0] if months else ""), "day": 1,
-                },
-                "months_per_year": len(months), "units": ["era", "ano", "mes", "dia"],
-                "supports_exact_dates": True, "date_resolution": "dia",
-            })
-        current.metadata = metadata
-        project.project_chronology = current
+        service = CalendarService(SimpleNamespace(active_project=project))
+        service.configure(payload)
 
 
 __all__ = ["ProjectWizard"]

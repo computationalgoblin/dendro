@@ -72,8 +72,9 @@ def _workspace_for(ps: ProjectService) -> CreationWorkspace:
         canvas=SimpleNamespace(reveal_entity=lambda entity_id: None),
     )
     workspace.refresh = lambda: None
-    workspace._open_node_panel = lambda *args, **kwargs: None
-    workspace._open_tree_panel = lambda *args, **kwargs: None
+    # BETA2-CLEANUP-PANELES: la creación desde el Mapa entra en Foco; se stubbea
+    # _focus_new_entity (antes se stubbeaban los cajones _open_node/tree_panel).
+    workspace._focus_new_entity = lambda *args, **kwargs: None
     return workspace
 
 

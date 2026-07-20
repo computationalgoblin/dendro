@@ -58,11 +58,23 @@ def normalize_watering_payload(payload: Any) -> Result[dict[str, Any], str]:
     if isinstance(raw_risks, list):
         risks = [str(risk).strip() for risk in raw_risks if str(risk or "").strip()]
 
+    # BETA2-STRUCT-09: potencial de propagación causal (0-100) atribuido por la IA de forma
+    # semántica. OPCIONAL: si falta o no es numérico → None (el riego sigue igual). El detector
+    # estructural lo lee para proponer reubicaciones de anillo.
+    raw_pot = payload.get("potencial_causal")
+    potencial_causal: int | None = None
+    if raw_pot is not None:
+        try:
+            potencial_causal = _clamp_score(int(raw_pot))
+        except (TypeError, ValueError):
+            potencial_causal = None
+
     return Ok(
         {
             "scores": scores,
             "summary": summary,
             "metric_explanations": explanations,
             "risks": risks,
+            "potencial_causal": potencial_causal,
         }
     )

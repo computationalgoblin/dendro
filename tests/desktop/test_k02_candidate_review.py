@@ -76,6 +76,28 @@ def test_edit_candidate_shows_canon_before_value():
     assert any("valor viejo en canon" in t for t in readonly_texts)
 
 
+def test_multi_field_patch_renders_row_per_field_and_collects_types():
+    """PLAY-15: un patch edit_fields muestra una fila por campo (before/after)
+    y al aceptar recoge los valores editados conservando el tipo original."""
+    cand = _cand(
+        proposed_data={
+            "edit_kind": "entity_edits",
+            "edit_target_name": "Aurora",
+            "edit_fields": {"name": "Aurora la Roja", "birth_year": -80},
+        }
+    )
+    ctrl = _controller_with_entity("Aurora", "cuerpo en canon")
+    panel = CandidateReviewPanel(cand, ctrl)
+
+    assert set(panel._field_edits) == {"name", "birth_year"}
+    editor, _original = panel._field_edits["birth_year"]
+    editor.setPlainText("-90")
+    panel._apply_edits()
+
+    assert cand.proposed_data["edit_fields"]["birth_year"] == -90  # int conservado
+    assert cand.proposed_data["edit_fields"]["name"] == "Aurora la Roja"
+
+
 def test_edit_candidate_without_target_has_no_before_box():
     cand = _cand(
         proposed_data={

@@ -204,3 +204,119 @@ class TestCandidateService:
         assert candidate.metadata["review_required"] is True
         assert candidate.metadata["canonizes_automatically"] is False
         assert len(ps.active_project.causal_milestones) == 0
+
+
+class TestEditFieldsPatch:
+    """PLAY-15: candidatos de edición multi-campo (`edit_fields`)."""
+
+    def test_accept_entity_patch_updates_all_fields(self):
+        ps, svc, es, _ = _setup()
+        es.create_entity(
+            {"name": "Aldric", "entity_type": "personaje", "birth_year": -100}
+        )
+        c = svc.create_candidate({
+            "title": "Editar Aldric",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_kind": "entity_edits",
+                "edit_target_name": "Aldric",
+                "edit_fields": {
+                    "name": "Aldric el Roto",
+                    "brief_description": "Herrero marcado por la Purga.",
+                    "birth_year": -120,
+                    "tags": ["herrero", "purga"],
+                },
+            },
+        }).value
+
+        result = svc.accept_candidate(c.id)
+
+        assert not isinstance(result, Error)
+        updated = ps.active_project.entities[0]
+        assert updated.name == "Aldric el Roto"
+        assert updated.brief_description == "Herrero marcado por la Purga."
+        assert updated.birth_year == -120
+        assert "herrero" in updated.tags
+
+    def test_accept_entity_patch_rejects_forbidden_field(self):
+        ps, svc, es, _ = _setup()
+        es.create_entity({"name": "Mara", "entity_type": "personaje"})
+        c = svc.create_candidate({
+            "title": "Editar Mara",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_kind": "entity_edits",
+                "edit_target_name": "Mara",
+                "edit_fields": {"visibility_state": "oculto_al_jugador"},
+            },
+        }).value
+
+        result = svc.accept_candidate(c.id)
+
+        assert isinstance(result, Error)
+        assert "no editable" in result.error
+        # El canon queda intacto (nada de fallbacks silenciosos).
+        assert ps.active_project.entities[0].visibility_state.value != "oculto_al_jugador"
+
+    def test_accept_milestone_patch_updates_fields_and_year_mirror(self):
+        ps, svc, _es, _ = _setup()
+        ps.active_project.causal_milestones.append(
+            CausalMilestone(id="h1", title="nuevo hito", year=100)
+        )
+        c = svc.create_candidate({
+            "title": "Editar hito",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_kind": "milestone_edits",
+                "edit_target_id": "h1",
+                "edit_target_name": "nuevo hito",
+                "edit_fields": {"title": "La Purga", "year": "412", "milestone_type": "guerra"},
+            },
+        }).value
+
+        result = svc.accept_candidate(c.id)
+
+        assert not isinstance(result, Error)
+        updated = ps.active_project.causal_milestones[0]
+        assert updated.title == "La Purga"
+        assert updated.year == 412  # coercionado a int
+        assert updated.temporality.year == 412  # espejo J01
+        assert updated.milestone_type.value == "guerra"
+
+    def test_legacy_single_field_candidate_still_applies(self):
+        ps, svc, es, _ = _setup()
+        es.create_entity({"name": "Mara", "entity_type": "personaje"})
+        c = svc.create_candidate({
+            "title": "Editar Mara",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_target_name": "Mara",
+                "edit_field": "brief_description",
+                "edit_proposed_value": "Espía taciturna.",
+            },
+        }).value
+
+        result = svc.accept_candidate(c.id)
+
+        assert not isinstance(result, Error)
+        assert ps.active_project.entities[0].brief_description == "Espía taciturna."
+
+    def test_legacy_unknown_field_errors_instead_of_silent_fallback(self):
+        ps, svc, es, _ = _setup()
+        es.create_entity({"name": "Mara", "entity_type": "personaje"})
+        c = svc.create_candidate({
+            "title": "Editar Mara",
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_target_name": "Mara",
+                "edit_field": "nombre_raro",
+                "edit_proposed_value": "valor",
+            },
+        }).value
+
+        result = svc.accept_candidate(c.id)
+
+        assert isinstance(result, Error)
+        assert "no editable" in result.error
+        # Antes el valor caía SILENCIOSAMENTE en extended_description. Nunca más.
+        assert "valor" not in str(ps.active_project.entities[0].extended_description or "")

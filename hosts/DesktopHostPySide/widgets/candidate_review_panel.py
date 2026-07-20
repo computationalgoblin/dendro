@@ -45,11 +45,42 @@ def is_edit_candidate(proposed_data: Any) -> bool:
         return False
     if str(proposed_data.get("edit_proposed_value") or "").strip():
         return True
+    # PLAY-15: patch multi-campo (edit_fields) también es edición.
+    fields = proposed_data.get("edit_fields")
+    if isinstance(fields, dict) and fields:
+        return True
     # UX5e: una edición de relación puede cambiar SOLO el tipo (sin contenido nuevo)
     # y sigue siendo una edición.
     return proposed_data.get("edit_kind") == "relation_edits" and bool(
         str(proposed_data.get("edit_relation_type") or "").strip()
     )
+
+
+def _field_value_text(value: Any) -> str:
+    """PLAY-15: representación editable de un valor de campo (lista → comas)."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and not isinstance(value, (str, int, float, bool)):
+        return str(enum_value)
+    return str(value)
+
+
+def _coerce_like(original: Any, text: str) -> Any:
+    """PLAY-15: devuelve el texto editado con el TIPO del valor original."""
+    text = str(text or "").strip()
+    if isinstance(original, bool):
+        return text.lower() in ("true", "sí", "si", "1")
+    if isinstance(original, int):
+        try:
+            return int(text)
+        except ValueError:
+            return original
+    if isinstance(original, list):
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return text
 
 
 def is_analysis_candidate(proposed_data: Any) -> bool:
@@ -59,6 +90,17 @@ def is_analysis_candidate(proposed_data: Any) -> bool:
     if str(proposed_data.get("report") or "").strip():
         return True
     return any(proposed_data.get(k) for k in ("issues", "proposals", "open_questions"))
+
+
+# BETA2-STRUCT: tipos de PROPUESTA ESTRUCTURAL (reubicación de anillos). No son
+# candidatos narrativos ni ediciones ordinarias: su payload es datos estructurados
+# (§17) que NO deben editarse como texto ni escribirse de vuelta al aceptar.
+_STRUCTURAL_KINDS = frozenset({"ring_move", "ascending_exception", "branch_move", "ring_merge"})
+
+
+def is_structural_candidate(proposed_data: Any) -> bool:
+    """True si el candidato es una propuesta estructural (mover/marcar anillos)."""
+    return isinstance(proposed_data, dict) and proposed_data.get("kind") in _STRUCTURAL_KINDS
 
 
 def candidate_body_text(proposed_data: dict[str, Any]) -> str:
@@ -201,9 +243,13 @@ class CandidateReviewPanel(QWidget):
         self._on_repair = on_repair
         self._log = log
         self._target_edit: QLineEdit | None = None
+        # PLAY-15: editores por campo de un patch multi-campo {campo: (editor, original)}.
+        self._field_edits: dict[str, tuple[QTextEdit, Any]] = {}
         self._rel_type_edit: QLineEdit | None = None  # UX5e: tipo en ediciones de relación
         proposed = dict(getattr(candidate, "proposed_data", {}) or {})
-        if is_edit_candidate(proposed):
+        if is_structural_candidate(proposed):
+            self._mode = "structural"
+        elif is_edit_candidate(proposed):
             self._mode = "edit"
         elif is_analysis_candidate(proposed):
             self._mode = "analysis"
@@ -243,7 +289,9 @@ class CandidateReviewPanel(QWidget):
         self._title_edit.setPlaceholderText(placeholder)
         layout.addWidget(self._title_edit)
 
-        if self._mode == "edit":
+        if self._mode == "structural":
+            self._build_structural(layout, proposed)
+        elif self._mode == "edit":
             self._build_edit(layout, proposed)
         elif self._mode == "analysis":
             self._build_analysis(layout, proposed)
@@ -279,6 +327,32 @@ class CandidateReviewPanel(QWidget):
         self._target_edit.setPlaceholderText("Nombre de la entidad/elemento a editar")
         layout.addWidget(self._target_edit)
 
+        # PLAY-15: patch multi-campo — una fila before/after por campo, cada
+        # «después» editable antes de aplicar (precedente visual: RepairReviewPanel).
+        fields = proposed.get("edit_fields")
+        if isinstance(fields, dict) and fields:
+            self._field_edits = {}
+            for key, value in fields.items():
+                field_label = QLabel(f"Campo: {key}")
+                field_label.setObjectName("muted")
+                layout.addWidget(field_label)
+                before = self._current_field_value(proposed, str(key))
+                if before:
+                    layout.addWidget(QLabel("Antes (canon actual):"))
+                    before_box = QTextEdit()
+                    before_box.setReadOnly(True)
+                    before_box.setObjectName("muted")
+                    before_box.setPlainText(before)
+                    before_box.setMaximumHeight(90)
+                    layout.addWidget(before_box)
+                layout.addWidget(QLabel("Propuesto (editable antes de aplicar):"))
+                editor = QTextEdit()
+                editor.setPlainText(_field_value_text(value))
+                editor.setMaximumHeight(110)
+                layout.addWidget(editor)
+                self._field_edits[str(key)] = (editor, value)
+            return
+
         # UX5e: una edición de relación lleva DOS campos en UNA sola semilla — el
         # tipo (campo corto) y el contenido/descripción (caja grande). Antes salían
         # dos semillas separadas.
@@ -311,6 +385,34 @@ class CandidateReviewPanel(QWidget):
         self._body_edit.setPlainText(candidate_body_text(proposed))
         self._body_edit.setMinimumHeight(220)
         layout.addWidget(self._body_edit, 1)
+
+    def _current_field_value(self, proposed: dict[str, Any], key: str) -> str:
+        """PLAY-15: valor actual en canon de UN campo del patch (diff por fila)."""
+        ctrl = self._controller
+        ps = getattr(ctrl, "ps", None)
+        project = getattr(ps, "active_project", None) if ps is not None else None
+        if project is None:
+            return ""
+        kind = str(proposed.get("edit_kind") or "entity_edits")
+        target_id = str(proposed.get("edit_target_id") or "")
+        name = str(proposed.get("edit_target_name") or "").strip().lower()
+        if kind == "milestone_edits":
+            items = getattr(project, "causal_milestones", []) or []
+            obj = next(
+                (m for m in items if str(getattr(m, "id", "")) == target_id), None
+            ) or next((m for m in items if str(getattr(m, "title", "")).lower() == name), None)
+        else:
+            obj = next(
+                (
+                    e
+                    for e in getattr(project, "entities", []) or []
+                    if str(getattr(e, "name", "")).strip().lower() == name
+                ),
+                None,
+            )
+        if obj is None:
+            return ""
+        return _field_value_text(getattr(obj, key, ""))
 
     def _current_target_value(self, proposed: dict[str, Any]) -> str:
         """fila 33: valor actual en canon del campo que la edición pretende cambiar
@@ -362,6 +464,30 @@ class CandidateReviewPanel(QWidget):
             repair.clicked.connect(self._repair)
             layout.addWidget(repair)
 
+    def _build_structural(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
+        """Propuesta ESTRUCTURAL (§17) en SOLO LECTURA: nunca edita el payload."""
+        current = str(proposed.get("current_ring_id") or "") or "Sin anillo"
+        target = str(proposed.get("target_ring_id") or "")
+        move = QLabel(f"Anillo:  {current}  →  {target}")
+        move.setWordWrap(True)
+        layout.addWidget(move)
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setObjectName("muted")
+        parts: list[str] = []
+        reasons = [str(r) for r in (proposed.get("reasons") or [])]
+        if reasons:
+            parts.append("Razones:\n" + "\n".join(f"• {r}" for r in reasons))
+        consequences = [str(c) for c in (proposed.get("expected_consequences") or [])]
+        if consequences:
+            parts.append("Consecuencias esperadas:\n" + "\n".join(f"• {c}" for c in consequences))
+        support = proposed.get("supporting_relation_ids") or []
+        if support:
+            parts.append(f"Relaciones que lo justifican: {len(support)}")
+        box.setPlainText("\n\n".join(parts))
+        box.setMinimumHeight(200)
+        layout.addWidget(box, 1)
+
     def _build_default(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
         """Candidato normal: cuerpo de texto editable."""
         self._body_edit = QTextEdit()
@@ -387,6 +513,22 @@ class CandidateReviewPanel(QWidget):
             self._candidate.title = new_title
         proposed = getattr(self._candidate, "proposed_data", None)
         if not isinstance(proposed, dict):
+            return
+        # BETA2-STRUCT: una propuesta estructural es SOLO LECTURA — su payload §17 se
+        # acepta tal cual (jamás se reescribe con título/cuerpo del formulario).
+        if self._mode == "structural":
+            return
+        # PLAY-15: patch multi-campo — recoge cada editor conservando el tipo
+        # original del valor (año int, listas por comas) y termina aquí.
+        if self._mode == "edit" and self._field_edits:
+            proposed["edit_fields"] = {
+                key: _coerce_like(original, editor.toPlainText())
+                for key, (editor, original) in self._field_edits.items()
+            }
+            if self._target_edit is not None:
+                target = self._target_edit.text().strip()
+                if target:
+                    proposed["edit_target_name"] = target
             return
         body = self._body_edit.toPlainText().strip()
         if self._mode == "edit":

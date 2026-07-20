@@ -1,6 +1,7 @@
 """RelationController — wraps RelationService for UI (B27.1-T02)."""
 from __future__ import annotations
 
+from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.relation_service import RelationService
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
@@ -11,6 +12,8 @@ class RelationController:
             raise ValueError("RelationController requires project_service")
         self.ps = project_service
         self.rs = RelationService(self.ps)
+        # BETA2-MEM-04: motor de impacto (marca Falta regar al guardar canon).
+        self.impact = NarrativeImpactService(self.ps)
 
     def list_all(self):
         _apptrace(f"CTRL RelationController.list_all"[:120])
@@ -26,7 +29,7 @@ class RelationController:
 
     def update(self, relation_id, data):
         _apptrace(f"CTRL RelationController.update relation_id={relation_id!r}"[:120])
-        return self.rs.update_relation(relation_id, data)
+        return self.rs.update_relation(relation_id, data, impact_service=self.impact)
 
     def archive(self, relation_id):
         _apptrace(f"CTRL RelationController.archive relation_id={relation_id!r}"[:120])

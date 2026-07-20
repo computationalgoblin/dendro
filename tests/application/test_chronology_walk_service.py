@@ -18,6 +18,7 @@ from packages.domain.chronology_walk import (
     WalkMode,
     WalkStatus,
 )
+from packages.domain.era import Era
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok
 
@@ -66,11 +67,73 @@ def _project_with_three_milestones():
     return project
 
 
-def _service(project, payloads=None):
+def _service(project, payloads=None, history_service=None):
     return ChronologyWalkService(
         project_service=_FakeProjectService(project),
         ai_job_service=_FakeAIJobService(payloads or []),
+        history_service=history_service,
     )
+
+
+class _RecordingHistory:
+    """Historial de prueba: captura las llamadas a record()."""
+
+    def __init__(self):
+        self.records: list[dict] = []
+
+    def record(self, event_type=None, description=None, affected_entity_ids=None, **kwargs):
+        self.records.append(
+            {
+                "event_type": event_type,
+                "description": description,
+                "affected_entity_ids": list(affected_entity_ids or []),
+                "change_origin": kwargs.get("change_origin", ""),
+                "metadata": dict(kwargs.get("metadata", {}) or {}),
+            }
+        )
+
+
+@pytest.mark.application
+def test_fold_step_records_observation_per_affected_entity():
+    """PLAY-18: cada paso deja una observación en el historial de las entidades."""
+    project = _project_with_three_milestones()
+    project.causal_milestones[1].affected_entity_ids = ["e2", "e5"]
+    history = _RecordingHistory()
+    payloads = [
+        {
+            "summary": "La Purga golpea a la casa.",
+            "issues": [
+                {"title": "Duda", "description": "¿Quién ordenó?", "severity": "media",
+                 "kind": "causal_gap"}
+            ],
+        }
+    ]
+    svc = _service(project, payloads, history_service=history)
+    session = svc.start_walk("h2").value
+
+    svc.analyze_step(session.id)
+
+    assert len(history.records) == 2  # una por entidad afectada
+    rec = history.records[0]
+    assert rec["change_origin"] == "recorrido_cronologico"
+    assert rec["metadata"]["milestone_id"] == "h2"
+    assert "La Purga golpea" in rec["description"]
+    assert "Duda" in rec["description"]  # las observaciones sin edición viajan
+    from packages.domain.source_history import HistoryEventType
+
+    assert rec["event_type"] is HistoryEventType.OBSERVACION_RECORRIDO
+
+
+@pytest.mark.application
+def test_fold_step_without_history_service_records_nothing():
+    """PLAY-18: sin history_service inyectado, no se registra nada (compat)."""
+    project = _project_with_three_milestones()
+    svc = _service(project, [{"summary": "ok"}])  # sin history_service
+    session = svc.start_walk("h1").value
+
+    res = svc.analyze_step(session.id)  # no debe explotar
+
+    assert isinstance(res, Ok)
 
 
 @pytest.mark.application
@@ -259,6 +322,196 @@ def test_attach_generated_candidates_dedups():
     svc.attach_generated_candidates(session.id, ["c2", "c3"])
 
     assert session.generated_candidate_ids == ["c1", "c2", "c3"]
+
+
+@pytest.mark.application
+def test_analyze_step_at_does_not_touch_session_memory():
+    """PLAY-01: el análisis de prefetch/desvío NO muta la sesión."""
+    project = _project_with_three_milestones()
+    payloads = [
+        {
+            "summary": "Análisis anticipado",
+            "issues": [{"title": "X", "severity": "alta", "kind": "contradiction"}],
+            "stop_required": True,
+        }
+    ]
+    svc = _service(project, payloads)
+    session = svc.start_walk("h1", direction=WalkDirection.FUTURE).value
+
+    res = svc.analyze_step_at(session.id, "h2")
+
+    assert isinstance(res, Ok)
+    assert "model_payload" in res.value
+    assert "walk" not in res.value  # sin memoria plegada
+    assert session.visited_milestone_ids == []
+    assert session.open_problems == []
+    assert session.accumulated_summary == ""
+    assert session.status is WalkStatus.ACTIVE
+
+
+@pytest.mark.application
+def test_commit_step_folds_prefetched_analysis_on_arrival():
+    """PLAY-01: al llegar a la escena, commit_step pliega el análisis cacheado."""
+    project = _project_with_three_milestones()
+    payloads = [
+        {
+            "summary": "Purga anticipada",
+            "issues": [{"title": "Duro", "severity": "alta", "kind": "contradiction"}],
+            "stop_required": True,
+        }
+    ]
+    svc = _service(project, payloads)
+    session = svc.start_walk("h1", direction=WalkDirection.FUTURE).value
+    prefetched = svc.analyze_step_at(session.id, "h2").value
+
+    # Aún en h1: plegarlo sería mentir sobre el orden del recorrido.
+    assert isinstance(svc.commit_step(session.id, "h2", prefetched), Error)
+
+    svc.advance(session.id)  # ahora current = h2
+    res = svc.commit_step(session.id, "h2", prefetched)
+
+    assert isinstance(res, Ok)
+    walk = res.value["walk"]
+    assert walk["milestone_id"] == "h2"
+    assert walk["stopped"] is True
+    assert walk["position"] == 2
+    assert walk["total"] == 3
+    assert "h2" in session.visited_milestone_ids
+    assert session.status is WalkStatus.PAUSED
+    assert session.accumulated_summary  # el resumen creció al plegar, no al prefetch
+
+
+@pytest.mark.application
+def test_analyze_step_reports_position_and_total():
+    project = _project_with_three_milestones()
+    svc = _service(project, [{"summary": "ok"}])
+    session = svc.start_walk("h2").value
+
+    walk = svc.analyze_step(session.id).value["walk"]
+
+    assert walk["position"] == 2
+    assert walk["total"] == 3
+    assert walk["milestone_title"] == "Purga"
+    assert walk["milestone_year"] == 200
+
+
+@pytest.mark.application
+def test_step_scene_is_deterministic_and_causal():
+    """PLAY-01: escena sin IA — posición, era, causas/consecuencias, visita."""
+    project = _project_with_three_milestones()
+    project.causal_milestones[1].causal_parent_hito_ids = ["h1"]
+    project.causal_milestones[1].causal_child_hito_ids = ["h3", "desconocido"]
+    project.project_chronology.eras.append(
+        Era(name="Edad de Plata", start_year=0, end_year=None, order=0)
+    )
+    svc = _service(project)
+    session = svc.start_walk("h2", direction=WalkDirection.FUTURE).value
+
+    res = svc.step_scene(session.id)
+
+    assert isinstance(res, Ok)
+    scene = res.value
+    assert scene["hito"]["id"] == "h2"
+    assert scene["position"] == 2
+    assert scene["total"] == 3
+    assert scene["next_milestone_id"] == "h3"
+    assert [c["id"] for c in scene["causes"]] == ["h1"]
+    assert [c["id"] for c in scene["consequences"]] == ["h3"]  # el roto se omite
+    assert scene["is_current"] is True
+    assert scene["era_name"] == "Edad de Plata"
+    # Desvío: describe otro hito sin tocar la sesión.
+    visit = svc.step_scene(session.id, "h1").value
+    assert visit["hito"]["id"] == "h1"
+    assert visit["is_current"] is False
+    assert session.current_milestone_id == "h2"
+
+
+@pytest.mark.application
+def test_defer_problems_unblocks_advance_without_resolving():
+    """PLAY-02: aplazar desbloquea el avance sin fingir resolución."""
+    project = _project_with_three_milestones()
+    payloads = [
+        {
+            "summary": "Diagnóstico duro",
+            "issues": [{"title": "X", "severity": "alta", "kind": "contradiction"}],
+            "stop_required": True,
+        }
+    ]
+    svc = _service(project, payloads)
+    session = svc.start_walk("h1", direction=WalkDirection.FUTURE).value
+    svc.analyze_step(session.id)
+    assert isinstance(svc.advance(session.id), Error)  # duro sin tratar → bloquea
+
+    res = svc.defer_problems(session.id, note="lo miro al final")
+
+    assert isinstance(res, Ok)
+    assert session.status is WalkStatus.ACTIVE
+    problem = session.open_problems[0]
+    assert problem["deferred"] is True
+    assert not problem.get("resolved")  # sigue vivo, no se finge resolución
+    assert session.decisions[-1]["decision"] == "aplazado"
+    assert session.decisions[-1]["note"] == "lo miro al final"
+    assert isinstance(svc.advance(session.id), Ok)
+    assert session.current_milestone_id == "h2"
+
+
+@pytest.mark.application
+def test_defer_problems_requires_open_problems():
+    project = _project_with_three_milestones()
+    svc = _service(project)
+    session = svc.start_walk("h1").value
+
+    assert isinstance(svc.defer_problems(session.id), Error)
+
+
+@pytest.mark.application
+def test_deferred_problems_surface_in_final_report():
+    """PLAY-02: lo aplazado reaparece en el informe (metadata + veredicto no limpio)."""
+    project = _project_with_three_milestones()
+    payloads = [
+        {
+            "summary": "Duro",
+            "issues": [{"title": "Hueco", "severity": "alta", "kind": "causal_gap"}],
+            "stop_required": True,
+        }
+    ]
+    svc = _service(project, payloads)
+    session = svc.start_walk("h1").value
+    svc.analyze_step(session.id)
+    svc.defer_problems(session.id, note="pendiente")
+
+    svc.stop(session.id)
+
+    report = project.chronology_walk_reports[0]
+    assert report.verdict != "Coherente hasta el hito revisado"
+    deferred = report.metadata["deferred_problems"]
+    assert len(deferred) == 1
+    assert deferred[0]["title"] == "Hueco"
+    assert any(g["title"] == "Hueco" for g in report.critical_gaps)
+
+
+@pytest.mark.application
+def test_deferred_session_round_trips_persistence():
+    """PLAY-02: el aplazado sobrevive to_dict/from_dict sin migración."""
+    from packages.domain.chronology_walk import ChronologyWalkSession
+
+    project = _project_with_three_milestones()
+    payloads = [
+        {
+            "summary": "Duro",
+            "issues": [{"title": "X", "severity": "alta", "kind": "contradiction"}],
+            "stop_required": True,
+        }
+    ]
+    svc = _service(project, payloads)
+    session = svc.start_walk("h1").value
+    svc.analyze_step(session.id)
+    svc.defer_problems(session.id)
+
+    revived = ChronologyWalkSession.from_dict(session.to_dict())
+
+    assert revived.open_problems[0]["deferred"] is True
+    assert revived.decisions[-1]["decision"] == "aplazado"
 
 
 @pytest.mark.application

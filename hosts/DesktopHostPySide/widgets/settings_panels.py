@@ -254,10 +254,26 @@ class ProjectPanel(QWidget):
         ps = getattr(pc, "ps", None) if pc is not None else None
         if ps is None:
             return
-        from hosts.DesktopHostPySide.controllers.project_chronology_controller import ProjectChronologyController
-        from hosts.DesktopHostPySide.widgets.chronology_config_panel import ChronologyConfigPanel
+        # BETA2-CAL-06: la edición del calendario abre en un diálogo ancho centrado
+        # (la timeline visual y las rejillas de meses/semana se recortaban en el cajón).
+        card = self._make_card(
+            "Calendario del proyecto",
+            "Eras en una timeline visual, presente y (opcional) meses y semana.",
+        )
+        edit_btn = QPushButton("Editar calendario…")
+        edit_btn.setObjectName("primaryButton")
+        edit_btn.clicked.connect(lambda: self._open_calendar_dialog(ps))
+        card.layout.addWidget(edit_btn)
+        self.root_layout.addWidget(card)
 
-        self.root_layout.addWidget(ChronologyConfigPanel(ProjectChronologyController(ps), compact=True))
+    def _open_calendar_dialog(self, ps):
+        from hosts.DesktopHostPySide.controllers.project_chronology_controller import (
+            ProjectChronologyController,
+        )
+        from hosts.DesktopHostPySide.widgets.calendar_editor_dialog import CalendarEditorDialog
+
+        dialog = CalendarEditorDialog(ProjectChronologyController(ps), parent=self)
+        dialog.exec()
 
     def _build_creative_config_section(self):
         card = self._make_card("Configuración creativa")

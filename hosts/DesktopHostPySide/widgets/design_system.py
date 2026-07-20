@@ -13,14 +13,16 @@ from PySide6.QtCore import (
     QEvent,
     QObject,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRect,
     QRectF,
     QSize,
     Qt,
     QTimer,
+    Signal,
 )
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
@@ -70,12 +72,20 @@ LINE_STRONG = "#BCB28E"
 # Acento — oro-oliva (identidad / acciones)
 GOLD        = "#8B7A36"
 GOLD_DEEP   = "#6E622E"
+GOLD_PRESS  = "#5E5427"   # oro hundido (estado :pressed de acciones doradas)
 GOLD_SOFT   = "#BBAA66"
 GOLD_TINT   = "#ECE4C7"   # relleno sutil de acento (hover/selección)
 
 # Verde botánico (secundario, con mucha mesura: vida, foco orgánico)
 SAGE        = "#6E7E58"
 SAGE_DEEP   = "#546243"  # verde profundo (reservado; aún sin uso)
+
+# Tierra (BETA2-JARDIN-01): ciclo de riego en el Mapa — sedienta (marrón) y
+# secada (gris-tierra). Tintes claros para rellenos con texto legible encima.
+EARTH           = "#8A6B45"   # borde/acento de entidad sedienta (falta regar)
+EARTH_TINT      = "#CDBB97"   # relleno de entidad sedienta
+EARTH_GREY      = "#A29B87"   # borde de entidad secada (pausada a propósito)
+EARTH_GREY_TINT = "#D0CCBE"   # relleno de entidad secada
 
 # Sombra cálida base (RGB) — las sombras nunca son grises neutros aquí
 SHADOW_RGB  = (52, 47, 28)
@@ -143,6 +153,16 @@ CHRONO_VIGNETTE = (
 )
 
 
+def canvas_vignette_brush(center_x: float, center_y: float, radius: float) -> "QBrush":
+    """BETA2-PULIDO-07: viñeta radial cálida ÚNICA de los lienzos de Creación
+    (Mapa, Cronología y Foco) — el «corazón del mundo» recibe luz suave y los
+    bordes se hunden. Paradas canónicas = CHRONO_VIGNETTE (misma escala)."""
+    gradient = QRadialGradient(QPointF(center_x, center_y), radius)
+    for stop, hex_color in CHRONO_VIGNETTE:
+        gradient.setColorAt(stop, QColor(hex_color))
+    return QBrush(gradient)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Cimientos del sistema (BETA1-UX01) — tokens transversales que dan
 # COHESIÓN y APLOMO. Principios:
@@ -153,10 +173,11 @@ CHRONO_VIGNETTE = (
 # ─────────────────────────────────────────────────────────────────────────
 
 # Escala de radios (cohesión de formas)
-RADIUS_SM   = 9    # chips, celdas, controles pequeños
-RADIUS_MD   = 12   # botones, inputs, combos
-RADIUS_LG   = 16   # tarjetas, cajones
-RADIUS_PILL = 999  # botones-cápsula
+RADIUS_SM      = 9    # chips, celdas, controles pequeños
+RADIUS_MD      = 12   # botones, inputs, combos
+RADIUS_LG      = 16   # tarjetas, cajones
+RADIUS_CAPSULE = 19   # PULIDO-05: cápsulas flotantes (save pill, view toggle, command bar)
+RADIUS_PILL    = 999  # botones-cápsula
 
 # Espaciado: escala 4-pt única (en vez de valores mágicos dispersos por widget).
 # Úsala para márgenes, padding y spacing de layouts. El ritmo espacial consistente
@@ -249,7 +270,8 @@ TYPE_H1_PX = 19       # título de sección
 TYPE_H2_PX = 16       # título de tarjeta/panel
 TYPE_BODY_PX = 13     # cuerpo del sistema
 TYPE_LABEL_PX = 12    # etiquetas/chips
-TYPE_CAPTION_PX = 11  # subtítulos muted / pies
+TYPE_CAPTION_PX = 11  # subtítulos muted / pies (PISO del sistema: nada por debajo)
+TYPE_OVERLINE_PX = 11  # PULIDO-05: micro-título en mayúsculas con tracking
 
 WEIGHT_BOLD = 700
 WEIGHT_SEMIBOLD = 600
@@ -395,6 +417,13 @@ QToolButton:hover {{ background: {SURFACE_HI}; border-color: {LINE}; color: {INK
 QToolButton:checked {{ background: {GOLD_TINT}; border-color: {GOLD_SOFT}; color: {INK_STRONG}; }}
 QToolButton:focus {{ border-color: {GOLD}; }}
 QLabel#mutedLabel {{ color: {INK_MUTED}; }}
+QLabel#overline {{
+    color: {GOLD_DEEP};
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}}
 QLabel#sectionTitle {{
     font-size: 19px;
     font-weight: 700;
@@ -908,16 +937,20 @@ class PanelScaffold(QWidget):
         self._outer.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         self._outer.setSpacing(SPACE_MD)
 
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(SPACE_SM)
-        self.header = SectionHeader(title, subtitle)
-        header_row.addWidget(self.header, 1)
-        if badge:
-            header_row.addWidget(
-                Badge(badge, tone=badge_tone), 0, Qt.AlignmentFlag.AlignTop
-            )
-        self._outer.addLayout(header_row)
+        # BETA2-PULIDO-04: sin título/subtítulo/badge no se monta cabecera —
+        # para paneles cuyo título lo pone el contenedor (p. ej. el drawer).
+        self.header: SectionHeader | None = None
+        if title or subtitle or badge:
+            header_row = QHBoxLayout()
+            header_row.setContentsMargins(0, 0, 0, 0)
+            header_row.setSpacing(SPACE_SM)
+            self.header = SectionHeader(title, subtitle)
+            header_row.addWidget(self.header, 1)
+            if badge:
+                header_row.addWidget(
+                    Badge(badge, tone=badge_tone), 0, Qt.AlignmentFlag.AlignTop
+                )
+            self._outer.addLayout(header_row)
 
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
@@ -994,6 +1027,57 @@ class AdvancedSection(QWidget):
             anim.finished.connect(lambda: body.setVisible(False))
         self._anim = anim
         anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+
+class DisclosureSection(QWidget):
+    """Sección plegable ESTÁTICA — alterna visibilidad, sin QGraphicsEffects.
+
+    A diferencia de ``AdvancedSection`` (que anima con ``fade_in`` → efecto de opacidad),
+    esta variante NO usa efectos gráficos: los efectos de opacidad vacían menús/botones y
+    rejillas dinámicas (lección conocida del repo). Pensada para contenidos editables
+    (rejillas de meses, listas de días). Cabecera = ``QToolButton`` con flecha.
+    """
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str, *, expanded: bool = False, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle.setObjectName("disclosureToggle")
+        self.body = QWidget()
+        self.body.setVisible(expanded)
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(12, 6, 0, 0)
+        self.body_layout.setSpacing(6)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.toggle)
+        layout.addWidget(self.body)
+        self.toggle.toggled.connect(self._on_toggled)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+        self.body.setVisible(checked)
+        self.toggled.emit(checked)
+
+    def add_widget(self, widget: QWidget) -> None:
+        self.body_layout.addWidget(widget)
+
+    def add_layout(self, layout: QLayout) -> None:
+        self.body_layout.addLayout(layout)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self.toggle.setChecked(bool(expanded))
+
+    def is_expanded(self) -> bool:
+        return self.toggle.isChecked()
 
 
 def fade_in(widget: QWidget, *, duration_ms: int = MOTION_BASE, start_opacity: float = 0.0):
@@ -1156,12 +1240,140 @@ class BusyIndicator(QWidget):
         painter.drawArc(arc_rect, start_angle, 270 * 16)
 
 
-def make_scroll_area(content: QWidget) -> QScrollArea:
+def make_scroll_area(content: QWidget, *, transparent: bool = False) -> QScrollArea:
     area = QScrollArea()
     area.setWidgetResizable(True)
     area.setFrameShape(QFrame.Shape.NoFrame)
     area.setWidget(content)
+    if transparent:
+        # PULIDO-05: variante para scrolls sobre tarjetas (el viewport no tapa
+        # el fondo del contenedor).
+        area.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
     return area
+
+
+def meta_chip_style() -> str:
+    """UI2-07: QSS de chip compacto para los combos de metadatos de la Ficha
+    del Foco (tipo/anillo/naturaleza/relevancia). Discretos y en una fila:
+    el protagonista de la Ficha es el texto, no el formulario."""
+    return (
+        f"QComboBox {{ background: {SURFACE}; border: 1px solid {LINE_SOFT}; "
+        f"border-radius: 11px; padding: 1px 10px; font-size: {TYPE_CAPTION_PX}px; "
+        f"color: {INK_SOFT}; }} "
+        f"QComboBox:hover {{ border-color: {GOLD_SOFT}; background: {GOLD_TINT}; }} "
+        "QComboBox::drop-down { border: none; width: 14px; }"
+    )
+
+
+def overline_label(text: str, *, color: str = "", parent: QWidget | None = None) -> QLabel:
+    """PULIDO-05: rol tipográfico «overline» — micro-título en MAYÚSCULAS con
+    tracking (11px/700/1px), única forma de encabezado menor del sistema."""
+    label = QLabel(str(text).upper(), parent)
+    label.setStyleSheet(
+        f"color: {color or INK_MUTED}; font-size: {TYPE_OVERLINE_PX}px; font-weight: 700; "
+        "letter-spacing: 1px; background: transparent; border: none;"
+    )
+    return label
+
+
+class ElidedLabel(QLabel):
+    """PULIDO-05: QLabel de UNA línea que elide con «…» en vez de desbordar o
+    forzar el ancho del layout. Sin QGraphicsEffect (canvas-safe)."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self._full_text = str(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def setText(self, text: str) -> None:  # noqa: N802 (API Qt)
+        self._full_text = str(text)
+        self._apply_elide()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event):  # noqa: N802 (API Qt)
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        metrics = self.fontMetrics()
+        width = max(0, self.width() - 2)
+        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, width)
+        super().setText(elided)
+        self.setToolTip(self._full_text if elided != self._full_text else "")
+
+
+class CapsuleTabBar(QFrame):
+    """UI2-06: segmento cápsula de pestañas — el patrón visual del alternador
+    de modos (Foco | Mapa | Cronología) aplicado a pestañas locales de un
+    panel. QSS puro, sin QGraphicsEffect (canvas-safe).
+
+    API: ``add_tab(key, label)``, ``set_current(key)``, ``current()`` y la
+    señal ``tabChanged(str)`` (solo se emite en cambios reales).
+    """
+
+    tabChanged = Signal(str)  # noqa: N815 — convención Qt de señales
+
+    _ACTIVE_SS = (
+        "QPushButton {{ background: {gold_tint}; border: none; border-radius: 13px; "
+        "color: {ink_strong}; font-size: 12px; font-weight: 700; padding: 0 14px; }}"
+    )
+    _IDLE_SS = (
+        "QPushButton {{ background: transparent; border: none; border-radius: 13px; "
+        "color: {ink_soft}; font-size: 12px; font-weight: 600; padding: 0 14px; }} "
+        "QPushButton:hover {{ background: {gold_tint}; color: {ink_strong}; }} "
+        "QPushButton:pressed {{ background: {gold_soft}; }}"
+    )
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"QFrame {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; "
+            f"border-radius: {RADIUS_CAPSULE}px; }}"
+        )
+        self._row = QHBoxLayout(self)
+        self._row.setContentsMargins(5, 3, 5, 3)
+        self._row.setSpacing(0)
+        self._buttons: dict[str, QPushButton] = {}
+        self._current = ""
+
+    def add_tab(self, key: str, label: str) -> QPushButton:
+        button = QPushButton(label)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFixedHeight(26)
+        button.clicked.connect(lambda _=False, k=key: self.set_current(k))
+        self._row.addWidget(button)
+        self._buttons[str(key)] = button
+        if not self._current:
+            self.set_current(key)
+        else:
+            self._restyle()
+        return button
+
+    def current(self) -> str:
+        return self._current
+
+    def set_current(self, key: str) -> None:
+        key = str(key)
+        if key not in self._buttons or key == self._current:
+            return
+        self._current = key
+        self._restyle()
+        self.tabChanged.emit(key)
+
+    def _restyle(self) -> None:
+        tones = {
+            "gold_tint": GOLD_TINT,
+            "gold_soft": GOLD_SOFT,
+            "ink_strong": INK_STRONG,
+            "ink_soft": INK_SOFT,
+        }
+        for key, button in self._buttons.items():
+            template = self._ACTIVE_SS if key == self._current else self._IDLE_SS
+            button.setStyleSheet(template.format(**tones))
 
 
 # ─────────────────────────────────────────────────────────────────────────

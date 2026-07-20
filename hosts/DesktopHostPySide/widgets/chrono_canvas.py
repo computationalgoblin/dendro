@@ -37,6 +37,10 @@ from packages.ui.graph_physics.rings import (
 TOP_MARGIN = 70.0
 LEFT_MARGIN = 150.0       # carril de etiquetas de era
 COLUMN_GAP = 56.0         # separación entre columnas de anillo
+# BETA2-HOVER-10: gutter para la columna de años ("Año N") — la primera columna
+# de anillo arranca pasada esta reserva para que los nombres de vida no pisen los
+# pills de año. Ancho del pill ≈ 12 (offset) + 56 (year_tag_w) + 28 (pad) ≈ 96.
+YEAR_LABEL_GUTTER = 112.0
 LANE_WIDTH = 92.0         # separación entre líneas de vida del mismo anillo
 # BETA1-UX9: cajas de rama. El marco se dibuja ALREDEDOR de los centros de carril
 # (no ensancha los carriles): BOX_CROSS_PAD = cuánto se mete el marco hacia dentro
@@ -48,13 +52,19 @@ BOX_NEST_INSET = 7.0
 # años se ve ~10× más alta que una de 20), CON TOPE para que eras enormes no
 # rompan la navegación. El tope se alcanza ~300 años; por debajo, proporción
 # estricta. MIN garantiza separación legible entre eventos casi coetáneos.
-MIN_GAP_PX = 22.0         # alto mínimo entre dos años-ancla consecutivos
-MAX_GAP_PX = 1500.0       # tope (≈300 años) — más allá deja de crecer
-PX_PER_YEAR = 5.0
+# BETA2-HOVER-05: más aire entre años para de-amontonar la cronología (antes
+# 22/5: años cercanos quedaban pegados; ahora ~40/11).
+# BETA2-HOVER-10: el tope se escala con PX_PER_YEAR para conservar el contrato
+# "~300 años" (300*11≈3300); con 1500 el tope caía a ~136 años y rompía la
+# proporcionalidad de eras de 200 años.
+MIN_GAP_PX = 40.0         # alto mínimo entre dos años-ancla consecutivos
+PX_PER_YEAR = 11.0
+MAX_GAP_PX = 300.0 * PX_PER_YEAR  # tope (≈300 años) — más allá deja de crecer
 BOTTOM_PAD_YEARS = 2
 # BETA1-HITO-MULTI: desplazamiento vertical entre franjas de hitos que comparten
 # el mismo año (misma "caja"), suficiente para que sus títulos no se solapen.
-MILESTONE_BOX_GAP_PX = 22.0
+# BETA2-HOVER-05: subido de 22 a 30 para separar mejor los hitos coetáneos.
+MILESTONE_BOX_GAP_PX = 30.0
 # BETA1-HITO-MULTI: el nombre de la entidad va CENTRADO sobre su línea; el ancho
 # del carril se amplía al nombre más ancho (con tope) para que no se solapen.
 NAME_MAX_PX = 360.0       # tope del nombre más ancho que dilata el carril
@@ -70,6 +80,9 @@ _ERA_ID_ROLE = 2
 # BETA1-UX36: la cabecera/caja de un contenedor lleva su branch_id para que clicarla
 # ALTERNE colapso/expansión (no abrir la rama — eso es por su línea/nombre de vida).
 _BRANCH_BOX_ROLE = 3
+# BETA2-HOVER-03: la cabecera de columna de un anillo lleva su ring_id para la
+# previsualización flotante al hover (los anillos no son items de escena).
+_RING_ID_ROLE = 4
 # BETA1-HITO-MULTI: holgura (px) para atribuir un clic sobre la franja al carril
 # de entidad más cercano. < media de LANE_WIDTH (92) → zonas de carril sin solape.
 BAND_LANE_TOL = 40.0
@@ -200,10 +213,16 @@ def effective_eras(project: Any) -> list[Any]:
     return spans
 
 
-def effective_present_year(project: Any) -> int:
-    """Año presente. Prefiere el dominio; si es 0/ausente usa
-    ``metadata.current_year`` del calendario, y como respaldo la suma de
-    longitudes de era."""
+def explicit_present_year(project: Any) -> int | None:
+    """BETA2-UI2-10: año presente REALMENTE configurado, o ``None``.
+
+    Misma cascada que :func:`effective_present_year` (dominio →
+    ``metadata.current_year`` → suma de longitudes de era) pero sin inventar
+    un 0 cuando nada está configurado — el pill temporal lo usa para
+    deshabilitar "Presente" en vez de saltar al año 0 con el grafo vacío.
+    Limitación heredada: un presente configurado exactamente a 0 es
+    indistinguible de "ausente" (consistente con el contrato efectivo).
+    """
     chronology = getattr(project, "project_chronology", None)
     present = int(getattr(chronology, "present_year", 0) or 0)
     if present:
@@ -217,7 +236,14 @@ def effective_present_year(project: Any) -> int:
         if value:
             return value
     total = sum(length for _name, length in _parse_era_lengths(meta))
-    return total or present
+    return total or None
+
+
+def effective_present_year(project: Any) -> int:
+    """Año presente. Prefiere el dominio; si es 0/ausente usa
+    ``metadata.current_year`` del calendario, y como respaldo la suma de
+    longitudes de era."""
+    return explicit_present_year(project) or 0
 
 
 # ── Escala temporal (pura) ────────────────────────────────────────────────
@@ -369,10 +395,31 @@ class MilestoneMark:
     y_offset: float = 0.0
     # Desambiguación dentro de la caja (mes/día u "Orden N").
     sub_label: str = ""
+    # FOCO-25: fin opcional del hito (lapso derivado de su duración) → el hito
+    # se pinta además como franja de tiempo inicio→fin.
+    end_year: int | None = None
+    y_end: float | None = None
 
     @property
     def y_band(self) -> float:
         return self.y + self.y_offset
+
+
+@dataclass
+class MilestoneBox:
+    """BETA2-SUB-01: recuadro de un hito-MARCO (p. ej. una guerra) que encierra a
+    sus subhitos en el eje TIEMPO. Coordenadas LÓGICAS (cross=anillo, time=tiempo);
+    la vista las transpone. La extensión en tiempo abarca el intervalo del marco y
+    de todos sus subhitos; la extensión en cross abarca a los participantes
+    implicados (o todo el ancho si no hay ninguno)."""
+    milestone_id: str
+    title: str
+    color: str
+    x_left: float       # cross (anillo)
+    x_right: float
+    y0: float           # time (inicio)
+    y1: float           # time (fin)
+    subhito_count: int
 
 
 @dataclass
@@ -390,6 +437,8 @@ class ChronoLayout:
     scale: Any = None
     # BETA1-UX9: recuadros de rama (contenedores) que encierran a sus miembros.
     boxes: list[BranchBox] = field(default_factory=list)
+    # BETA2-SUB-01: recuadros de hito-marco que encierran a sus subhitos.
+    milestone_boxes: list[MilestoneBox] = field(default_factory=list)
     # BETA1-UX39: entidades SUELTAS agregadas por anillo (cuando lod aleja): ring_id
     # → nº de sueltas no dibujadas como carril, para pintar una píldora "N sueltas".
     loose_counts: dict = field(default_factory=dict)
@@ -631,11 +680,20 @@ def build_chrono_layout(
         if death is not None:
             anchor_years.append(int(death))
     milestone_years: dict[str, int] = {}
+    milestone_ends: dict[str, int] = {}
     for hito in milestones:
         year = getattr(hito, "year", None)
         year = int(year) if isinstance(year, int) and not isinstance(year, bool) else present_year
-        milestone_years[str(getattr(hito, "id", ""))] = year
+        hid = str(getattr(hito, "id", ""))
+        milestone_years[hid] = year
         anchor_years.append(year)
+        # FOCO-25: fin del hito (lapso por duración) también ancla la escala.
+        span_of = getattr(hito, "as_temporal_span", None)
+        if callable(span_of):
+            end = getattr(span_of(), "end_year", None)
+            if isinstance(end, int) and not isinstance(end, bool) and end > year:
+                milestone_ends[hid] = int(end)
+                anchor_years.append(int(end))
     anchor_years.append(max(anchor_years) + BOTTOM_PAD_YEARS)
     scale = YearScale(anchor_years, min_gaps=milestone_min_gaps)
 
@@ -655,7 +713,9 @@ def build_chrono_layout(
     loose_counts: dict[str, int] = {}  # BETA1-UX39: sueltas agregadas por anillo
     # (ring_id, branch_id, depth, first_lane, last_lane, collapsed, hidden_count)
     pending_boxes: list[tuple[str, str, int, int, int, bool, int]] = []
-    x_cursor = LEFT_MARGIN + COLUMN_GAP
+    # BETA2-HOVER-10: la primera columna arranca pasado el gutter de años para que
+    # ningún carril quede bajo los pills "Año N" (solape "nombre sobre año").
+    x_cursor = LEFT_MARGIN + max(COLUMN_GAP, YEAR_LABEL_GUTTER)
     for ring_id, ring_name in _ring_order(project):
         # BETA1-UX37: filtro/foco de anillo (vacío = todos los anillos).
         if scope.focused_ring_id and ring_id != scope.focused_ring_id:
@@ -785,6 +845,7 @@ def build_chrono_layout(
         year = milestone_years.get(hid, present_year)
         affected = [str(v) for v in (getattr(hito, "affected_entity_ids", []) or []) if str(v) in x_by_entity]
         pairs = sorted((x_by_entity[eid], eid) for eid in affected)
+        end_year = milestone_ends.get(hid)
         marks.append(MilestoneMark(
             milestone_id=hid,
             title=str(getattr(hito, "title", "") or "Hito"),
@@ -793,6 +854,8 @@ def build_chrono_layout(
             entity_xs=[x for x, _ in pairs],
             entity_ids=[eid for _, eid in pairs],
             sub_label=_milestone_sub_label(hito),
+            end_year=end_year,
+            y_end=scale.y(end_year) if end_year is not None else None,
         ))
 
     # Misma "caja" (mismo año) → escalonar en Y para que las franjas se lean.
@@ -845,6 +908,60 @@ def build_chrono_layout(
             collapsed=is_collapsed,
         ))
 
+    # 6.b Cajas de hito-marco (BETA2-SUB-01): un hito que contiene subhitos se
+    #     dibuja como recuadro que los encierra en el eje TIEMPO. La extensión en
+    #     tiempo abarca el intervalo del marco y de todos sus subhitos.
+    milestone_boxes: list[MilestoneBox] = []
+    hito_by_id = {str(getattr(h, "id", "")): h for h in milestones}
+    children_by_parent: dict[str, list] = {}
+    for hito in milestones:
+        pid = str(getattr(hito, "parent_milestone_id", "") or "")
+        if pid:
+            children_by_parent.setdefault(pid, []).append(hito)
+    _box_pad = 16.0
+    for pid, children in children_by_parent.items():
+        marco = hito_by_id.get(pid)
+        if marco is None:
+            continue
+        years: list[int] = []
+        for member in (marco, *children):
+            mid = str(getattr(member, "id", ""))
+            start = milestone_years.get(mid)
+            if start is not None:
+                years.append(int(start))
+            member_end = milestone_ends.get(mid)
+            if member_end is not None:
+                years.append(int(member_end))
+        if not years:
+            continue
+        y_vals = [scale.y(y) for y in years]
+        y_top = min(y_vals) - _box_pad
+        y_bot = max(y_vals) + _box_pad
+        xs = []
+        for member in (marco, *children):
+            for eid in getattr(member, "affected_entity_ids", []) or []:
+                mx = x_by_entity.get(str(eid))
+                if mx is not None:
+                    xs.append(mx)
+        if xs:
+            x_left = min(xs) - lane_width
+            x_right = max(xs) + lane_width
+        else:
+            x_left = LEFT_MARGIN
+            x_right = total_width - 8.0
+        mmeta = getattr(marco, "custom_metadata", {}) or {}
+        mcolor = str(mmeta.get("_node_color", "") or mmeta.get("tree_color", "") or "")
+        milestone_boxes.append(MilestoneBox(
+            milestone_id=pid,
+            title=str(getattr(marco, "title", "") or "Hito"),
+            color=mcolor,
+            x_left=min(x_left, x_right),
+            x_right=max(x_left, x_right),
+            y0=min(y_top, y_bot),
+            y1=max(y_top, y_bot),
+            subhito_count=len(children),
+        ))
+
     height = scale.bottom + 80.0
     return ChronoLayout(
         eras=era_bands,
@@ -856,6 +973,7 @@ def build_chrono_layout(
         present_year=present_year,
         y_present=scale.y(present_year),
         boxes=boxes,
+        milestone_boxes=milestone_boxes,
         scale=scale,
         loose_counts=loose_counts,
     )
@@ -874,7 +992,6 @@ try:  # la parte pura debe poder importarse sin PySide6
         QPainter,
         QPainterPath,
         QPen,
-        QRadialGradient,
     )
     from PySide6.QtWidgets import (
         QComboBox,
@@ -921,7 +1038,9 @@ try:  # la parte pura debe poder importarse sin PySide6
         SHADOW_RGB,
         SURFACE_HI,
         SURFACE_PALE,
+        canvas_vignette_brush,
         entity_kind_color,
+        make_scroll_area,
     )
     HAS_QT = True
 except Exception:  # pragma: no cover
@@ -1211,6 +1330,52 @@ if HAS_QT:
                     painter.drawLine(QPointF(cx - s / 2.0, cy), QPointF(cx + s / 2.0, cy))
                     painter.drawLine(QPointF(cx, cy - s / 2.0), QPointF(cx, cy + s / 2.0))
 
+    class _MilestoneBoxItem(QGraphicsRectItem):
+        """BETA2-SUB-01: recuadro de un hito-MARCO (p. ej. una guerra) que encierra
+        a sus subhitos en el intervalo de años. Relleno translúcido + borde
+        DISCONTINUO (para distinguirlo de las cajas de rama, de borde sólido) +
+        franja de cabecera con el título. Lleva ``_MILESTONE_ID_ROLE`` para que
+        clicar el marco/cabecera/interior vacío abra el hito (los nodos de los
+        subhitos, en z superior, ganan sobre el interior)."""
+
+        def __init__(self, milestone_id, color, header_px, horizontal, *args):
+            super().__init__(*args)
+            self.milestone_id = str(milestone_id)
+            self._color = QColor(color) if color else QColor(CHRONO_GOLD)
+            self._header_px = float(header_px)
+            self._horizontal = bool(horizontal)
+            self.setData(_MILESTONE_ID_ROLE, self.milestone_id)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Hito con subhitos — clic para abrir")
+            # z sobre eras (-30) y cajas de rama (-28..), bajo las vidas (10) y los
+            # nodos de hito (40): los subhitos siguen clicables sobre la caja.
+            self.setZValue(-20.0)
+            self.setPen(QPen(Qt.PenStyle.NoPen))  # el borde lo pinta paint()
+
+        def boundingRect(self):  # noqa: N802
+            return self.rect().adjusted(-2.0, -2.0, 2.0, 2.0)
+
+        def paint(self, painter, option, widget=None):  # noqa: N802
+            r = self.rect()
+            radius = BOX_CORNER_RADIUS
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            path = QPainterPath()
+            path.addRoundedRect(r, radius, radius)
+            fill = QColor(self._color); fill.setAlpha(_BOX_FILL_ALPHA)
+            painter.fillPath(path, QBrush(fill))
+            header = QColor(self._color); header.setAlpha(_BOX_HEADER_ALPHA)
+            if self._horizontal:
+                hr = QRectF(r.left(), r.top(), min(self._header_px, r.width()), r.height())
+            else:
+                hr = QRectF(r.left(), r.top(), r.width(), min(self._header_px, r.height()))
+            hpath = QPainterPath()
+            hpath.addRoundedRect(hr, radius, radius)
+            painter.fillPath(hpath.intersected(path), QBrush(header))
+            border = QColor(self._color); border.setAlpha(190)
+            painter.setPen(QPen(border, 1.4, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+
     class _GhostNode(QGraphicsEllipseItem):
         """BETA1-HITO-MULTI: marcador TENUE en el cruce franja↔carril de una
         entidad NO vinculada al hito. Clicarlo vincula esa entidad (pasa a punto
@@ -1301,7 +1466,9 @@ if HAS_QT:
         submitted = Signal(dict)
         cancelled = Signal()
 
-        def __init__(self, *, default_year, calendar_meta, era_name="", parent=None):
+        def __init__(
+            self, *, default_year, calendar_meta, era_name="", default_end_year=None, parent=None
+        ):
             super().__init__(parent)
             self.setObjectName("milestoneQuickCreate")
             # WA_StyledBackground: sin esto un QWidget plano NO pinta el fondo del
@@ -1321,13 +1488,26 @@ if HAS_QT:
             header = QLabel(f"Crear hito en «{era_name}»" if era_name else "Crear hito")
             header.setStyleSheet("font-size: 15px; font-weight: 600;")
             outer.addWidget(header)
-            form = QFormLayout()
+            # PULIDO-02: el formulario vive en un scroll acotado — con Año fin
+            # + Mes/Día crecía sin límite y podía desbordar el overlay en
+            # pantallas pequeñas.
+            form_host = QWidget()
+            form = QFormLayout(form_host)
+            form.setContentsMargins(0, 0, 0, 0)
             self.title_edit = QLineEdit("Nuevo hito")
             form.addRow("Título", self.title_edit)
             self.year_spin = QSpinBox()
             self.year_spin.setRange(-999999, 999999)
             self.year_spin.setValue(int(default_year))
             form.addRow("Año", self.year_spin)
+            # FOCO-26: fin opcional — el hito puede nacer con lapso inicio→fin.
+            self.end_year_spin = QSpinBox()
+            self.end_year_spin.setRange(-999999, 999999)
+            self.end_year_spin.setSpecialValueText("— sin fin")
+            self.end_year_spin.setValue(
+                int(default_end_year) if default_end_year is not None else -999999
+            )
+            form.addRow("Año fin (opcional)", self.end_year_spin)
             self.month_combo = None
             self.day_spin = None
             if full:
@@ -1342,7 +1522,12 @@ if HAS_QT:
                 self.day_spin.setRange(0, 99)  # 0 → sin día
                 self.day_spin.setSpecialValueText("(ninguno)")
                 form.addRow("Día (opcional)", self.day_spin)
-            outer.addLayout(form)
+            form_scroll = make_scroll_area(form_host)
+            form_scroll.setMaximumHeight(360)
+            form_scroll.setStyleSheet(
+                "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+            )
+            outer.addWidget(form_scroll)
             row = QHBoxLayout()
             row.addStretch(1)
             cancel_btn = QPushButton("Cancelar")
@@ -1359,6 +1544,16 @@ if HAS_QT:
             title = self.title_edit.text().strip() or "Nuevo hito"
             year = int(self.year_spin.value())
             data: dict = {"title": title, "year": year}
+            # FOCO-26: fin > inicio ⇒ lapso persistido como DURACIÓN en años
+            # (contrato de 22 campos intacto; as_temporal_span deriva el fin).
+            end_year = int(self.end_year_spin.value())
+            if end_year > max(year, int(self.end_year_spin.minimum())):
+                data["temporality"] = {
+                    "year": year,
+                    "is_duration": True,
+                    "duration_value": end_year - year,
+                    "duration_unit": "años",
+                }
             month = str(self.month_combo.currentData() or "") if self.month_combo is not None else ""
             day = int(self.day_spin.value()) if self.day_spin is not None else 0
             if month:
@@ -1513,6 +1708,12 @@ if HAS_QT:
         milestoneCreateRequested = Signal(int, str)
         # BETA1-HITO-MULTI: clic simple sobre una era → abrir su panel de edición.
         eraActivated = Signal(str)
+        # BETA2-UI2-10: "Crear era…" desde el menú contextual (el panel de
+        # filtros con CRUD de eras desapareció; esta es la vía contextual).
+        eraCreateRequested = Signal()  # noqa: N815 (Qt API)
+        # BETA2-FOCO-33: embudo de filtros de la cronología (el workspace abre el
+        # popover; la vista solo emite, igual que el Mapa).
+        filterRequested = Signal()  # noqa: N815 (Qt API)
         # BETA1-HITO-MULTI: clic en un cruce "fantasma" → vincular la entidad al
         # hito. (milestone_id, entity_id). Lo persiste el workspace por controller.
         milestoneEntityLinkRequested = Signal(str, str)
@@ -1561,6 +1762,12 @@ if HAS_QT:
             self._focused_ring_id = ""          # UX37: foco de anillo (vía leyenda)
             self._year_min: int | None = None   # UX38: ventana temporal
             self._year_max: int | None = None
+            # BETA2-FOCO-33: filtros del embudo (réplica del Mapa aplicable a la
+            # línea de tiempo). ChronoScope ya los respeta en build_chrono_layout.
+            self._filter_entity_types: frozenset = frozenset()
+            self._filter_ring_ids: frozenset = frozenset()
+            self._filter_canon_states: frozenset = frozenset()
+            self._filter_hide_secret = False
             self._lod_level = 2                  # UX39: 0 lejos … 2 cerca (se deriva del zoom)
             self._legend_hit_rects: list = []    # UX39/41: filas de la leyenda (rect, kind, id)
             # BETA1-UX41: navegación por teclado + filtro de era + edge-pan.
@@ -1630,6 +1837,182 @@ if HAS_QT:
             # BETA1-UX38: control de ventana temporal (scrubber de intervalo, overlay).
             self._time_window_bar = self._build_time_window_bar()
             self._time_window_bar.hide()
+            # BETA2-FOCO-33: embudo de filtros + badge (junto al scrubber temporal).
+            self._filter_btn = self._build_filter_button()
+            self._filter_btn.hide()
+            # BETA2-HOVER-03: previsualización flotante al hover (retrato + brief).
+            from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverPreviewController
+
+            self._hover_preview = HoverPreviewController(self, self._hover_content_at)
+
+        def set_assets_root(self, path) -> None:
+            """BETA2-HOVER-03: carpeta de assets del proyecto para los retratos de la
+            tarjeta flotante de hover (espejo del Mapa/Foco)."""
+            from pathlib import Path as _Path
+
+            self.scene()._portrait_assets_root = _Path(path) if path else None
+
+        # ── Previsualización flotante al hover (BETA2-HOVER-03) ──────────────
+
+        def _hover_content_at(self, view_pos):
+            """Resuelve el item bajo el cursor a contenido de previsualización
+            (entidad / hito / rama / anillo). None si no aplica."""
+            item = self.itemAt(view_pos)
+            while item is not None:
+                if isinstance(item, (_LifelineHead, _LifelineEndHandle)):
+                    return self._entity_hover_content(item.entity_id)
+                if isinstance(item, (_MilestoneNode, _MilestoneBand, _MilestoneBoxItem)):
+                    return self._hito_hover_content(item.milestone_id)
+                if isinstance(item, _BranchBoxItem):
+                    return self._entity_hover_content(item.branch_id)
+                if isinstance(item, _EraBandItem):
+                    return self._era_hover_content(item.era_id)
+                mid = item.data(_MILESTONE_ID_ROLE)
+                if mid:
+                    return self._hito_hover_content(str(mid))
+                ring_id = item.data(_RING_ID_ROLE)
+                if ring_id:
+                    return self._ring_hover_content(str(ring_id))
+                eid = item.data(_ENTITY_ID_ROLE)
+                if eid:
+                    return self._entity_hover_content(str(eid))
+                bbox = item.data(_BRANCH_BOX_ROLE)
+                if bbox:
+                    return self._entity_hover_content(str(bbox))
+                # BETA2-HOVER-09: etiqueta (nombre/rango) de era → tarjeta de era.
+                # `is not None` (no truthiness): en calendario completo el id es ""
+                # y aun así queremos parar el walk (el builder devuelve None si toca).
+                era_id = item.data(_ERA_ID_ROLE)
+                if era_id is not None:
+                    return self._era_hover_content(str(era_id))
+                item = item.parentItem()
+            return None
+
+        def _project_entity(self, entity_id):
+            project = self._project
+            if project is None:
+                return None
+            getter = getattr(project, "entity_by_id", None)
+            if callable(getter):
+                return getter(entity_id)
+            return next(
+                (
+                    e
+                    for e in getattr(project, "entities", []) or []
+                    if str(getattr(e, "id", "")) == str(entity_id)
+                ),
+                None,
+            )
+
+        def _ring_name_for(self, entity) -> str:
+            project = self._project
+            layer_ids = list(getattr(entity, "layer_ids", []) or [])
+            if project is None or not layer_ids:
+                return ""
+            for layer in getattr(project, "world_layers", []) or []:
+                if str(getattr(layer, "id", "")) == str(layer_ids[0]):
+                    return str(getattr(layer, "name", "") or "")
+            return ""
+
+        def _entity_hover_content(self, entity_id):
+            from hosts.DesktopHostPySide.widgets.design_system import enum_human
+            from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+
+            entity = self._project_entity(entity_id)
+            if entity is None:
+                return None
+            etype = getattr(
+                getattr(entity, "entity_type", None),
+                "value",
+                str(getattr(entity, "entity_type", "")),
+            )
+            is_branch = str(etype) == "contenedor"
+            meta = " · ".join(b for b in (enum_human(etype), self._ring_name_for(entity)) if b)
+            cmeta = getattr(entity, "custom_metadata", {}) or {}
+            return HoverContent(
+                title=str(getattr(entity, "name", "") or "Sin nombre"),
+                meta=meta,
+                brief=str(getattr(entity, "brief_description", "") or ""),
+                kind="rama" if is_branch else "entidad",
+                entity_type=str(etype),
+                image_path=str(cmeta.get("_image_path", "") or ""),
+                image_crop=cmeta.get("_image_crop"),
+                assets_root=getattr(self.scene(), "_portrait_assets_root", None),
+            )
+
+        def _hito_hover_content(self, milestone_id):
+            from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+            from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_temporal_label
+
+            project = self._project
+            hito = None
+            if project is not None:
+                hito = next(
+                    (
+                        h
+                        for h in getattr(project, "causal_milestones", []) or []
+                        if str(getattr(h, "id", "")) == str(milestone_id)
+                    ),
+                    None,
+                )
+            if hito is None:
+                return None
+            return HoverContent(
+                title=str(getattr(hito, "title", "") or "Hito"),
+                meta=milestone_temporal_label(hito),
+                brief=str(getattr(hito, "description", "") or ""),
+                kind="hito",
+            )
+
+        def _ring_hover_content(self, ring_id):
+            from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+
+            project = self._project
+            name, desc, color = "Anillo", "", ""
+            if project is not None:
+                for layer in getattr(project, "world_layers", []) or []:
+                    if str(getattr(layer, "id", "")) == str(ring_id):
+                        name = str(getattr(layer, "name", "") or "Anillo")
+                        desc = str(
+                            getattr(layer, "description", "")
+                            or getattr(layer, "brief_description", "")
+                            or ""
+                        )
+                        color = str(getattr(layer, "color", "") or "")
+                        break
+            return HoverContent(title=name, meta="Anillo", brief=desc, kind="anillo", accent=color)
+
+        def _era_hover_content(self, era_id):
+            """BETA2-HOVER-09: tarjeta de resumen de una era (nombre + rango de
+            años + descripción). La fuente canónica (con descripción) es
+            ``effective_eras``; si no hay match (p. ej. calendario completo con
+            eras derivadas de metadata), se cae a ``_all_eras`` (nombre+rango)."""
+            from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverContent
+
+            eid = str(era_id or "")
+            name, brief = "Era", ""
+            start = end = None
+            project = self._project
+            if project is not None and eid:
+                for era in effective_eras(project):
+                    if str(getattr(era, "id", "")) == eid:
+                        name = str(getattr(era, "name", "") or "Era")
+                        brief = str(getattr(era, "description", "") or "")
+                        start = getattr(era, "start_year", None)
+                        end = getattr(era, "end_year", None)
+                        break
+            if start is None:
+                era_tuple = next(
+                    (e for e in getattr(self, "_all_eras", []) if str(e[0]) == eid), None
+                )
+                if era_tuple is not None:
+                    name = str(era_tuple[1] or name)
+                    start, end = era_tuple[2], era_tuple[3]
+            if start is None and not brief and name == "Era":
+                return None
+            end_txt = end if end is not None else "…"
+            rng = f"{start} → {end_txt}" if start is not None else ""
+            return HoverContent(title=name, meta=rng, brief=brief, kind="era")
 
         def set_atmosphere_context(self, ctx) -> None:
             self._ctx = ctx
@@ -1646,6 +2029,11 @@ if HAS_QT:
             return ChronoScope(
                 collapse_default=self._collapse_default,
                 expanded_ids=frozenset(self._expanded_ids),
+                # BETA2-FOCO-33: filtros del embudo (tipo/anillo/canon/secretas).
+                entity_types=frozenset(self._filter_entity_types),
+                ring_ids=frozenset(self._filter_ring_ids),
+                canon_states=frozenset(self._filter_canon_states),
+                hide_secret=self._filter_hide_secret,
                 focused_ring_id=self._focused_ring_id,
                 year_min=self._year_min,
                 year_max=self._year_max,
@@ -1915,12 +2303,93 @@ if HAS_QT:
             if bar is None:
                 return
             bar.adjustSize()
-            bar.move(max(8, (self.width() - bar.width()) // 2), 10)
+            funnel = getattr(self, "_filter_btn", None)
+            funnel_w = (funnel.width() + 8) if funnel is not None else 0
+            # Centra el conjunto scrubber+embudo; el embudo va a la derecha del scrubber.
+            left = max(8, (self.width() - bar.width() - funnel_w) // 2)
+            bar.move(left, 10)
             bar.raise_()
             has_content = self._layout is not None and bool(
                 getattr(self._layout, "lifelines", None) or getattr(self._layout, "columns", None)
             )
             bar.setVisible(has_content)
+            if funnel is not None:
+                funnel.move(left + bar.width() + 8, 10 + (bar.height() - funnel.height()) // 2)
+                funnel.raise_()
+                funnel.setVisible(has_content)
+
+        # ── BETA2-FOCO-33: embudo de filtros (réplica del Mapa) ──────────────
+        def _build_filter_button(self):
+            from hosts.DesktopHostPySide.widgets import icons
+
+            btn = QPushButton(self)
+            btn.setToolTip("Filtros de la cronología")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedSize(26, 26)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {CHRONO_LINE}; "
+                f"border-radius: 13px; }} "
+                f"QPushButton:hover {{ background: {SURFACE_PALE}; border-color: {CHRONO_GOLD}; }}"
+            )
+            icons.set_button_icon(btn, "filter", color=CHRONO_INK, size=13)
+            btn.clicked.connect(self.filterRequested.emit)
+            self._filter_badge = QLabel("0", btn)
+            self._filter_badge.setObjectName("filterBadge")
+            self._filter_badge.setStyleSheet(
+                f"QLabel#filterBadge {{ background: {CHRONO_GOLD}; color: {CHRONO_INK}; "
+                f"border: 1px solid {SURFACE_HI}; border-radius: 6px; "
+                f"font-size: 8px; font-weight: 700; padding: 0px 2px; }}"
+            )
+            self._filter_badge.hide()
+            return btn
+
+        def filter_anchor(self):
+            """Ancla del popover de filtros (el embudo)."""
+            return self._filter_btn
+
+        def set_filter_badge_count(self, count: int) -> None:
+            """Badge de filtros activos sobre el embudo (0 = oculto)."""
+            count = max(0, int(count))
+            badge = self._filter_badge
+            if count <= 0:
+                badge.hide()
+                return
+            badge.setText(str(count))
+            badge.adjustSize()
+            badge.move(max(0, self._filter_btn.width() - badge.width() - 1), 0)
+            badge.show()
+            badge.raise_()
+
+        def active_filter_count(self) -> int:
+            return (
+                (1 if self._filter_entity_types else 0)
+                + (1 if self._filter_ring_ids else 0)
+                + (1 if self._filter_canon_states else 0)
+                + (1 if self._filter_hide_secret else 0)
+            )
+
+        def apply_scope_filter(
+            self, *, entity_types=(), ring_ids=(), canon_states=(), hide_secret: bool = False
+        ) -> None:
+            """Fija los filtros del embudo y reconstruye (ChronoScope los respeta)."""
+            self._filter_entity_types = frozenset(str(v).lower() for v in entity_types if v)
+            self._filter_ring_ids = frozenset(str(v) for v in ring_ids if v)
+            self._filter_canon_states = frozenset(str(v).lower() for v in canon_states if v)
+            self._filter_hide_secret = bool(hide_secret)
+            if self._project is not None:
+                self.set_project(self._project)
+
+        def clear_scope_filter(self) -> None:
+            self.apply_scope_filter()
+
+        def filter_snapshot(self) -> dict:
+            """Estado actual de los filtros (para rehidratar el popover)."""
+            return {
+                "entity_types": sorted(self._filter_entity_types),
+                "ring_ids": sorted(self._filter_ring_ids),
+                "canon_states": sorted(self._filter_canon_states),
+                "hide_secret": self._filter_hide_secret,
+            }
 
         def _toggle_collapse(self, branch_id: str) -> None:
             """BETA1-UX36: alterna el colapso de un contenedor (clic en su caja).
@@ -1995,10 +2464,8 @@ if HAS_QT:
                 radius = max(layout.width, layout.height, 600.0) * 0.62
             else:
                 cx, cy, radius = 0.0, 0.0, 1500.0
-            grad = QRadialGradient(QPointF(cx, cy), radius)
-            for stop, hexc in _VIGNETTE:
-                grad.setColorAt(stop, QColor(hexc))
-            self.setBackgroundBrush(QBrush(grad))
+            # PULIDO-07: viñeta compartida del sistema (misma en Mapa/Crono/Foco).
+            self.setBackgroundBrush(canvas_vignette_brush(cx, cy, radius))
 
         def drawBackground(self, painter, rect):  # noqa: N802 (Qt API)
             super().drawBackground(painter, rect)  # viñeta radial (backgroundBrush)
@@ -2397,6 +2864,25 @@ if HAS_QT:
                         font=yr_font, fg=_MUTED, z=8, max_w=LEFT_MARGIN - 10, tag=era_tag,
                     )
 
+            # BETA2-HOVER-10: anti-colisión GLOBAL de etiquetas. Registro compartido
+            # de rects en el espacio LÓGICO (cross×tiempo, pre-_pt). Se siembra con las
+            # familias de posición fija (nombres de vida, etiquetas de rama/hito-marco);
+            # luego el título de hito —única familia MÓVIL— se empuja en cross para no
+            # pisar ninguna. La vista transpone con _pt, que preserva la disjunción.
+            reserved_label_rects: list[tuple[float, float, float, float]] = []
+
+            def _label_footprint(cross, time, w, h):
+                """Rect lógico (cross0, time0, cross1, time1) de una etiqueta de texto
+                horizontal de tamaño (w, h) px anclada (esquina) en (cross, time). En
+                modo horizontal la vista transpone (cross↔Y, tiempo↔X), así que el ANCHO
+                del texto ocupa el eje TIEMPO y el ALTO el eje CROSS (y al revés en vertical)."""
+                cross_ext = h if self._horizontal else w
+                time_ext = w if self._horizontal else h
+                return (cross, time, cross + cross_ext, time + time_ext)
+
+            def _rects_overlap(a, b):
+                return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
             # BETA1-UX9: cajas de rama (contenedores) que encierran a sus miembros.
             # Tras las eras y antes de las vidas; z entre ambas para que vidas,
             # cabezas y nombres queden por encima (interior "click-through": clic en
@@ -2423,6 +2909,41 @@ if HAS_QT:
                     font=box_font, fg=_INK, z=9, max_w=240,
                     tag=(_BRANCH_BOX_ROLE, box.branch_id),
                 )
+                # BETA2-HOVER-10: reserva el rect de la etiqueta de rama para que los
+                # títulos de hito la esquiven.
+                _blw = min(240.0, QFontMetrics(box_font).horizontalAdvance(box_label) + 14.0)
+                reserved_label_rects.append(_label_footprint(
+                    box.x_left + BOX_LABEL_PAD - 7.0, box.y0 + 6.0 - 3.0,
+                    _blw, QFontMetrics(box_font).height() + 6.0,
+                ))
+
+            # BETA2-SUB-01: cajas de hito-marco (guerras…) que encierran a sus
+            # subhitos. z bajo (−20), así los nodos/vidas quedan por encima; el
+            # interior vacío abre el hito (rol _MILESTONE_ID_ROLE).
+            for mbox in getattr(layout, "milestone_boxes", []):
+                mbox_rect = self._logical_rect(mbox.x_left, mbox.y0, mbox.x_right, mbox.y1)
+                mbox_item = _MilestoneBoxItem(
+                    mbox.milestone_id, mbox.color, BOX_HEADER_PX, self._horizontal,
+                    mbox_rect.x(), mbox_rect.y(), mbox_rect.width(), mbox_rect.height(),
+                )
+                scene.addItem(mbox_item)
+                mbox_label = (
+                    mbox.title if mbox.subhito_count <= 0
+                    else f"{mbox.title}  ·  {mbox.subhito_count}"
+                )
+                mbox_font = QFont("Georgia"); mbox_font.setPointSize(9); mbox_font.setBold(True)
+                mbox_anchor = self._pt(mbox.x_left + BOX_LABEL_PAD, mbox.y0 + 6.0)
+                _add_pill_label(
+                    scene, mbox_label, mbox_anchor.x(), mbox_anchor.y(),
+                    font=mbox_font, fg=_INK, z=9, max_w=240,
+                    tag=(_MILESTONE_ID_ROLE, mbox.milestone_id),
+                )
+                # BETA2-HOVER-10: reserva el rect de la etiqueta de hito-marco.
+                _mlw = min(240.0, QFontMetrics(mbox_font).horizontalAdvance(mbox_label) + 14.0)
+                reserved_label_rects.append(_label_footprint(
+                    mbox.x_left + BOX_LABEL_PAD - 7.0, mbox.y0 + 6.0 - 3.0,
+                    _mlw, QFontMetrics(mbox_font).height() + 6.0,
+                ))
 
             # Cabeceras de columna (anillos — el lector conserva el mapa mental).
             # BETA1-UX35: cada columna de ANILLO recibe identidad visual cálida y
@@ -2482,6 +3003,8 @@ if HAS_QT:
                     scene, column.name, base.x(), header_y,
                     font=font, fg=_INK, z=8, max_w=220,
                     align_right=self._horizontal, center=not self._horizontal,
+                    # BETA2-HOVER-03: la cabecera lleva el ring_id para la previsualización.
+                    tag=(_RING_ID_ROLE, column.ring_id),
                 )
                 lr = header.sceneBoundingRect()
                 sw = 9.0
@@ -2536,6 +3059,10 @@ if HAS_QT:
 
             # Líneas de vida. BETA1-UX7: cada vida es una línea a lo largo del eje
             # del TIEMPO a su posición de ANILLO; en horizontal queda horizontal.
+            # BETA2-HOVER-10 (fix duplicado): una rama con caja ya se rotula en la
+            # cabecera de su caja («Nombre · N»); NO dibujamos además el nombre de su
+            # línea de vida (se solapaban «Nueva rama · 1» de la caja y «Nueva rama»).
+            boxed_branch_ids = {box.branch_id for box in layout.boxes}
             for lifeline in layout.lifelines:
                 width = 3.4 if lifeline.is_tree else 2.2
                 pen = QPen(QColor(_LINE.red(), _LINE.green(), _LINE.blue(), 200), width)
@@ -2589,6 +3116,10 @@ if HAS_QT:
                 # lod 2 = todos. (Es lo último del bucle, así que continue es seguro.)
                 if scope.lod_level == 0 or (scope.lod_level == 1 and not lifeline.is_tree):
                     continue
+                # BETA2-HOVER-10: si la rama tiene caja, su cabecera ya la rotula →
+                # no dupliques el nombre de la vida encima.
+                if lifeline.entity_id in boxed_branch_ids:
+                    continue
                 # BETA1-HITO-MULTI: nombre CENTRADO sobre su línea, SIN recuadro
                 # (texto suelto), y POR ENCIMA del nodo para no taparlo (el nodo
                 # marca el origen y debe quedar libre para arrastrar el lapso).
@@ -2626,6 +3157,22 @@ if HAS_QT:
                 name_item.setZValue(31)
                 name_item.setData(_ENTITY_ID_ROLE, lifeline.entity_id)  # clic en el nombre → abrir entidad
                 scene.addItem(name_item)
+                # BETA2-HOVER-10: reserva el rect del nombre (en el espacio lógico,
+                # replicando el offset REAL por modo) para que los títulos lo esquiven.
+                if self._horizontal:
+                    reserved_label_rects.append((
+                        lifeline.x - head_r - 6.0 - r.height() - 3.0,
+                        lifeline.y_birth - head_r - 3.0,
+                        lifeline.x - head_r - 6.0 + 3.0,
+                        lifeline.y_birth - head_r + r.width() + 3.0,
+                    ))
+                else:
+                    reserved_label_rects.append((
+                        lifeline.x - r.width() / 2.0 - 3.0,
+                        lifeline.y_birth - head_r - 8.0 - r.height() - 3.0,
+                        lifeline.x + r.width() / 2.0 + 3.0,
+                        lifeline.y_birth - head_r - 8.0 + 3.0,
+                    ))
 
             # Hitos: cada hito es una FRANJA horizontal a la altura de su año que
             # cruza todo el grafo, con un punto por entidad participante
@@ -2643,6 +3190,11 @@ if HAS_QT:
             boxes: dict[int, list] = {}
             for mark in layout.milestones:
                 boxes.setdefault(mark.year, []).append(mark)
+            # BETA2-HOVER-10: anti-colisión GLOBAL — los títulos de hito arrancan
+            # esquivando TODAS las familias fijas ya sembradas (nombres de vida,
+            # etiquetas de rama/hito-marco) además de otros títulos. Registro en el
+            # espacio lógico cross×tiempo; el empuje es en el eje cross.
+            placed_title_rects: list[tuple[float, float, float, float]] = list(reserved_label_rects)
             for year, box in boxes.items():
                 cy = sum(m.y_band for m in box) / len(box)
                 # Año una sola vez por caja, junto al inicio del eje anillo,
@@ -2657,11 +3209,26 @@ if HAS_QT:
                 # TÍTULOS se apilan en el eje PERPENDICULAR (cross) — en
                 # horizontal hacia abajo, en vertical hacia un lado — para que no
                 # se solapen. Un solo hito por año conserva su sitio exacto.
-                title_step = QFontMetrics(title_font).height() + 8.0
                 title_base_cross = label_x + year_tag_w + 10.0
-                for stack_i, mark in enumerate(box):
+                for mark in box:
                     y = mark.y_band
                     items: list = []
+                    # FOCO-25: hito con fin ⇒ franja translúcida inicio→fin a lo
+                    # largo del eje de tiempo (el lapso del hito se VE).
+                    if mark.y_end is not None and mark.y_end > y:
+                        span_rect = QGraphicsRectItem(
+                            self._logical_rect(LEFT_MARGIN, y, band_x1, mark.y_end)
+                        )
+                        span_fill = QColor(_LINE)
+                        span_fill.setAlpha(40)
+                        span_rect.setBrush(span_fill)
+                        span_rect.setPen(QPen(Qt.PenStyle.NoPen))
+                        span_rect.setZValue(17)
+                        span_rect.setToolTip(
+                            f"{mark.title} — {mark.year} a {mark.end_year}"
+                        )
+                        scene.addItem(span_rect)
+                        items.append(span_rect)
                     band = _MilestoneBand(mark, LEFT_MARGIN, band_x1, self._horizontal)
                     scene.addItem(band)
                     items.append(band)
@@ -2670,9 +3237,25 @@ if HAS_QT:
                     title_text = mark.title
                     if mark.sub_label:
                         title_text += f" · {mark.sub_label}"
-                    title_at = self._pt(
-                        title_base_cross + stack_i * title_step, y - 9.0
+                    # Ancho/alto estimados de la píldora del título (tope max_w=300).
+                    title_w = min(
+                        300.0, QFontMetrics(title_font).horizontalAdvance(title_text) + 14.0
                     )
+                    title_h = QFontMetrics(title_font).height() + 6.0
+                    time0 = y - 9.0
+                    # Extensión del título en el eje CROSS (mode-aware) → paso de empuje.
+                    cross_ext = title_h if self._horizontal else title_w
+                    cross_step = cross_ext + 8.0
+                    cross0 = title_base_cross
+                    # Empuje greedy en cross hasta no solapar con NADA ya colocado
+                    # (títulos previos + familias fijas sembradas).
+                    for _ in range(64):
+                        rect = _label_footprint(cross0, time0, title_w, title_h)
+                        if not any(_rects_overlap(rect, other) for other in placed_title_rects):
+                            break
+                        cross0 += cross_step
+                    placed_title_rects.append(_label_footprint(cross0, time0, title_w, title_h))
+                    title_at = self._pt(cross0, time0)
                     _add_pill_label(
                         scene, title_text, title_at.x(), title_at.y(),
                         font=title_font, fg=_INK, z=34, max_w=300,
@@ -2837,12 +3420,14 @@ if HAS_QT:
                 self.fit_all()
                 event.accept()
                 return
-            # BETA1-UX41: Tab/Shift+Tab recorren las ERAS (acotando a cada una).
-            if key == Qt.Key.Key_Tab:
+            # BETA1-UX41/FOCO-28: AvPág/RePág recorren las ERAS (acotando a cada
+            # una). Tab/Shift+Tab quedaron para cambiar de MODO (Foco/Mapa/Crono),
+            # interceptados por el eventFilter de CreationWorkspace.
+            if key == Qt.Key.Key_PageDown:
                 self._cycle_era(1)
                 event.accept()
                 return
-            if key == Qt.Key.Key_Backtab:  # Shift+Tab
+            if key == Qt.Key.Key_PageUp:
                 self._cycle_era(-1)
                 event.accept()
                 return
@@ -2867,11 +3452,6 @@ if HAS_QT:
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._open_nav_current(); event.accept(); return
             super().keyPressEvent(event)
-
-        def focusNextPrevChild(self, _next):  # noqa: N802 (Qt API)
-            # BETA1-UX41: que Tab/Shift+Tab lleguen a keyPressEvent (recorrer eras)
-            # en vez de mover el foco entre widgets.
-            return False
 
         def keyReleaseEvent(self, event):  # noqa: N802
             if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
@@ -3212,8 +3792,15 @@ if HAS_QT:
             era = next((b for b in layout.eras if b.y0 <= t <= b.y1), None)
             menu = QMenu(self)
             label = f"Crear hito en «{era.name}»…" if era is not None else "Crear hito aquí…"
-            action = menu.addAction(label)
-            if menu.exec(event.globalPos()) is not action:
+            milestone_action = menu.addAction(label)
+            # BETA2-UI2-10: crear era desde el propio lienzo (vía contextual).
+            era_action = menu.addAction("Crear era…")
+            chosen = menu.exec(event.globalPos())
+            if chosen is era_action:
+                self.eraCreateRequested.emit()
+                event.accept()
+                return
+            if chosen is not milestone_action:
                 event.accept()
                 return
             year = int(layout.scale.year_at(t)) if layout.scale is not None else 0

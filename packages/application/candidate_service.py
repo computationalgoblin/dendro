@@ -7,11 +7,45 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application.project_chronology_service import ProjectChronologyService
+from packages.application.world_layer_causal import set_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
 from packages.domain.causal_milestone import CausalMilestone
-from packages.domain.world_layer import WorldLayer
 from packages.domain.result import Error, Ok, Result
-from packages.application.project_chronology_service import ProjectChronologyService
+from packages.domain.world_layer import WorldLayer
+
+# BETA2-PLAY-15: campos que la IA puede proponer editar (decisión de producto:
+# todos los editables SALVO visibilidad/secretos/estado de canon, y las
+# referencias internas por id que la IA no puede conocer de forma fiable).
+# Lista blanca ÚNICA: la normalización (ai_jobs) filtra con ella y la
+# aceptación (_apply_edit_fields) la vuelve a validar — nunca fallback mudo.
+AI_EDITABLE_ENTITY_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "aliases",
+        "entity_type",
+        "brief_description",
+        "extended_description",
+        "certainty_level",
+        "tags",
+        "exportable_notes",
+        "narrative_importance",
+        "development_level",
+        "birth_year",
+        "death_year",
+        "life_span",
+        "temporal_nature",
+    }
+)
+AI_EDITABLE_MILESTONE_FIELDS: frozenset[str] = frozenset(
+    {"title", "description", "rationale", "year", "milestone_type"}
+)
+# Alias tolerados del modelo → campo del dominio.
+AI_ENTITY_FIELD_ALIASES: dict[str, str] = {
+    "body": "extended_description",
+    "description": "brief_description",
+}
+AI_MILESTONE_FIELD_ALIASES: dict[str, str] = {"body": "rationale", "summary": "description"}
 
 
 def _now() -> datetime:
@@ -194,7 +228,7 @@ class CandidateService:
             for i in issues
         ]
 
-    def accept_candidate(self, cid: str) -> Result[Candidate, str]:
+    def accept_candidate(self, cid: str, impact_service: Any = None) -> Result[Candidate, str]:
         rc = self.get_candidate(cid)
         if isinstance(rc, Error):
             return rc
@@ -343,10 +377,66 @@ class CandidateService:
                     "derived_from": str(data.get("derived_from") or ""),
                 },
             )
+            # BETA2-STRUCT-07 (fix smoke): el orden VISUAL de los anillos lo fija
+            # ``causal_rank`` (foco_rings.effective_rank_map), no ``order`` — que solo
+            # es desempate. Si la propuesta trae un rank causal (la IA lo asigna al
+            # proponer estructura), lo escribimos para que el anillo nuevo caiga en su
+            # banda; sin esto el anillo quedaba al final (rank None → desempate por order).
+            causal_rank = data.get("causal_rank")
+            if isinstance(causal_rank, (int, float)):
+                set_causal_rank(layer, int(causal_rank))
             proj.value.world_layers.append(layer)
             if hasattr(proj.value, "touch"):
                 proj.value.touch()
             entity_id = layer.id
+        elif c.proposed_data.get("kind") == "ring_move":
+            # BETA2-MEM-08: propuesta estructural — mueve una entidad de anillo. Es
+            # revisable (candidato) pero NO un candidato narrativo ordinario. Al
+            # aceptar: swap de layer_ids (preservando capas no-anillo) + propaga
+            # impacto (via el bloque to_propagate, con entity_id fijado abajo).
+            data = c.proposed_data
+            move_id = str(data.get("entity_id") or "")
+            target_ring_id = str(data.get("target_ring_id") or "")
+            moved = proj.value.entity_by_id(move_id) if move_id else None
+            if moved is None or not target_ring_id:
+                return Error("Propuesta de mover-anillo sin entidad o anillo destino")
+            world_ids = {wl.id for wl in getattr(proj.value, "world_layers", []) or []}
+            preserved = [lid for lid in (moved.layer_ids or []) if lid not in world_ids]
+            new_layers = preserved + [target_ring_id]
+            if self.entity_service is not None:
+                applied = self.entity_service.update_entity(move_id, {"layer_ids": new_layers})
+                if isinstance(applied, Error):
+                    return applied
+            else:
+                moved.layer_ids = new_layers
+                moved.touch()
+                if hasattr(proj.value, "touch"):
+                    proj.value.touch()
+            entity_id = move_id  # dispara impacto (marca dependientes Falta regar)
+        elif c.proposed_data.get("kind") == "ring_merge":
+            # BETA2-STRUCT-07: fusión de anillos — reasigna los miembros del anillo ORIGEN
+            # al DESTINO (dedup) y elimina el origen. Estructural, revisable; via servicio.
+            data = c.proposed_data
+            src = str(data.get("source_ring_id") or "")
+            dst = str(data.get("target_ring_id") or "")
+            layers = getattr(proj.value, "world_layers", []) or []
+            has_src = any(wl.id == src for wl in layers)
+            has_dst = any(wl.id == dst for wl in layers)
+            if not src or not dst or src == dst or not has_src or not has_dst:
+                return Error("Fusión de anillos inválida (origen/destino)")
+            for ent in list(getattr(proj.value, "entities", []) or []):
+                if src in (ent.layer_ids or []):
+                    new = [lid for lid in ent.layer_ids if lid != src]
+                    if dst not in new:
+                        new.append(dst)
+                    if self.entity_service is not None:
+                        self.entity_service.update_entity(ent.id, {"layer_ids": new})
+                    else:
+                        ent.layer_ids = new
+                        ent.touch()
+            proj.value.world_layers = [wl for wl in layers if wl.id != src]
+            if hasattr(proj.value, "touch"):
+                proj.value.touch()
         elif c.proposed_data.get("kind") == "project_chronology_suggestion":
             result = ProjectChronologyService(self.project_service).apply_candidate(c.proposed_data)
             if isinstance(result, Error):
@@ -399,6 +489,30 @@ class CandidateService:
         c.reviewed_at = _now()
         self._add_history(proj.value, "candidato_aceptado", entity_id,
                           f"Candidate '{c.title}' accepted", c.id)
+        # BETA2-MEM-04: al florecer canon (semilla→canon), propaga impacto (Falta
+        # regar) para lo creado/editado. Efecto derivado: nunca rompe el accept.
+        if impact_service is not None:
+            to_propagate: list[tuple[str, str]] = []
+            if entity_id:
+                to_propagate.append(("entity", entity_id))
+            if created_relation_id:
+                to_propagate.append(("relation", created_relation_id))
+            if created_milestone_id:
+                to_propagate.append(("milestone", created_milestone_id))
+            for key, val in (edited_stamp or {}).items():
+                if not val:
+                    continue
+                if key.endswith("entity_id"):
+                    to_propagate.append(("entity", val))
+                elif key.endswith("relation_id"):
+                    to_propagate.append(("relation", val))
+                elif key.endswith("milestone_id"):
+                    to_propagate.append(("milestone", val))
+            for kind, oid in dict.fromkeys(to_propagate):
+                try:
+                    impact_service.propagate_change(kind, oid)
+                except Exception:  # noqa: BLE001
+                    pass
         return Ok(c)
 
     # UX4 (C5): mapeo de campo de edición → campo del dominio por tipo de objetivo.
@@ -437,6 +551,12 @@ class CandidateService:
         """
         if not isinstance(pd, dict):
             return False
+        # PLAY-15: patch multi-campo (edit_fields) — exige objetivo resoluble.
+        fields = pd.get("edit_fields")
+        if isinstance(fields, dict) and fields:
+            return bool(str(pd.get("edit_target_name") or "").strip()) or bool(
+                str(pd.get("edit_target_id") or "").strip()
+            )
         has_value = bool(str(pd.get("edit_proposed_value") or "").strip())
         if pd.get("edit_kind") == "relation_edits":
             return has_value or bool(str(pd.get("edit_relation_type") or "").strip())
@@ -446,6 +566,10 @@ class CandidateService:
         """Aplica una edición staged a canon. Resuelve el objetivo por nombre y,
         de respaldo, por la selección guardada en metadata.context_scope."""
         pd = c.proposed_data or {}
+        # PLAY-15: el patch multi-campo tiene su propio camino (lista blanca).
+        fields = pd.get("edit_fields")
+        if isinstance(fields, dict) and fields:
+            return self._apply_edit_fields(project, c, pd, fields)
         kind = str(pd.get("edit_kind") or "entity_edits")
         target_name = str(pd.get("edit_target_name") or "").strip()
         field = str(pd.get("edit_field") or "").strip().lower()
@@ -458,7 +582,11 @@ class CandidateService:
             ent = self._find_entity(project, target_name, scope.get("selected_entity_ids"))
             if ent is None:
                 return Error(f"No se encontró la entidad a editar: '{target_name}'")
-            dom_field = self._ENTITY_FIELD_MAP.get(field, "extended_description")
+            dom_field = self._ENTITY_FIELD_MAP.get(field)
+            if dom_field is None:
+                # PLAY-15: un campo desconocido era antes un fallback SILENCIOSO a
+                # extended_description (escribía el valor en el cuerpo). Nunca más.
+                return Error(f"Campo no editable por IA: '{field}'")
             res = self.entity_service.update_entity(ent.id, {dom_field: value})
             if isinstance(res, Error):
                 return res
@@ -535,13 +663,98 @@ class CandidateService:
                     project.touch()
                 return Ok(("milestone", hito.id))
             attr = {"title": "title", "summary": "description", "description": "description",
-                    "body": "rationale", "rationale": "rationale"}.get(field, "description")
+                    "body": "rationale", "rationale": "rationale"}.get(field)
+            if attr is None:
+                # PLAY-15: campo desconocido ⇒ error explícito, nunca fallback mudo.
+                return Error(f"Campo no editable por IA: '{field}'")
             setattr(hito, attr, value)
             if hasattr(project, "touch"):
                 project.touch()
             return Ok(("milestone", hito.id))
 
         return Error(f"Tipo de edición no soportado: {kind}")
+
+    @staticmethod
+    def _find_milestone(project, pd: dict) -> Any | None:
+        """Resolución por ID primero (estable ante renombrados), título de respaldo."""
+        target_id = str(pd.get("edit_target_id") or "").strip()
+        if target_id:
+            for m in project.causal_milestones:
+                if str(getattr(m, "id", "")) == target_id:
+                    return m
+        nm = str(pd.get("edit_target_name") or "").strip().lower()
+        if nm:
+            for m in project.causal_milestones:
+                if str(getattr(m, "title", "")).lower() == nm:
+                    return m
+        return None
+
+    def _apply_edit_fields(
+        self, project, c: Candidate, pd: dict, fields: dict
+    ) -> Result[tuple, str]:
+        """PLAY-15: aplica un patch multi-campo validado contra la lista blanca.
+
+        Cada campo se mapea por alias y se valida; uno desconocido es Error
+        explícito (jamás el viejo fallback silencioso a la descripción). Las
+        entidades delegan en ``EntityService.update_entity`` (patch genérico ya
+        validado en dominio); los hitos se reconstruyen vía ``from_dict`` con el
+        espejo ``year``→``temporality`` (J01).
+        """
+        kind = str(pd.get("edit_kind") or "entity_edits")
+        target_name = str(pd.get("edit_target_name") or "").strip()
+        scope = (getattr(c, "metadata", None) or {}).get("context_scope") or {}
+
+        if kind in ("entity_edits", "entity"):
+            if not self.entity_service:
+                return Error("EntityService not available")
+            ent = self._find_entity(project, target_name, scope.get("selected_entity_ids"))
+            if ent is None:
+                return Error(f"No se encontró la entidad a editar: '{target_name}'")
+            patch: dict[str, Any] = {}
+            for raw_key, value in fields.items():
+                lowered = str(raw_key).strip().lower()
+                key = AI_ENTITY_FIELD_ALIASES.get(lowered, lowered)
+                if key not in AI_EDITABLE_ENTITY_FIELDS:
+                    return Error(f"Campo no editable por IA: '{raw_key}'")
+                patch[key] = value
+            res = self.entity_service.update_entity(ent.id, patch)
+            if isinstance(res, Error):
+                return res
+            return Ok(("entity", ent.id))
+
+        if kind == "milestone_edits":
+            hito = self._find_milestone(project, pd)
+            if hito is None:
+                return Error(f"No se encontró el hito a editar: '{target_name}'")
+            patch = {}
+            for raw_key, value in fields.items():
+                lowered = str(raw_key).strip().lower()
+                key = AI_MILESTONE_FIELD_ALIASES.get(lowered, lowered)
+                if key not in AI_EDITABLE_MILESTONE_FIELDS:
+                    return Error(f"Campo no editable por IA: '{raw_key}'")
+                if key == "year" and value is not None:
+                    try:
+                        value = int(str(value).strip())
+                    except (TypeError, ValueError):
+                        return Error(f"Año inválido para el hito: '{value}'")
+                patch[key] = value
+            merged = hito.to_dict()
+            merged.update(patch)
+            try:
+                updated = CausalMilestone.from_dict(merged)
+            except Exception as exc:  # noqa: BLE001 — datos propuestos por el modelo
+                return Error(f"Edición de hito inválida: {exc}")
+            if "year" in patch and getattr(updated, "temporality", None) is not None:
+                updated.temporality.year = updated.year  # espejo J01
+            for i, m in enumerate(project.causal_milestones):
+                if str(getattr(m, "id", "")) == str(hito.id):
+                    project.causal_milestones[i] = updated
+                    break
+            if hasattr(project, "touch"):
+                project.touch()
+            return Ok(("milestone", hito.id))
+
+        return Error(f"Tipo de edición multi-campo no soportado: {kind}")
 
     def accept_with_changes(self, cid: str, modified: dict) -> Result[Candidate, str]:
         rc = self.get_candidate(cid)

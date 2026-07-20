@@ -10,7 +10,8 @@ from packages.domain.temporal_models import EventTemporality, TemporalPrecision
 
 
 @pytest.mark.domain
-def test_causal_milestone_has_22_exact_fields_and_roundtrips():
+def test_causal_milestone_has_24_exact_fields_and_roundtrips():
+    # 22 campos B41-T01 + ``year`` (BETA1-G02) + ``parent_milestone_id`` (BETA2-SUB-01).
     milestone = CausalMilestone(
         id="hito-1",
         title="Caída de la Primera Luna",
@@ -34,16 +35,20 @@ def test_causal_milestone_has_22_exact_fields_and_roundtrips():
         metadata={"kind": "causal_milestone"},
         created_at="2026-06-05T21:00:00+00:00",
         updated_at="2026-06-05T21:30:00+00:00",
+        year=-120,
+        parent_milestone_id="hito-guerra",
     )
 
     data = milestone.to_dict()
 
-    assert len(data) == 22
+    assert len(data) == 24
     assert data["milestone_type"] == "ruptura"
     assert data["status"] == "hypothesis"
     assert data["temporality"]["era"] == "Edad Mítica"
     assert data["affected_entity_ids"] == ["ent_cultura"]
     assert data["caused_relation_ids"] == ["rel_deriva"]
+    assert data["year"] == -120
+    assert data["parent_milestone_id"] == "hito-guerra"
 
     loaded = CausalMilestone.from_dict(data)
 
@@ -54,6 +59,24 @@ def test_causal_milestone_has_22_exact_fields_and_roundtrips():
     assert loaded.temporality.precision == TemporalPrecision.MYTHICAL
     assert loaded.layer_ids == ["layer_historia"]
     assert loaded.metadata == {"kind": "causal_milestone"}
+    assert loaded.parent_milestone_id == "hito-guerra"
+    assert loaded.is_subhito is True
+
+
+@pytest.mark.domain
+def test_causal_milestone_parent_id_defaults_to_none_and_tolerates_blank():
+    # BETA2-SUB-01: por defecto un hito es de primer nivel (sin marco).
+    plain = CausalMilestone(id="hito-libre", title="Sin marco")
+    assert plain.parent_milestone_id is None
+    assert plain.is_subhito is False
+
+    # from_dict tolerante: cadena vacía / no-string → None.
+    assert CausalMilestone.from_dict({"parent_milestone_id": ""}).parent_milestone_id is None
+    assert CausalMilestone.from_dict({"parent_milestone_id": 123}).parent_milestone_id is None
+    assert (
+        CausalMilestone.from_dict({"parent_milestone_id": "hito-marco"}).parent_milestone_id
+        == "hito-marco"
+    )
 
 
 @pytest.mark.domain

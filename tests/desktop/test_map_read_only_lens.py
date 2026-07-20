@@ -83,8 +83,12 @@ def _view_with_items(entity_ids_and_canons):
     return view
 
 
-class TestGardenLens:
-    def test_lens_paints_states_from_real_service(self, qapp):
+class TestGardenAlwaysOn:
+    """BETA2-JARDIN-01: sin lente conmutable — el estado de riego es el
+    aspecto normal del Mapa (estados discretos, sin gradientes de opacidad).
+    El detalle visual (tintes/caída/freeze) vive en test_map_garden_status.py."""
+
+    def test_states_always_visible_from_real_service(self, qapp):
         project_service, watering = _watering()
         watered = _entity(project_service, "Regada")
         never = _entity(project_service, "Nunca")
@@ -100,19 +104,17 @@ class TestGardenLens:
             [(entity.id, "borrador") for entity in (watered, never, dried, stale)]
         )
         provider = lambda ids: getattr(watering.statuses_for(list(ids)), "value", {})  # noqa: E731
-        view.set_garden_lens(True, provider)
+        view.set_garden_status_provider(provider)
 
-        # Nutrida 70 → sólida (0.5 + 0.35 = 0.85); obsoleta atenuada ×0.75.
-        assert abs(view._nodes[watered.id].opacity() - 0.85) < 0.01
-        assert abs(view._nodes[stale.id].opacity() - 0.85 * 0.75) < 0.01
-        assert abs(view._nodes[dried.id].opacity() - 0.35) < 0.01  # apagada estable
-        assert abs(view._nodes[never.id].opacity() - 0.8) < 0.01
-        # Overlays para el primer plano: halo por Iluminada y semilla sin cultivar.
-        assert view._garden_overlays[watered.id]["iluminada"] == 80
-        assert view._garden_overlays[never.id]["never"] is True
-        assert view._garden_overlays[dried.id]["status"] == "secada"
+        # Estados discretos: todas plenas (el tinte comunica, no la opacidad).
+        for entity in (watered, never, dried, stale):
+            assert view._nodes[entity.id].opacity() == 1.0
+        # Halo solo en la regada vigente; la obsoleta vuelve a falta_regar.
+        assert view._garden_overlays == {watered.id: {"iluminada": 80, "arraigo": 30}}
+        assert view._garden_frozen == {never.id, dried.id, stale.id}
+        assert view._garden_droopy == set()  # nutrida 70 >= 60
 
-    def test_lens_off_leaves_a_clean_map(self, qapp):
+    def test_ghost_keeps_translucency_out_of_the_cycle(self, qapp):
         project_service, watering = _watering()
         watered = _entity(project_service, "Regada")
         ghost_id = "ghost-1"
@@ -120,21 +122,22 @@ class TestGardenLens:
         view = _view_with_items([(watered.id, "borrador"), (ghost_id, "fantasma")])
         provider = lambda ids: getattr(watering.statuses_for(list(ids)), "value", {})  # noqa: E731
 
-        view.set_garden_lens(True, provider)
-        view.set_garden_lens(False)
-        assert view._garden_overlays == {}
+        view.set_garden_status_provider(provider)
         assert view._nodes[watered.id].opacity() == 1.0
-        # La translucidez del fantasma NO es de la lente: se conserva.
+        # La translucidez del fantasma es de su naturaleza, no del jardín;
+        # jamás se congela ni se tiñe.
         assert abs(view._nodes[ghost_id].opacity() - 0.45) < 0.01
+        assert ghost_id not in view._garden_frozen
 
-    def test_lens_never_breaks_on_provider_failure(self, qapp):
+    def test_garden_never_breaks_on_provider_failure(self, qapp):
         view = _view_with_items([("e1", "borrador")])
 
         def _boom(_ids):
             raise RuntimeError("provider roto")
 
-        view.set_garden_lens(True, _boom)  # fail-soft: sin overlays, sin excepción
+        view.set_garden_status_provider(_boom)  # fail-soft: sin overlays, sin excepción
         assert view._garden_overlays == {}
+        assert view._garden_frozen == set()
 
 
 class TestSourcePins:
@@ -151,23 +154,31 @@ class TestSourcePins:
 
     def test_ghosts_are_translucent_in_map(self):
         graph_source = _GRAPH.read_text(encoding="utf-8")
-        assert '"fantasma": "#B9B29A"' in graph_source
         assert graph_source.count('if node.canon.lower() == "fantasma":') >= 2  # hoja y rama
 
-    def test_map_is_read_only_with_summary_and_batch(self):
+    def test_map_click_selects_only_no_obsolete_summary_drawer(self):
+        # UI2-22: el drawer obsoleto «Entidad (Mapa)» se eliminó; el clic simple
+        # en el Mapa solo selecciona (return temprano) y el doble clic abre el
+        # Foco. El riego per-entidad ya no vive en un menú del Mapa.
         source = _WORKSPACES.read_text(encoding="utf-8")
-        assert "def _open_map_summary" in source
+        assert "def _open_map_summary" not in source
+        assert 'drawer.set_content(card, title="Entidad (Mapa)")' not in source
+        # El clic simple en el Mapa hace return sin abrir panel/drawer.
         assert 'if getattr(self, "_active_view", "") == "concentric" and not is_new:' in source
-        assert '"Regar esta entidad"' in source
-        assert '"Regar su anillo"' in source
-        assert '"Regar todo el grafo"' in source
-        assert '"Abrir en Foco (editar)"' in source
+        # El doble clic → Foco se conserva.
+        assert (
+            "self.graph.entityFocusRequested.connect(self._on_map_entity_to_foco)" in source
+        )
 
-    def test_lens_toggle_lives_in_the_map_cluster(self):
+    def test_garden_is_always_on_without_toggle(self):
+        # BETA2-JARDIN-01: la lente conmutable desapareció del cluster.
         source = _WORKSPACES.read_text(encoding="utf-8")
-        assert '"garden_lens", "Lente Jardín' in source
-        assert "def _toggle_garden_lens" in source
-        assert "self.graph.set_garden_lens(self._garden_lens_on, self._garden_status_map)" in source
+        assert '"garden_lens"' not in source
+        assert "_toggle_garden_lens" not in source
+        assert "self.graph.set_garden_status_provider(self._garden_status_map)" in source
+        graph_source = _GRAPH.read_text(encoding="utf-8")
+        assert "def set_garden_lens" not in graph_source
+        assert "def set_garden_status_provider" in graph_source
 
 
 class TestTimeBarPillDeconflict:
@@ -205,6 +216,10 @@ class TestTimeBarPillDeconflict:
         assert widget._time_bar.y() == 14
         widget.deleteLater()
 
-    def test_workspace_wires_pill_height_as_inset(self):
+    def test_workspace_no_longer_reserves_pill_height(self):
+        # FOCO-28: la píldora de modos vive en el banner superior (no flota sobre
+        # el Mapa), así que la barra temporal recupera el borde superior con un
+        # inset mínimo en vez de reservar la altura de la píldora.
         source = _WORKSPACES.read_text(encoding="utf-8")
-        assert "graph.set_time_bar_top_inset(toggle.height() + 10)" in source
+        assert "graph.set_time_bar_top_inset(10)" in source
+        assert "graph.set_time_bar_top_inset(toggle.height() + 10)" not in source

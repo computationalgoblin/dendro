@@ -480,5 +480,11 @@ def test_workspace_wires_view_toggle_and_eras():
     assert "_build_view_toggle" in source
     assert "def set_active_view" in source
     assert "creation/active_view" in source  # preferencia persistida
-    assert "_build_eras_section" in source  # G03: eras en filtros
-    assert "EraQuickCreatePanel" in source and "EraEditPanel" in source
+    # BETA2-UI2-10: el CRUD de eras dejo de vivir en el panel de filtros (retirado);
+    # crear = menu contextual de la Cronologia, editar = clic en la banda de era.
+    # BETA2-CAL: ambos abren el editor de calendario unificado (eras encadenadas por
+    # duracion); se retiro el editor de una-era con anos absolutos.
+    assert "_build_eras_section" not in source
+    assert "self.chrono.eraCreateRequested.connect(self._open_era_create_panel)" in source
+    assert "def _open_calendar_editor" in source
+    assert "EraQuickCreatePanel" not in source and "EraEditPanel" not in source

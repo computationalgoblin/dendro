@@ -92,13 +92,12 @@ def test_node_menu_has_full_action_set(qapp):
     item = view._nodes["hoja-1"]
     menu = view._node_context_menu(item)
     texts = action_texts(menu)
-    # "IA sobre seleccion" añadido por D06 (Hermes): contrato unificado
+    # BETA2-WIKI-10: "IA sobre seleccion" (submenú de generación IA) RETIRADO del menú.
     assert texts == [
         "Editar",
         "Crear relación desde aquí",
         "Mover a rama",
         "Mover a anillo",
-        "IA sobre seleccion",
         "Eliminar",
     ]
     # 'Mover a anillo' has no route until B03 → must be disabled, not crash
@@ -120,8 +119,7 @@ def test_tree_menu_has_tree_actions(qapp):
         "Crear hoja dentro",
         "Crear subrama",
         "Mover a anillo",
-        "IA sobre seleccion",  # D06 (Hermes)
-        "Eliminar",
+        "Eliminar",  # BETA2-WIKI-10: "IA sobre seleccion" retirado
     ]
     # En layout libre no hay anillos → la acción existe pero deshabilitada
     ring_action = next(a for a in menu.actions() if a.text() == "Mover a anillo")
@@ -132,8 +130,8 @@ def test_edge_menu_has_relation_actions(qapp):
     view = build_basic_view(qapp)
     item = view._edges[0]
     menu = view._edge_context_menu(item)
-    # "IA sobre seleccion" añadido por D06 (Hermes)
-    assert action_texts(menu) == ["Editar relación", "IA sobre seleccion", "Eliminar relación"]
+    # BETA2-WIKI-10: "IA sobre seleccion" retirado del menú de relación.
+    assert action_texts(menu) == ["Editar relación", "Eliminar relación"]
 
 
 def test_ring_menu_offers_ring_creation(qapp):
@@ -157,7 +155,9 @@ def test_node_actions_emit_existing_signals(qapp):
     view = build_basic_view(qapp)
     item = view._nodes["hoja-1"]
     received: dict[str, object] = {}
-    view.entitySelected.connect(lambda eid: received.__setitem__("edit", eid))
+    # BETA2-CLEANUP-PANELES: "Editar" abre el Modo Foco (entityFocusRequested),
+    # ya no el cajón de detalle (entitySelected).
+    view.entityFocusRequested.connect(lambda eid: received.__setitem__("edit", eid))
     view.contextDeleteRequested.connect(lambda: received.__setitem__("delete", True))
     view.nodeAssignToTreeRequested.connect(
         lambda eid, tid: received.__setitem__("assign", (eid, tid))

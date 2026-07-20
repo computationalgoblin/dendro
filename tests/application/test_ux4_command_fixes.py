@@ -230,8 +230,12 @@ def test_hoja_still_renders_as_leaf():
 
 
 def _edit_candidate(result):
+    # PLAY-15: la forma canónica del candidato de edición es `edit_fields`
+    # (patch multi-campo); el escalar viejo pervive solo en candidatos ya
+    # persistidos, no en los recién stageados.
     return next(c for c in result["candidates"]
-                if (c.get("proposed_data") or {}).get("edit_proposed_value"))
+                if (c.get("proposed_data") or {}).get("edit_fields")
+                or (c.get("proposed_data") or {}).get("edit_proposed_value"))
 
 
 def test_accepting_entity_edit_applies_to_canon():

@@ -134,6 +134,7 @@ class EntityService:
     def update_entity(
         self, entity_id: str, data: dict[str, Any],
         history_service: Any = None,
+        impact_service: Any = None,
     ) -> Result[NarrativeEntity, str]:
         """Modify an existing entity and persist.
 
@@ -208,6 +209,13 @@ class EntityService:
                 operation="update_entity",
             )
             history_service.record(entry)
+        # BETA2-MEM-04: propaga impacto (marca Falta regar las Memorias afectadas).
+        # Efecto derivado: jamas debe romper el guardado canonico.
+        if impact_service is not None:
+            try:
+                impact_service.propagate_change("entity", found.id)
+            except Exception:  # noqa: BLE001
+                pass
         return Ok(found)
 
     def archive_entity(self, entity_id: str, history_service: Any = None) -> Result[None, str]:

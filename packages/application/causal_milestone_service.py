@@ -161,7 +161,9 @@ class CausalMilestoneService:
                 self.candidate_service.reject_candidate(hito_or_candidate_id)
         return existing
 
-    def update_hito(self, hito_id: str, data: dict[str, Any]) -> Result[CausalMilestone, str]:
+    def update_hito(
+        self, hito_id: str, data: dict[str, Any], impact_service: Any = None
+    ) -> Result[CausalMilestone, str]:
         current = self._get_hito(hito_id)
         if isinstance(current, Error):
             return current
@@ -178,6 +180,12 @@ class CausalMilestoneService:
                 if hasattr(proj.value, "touch"):
                     proj.value.touch()
                 self._record("hito_actualizado", f"Hito '{hito.title}' actualizado", hito)
+                # BETA2-MEM-04: propaga impacto (Falta regar), sin romper el guardado.
+                if impact_service is not None:
+                    try:
+                        impact_service.propagate_change("milestone", hito.id)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return Ok(hito)
         return Error(f"Hito '{hito_id[:8]}' not found")
 
@@ -202,11 +210,102 @@ class CausalMilestoneService:
                 other.causal_child_hito_ids = [
                     mid for mid in (other.causal_child_hito_ids or []) if str(mid) != normalized
                 ]
+                # BETA2-SUB-01: los subhitos del marco borrado quedan huérfanos
+                # (nunca se borran en cascada).
+                if str(getattr(other, "parent_milestone_id", "") or "") == normalized:
+                    other.parent_milestone_id = None
             if hasattr(proj.value, "touch"):
                 proj.value.touch()
             self._record("hito_eliminado", f"Hito '{removed.title}' eliminado", removed)
             return Ok(removed)
         return Error(f"Hito '{normalized[:8]}' not found")
+
+    # ── Subhitos: contención temporal de 1 nivel (BETA2-SUB-01) ──────────────
+
+    def set_milestone_parent(self, child_id: str, parent_id: str) -> Result[CausalMilestone, str]:
+        """Declara ``child_id`` como subhito de ``parent_id`` (hito-marco).
+
+        Reglas de 1 nivel: existencia, sin auto-referencia, el marco no puede
+        ser a su vez subhito, y el hijo no puede tener subhitos propios.
+        """
+        proj = self._proj()
+        if isinstance(proj, Error):
+            return proj
+        child_id = str(child_id or "").strip()
+        parent_id = str(parent_id or "").strip()
+        if not child_id or not parent_id:
+            return Error("Se requieren el subhito y el hito-marco")
+        if child_id == parent_id:
+            return Error("Un hito no puede contenerse a sí mismo")
+        child = self._get_hito(child_id)
+        if isinstance(child, Error):
+            return child
+        parent = self._get_hito(parent_id)
+        if isinstance(parent, Error):
+            return parent
+        if parent.value.parent_milestone_id:
+            return Error("El marco ya es un subhito: no se admite más de un nivel")
+        if any(
+            str(getattr(h, "parent_milestone_id", "") or "") == child_id
+            for h in proj.value.causal_milestones
+        ):
+            return Error("Este hito ya contiene subhitos: no puede ser subhito de otro")
+        child.value.parent_milestone_id = parent_id
+        child.value.updated_at = _now_iso()
+        if hasattr(proj.value, "touch"):
+            proj.value.touch()
+        self._record(
+            "subhito_vinculado",
+            f"Hito '{child.value.title}' contenido en '{parent.value.title}'",
+            child.value,
+        )
+        return Ok(child.value)
+
+    def clear_milestone_parent(self, child_id: str) -> Result[CausalMilestone, str]:
+        """Saca a un subhito de su marco (queda de primer nivel)."""
+        child = self._get_hito(child_id)
+        if isinstance(child, Error):
+            return child
+        child.value.parent_milestone_id = None
+        child.value.updated_at = _now_iso()
+        proj = self._proj()
+        if isinstance(proj, Ok) and hasattr(proj.value, "touch"):
+            proj.value.touch()
+        self._record(
+            "subhito_desvinculado",
+            f"Hito '{child.value.title}' ya no está contenido",
+            child.value,
+        )
+        return Ok(child.value)
+
+    def list_subhitos(self, parent_id: str) -> Result[list[CausalMilestone], str]:
+        """Subhitos contenidos en ``parent_id`` (ordenados por año)."""
+        parent_id = str(parent_id or "").strip()
+        result = self._filter(
+            lambda h: str(getattr(h, "parent_milestone_id", "") or "") == parent_id
+        )
+        if isinstance(result, Ok):
+            result.value.sort(key=lambda h: h.year if isinstance(h.year, int) else 0)
+        return result
+
+    def create_subhito(
+        self, parent_id: str, data: dict[str, Any], *, enforce_dating: bool = False
+    ) -> Result[CausalMilestone, str]:
+        """Crea un hito nuevo y lo contiene en el marco ``parent_id``."""
+        parent = self._get_hito(str(parent_id or "").strip())
+        if isinstance(parent, Error):
+            return parent
+        if parent.value.parent_milestone_id:
+            return Error("El marco ya es un subhito: no se admite más de un nivel")
+        created = self.create_hito_manual(data, enforce_dating=enforce_dating)
+        if isinstance(created, Error):
+            return created
+        linked = self.set_milestone_parent(created.value.id, parent.value.id)
+        if isinstance(linked, Error):
+            # revertir el hito recién creado para no dejar basura suelta
+            self.delete_hito(created.value.id)
+            return linked
+        return Ok(created.value)
 
     def list_hitos_for_leaf(self, leaf_id: str) -> Result[list[CausalMilestone], str]:
         return self._filter(lambda h: leaf_id in h.affected_entity_ids)

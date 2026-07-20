@@ -145,6 +145,8 @@ class MainWindow(QMainWindow):
         # BETA1-A01: navigate_gallery / navigate_session removed from wiring
         self.home_view.register_callback("project_menu", self._open_project_panel)
         self.home_view.register_callback("config_menu", self._open_config_panel)
+        # BETA2-MEM-10: visor editorial de Memoria (función de proyecto).
+        self.home_view.register_callback("memory_menu", self._open_memory_panel)
         self.home_view.register_callback("new_project", self._new_project)
         self.home_view.register_callback("open_project", self._open_project)
         self.home_view.register_callback("save_project", self._save)
@@ -298,6 +300,13 @@ class MainWindow(QMainWindow):
         )
         nav_layout.addWidget(space_title)
         nav_layout.addStretch()
+
+        # FOCO-28: las píldoras de modo (Foco | Mapa | Cronología) viven en el
+        # banner superior (antes flotaban sobre el lienzo de Creación). addWidget
+        # REPARENTA el QFrame existente; sus `_mode_buttons` son los mismos, así
+        # que el resaltado del modo activo (`_update_mode_pill`) sigue vigente.
+        if hasattr(workspace, "view_toggle_widget"):
+            nav_layout.addWidget(workspace.view_toggle_widget())
 
         layout.addWidget(navbar)
         layout.addWidget(workspace, stretch=1)
@@ -470,6 +479,26 @@ class MainWindow(QMainWindow):
             on_preview=self._preview_project_change,
         )
         self.ctx.drawer.set_content(panel, title="Proyecto")
+        self.ctx.drawer.open()
+
+    def _open_memory_panel(self):
+        """BETA2-MEM-10: visor editorial de Memoria (función de proyecto)."""
+        _apptrace("UI open_memory_panel")
+        if self.ctx.drawer is None:
+            return
+        if self.ctx.drawer.isVisible():
+            self.ctx.drawer.close()
+            return
+        if getattr(self.ctx, "left_drawer", None) and self.ctx.left_drawer.isVisible():
+            self.ctx.left_drawer.close()
+        ws = getattr(self, "creation_workspace", None)
+        mem_svc = getattr(ws, "memory_service", None) if ws is not None else None
+        if mem_svc is None:
+            return
+        from hosts.DesktopHostPySide.widgets.memory_viewer_panel import MemoryViewerPanel
+
+        panel = MemoryViewerPanel(mem_svc, getattr(ws, "memory_ai_service", None))
+        self.ctx.drawer.set_content(panel, title="Memoria")
         self.ctx.drawer.open()
 
     def _preview_project_change(self, project_type: str, worldbuilding_active: bool):

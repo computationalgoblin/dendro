@@ -24,15 +24,21 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
     GOLD_DEEP,
+    GOLD_PRESS,
     GOLD_TINT,
+    INK_INVERSE,
     INK_MUTED,
     INK_SOFT,
     INK_STRONG,
     LINE_SOFT,
+    RADIUS_SM,
     SAGE,
+    PanelScaffold,
+    overline_label,
 )
 
-WEAK_THRESHOLD = 60  # métrica "débil" → habilita Sugerir X (spec)
+# BETA2-JARDIN-04: umbral único compartido (chip, Cuaderno y este drawer).
+from packages.application.watering_guidance import WEAK_THRESHOLD
 
 _METRICS = (
     ("arraigo", "Arraigo"),
@@ -55,8 +61,11 @@ _STATUS_STYLES = {
 }
 
 
-class WateringPanel(QWidget):
-    """Panel del drawer: todo el ciclo de riego de la entidad en foco."""
+class WateringPanel(PanelScaffold):
+    """Panel del drawer: todo el ciclo de riego de la entidad en foco.
+
+    BETA2-PULIDO-04: sobre ``PanelScaffold`` (márgenes-token, sin cabecera
+    propia — el título «Riego» lo pone el drawer)."""
 
     waterRequested = Signal()  # noqa: N815 — convención Qt de señales
     pauseToggled = Signal(bool)  # noqa: N815 — True = Secar, False = Cultivar
@@ -65,18 +74,18 @@ class WateringPanel(QWidget):
     reviewRequested = Signal(str)  # noqa: N815 — tarjeta de Semilla textual ⇒ revisión
 
     def __init__(self, watering_service: Any, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+        super().__init__("", parent=parent)
         self.watering_service = watering_service
         self._entity_id = ""
         self._status = ""
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
+        layout = self.body
         layout.setSpacing(8)
 
         self.status_chip = QLabel("", self)
         self.status_chip.setStyleSheet(
-            "QLabel { border-radius: 10px; padding: 4px 10px; color: #FCF8EC; font-weight: 700; }"
+            f"QLabel {{ border-radius: {RADIUS_SM}px; padding: 4px 10px; "
+            f"color: {INK_INVERSE}; font-weight: 700; }}"
         )
         layout.addWidget(self.status_chip)
         self.state_note = QLabel("", self)
@@ -126,23 +135,28 @@ class WateringPanel(QWidget):
 
         actions = QHBoxLayout()
         self.water_button = QPushButton("Regar", self)
+        # PULIDO-04: hover/pressed explícitos (el QSS propio pisaba el global).
         self.water_button.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; border: none; border-radius: 10px; "
-            "color: #FCF8EC; font-weight: 700; padding: 6px 14px; }"
+            f"color: {INK_INVERSE}; font-weight: 700; padding: 6px 14px; }} "
+            f"QPushButton:hover {{ background: {GOLD_DEEP}; }} "
+            f"QPushButton:pressed {{ background: {GOLD_PRESS}; }}"
         )
         self.water_button.clicked.connect(self.waterRequested)
         actions.addWidget(self.water_button)
         self.pause_button = QPushButton("Secar", self)
         self.pause_button.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {LINE_SOFT}; "
-            f"border-radius: 10px; color: {INK_SOFT}; padding: 6px 12px; }}"
+            f"border-radius: 10px; color: {INK_SOFT}; padding: 6px 12px; }} "
+            f"QPushButton:hover {{ border-color: {GOLD_DEEP}; color: {GOLD_DEEP}; }}"
         )
         self.pause_button.clicked.connect(self._toggle_pause)
         actions.addWidget(self.pause_button)
         self.cancel_button = QPushButton("Cancelar riego", self)
         self.cancel_button.setStyleSheet(
             f"QPushButton {{ background: transparent; border: 1px solid {GOLD_DEEP}; "
-            f"border-radius: 10px; color: {GOLD_DEEP}; padding: 6px 12px; }}"
+            f"border-radius: 10px; color: {GOLD_DEEP}; padding: 6px 12px; }} "
+            f"QPushButton:hover {{ background: {GOLD_TINT}; }}"
         )
         self.cancel_button.clicked.connect(self.cancelBatchRequested)
         self.cancel_button.hide()
@@ -156,16 +170,14 @@ class WateringPanel(QWidget):
             button.setStyleSheet(
                 f"QPushButton {{ background: transparent; border: 1px dashed {GOLD}; "
                 f"border-radius: 8px; color: {GOLD_DEEP}; padding: 4px 8px; }} "
+                f"QPushButton:hover {{ background: {GOLD_TINT}; }} "
                 "QPushButton:disabled { border-color: #E3DCC8; color: #B8B5A8; }"
             )
             button.clicked.connect(lambda _=False, m=metric_key: self.suggestRequested.emit(m))
             layout.addWidget(button)
             self.suggest_buttons[metric_key] = button
 
-        history_title = QLabel("Historial de riegos", self)
-        history_title.setStyleSheet(
-            f"color: {INK_SOFT}; font-weight: 600; background: transparent;"
-        )
+        history_title = overline_label("Historial de riegos", parent=self)
         layout.addWidget(history_title)
         self.history_list = QListWidget(self)
         self.history_list.setMaximumHeight(150)
@@ -232,7 +244,7 @@ class WateringPanel(QWidget):
         review_button = QPushButton("Revisar", card)
         review_button.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; border: none; border-radius: 8px; "
-            "color: #FCF8EC; padding: 4px 10px; }"
+            f"color: {INK_INVERSE}; padding: 4px 10px; }}"
         )
         # Abre la más antigua; el resto se revisa en la superficie primaria.
         review_button.clicked.connect(
@@ -259,8 +271,8 @@ class WateringPanel(QWidget):
         if service is None or not self._entity_id:
             self.status_chip.setText("Sin entidad en foco")
             self.status_chip.setStyleSheet(
-                f"QLabel {{ background: {INK_MUTED}; border-radius: 10px; "
-                "padding: 4px 10px; color: #FCF8EC; }"
+                f"QLabel {{ background: {INK_MUTED}; border-radius: {RADIUS_SM}px; "
+                f"padding: 4px 10px; color: {INK_INVERSE}; }}"
             )
             return
         report_result = service.status_of(self._entity_id)
@@ -274,8 +286,8 @@ class WateringPanel(QWidget):
             text = "Falta regar — nunca regada"
         self.status_chip.setText(text)
         self.status_chip.setStyleSheet(
-            f"QLabel {{ background: {color}; border-radius: 10px; "
-            "padding: 4px 10px; color: #FCF8EC; font-weight: 700; }"
+            f"QLabel {{ background: {color}; border-radius: {RADIUS_SM}px; "
+            f"padding: 4px 10px; color: {INK_INVERSE}; font-weight: 700; }}"
         )
 
         notes: list[str] = []

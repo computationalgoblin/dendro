@@ -27,7 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
+from hosts.DesktopHostPySide.widgets.mention_support import attach_mention_support
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
+from packages.application.structured_reference_service import (
+    StructuredReferenceService,
+    build_known_targets,
+)
+from packages.domain.narrative_memory import MemoryTargetKind
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets.design_system import (
     FONT_SERIF,
@@ -348,6 +354,14 @@ class RelationDetailPanel(QWidget):
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(80)
         self.description_edit.setPlaceholderText("Descripción breve…")
+        # BETA2-MEM-03: @menciones estructuradas en la descripción de la relación.
+        self._mention_supports = {}
+        try:
+            self._mention_supports["description"] = attach_mention_support(
+                self.description_edit, self._mention_targets_provider()
+            )
+        except Exception:  # noqa: BLE001 — las @menciones nunca deben romper el editor
+            self._mention_supports = {}
 
         # BETA2-FOCO-16 (canon total): el estado canon ya no se edita en el
         # panel — todo es canon salvo relación fantasma (conversión explícita).
@@ -443,12 +457,6 @@ class RelationDetailPanel(QWidget):
 
         # BETA2-UX-03: botón «Analizar coherencia» estaba oculto — eliminado.
 
-        if self.ai_controller is None:
-            no_ai_label = QLabel("IA contextual no disponible en esta sesión.")
-            no_ai_label.setObjectName("mutedLabel")
-            no_ai_label.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
-            ai_layout.addWidget(no_ai_label)
-
         # Suggestion display area
         self.suggestion_frame = QFrame()
         self.suggestion_frame.setObjectName("suggestionFrame")
@@ -503,7 +511,16 @@ class RelationDetailPanel(QWidget):
         sug_layout.addLayout(sug_actions)
 
         ai_layout.addWidget(self.suggestion_frame)
-        root.addWidget(ai_card)
+        # BETA2-WIKI-10: la superficie de IA del panel de relación queda RETIRADA de
+        # la UI (recorte de IA a Regar+Sugerencias+wiki+cronología). El bloque solo se
+        # monta si hay ai_controller; hoy es siempre None → no se muestra nada de IA.
+        # Si no se monta, el card queda como huérfano oculto propiedad del panel (sin
+        # dejar referencias colgantes a los widgets internos).
+        if self.ai_controller is not None:
+            root.addWidget(ai_card)
+        else:
+            ai_card.setParent(self)
+            ai_card.hide()
 
         # BETA1-F04: submenú "Más opciones" — dirección, estado, notas,
         # hitos y datos técnicos (estos, además, solo en modo avanzado).
@@ -963,6 +980,29 @@ class RelationDetailPanel(QWidget):
         self._autosave_timer.stop()
         self._do_save(refresh_after=True)
 
+    def _mention_targets_provider(self):
+        def provider():
+            ps = getattr(self.relation_controller, "ps", None)
+            project = getattr(ps, "active_project", None)
+            return build_known_targets(project) if project is not None else []
+
+        return provider
+
+    def _sync_structured_references(self, field_texts: dict) -> None:
+        """Resuelve las @menciones de la relación a referencias estructuradas (MEM-03)."""
+        ps = getattr(self.relation_controller, "ps", None)
+        if ps is None or getattr(ps, "active_project", None) is None:
+            return
+        hints: dict[str, tuple[str, str]] = {}
+        for ms in getattr(self, "_mention_supports", {}).values():
+            hints.update(ms.hints())
+        try:
+            StructuredReferenceService(ps).sync_element_references(
+                MemoryTargetKind.RELATION, self.relation_id, field_texts, hints=hints
+            )
+        except Exception:  # noqa: BLE001 — nunca romper el guardado por las @menciones
+            pass
+
     def _do_save(self, *, refresh_after: bool = True):
         if self._relation is None:
             return
@@ -1053,6 +1093,11 @@ class RelationDetailPanel(QWidget):
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
             return
+        # BETA2-MEM-03: resolver @menciones de la descripción → refs estructuradas.
+        if not getattr(self, "preview_patch", None):
+            self._sync_structured_references(
+                {"description": self.description_edit.toPlainText().strip()}
+            )
         self.ctx.log("info", "Relación guardada")
         self.ctx.selected_relation_id = self.relation_id
         if self.is_new:

@@ -136,19 +136,20 @@ def capture(out_dir: str | Path, label: str = "baseline") -> list[Path]:
     except Exception as exc:  # noqa: BLE001
         print(f"  [warn] no se pudo capturar la vista cronológica: {exc}")
 
-    # 6) Panel de detalle de nodo (best-effort).
+    # 6) Modo Foco sobre una entidad (best-effort). BETA2-CLEANUP-PANELES: el
+    #    cajón de detalle «Nodo» se retiró — la edición vive en el Foco.
     try:
         if manifest.entity_ids:
-            mw.creation_workspace._open_node_panel(manifest.entity_ids[1])
-            drawer = getattr(mw, "drawer", None)
-            if drawer is not None and hasattr(drawer, "update_target_width"):
-                drawer.update_target_width()
+            ws = mw.creation_workspace
+            ws._on_map_entity_to_foco(manifest.entity_ids[1])
             _pump(app, rounds=24)
-            panel = _grab(drawer, out, "panel_nodo")
+            panel = _grab(getattr(ws, "foco", None), out, "foco_entidad")
             if panel:
                 saved.append(panel)
+            ws.set_active_view("concentric")  # restaurar
+            _pump(app, rounds=8)
     except Exception as exc:  # noqa: BLE001
-        print(f"  [warn] no se pudo capturar panel de nodo: {exc}")
+        print(f"  [warn] no se pudo capturar el Modo Foco: {exc}")
 
     print(f"Capturas en {out} ({len(saved)}):")
     for p in saved:

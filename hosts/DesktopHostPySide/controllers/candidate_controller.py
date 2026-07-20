@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from packages.application.candidate_service import CandidateService
 from packages.application.entity_service import EntityService
+from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.relation_service import RelationService
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
@@ -17,6 +18,8 @@ class CandidateController:
             entity_service=EntityService(self.ps),
             relation_service=RelationService(self.ps),
         )
+        # BETA2-MEM-04: motor de impacto (marca Falta regar al florecer canon).
+        self.impact = NarrativeImpactService(self.ps)
 
     def list_all(self):
         """List candidates pending review (not accepted/rejected/postponed)."""
@@ -39,7 +42,7 @@ class CandidateController:
 
     def accept(self, cid):
         _apptrace(f"CTRL CandidateController.accept cid={cid!r}"[:120])
-        return self.cs.accept_candidate(cid)
+        return self.cs.accept_candidate(cid, impact_service=self.impact)
 
     def reject(self, cid):
         _apptrace(f"CTRL CandidateController.reject cid={cid!r}"[:120])

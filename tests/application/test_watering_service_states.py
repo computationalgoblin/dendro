@@ -106,6 +106,20 @@ class TestBasicStates:
         assert report.latest is not None
         assert report.latest.scores["nutrida"] == 60
 
+    def test_rewater_regada_entity_is_not_blocked(self):
+        # BETA2-FOCO-34: regar una entidad YA regada NO está bloqueado (sin
+        # cooldown ni idempotencia). El segundo riego se registra y prevalece.
+        project_service, watering = _setup()
+        entity = _entity(project_service, "Eldrin")
+        _water(watering, entity, minutes_ago=30)
+        assert _status(watering, entity).status == WateringStatus.REGADA.value
+
+        second = _water(watering, entity, minutes_ago=5)  # asserta Ok internamente
+        report = _status(watering, entity)
+        assert report.status == WateringStatus.REGADA.value
+        assert report.latest is not None
+        assert report.latest.created_at == second.created_at  # prevalece la nueva
+
     def test_editing_watered_entity_goes_stale_keeping_reading(self):
         project_service, watering = _setup()
         entity = _entity(project_service, "Eldrin")

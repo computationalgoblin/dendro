@@ -57,7 +57,7 @@ def test_user_prompt_is_sacred():
     assert msg["prompt_exacto_usuario"] == long_prompt
 
 
-def test_rag_pack_partitioned_by_authority():
+def test_rag_pack_no_longer_partitioned():
     pack = _pack(
         [
             {
@@ -91,18 +91,10 @@ def test_rag_pack_partitioned_by_authority():
         ]
     )
     msg = _msg(_plan(context={"rag_context_pack": pack}))
-
-    # Canon confirmado: entity + relation.
-    canon_ids = {it["ref_id"] for it in msg["canon_confirmado"]["items"]}
-    assert canon_ids == {"e1", "r1"}
-    assert "CANON CONFIRMADO" in msg["canon_confirmado"]["autoridad"]
-
-    # Candidates pendientes: claramente NO canon.
-    assert {it["ref_id"] for it in msg["candidates_pendientes"]["items"]} == {"c1"}
-    assert "NO" in msg["candidates_pendientes"]["autoridad"].upper()
-
-    # RAG auxiliar: lo demás (issue/creative_config).
-    assert {it["ref_id"] for it in msg["rag_auxiliar"]["items"]} == {"i1"}
+    # BETA2-WIKI-05: el pack RAG ya NO se particiona en secciones de autoridad;
+    # el contexto relevante lo aporta la navegación de la wiki (contexto_wiki).
+    for retired in ("canon_confirmado", "candidates_pendientes", "rag_auxiliar"):
+        assert retired not in msg
 
 
 def test_rag_pack_removed_from_authorized_context():
@@ -124,11 +116,11 @@ def test_rag_pack_removed_from_authorized_context():
     assert msg["contexto_autorizado"]["algo_libre"] == "se queda"
 
 
-def test_rag_warnings_surface_in_rag_auxiliar():
+def test_rag_warnings_no_longer_surface():
+    # BETA2-WIKI-05: el pack RAG está retirado del ensamblado; sus warnings no viajan.
     pack = _pack([], warnings=["rag_project_unavailable"])
     msg = _msg(_plan(context={"rag_context_pack": pack}))
-    assert msg["rag_auxiliar"]["warnings"] == ["rag_project_unavailable"]
-    assert "canon_confirmado" not in msg
+    assert "rag_auxiliar" not in msg
 
 
 def test_empty_pack_emits_no_authority_sections():
@@ -262,40 +254,30 @@ def test_apply_section_exclusions_ignores_fixed_sections():
     assert ctx["creative_brief"] == {"canon": {}}
 
 
-def test_preview_honours_exclusions_so_real_job_matches():
-    # Con preview_exclusions en el contexto, assemble() (= ejecución real) no
-    # incluye el item excluido. Así la vista previa y el job van sincronizados.
-    pack = _pack([
-        {"kind": "entity", "ref_id": "keep", "rendered_text": "x",
-         "priority": "high", "reason": "r"},
-        {"kind": "entity", "ref_id": "drop", "rendered_text": "y",
-         "priority": "high", "reason": "r"},
-    ])
+def test_section_exclusion_drops_flexible_section():
+    # BETA2-WIKI-05: la exclusión por-ítem del pack RAG queda retirada. La exclusión
+    # a nivel de SECCIÓN sigue: excluir una sección flexible la quita del mensaje real.
     plan = _plan(context={
-        "rag_context_pack": pack,
-        "preview_exclusions": {"sections": [], "item_ids": ["drop"]},
+        "vecindario": {"items": [{"id": "v1", "rendered_text": "vecino"}]},
+        "preview_exclusions": {"sections": ["vecindario"], "item_ids": []},
     })
     msg = json.loads(PromptAssembler().assemble(plan))
-    ids = {it["ref_id"] for it in msg["canon_confirmado"]["items"]}
-    assert ids == {"keep"}
+    assert "vecindario" not in msg
 
 
 def test_build_context_preview_structure():
-    pack = _pack([
-        {"kind": "entity", "ref_id": "e1", "rendered_text": "Ariadna",
-         "priority": "high", "reason": "r"},
-    ])
+    # BETA2-WIKI-05: sin pack RAG. La vista previa distingue secciones fijas (sagradas)
+    # de flexibles (excluibles). contexto_wiki es fija; vecindario es flexible.
     plan = _plan(context={
         "creative_brief": {"canon": {"hard_rules": ["r"]}},
-        "rag_context_pack": pack,
+        "contexto_wiki": {"nota": "x", "paginas": [{"kind": "entity", "id": "e1"}], "canon": []},
+        "vecindario": {"items": [{"id": "v1", "rendered_text": "vecino"}]},
     })
     preview = build_context_preview(PromptAssembler().preview(plan))
     by_key = {s["key"]: s for s in preview["sections"]}
-    # Sección sagrada: presente y NO excluible.
+    # Sección sagrada y contexto_wiki: fijas, NO excluibles.
     assert by_key["prompt_exacto_usuario"]["fixed"] is True
-    # Sección RAG: excluible y con item ref_id visible.
-    canon = by_key["canon_confirmado"]
-    assert canon["fixed"] is False
-    assert canon["items"][0]["ref_id"] == "e1"
-    assert canon["items"][0]["est_tokens"] >= 1
+    assert by_key["contexto_wiki"]["fixed"] is True
+    # Sección flexible: excluible.
+    assert by_key["vecindario"]["fixed"] is False
     assert preview["total_tokens"] >= 1

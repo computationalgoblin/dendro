@@ -13,13 +13,14 @@ from packages.application.candidate_service import CandidateService
 from packages.application.causal_milestone_service import CausalMilestoneService
 from packages.application.chronology_walk_service import ChronologyWalkService
 from packages.application.entity_service import EntityService
+from packages.application.history_service import HistoryService
 from packages.application.relation_service import RelationService
 
 
 class ChronologyWalkController:
     """Adaptador fino: delega en ChronologyWalkService."""
 
-    def __init__(self, project_service: Any, ai_job_service: Any):
+    def __init__(self, project_service: Any, ai_job_service: Any, navigator: Any = None):
         if project_service is None:
             raise ValueError("ChronologyWalkController requires project_service")
         if ai_job_service is None:
@@ -39,6 +40,10 @@ class ChronologyWalkController:
             milestone_service=CausalMilestoneService(
                 project_service=self.ps, candidate_service=self.cs
             ),
+            # BETA2-PLAY-18: las observaciones del paso dejan traza por entidad.
+            history_service=HistoryService(self.ps),
+            # BETA2-WIKI-09: el paso navega la wiki para su contexto (opcional).
+            navigator=navigator,
         )
 
     def apply_step(self, session_id: str, items: list[dict]):
@@ -65,9 +70,29 @@ class ChronologyWalkController:
         _apptrace(f"CTRL ChronologyWalkController.analyze id={session_id!r}"[:120])
         return self.svc.analyze_step(session_id)
 
+    def analyze_at(self, session_id: str, milestone_id: str):
+        _apptrace(
+            f"CTRL ChronologyWalkController.analyze_at id={session_id!r} mid={milestone_id!r}"[:120]
+        )
+        return self.svc.analyze_step_at(session_id, milestone_id)
+
+    def commit(self, session_id: str, milestone_id: str, result: dict):
+        _apptrace(
+            f"CTRL ChronologyWalkController.commit id={session_id!r} mid={milestone_id!r}"[:120]
+        )
+        return self.svc.commit_step(session_id, milestone_id, result)
+
+    def scene(self, session_id: str, milestone_id: str | None = None):
+        _apptrace(f"CTRL ChronologyWalkController.scene id={session_id!r}"[:120])
+        return self.svc.step_scene(session_id, milestone_id)
+
     def decide(self, session_id: str, decision: str, note: str = ""):
         _apptrace(f"CTRL ChronologyWalkController.decide id={session_id!r} d={decision!r}"[:120])
         return self.svc.record_decision(session_id, decision, note)
+
+    def defer(self, session_id: str, note: str = ""):
+        _apptrace(f"CTRL ChronologyWalkController.defer id={session_id!r}"[:120])
+        return self.svc.defer_problems(session_id, note)
 
     def advance(self, session_id: str):
         _apptrace(f"CTRL ChronologyWalkController.advance id={session_id!r}"[:120])

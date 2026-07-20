@@ -16,6 +16,11 @@ NOMBRES_ESPERADOS = {
     "settings", "project", "creation", "worldbuilding", "search", "filter",
     "save", "back", "close", "chronology", "music", "layers", "expand",
     "collapse", "add", "edit", "delete", "refresh", "gallery", "session",
+    # UI2-11: métricas del jardín, campos de la Ficha, paso sugerido, alerta
+    # y flechas de navegación del editor a pantalla completa.
+    "metric_arraigo", "metric_nutrida", "metric_iluminada", "metric_relevancia",
+    "field_type", "field_nature", "step_suggest", "alert",
+    "arrow_left", "arrow_right", "arrow_up", "arrow_down",
 }
 
 

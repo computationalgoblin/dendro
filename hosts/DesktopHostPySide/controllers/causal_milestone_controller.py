@@ -6,6 +6,7 @@ from typing import Any
 
 from packages.application.candidate_service import CandidateService
 from packages.application.causal_milestone_service import CausalMilestoneService
+from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.domain.result import Error, Ok
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
@@ -25,6 +26,8 @@ class CausalMilestoneController:
             project_service=self.ps,
             candidate_service=self.cs,
         )
+        # BETA2-MEM-04: motor de impacto (marca Falta regar al guardar canon).
+        self.impact = NarrativeImpactService(self.ps)
 
     # ── CRUD ──
 
@@ -46,11 +49,32 @@ class CausalMilestoneController:
 
     def update(self, hito_id: str, data: dict):
         _apptrace(f"CTRL CausalMilestoneController.update hito_id={hito_id!r}"[:120])
-        return self.svc.update_hito(hito_id, data)
+        return self.svc.update_hito(hito_id, data, impact_service=self.impact)
 
     def delete(self, hito_id: str):
         _apptrace(f"CTRL CausalMilestoneController.delete hito_id={hito_id!r}"[:120])
         return self.svc.delete_hito(hito_id)
+
+    # ── Subhitos: contención temporal de 1 nivel (BETA2-SUB-01) ──
+
+    def set_parent(self, child_id: str, parent_id: str):
+        _apptrace(
+            f"CTRL CausalMilestoneController.set_parent child={child_id!r} parent={parent_id!r}"[:120]
+        )
+        return self.svc.set_milestone_parent(child_id, parent_id)
+
+    def clear_parent(self, child_id: str):
+        _apptrace(f"CTRL CausalMilestoneController.clear_parent child={child_id!r}"[:120])
+        return self.svc.clear_milestone_parent(child_id)
+
+    def create_subhito(self, parent_id: str, data: dict):
+        _apptrace(f"CTRL CausalMilestoneController.create_subhito parent={parent_id!r}"[:120])
+        return self.svc.create_subhito(parent_id, data)
+
+    def list_subhitos(self, parent_id: str):
+        _apptrace(f"CTRL CausalMilestoneController.list_subhitos parent={parent_id!r}"[:120])
+        result = self.svc.list_subhitos(parent_id)
+        return result.value if isinstance(result, Ok) else []
 
     # ── Queries ──
 

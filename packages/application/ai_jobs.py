@@ -28,7 +28,12 @@ import uuid
 from packages.domain.result import Error, Ok, Result
 from packages.application.ai_observability import AIJobRecord, AIObservabilityLog
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest, ModelParams
-from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider, create_provider
+from packages.infrastructure.ai_provider import (
+    AIProvider,
+    SimulatedAIProvider,
+    create_provider,
+    provider_chat,
+)
 from packages.application.context_budget import ContextBudgetManager
 from packages.application.prompt_assembler import (
     PromptAssembler,
@@ -54,6 +59,12 @@ def _opt_int(value: Any) -> int | None:
 
 from packages.application.prompt_registry import get_prompt
 from packages.application.command_prompts import system_prompt_for_intent
+from packages.application.candidate_service import (
+    AI_EDITABLE_ENTITY_FIELDS,
+    AI_EDITABLE_MILESTONE_FIELDS,
+    AI_ENTITY_FIELD_ALIASES,
+    AI_MILESTONE_FIELD_ALIASES,
+)
 
 # Legacy constant — now sourced from Prompt Registry (B43-T01)
 COMMAND_BAR_SYSTEM_PROMPT_ES = get_prompt("command_bar", lang="es") or ""
@@ -101,11 +112,43 @@ class AIJobType(str, Enum):
     # BETA2-FOCO: riego — diagnóstico IA puro de una entidad (jamás candidatos,
     # jamás canon). El resultado se persiste como WateringDiagnostic.
     WATER_ENTITY = "water_entity"
+    # BETA2-MEM-05: actualización IA de la Memoria editorial (derivada, no canon).
+    # Produce resumen/estado/contradicciones/huecos anclados por id; nunca canon.
+    UPDATE_MEMORY = "update_memory"
+    # BETA2-WIKI-13: generación COMPUESTA de una Sugerencia (arraigo/iluminada). Tras un
+    # análisis de intención (SuggestionIntentService), un solo job produce el MIX que el
+    # plan pide: hojas/ramas/relaciones/hitos/ediciones. stage_results ya es agnóstico y
+    # los estadía todos como Semillas revisables. NUNCA canoniza.
+    SUGGEST_COMPOSITE = "suggest_composite"
     UNKNOWN = "unknown"
 
 
 # BETA1-AI02: intents that return free text instead of staged candidates.
 _TEXT_INTENTS: frozenset[AIJobType] = frozenset({AIJobType.IMPROVE_TEXT, AIJobType.GENERATE_TEXT})
+
+# BETA2-WIKI-11: tipos de job SIN superficie UI (la retirada de WIKI-10 los dejó
+# inaccesibles). Se conservan en el enum para no romper carga/tests; se borran en la
+# limpieza posterior a la épica. Los VIVOS internos (usados por servicios sobrevivientes)
+# NO están aquí: WATER_ENTITY, UPDATE_MEMORY, SUGGEST_RELATIONS, EDIT_ENTITIES,
+# GENERATE_ENTITIES (estos tres los reusan las Sugerencias) y CHRONOLOGY_WALK_STEP.
+_DEPRECATED_JOB_TYPES: frozenset[AIJobType] = frozenset(
+    {
+        AIJobType.GENERATE_TREE,
+        AIJobType.ANALYZE_COHERENCE,
+        AIJobType.REPAIR_COHERENCE,
+        AIJobType.EXPAND_WORLDBUILDING,
+        AIJobType.EXPLAIN_FROM_CAUSES,
+        AIJobType.REVIEW_GRAPH,
+        AIJobType.FREEFORM_PLANNING,
+        AIJobType.PROPOSE_MILESTONES,
+        AIJobType.CREATE_RING_TEMPLATE,
+        AIJobType.EDIT_RELATION,
+        AIJobType.EDIT_RING,
+        AIJobType.EDIT_MILESTONE,
+        AIJobType.IMPROVE_TEXT,
+        AIJobType.GENERATE_TEXT,
+    }
+)
 
 
 def _is_text_intent(intent_type: Any) -> bool:
@@ -499,6 +542,8 @@ def _creates_for_intent(intent_type: AIJobType) -> list[str]:
         return ["informe editorial", "candidatos", "propuestas de cambio", "preguntas abiertas"]
     if intent_type == AIJobType.WATER_ENTITY:
         return ["diagnóstico de riego persistente (sin candidatos ni cambios de canon)"]
+    if intent_type == AIJobType.UPDATE_MEMORY:
+        return ["Memoria editorial derivada (resumen, contradicciones, huecos; no canon)"]
     if intent_type in _TEXT_INTENTS:
         return ["texto sugerido (no canon hasta guardar)"]
     return ["plan revisable"]
@@ -529,6 +574,8 @@ def _expected_output_for_intent(intent_type: AIJobType) -> str:
         return "milestone_candidates"
     if intent_type == AIJobType.WATER_ENTITY:
         return "watering_diagnostic"
+    if intent_type == AIJobType.UPDATE_MEMORY:
+        return "memory_update"
     if intent_type == AIJobType.CHRONOLOGY_WALK_STEP:
         return "chronology_walk_step"
     if intent_type in _TEXT_INTENTS:
@@ -817,6 +864,41 @@ def _opt_nature(value: Any) -> str:
     return "mortal"
 
 
+def _normalized_edit_fields(
+    edit: dict[str, Any],
+    whitelist: frozenset[str],
+    aliases: dict[str, str],
+    *,
+    default_field: str = "",
+) -> dict[str, Any]:
+    """PLAY-15: extrae el patch {campo: valor} de una edición del modelo.
+
+    Acepta ``edit_fields`` (dict multi-campo, formato nuevo) o el par escalar
+    viejo ``field``/``proposed_value`` (envuelto como patch de un campo). Los
+    campos fuera de la lista blanca se DESCARTAN aquí: visibilidad, secretos y
+    estado de canon jamás llegan a candidato.
+    """
+    raw = edit.get("edit_fields")
+    if not isinstance(raw, dict) or not raw:
+        field = str(edit.get("field") or default_field).strip()
+        value = edit.get("proposed_value")
+        raw = {field: value} if field and str(value or "").strip() else {}
+    fields: dict[str, Any] = {}
+    for raw_key, value in raw.items():
+        lowered = str(raw_key).strip().lower()
+        key = aliases.get(lowered, lowered)
+        if key not in whitelist:
+            continue
+        if value is None or not str(value).strip():
+            continue
+        fields[key] = value
+    return fields
+
+
+def _edit_fields_summary(fields: dict[str, Any]) -> str:
+    return "\n".join(f"- {key}: {value}" for key, value in fields.items())
+
+
 def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
     """Convert model payload to reviewable candidates/report. Never mutates canon."""
     payload = dict(model_payload or {})
@@ -855,6 +937,28 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             "kind": "watering_diagnostic",
             "summary": str(data.get("summary", "")),
             "watering": data,
+            "candidates": [],
+        }
+
+    # BETA2-MEM-05: actualización de Memoria — secciones editoriales derivadas, no
+    # canon. Validación autoritativa propia (mismo motivo: gateway con validate=False).
+    if job.type == AIJobType.UPDATE_MEMORY:
+        from packages.application.memory_payload import normalize_memory_payload
+
+        normalized = normalize_memory_payload(payload)
+        if isinstance(normalized, Error):
+            return {
+                "kind": "memory_update",
+                "summary": "",
+                "memory": None,
+                "memory_error": normalized.error,
+                "candidates": [],
+            }
+        data = normalized.value
+        return {
+            "kind": "memory_update",
+            "summary": data.get("resumen_editorial", ""),
+            "memory": data,
             "candidates": [],
         }
 
@@ -1033,34 +1137,43 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             justification=str(tree.get("rationale") or "Rama propuesta para revisión."),
         ))
 
-    # BUG 4 fix: stage entity edits as reviewable candidates (not new entities)
+    # BUG 4 fix + PLAY-15: stage entity edits as reviewable candidates. Acepta
+    # AMBOS formatos del modelo — `edit_fields` (patch multi-campo, nuevo) y el
+    # escalar viejo `field`/`proposed_value` (se envuelve como patch de 1 campo).
+    # Los campos fuera de la lista blanca se descartan AQUÍ: visibilidad,
+    # secretos y estado de canon jamás llegan a candidato.
     for edit in _safe_list(payload.get("entity_edits")):
         if not isinstance(edit, dict):
             continue
         entity_name = str(edit.get("entity_name") or "").strip()
         if not entity_name:
             continue
-        field = str(edit.get("field") or "body").strip()
-        proposed_value = str(edit.get("proposed_value") or "").strip()
-        if not proposed_value:
+        fields = _normalized_edit_fields(
+            edit, AI_EDITABLE_ENTITY_FIELDS, AI_ENTITY_FIELD_ALIASES, default_field="body"
+        )
+        if not fields:
             continue
+        resumen = _edit_fields_summary(fields)
+        campos = ", ".join(fields)
         candidates.append(_candidate(
-            title=f"Editar {field} de {entity_name}",
+            title=f"Editar {entity_name}: {campos}",
             candidate_type="sugerencia_ia",
             proposed_data={
-                "report": f"Propuesta de edición para '{entity_name}':\n\n{proposed_value}",
+                "report": f"Propuesta de edición para '{entity_name}':\n\n{resumen}",
+                "edit_kind": "entity_edits",
                 "edit_target_name": entity_name,
-                "edit_field": field,
-                "edit_proposed_value": proposed_value,
+                "edit_fields": dict(fields),
                 "issues": [],
-                "proposals": [{"title": f"Editar {field} de {entity_name}", "description": proposed_value[:200]}],
+                "proposals": [{"title": f"Editar {entity_name}", "description": resumen[:200]}],
                 "open_questions": [],
                 "prompt": job.prompt,
             },
             job=job,
-            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para hoja o rama existente."),
+            justification=str(
+                edit.get("rationale") or "Edición propuesta para hoja o rama existente."
+            ),
             confidence=0.65,
-            expected_impact=f"Editar {field} de '{entity_name}' tras revisión humana.",
+            expected_impact=f"Editar {len(fields)} campo(s) de '{entity_name}' tras revisión humana.",
         ))
 
     # UX5e: edición de RELACIÓN → UNA sola semilla con AMBOS campos (tipo + contenido).
@@ -1131,44 +1244,82 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                             "(tipo y/o descripción) tras revisión humana.",
         ))
 
-    # Structured edits for rings / milestones (deterministic "Editar" cells). Each
-    # becomes a reviewable sugerencia_ia candidate; never canon. (Las relaciones se
-    # tratan aparte arriba, agrupando tipo + contenido en una sola semilla.)
-    for kind_key, label in (
-        ("ring_edits", "anillo"),
-        ("milestone_edits", "hito"),
-    ):
-        for edit in _safe_list(payload.get(kind_key)):
-            if not isinstance(edit, dict):
-                continue
-            target_name = str(
-                edit.get("target_name") or edit.get("name") or edit.get("title") or ""
-            ).strip()
-            field = str(edit.get("field") or "description").strip()
-            proposed_value = str(edit.get("proposed_value") or "").strip()
-            if not (target_name and proposed_value):
-                continue
-            candidates.append(_candidate(
-                title=f"Editar {field} de {label}: {target_name}",
-                candidate_type="sugerencia_ia",
-                proposed_data={
-                    "report": f"Propuesta de edición de {label} '{target_name}':\n\n{proposed_value}",
-                    "edit_kind": kind_key,
-                    "edit_target_name": target_name,
-                    # CRON: id estable del objetivo (renombrados no rompen ediciones).
-                    "edit_target_id": str(edit.get("target_id") or "").strip(),
-                    "edit_field": field,
-                    "edit_proposed_value": proposed_value,
-                    "issues": [],
-                    "proposals": [{"title": f"Editar {field} de {target_name}", "description": proposed_value[:200]}],
-                    "open_questions": [],
-                    "prompt": job.prompt,
-                },
-                job=job,
-                justification=str(edit.get("rationale") or f"Edición propuesta de {field} para {label} existente."),
-                confidence=0.65,
-                expected_impact=f"Editar {field} de {label} '{target_name}' tras revisión humana.",
-            ))
+    # Structured edits for rings (deterministic "Editar" cells; mono-campo — los
+    # anillos quedan fuera del alcance de PLAY-15). Cada uno stagea como
+    # sugerencia_ia revisable; nunca canon.
+    for edit in _safe_list(payload.get("ring_edits")):
+        if not isinstance(edit, dict):
+            continue
+        target_name = str(
+            edit.get("target_name") or edit.get("name") or edit.get("title") or ""
+        ).strip()
+        field = str(edit.get("field") or "description").strip()
+        proposed_value = str(edit.get("proposed_value") or "").strip()
+        if not (target_name and proposed_value):
+            continue
+        candidates.append(_candidate(
+            title=f"Editar {field} de anillo: {target_name}",
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "report": f"Propuesta de edición de anillo '{target_name}':\n\n{proposed_value}",
+                "edit_kind": "ring_edits",
+                "edit_target_name": target_name,
+                "edit_target_id": str(edit.get("target_id") or "").strip(),
+                "edit_field": field,
+                "edit_proposed_value": proposed_value,
+                "issues": [],
+                "proposals": [{"title": f"Editar {field} de {target_name}", "description": proposed_value[:200]}],
+                "open_questions": [],
+                "prompt": job.prompt,
+            },
+            job=job,
+            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para anillo existente."),
+            confidence=0.65,
+            expected_impact=f"Editar {field} de anillo '{target_name}' tras revisión humana.",
+        ))
+
+    # PLAY-15: milestone edits como patch multi-campo (con compat escalar). El
+    # id estable (target_id) sobrevive a renombrados; la lista blanca filtra
+    # aquí lo que la IA no puede tocar.
+    for edit in _safe_list(payload.get("milestone_edits")):
+        if not isinstance(edit, dict):
+            continue
+        target_name = str(
+            edit.get("target_name") or edit.get("name") or edit.get("title") or ""
+        ).strip()
+        target_id = str(edit.get("target_id") or "").strip()
+        fields = _normalized_edit_fields(
+            edit,
+            AI_EDITABLE_MILESTONE_FIELDS,
+            AI_MILESTONE_FIELD_ALIASES,
+            default_field="description",
+        )
+        if not fields or not (target_name or target_id):
+            continue
+        resumen = _edit_fields_summary(fields)
+        campos = ", ".join(fields)
+        candidates.append(_candidate(
+            title=f"Editar hito {target_name or target_id}: {campos}",
+            candidate_type="sugerencia_ia",
+            proposed_data={
+                "report": f"Propuesta de edición de hito '{target_name}':\n\n{resumen}",
+                "edit_kind": "milestone_edits",
+                "edit_target_name": target_name,
+                # CRON: id estable del objetivo (renombrados no rompen ediciones).
+                "edit_target_id": target_id,
+                "edit_fields": dict(fields),
+                "issues": [],
+                "proposals": [{"title": f"Editar hito {target_name}", "description": resumen[:200]}],
+                "open_questions": [],
+                "prompt": job.prompt,
+            },
+            job=job,
+            justification=str(edit.get("rationale") or "Edición propuesta para hito existente."),
+            confidence=0.65,
+            expected_impact=(
+                f"Editar {len(fields)} campo(s) del hito '{target_name}' tras revisión humana."
+            ),
+        ))
 
     # Ring template (CREATE_RING_TEMPLATE): initial rings as a causal domain
     # structure. Rings are world layers, not entities, so each stages as a
@@ -1533,6 +1684,20 @@ class AIJobService:
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         return provider_name == "simulated" and not self.allow_simulated
 
+    def raw_json_completion(
+        self, system_prompt: str, user_message: str
+    ) -> tuple[str | None, str | None]:
+        """Una llamada single-shot JSON al proveedor, devolviendo ``(texto, error)``.
+
+        BETA2-WIKI: la mantiene el AIJobService (borde IA autorizado a tocar el proveedor)
+        para que servicios de aplicación como ``WikiNavigator``/``WikiLintService`` NO
+        importen infraestructura. Tolera firmas de ``chat`` más estrechas (provider_chat).
+        """
+        return provider_chat(
+            self._provider, system_prompt, user_message, json_mode=True,
+            timeout=self.timeout_seconds,
+        )
+
     def update_status(
         self,
         job_id: str,
@@ -1616,35 +1781,26 @@ class AIJobService:
         return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
 
     def _with_rag_context(self, job: AIJob, plan: AIJobPlan) -> AIJobPlan:
-        if self._rag_service is None:
+        """Inyecta el contexto determinista del proyecto en el plan (BETA2-WIKI-05).
+
+        Ya NO recupera por RAG léxico ni vuelca la Memoria fija: el contexto relevante
+        lo decide la IA navegando la wiki (``WikiNavigator``), y el consumidor lo pasa
+        en ``context_scope['contexto_wiki']`` (que el ensamblador renderiza). Aquí solo
+        se añade lo determinista que no viaja por la wiki: cronología compacta, anillo
+        activo y hito(s) seleccionado(s). Sin ``_project_provider`` es un no-op.
+        """
+        if self._project_provider is None:
+            return plan
+        try:
+            project = self._project_provider()
+        except Exception:  # pragma: no cover - defensive UI boundary
+            return plan
+        if project is None:
             return plan
 
-        from packages.application.rag_context import RAGContextBuilder
-
         context = dict(plan.context)
-        project = None
-        if self._project_provider is not None:
-            try:
-                project = self._project_provider()
-            except Exception as exc:  # pragma: no cover - defensive UI boundary
-                context["rag_context_pack"] = {
-                    "schema": "context_pack/v1",
-                    "warnings": [f"rag_project_provider_error: {_sanitize_error(str(exc))}"],
-                    "items": [],
-                    "truncated": False,
-                }
-                return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
 
-        # PA03: presupuesto de recuperación derivado del pool flexible (más
-        # contexto declarado ⇒ recupera más), en vez de una constante fija.
-        intent_type = plan.intent.intent_type
-        total = self._budget.input_budget(
-            intent_type, override_tokens=context.get("prompt_budget_tokens")
-        )
-        share = self._budget.rag_retrieval_share(intent_type)
-        context.setdefault("rag_token_budget", max(800, int(total * share * 1.5)))
-
-        # PA03: cronología compacta determinista (el calendario ya NO viaja por RAG).
+        # Cronología compacta determinista (el calendario nunca viajó por recuperación).
         cronologia = _compact_chronology(project)
         if cronologia:
             context["cronologia"] = cronologia
@@ -1661,18 +1817,6 @@ class AIJobService:
         if milestones_brief:
             context["selected_milestones"] = milestones_brief
 
-        retrieval_plan = build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
-        built = RAGContextBuilder(self._rag_service).build_for_job_plan(project, retrieval_plan)
-        if isinstance(built, Error):
-            context["rag_context_pack"] = {
-                "schema": "context_pack/v1",
-                "warnings": [f"rag_context_error: {_sanitize_error(built.error)}"],
-                "items": [],
-                "truncated": False,
-            }
-            return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
-
-        context["rag_context_pack"] = built.value.to_dict()
         return build_job_plan(plan.intent, plan.prompt, context, job_id=job.id)
 
     def _trace_prompt_request(

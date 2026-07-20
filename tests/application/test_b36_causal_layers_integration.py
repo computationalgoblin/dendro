@@ -134,20 +134,15 @@ def test_desktop_ui_exposes_b36_layer_view_controls_without_modals() -> None:
     root = Path(__file__).resolve().parents[2]
     workspace = (root / "hosts" / "DesktopHostPySide" / "views" / "workspaces.py").read_text(encoding="utf-8")
     node_panel = (root / "hosts" / "DesktopHostPySide" / "widgets" / "node_detail_panel.py").read_text(encoding="utf-8")
-    tree_panel = (root / "hosts" / "DesktopHostPySide" / "widgets" / "tree_detail_panel.py").read_text(encoding="utf-8")
     graph_canvas = (root / "hosts" / "DesktopHostPySide" / "widgets" / "graph_canvas.py").read_text(encoding="utf-8")
 
+    # BETA2-CLEANUP-PANELES: tree_detail_panel.py se eliminó; solo node_panel.
     assert "Vista Anillos causales" in workspace
     assert "set_worldbuilding_active" in workspace
     assert "self.layer_combo" in node_panel
-    assert "self.layer_combo" in tree_panel
     assert "Expandir hacia anillo inferior" not in node_panel
     assert "Explicar desde causas superiores" not in node_panel
     assert "Destino causal" not in node_panel
-    assert "Expandir hacia anillo inferior" not in tree_panel
-    assert "Explicar desde causas superiores" not in tree_panel
-    assert "Destino causal" not in tree_panel
     assert "_set_graph_by_layers" in graph_canvas
-    panel_sources = node_panel + tree_panel
-    assert "QInputDialog" not in panel_sources
-    assert "QMessageBox" not in panel_sources
+    assert "QInputDialog" not in node_panel
+    assert "QMessageBox" not in node_panel

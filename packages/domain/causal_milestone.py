@@ -67,6 +67,16 @@ class CausalMilestone:
     updated_at: str = ""
     # BETA1-G02: año diegético del hito (None solo transitorio pre-migración)
     year: int | None = None
+    # BETA2-SUB-01: contención TEMPORAL de 1 nivel — el id del hito-marco que
+    # contiene a este subhito (p. ej. una guerra que contiene batallas). Es
+    # distinto de causal_parent/child_hito_ids (causa→consecuencia): aquí es
+    # pertenencia al intervalo del marco. None = hito de primer nivel.
+    parent_milestone_id: str | None = None
+
+    @property
+    def is_subhito(self) -> bool:
+        """BETA2-SUB-01: True si este hito está contenido en un hito-marco."""
+        return bool(self.parent_milestone_id)
 
     def as_temporal_span(self) -> TemporalSpan:
         """BETA1-J01: vista de lapso unificada sobre ``temporality`` + ``year``.
@@ -90,7 +100,7 @@ class CausalMilestone:
         return TemporalSpan(start=start, end=end, ongoing=end is None)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to the 22-field B41-T01 contract."""
+        """Serialize to the B41-T01 contract (+ ``year`` y ``parent_milestone_id``)."""
         return {
             "id": self.id,
             "title": self.title,
@@ -115,6 +125,7 @@ class CausalMilestone:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "year": self.year,
+            "parent_milestone_id": self.parent_milestone_id,
         }
 
     @classmethod
@@ -152,6 +163,7 @@ class CausalMilestone:
             created_at=str(data.get("created_at", "")),
             updated_at=str(data.get("updated_at", "")),
             year=_parse_optional_year(data.get("year")),
+            parent_milestone_id=_parse_optional_str(data.get("parent_milestone_id")),
         )
 
 
@@ -176,6 +188,13 @@ def _parse_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _parse_optional_str(value: Any) -> str | None:
+    """BETA2-SUB-01: id de hito-marco (str no vacío) o None."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _parse_optional_year(value: Any) -> int | None:

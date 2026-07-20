@@ -9,11 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -29,8 +27,14 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.app_context import AppContext
-from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from hosts.DesktopHostPySide.app_trace import _apptrace
+from hosts.DesktopHostPySide.widgets import icons, portrait_cache, portrait_flow
+from hosts.DesktopHostPySide.widgets.mention_support import attach_mention_support
+from packages.application.structured_reference_service import (
+    StructuredReferenceService,
+    build_known_targets,
+)
+from packages.domain.narrative_memory import MemoryTargetKind
 from hosts.DesktopHostPySide.widgets.design_system import (
     ENTITY_KIND_PALETTE,
     FONT_SERIF,
@@ -45,19 +49,23 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     LINE_STRONG,
     SPACE_LG,
     SPACE_MD,
-    SURFACE,
     SURFACE_HI,
+    TYPE_H1_PX,
     Badge,
+    FlowLayout,
     enum_human,
+    meta_chip_style,
 )
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
+from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.entity import EntityType
 from packages.domain.entity_taxonomy import (
     BEING_NATURES,
-    LEAF_ENTITY_TYPES,
+    OFFERED_ENTITY_TYPES,
     has_temporal_nature,
+    is_branch_type,
 )
 from packages.domain.result import Error
-from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 
 # ---------------------------------------------------------------------------
 # Warm palette constants
@@ -74,8 +82,8 @@ _SUGGESTION_BG = INPUT_BG
 # BETA1-UX04/UX07: paleta BOTÁNICA cálida (antes azules/lavandas frías que
 # pintaban un swatch azul fuera de paleta en el editor). Debe coincidir con
 # graph_canvas._NODE_COLORS.
-# B39 terminology: branch types show as "Rama", all others as "Hoja"
-BRANCH_TYPES = {"faccion", "cultura", "sistema_magico", "religion", "institucion", "trama", "contenedor"}
+# UI2-20: la ramitud (Rama/Hoja) se DERIVA del tipo vía is_branch_type
+# (taxonomía + rol legado 'contenedor'); ya no hay set local de tipos de rama.
 
 # UX15: paleta cálida por tipo centralizada en el design system (antes duplicada).
 _NODE_COLORS: dict[str, str] = ENTITY_KIND_PALETTE
@@ -107,6 +115,26 @@ def _enum_value(value: Any, default: str = "") -> str:
 def _default_color_for_type(entity_type_str: str) -> str:
     """Return the default hex colour for *entity_type_str*, or a fallback."""
     return _NODE_COLORS.get((entity_type_str or "").lower(), "#8EA4C8")
+
+
+def _meta_chip(icon_name: str, combo: QComboBox, tooltip: str) -> QWidget:
+    """UI2-12: chip de metadato de la Ficha — icono SVG 14px + combo cápsula.
+
+    El icono identifica QUÉ selecciona el chip (decisión de producto: icono +
+    tooltip, sin labels de formulario); el tooltip explica el detalle."""
+    wrapper = QWidget()
+    row = QHBoxLayout(wrapper)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    glyph = QLabel(wrapper)
+    glyph.setPixmap(icons.pixmap(icon_name, size=14, color=INK_MUTED))
+    glyph.setFixedSize(16, 16)
+    glyph.setStyleSheet("background: transparent; border: none;")
+    row.addWidget(glyph)
+    row.addWidget(combo)
+    for widget in (wrapper, glyph, combo):
+        widget.setToolTip(tooltip)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -249,15 +277,28 @@ class NodeDetailPanel(QWidget):
         variant: str = "drawer",
         on_open_relation=None,
         on_create_relation=None,
+        on_portrait=None,
+        preview_patch: dict | None = None,
+        on_preview_save=None,
     ):
         super().__init__()
         self.ctx = ctx
-        # BETA2-FOCO: variant="foco" monta las relaciones clicables en el propio
-        # formulario (abren panel ADYACENTE) y oculta el bloque IA inline.
+        # PLAY-16: modo PREVIEW — la ficha real con un patch propuesto aplicado
+        # encima del canon. SIN autosave; guardar emite el DIFF por callback
+        # (on_preview_save) y JAMÁS escribe canon. preview_patch is not None ⇔ preview.
+        self.preview_patch = dict(preview_patch) if preview_patch else None
+        self.on_preview_save = on_preview_save
+        self._preview_base: dict = {}
+        self._preview_extra: dict = {}
+        # UI2-06: variant="foco" es la pestaña FICHA de la tarjeta del Foco;
+        # las relaciones viven en su propia pestaña (FocoRelationsPanel) y el
+        # retrato en la banda de la tarjeta (PortraitBand).
         self.variant = str(variant or "drawer")
         self.on_open_relation = on_open_relation
-        # FOCO-20: «+» de la sección Relaciones (abre el flujo de crear relación).
         self.on_create_relation = on_create_relation
+        # UI2-06: la tarjeta del Foco recibe el retrato resuelto por este hook
+        # (banda lateral persistente entre pestañas); el panel solo notifica.
+        self.on_portrait = on_portrait
         self._is_ghost = False
         self.entity_controller = entity_controller
         self.entity_id = entity_id
@@ -291,6 +332,10 @@ class NodeDetailPanel(QWidget):
             ):
                 if ai_widget is not None:
                     ai_widget.hide()
+            # UI2-06: la identidad vive en la tarjeta (título fijo + nombre
+            # editable protagonista) — el título/resumen del header duplicaban.
+            self.title.hide()
+            self.summary.hide()
         self._connect_autosave_signals()
         self.refresh()
 
@@ -299,6 +344,10 @@ class NodeDetailPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _build(self):
+        # UI2-06: la banda de retrato ya NO vive aquí — es de la tarjeta del
+        # Foco (PortraitBand en foco_view), visible en todas las pestañas. El
+        # atributo queda en None para las rutas y tests que lo consultan.
+        self.portrait_band = None
         root = QVBoxLayout(self)
         root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)  # UX23: ritmo del scaffold
         root.setSpacing(SPACE_MD)
@@ -335,8 +384,9 @@ class NodeDetailPanel(QWidget):
         title_column = QVBoxLayout()
         title_column.setSpacing(2)
         self.title = QLabel("Hoja")
+        # PULIDO-04: rol H1 del sistema (19px) — antes 20px fuera de escala.
         self.title.setStyleSheet(
-            f"font-size: 20px; font-weight: 700; color: {_TITLE_COLOR}; "
+            f"font-size: {TYPE_H1_PX}px; font-weight: 700; color: {_TITLE_COLOR}; "
             f"font-family: {FONT_SERIF}; background: transparent;"
         )
         self.title.setWordWrap(True)
@@ -351,8 +401,9 @@ class NodeDetailPanel(QWidget):
 
         badge_column = QVBoxLayout()
         badge_column.setSpacing(4)
-        badge_row = QHBoxLayout()
-        badge_row.setSpacing(6)
+        # PULIDO-04: FlowLayout — el badge de tipo y el menú ⋯ envuelven en
+        # paneles estrechos en vez de imponer un ancho mínimo sumado.
+        badge_row = FlowLayout(spacing=6)
         self.type_badge = Badge("Hoja", "info")
         badge_row.addWidget(self.type_badge)
         # FOCO-20: acciones secundarias («Convertir en rama») en un menú ⋯
@@ -369,9 +420,10 @@ class NodeDetailPanel(QWidget):
             "QToolButton::menu-indicator { image: none; }"
         )
         self._more_menu = QMenu(self.more_menu_btn)
-        self.convert_to_branch_action = self._more_menu.addAction("Convertir en rama")
-        self.convert_to_branch_action.triggered.connect(self._convert_to_branch)
         self.more_menu_btn.setMenu(self._more_menu)
+        # UI2-20: «Convertir en rama» es redundante — la ramitud se deriva del
+        # tipo (elige un tipo de rama en el combo). El menú ⋯ queda oculto.
+        self.more_menu_btn.hide()
         badge_row.addWidget(self.more_menu_btn)
         badge_column.addLayout(badge_row)
         badge_column.addStretch(1)
@@ -389,26 +441,20 @@ class NodeDetailPanel(QWidget):
         form_card.setStyleSheet(
             f"QFrame#formCard {{ background: {_BG_DRAWER}; border: none; }}"
         )
-        form_layout = QFormLayout(form_card)
-        form_layout.setContentsMargins(0, 4, 0, 4)
-        form_layout.setSpacing(8)
-        form_layout.labelAlignment = 0x0002  # Qt.AlignmentFlag.AlignRight
         _label_ss = f"color: {_LABEL_COLOR}; background: transparent; font-weight: 600;"
 
-        # BETA1-F05 layout exacto: NOMBRE + TIPO + ANILLO en UNA fila fluida.
-        first_row = QHBoxLayout()
-        first_row.setSpacing(8)
+        # Widgets de metadatos (comunes a ambos variants; solo cambia el montaje).
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Nombre")
-        first_row.addWidget(self.name_edit, 3)
         self.type_combo = QComboBox()
         self.type_combo.setEditable(True)
-        # BETA1-J08: la HOJA solo ofrece tipos de hoja (sigue editable por los
-        # tipos personalizados).
-        for item in LEAF_ENTITY_TYPES:
+        # UI2-20: TODAS las entidades ofrecen TODOS los tipos (hoja + rama). La
+        # ramitud se deriva del tipo elegido: un tipo de rama la hace rama
+        # (marcador interno 'contenedor'), uno de hoja la hace hoja. Sigue
+        # editable por los tipos personalizados.
+        for item in OFFERED_ENTITY_TYPES:
             self.type_combo.addItem(enum_human(item.value), item.value)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
-        first_row.addWidget(self.type_combo, 2)
         # Legacy ref kept for older code paths; never shown as UI. If this
         # empty label is made visible without a layout, Qt opens it as a
         # top-level blank popout.
@@ -416,23 +462,12 @@ class NodeDetailPanel(QWidget):
         self.layer_label.hide()
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("— Sin anillo —", "")
-        first_row.addWidget(self.layer_combo, 2)
         # UX28/BETA2-UX-03: el color del nodo lo decide el TIPO de entidad
         # (paleta de Dendro); no hay selector manual de color.
-        form_layout.addRow(first_row)
 
-        # BETA1-UX2C: el lapso de vida (origen → fin) se EDITA estirando el nodo
-        # en la vista Cronología; aquí solo se MUESTRA, derivado de birth/death y
-        # de las eras efectivas (las mismas que pinta la cronológica). Solo lectura.
-        self.lifespan_label = QLabel("")
-        self.lifespan_label.setWordWrap(True)
-        self.lifespan_label.setStyleSheet(
-            f"color: {_MUTED_COLOR}; background: transparent; font-size: 12px;"
-        )
-        self.lifespan_label.setToolTip(
-            "Define el origen y el fin estirando el nodo en la vista Cronología."
-        )
-        form_layout.addRow(self.lifespan_label)
+        # BETA2-FOCO-27: el lapso de vida (origen → fin) se define en la cronología
+        # del PIE del editor (arrastre de bordes + hitos); en la descripción es solo
+        # lectura. Ya no hay texto muerto de "Lapso de vida" en el formulario.
 
         # BETA1-J07/J08: naturaleza temporal SOLO para seres (personaje/criatura).
         # Un eterno NO recibe nacimiento mortal; la IA la propone y el usuario manda.
@@ -446,7 +481,6 @@ class NodeDetailPanel(QWidget):
         )
         self.nature_label = QLabel("Naturaleza temporal")
         self.nature_label.setStyleSheet(_label_ss)
-        form_layout.addRow(self.nature_label, self.nature_combo)
 
         # FOCO-20: «Relevancia narrativa» visible en el formulario principal
         # (calibra el riego y la invalidación de 2º grado; antes estaba
@@ -458,9 +492,79 @@ class NodeDetailPanel(QWidget):
             "Cuánto pesa esta entidad en la trama. Calibra la exigencia del "
             "riego y qué cambios vecinos la invalidan."
         )
-        importance_label = QLabel("Relevancia")
-        importance_label.setStyleSheet(_label_ss)
-        form_layout.addRow(importance_label, self.importance_combo)
+
+        if self.variant == "foco":
+            # UI2-07: la Ficha se lee como texto — nombre protagonista (serif,
+            # sin marco hasta hover/focus) + UNA fila discreta de chips con los
+            # MISMOS combos (autosave intacto); sin labels de formulario (los
+            # tooltips ya explican cada chip).
+            self.name_edit.setStyleSheet(
+                f"QLineEdit {{ background: transparent; border: 1px solid transparent; "
+                f"border-radius: 8px; padding: 2px 4px; color: {_TITLE_COLOR}; "
+                f"font-family: {FONT_SERIF}; font-size: {TYPE_H1_PX}px; font-weight: 700; }} "
+                f"QLineEdit:hover {{ border-color: {LINE_SOFT}; }} "
+                f"QLineEdit:focus {{ border-color: {GOLD}; background: {INPUT_BG}; }}"
+            )
+            chip_ss = meta_chip_style()
+            for combo in (
+                self.type_combo,
+                self.layer_combo,
+                self.nature_combo,
+                self.importance_combo,
+            ):
+                combo.setStyleSheet(chip_ss)
+                combo.setFixedHeight(22)
+            self.nature_label.hide()  # el chip se explica solo (icono + tooltip)
+            chips_layout = QVBoxLayout(form_card)
+            chips_layout.setContentsMargins(0, 4, 0, 4)
+            chips_layout.setSpacing(6)
+            chips_layout.addWidget(self.name_edit)
+            # UI2-12: cada chip lleva su icono SVG identificador + tooltip.
+            meta_row = FlowLayout(spacing=8)
+            meta_row.addWidget(
+                _meta_chip(
+                    "field_type",
+                    self.type_combo,
+                    "Tipo de entidad — decide su color y su papel en el jardín.",
+                )
+            )
+            meta_row.addWidget(
+                _meta_chip(
+                    "rings",
+                    self.layer_combo,
+                    "Anillo del mundo al que pertenece la entidad.",
+                )
+            )
+            self._nature_chip_wrapper = _meta_chip(
+                "field_nature",
+                self.nature_combo,
+                self.nature_combo.toolTip(),
+            )
+            meta_row.addWidget(self._nature_chip_wrapper)
+            meta_row.addWidget(
+                _meta_chip(
+                    "metric_relevancia",
+                    self.importance_combo,
+                    self.importance_combo.toolTip(),
+                )
+            )
+            chips_layout.addLayout(meta_row)
+        else:
+            form_layout = QFormLayout(form_card)
+            form_layout.setContentsMargins(0, 4, 0, 4)
+            form_layout.setSpacing(8)
+            form_layout.labelAlignment = 0x0002  # Qt.AlignmentFlag.AlignRight
+            # BETA1-F05 layout exacto: NOMBRE + TIPO + ANILLO en UNA fila fluida.
+            first_row = QHBoxLayout()
+            first_row.setSpacing(8)
+            first_row.addWidget(self.name_edit, 3)
+            first_row.addWidget(self.type_combo, 2)
+            first_row.addWidget(self.layer_combo, 2)
+            form_layout.addRow(first_row)
+            form_layout.addRow(self.nature_label, self.nature_combo)
+            importance_label = QLabel("Relevancia")
+            importance_label.setStyleSheet(_label_ss)
+            form_layout.addRow(importance_label, self.importance_combo)
 
         # Descripción breve: tras la imagen (montada fuera del form) — el
         # widget se crea aquí, se monta más abajo en el orden F05.
@@ -510,6 +614,19 @@ class NodeDetailPanel(QWidget):
         self.extended_edit.setStyleSheet(self._editorial_card_ss)
         root.addWidget(self.extended_edit, 1)
 
+        # BETA2-MEM-03: @menciones estructuradas en la prosa (breve + cuerpo).
+        self._mention_supports = {}
+        try:
+            provider = self._mention_targets_provider()
+            self._mention_supports["brief_description"] = attach_mention_support(
+                self.brief_edit, provider
+            )
+            self._mention_supports["extended_description"] = attach_mention_support(
+                self.extended_edit, provider
+            )
+        except Exception:  # noqa: BLE001 — las @menciones nunca deben romper el editor
+            self._mention_supports = {}
+
         # BETA2-UX-03: notas privadas/exportables, visibilidad y el resumen de
         # «Contexto» (relations_label/campaigns_label) eran widgets muertos (sin
         # montar). Se eliminaron; notas y visibilidad se PRESERVAN por
@@ -520,8 +637,8 @@ class NodeDetailPanel(QWidget):
         # crean en la cronología local bajo el editor (FocoLifelineBand); el
         # atributo queda en None para las rutas que lo consultan.
         self.related_milestones_panel = None
-        # FOCO-20: «Convertir en rama» vive en el menú ⋯ de la cabecera
-        # (self.convert_to_branch_action, creado junto al header).
+        # UI2-20: ya no hay «Convertir en rama» — la ramitud se deriva del tipo
+        # (elige un tipo de rama en el combo); el menú ⋯ queda oculto.
 
         # -- AI suggestion section --
         ai_card = QFrame()
@@ -620,10 +737,9 @@ class NodeDetailPanel(QWidget):
 
         # FOCO-20: «Más opciones» desapareció del editor — la Relevancia vive
         # en el formulario principal, los hitos en la cronología local y
-        # «Convertir en rama» en el menú ⋯ de la cabecera. La sección de
-        # RELACIONES es una lista real (todas, clicables → panel adyacente).
-        if self.variant == "foco":
-            root.addWidget(self._build_relations_section())
+        # «Convertir en rama» en el menú ⋯ de la cabecera.
+        # UI2-06: la lista de RELACIONES tampoco vive ya aquí — es la pestaña
+        # «Relaciones» de la tarjeta del Foco (FocoRelationsPanel).
 
         # -- Actions --
         actions = QHBoxLayout()
@@ -648,120 +764,34 @@ class NodeDetailPanel(QWidget):
         self.set_advanced_mode(self.ctx.advanced_mode)
 
     # ------------------------------------------------------------------
-    # FOCO-20: sección de Relaciones (lista real, clicable, sin tope)
-    # ------------------------------------------------------------------
-
-    def _build_relations_section(self) -> QFrame:
-        section = QFrame()
-        section.setObjectName("relationsSection")
-        section.setStyleSheet("QFrame#relationsSection { background: transparent; border: none; }")
-        box = QVBoxLayout(section)
-        box.setContentsMargins(0, SPACE_MD, 0, 0)
-        box.setSpacing(4)
-
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        title = QLabel("RELACIONES")
-        title.setStyleSheet(
-            f"color: {_MUTED_COLOR}; background: transparent; font-size: 11px; "
-            "font-weight: 700; letter-spacing: 1px;"
-        )
-        header.addWidget(title)
-        header.addStretch(1)
-        self.add_relation_btn = QToolButton()
-        self.add_relation_btn.setText("+")
-        self.add_relation_btn.setToolTip("Crear relación desde esta entidad")
-        self.add_relation_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_relation_btn.setStyleSheet(
-            f"QToolButton {{ border: 1px solid {LINE_SOFT}; border-radius: 10px; "
-            f"background: transparent; color: {_LABEL_COLOR}; font-size: 14px; "
-            f"padding: 0 7px; }} "
-            f"QToolButton:hover {{ border-color: {GOLD}; color: {_TITLE_COLOR}; }}"
-        )
-        self.add_relation_btn.setVisible(callable(self.on_create_relation))
-        if callable(self.on_create_relation):
-            self.add_relation_btn.clicked.connect(lambda: self.on_create_relation())
-        header.addWidget(self.add_relation_btn)
-        box.addLayout(header)
-
-        self._relations_rows = QVBoxLayout()
-        self._relations_rows.setSpacing(2)
-        box.addLayout(self._relations_rows)
-        self.relations_empty_label = QLabel("Sin relaciones todavía.")
-        self.relations_empty_label.setStyleSheet(
-            f"color: {_MUTED_COLOR}; background: transparent; font-style: italic;"
-        )
-        box.addWidget(self.relations_empty_label)
-        return section
-
-    def _rebuild_relation_rows(self, entries: list[tuple[str, str]]) -> None:
-        """entries = [(relation_id, texto)] — una fila-botón por relación."""
-        rows = getattr(self, "_relations_rows", None)
-        if rows is None:
-            return
-        while rows.count():
-            item = rows.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self.relations_empty_label.setVisible(not entries)
-        for relation_id, text in entries:
-            row = QPushButton(text)
-            row.setCursor(Qt.CursorShape.PointingHandCursor)
-            row.setStyleSheet(
-                f"QPushButton {{ border: none; border-radius: 8px; background: transparent; "
-                f"color: {_LABEL_COLOR}; text-align: left; padding: 6px 8px; font-size: 13px; }} "
-                f"QPushButton:hover {{ background: {SURFACE}; color: {_TITLE_COLOR}; }}"
-            )
-            if relation_id:
-                row.clicked.connect(
-                    lambda _=False, rid=relation_id: self._on_relation_link(rid)
-                )
-            rows.addWidget(row)
-
-    # ------------------------------------------------------------------
     # Colour helpers
     # ------------------------------------------------------------------
 
-    # ── BETA1-F04: imagen opcional ───────────────────────────────────────
+    # ── BETA2-IMG: retrato de entidad (subir / buscar / encuadrar) ───────
 
     def _pick_image(self):
-        """Importa una imagen y la asocia a la hoja (persistencia mínima:
-        ruta en custom_metadata. Gestión avanzada de assets = deuda F)."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Importar imagen", "", "Imágenes (*.png *.jpg *.jpeg *.webp)"
-        )
-        if not path:
-            return
-        entity = self._entity_by_id(self.entity_id)
-        metadata = dict(getattr(entity, "custom_metadata", {}) or {}) if entity is not None else {}
-        metadata["_image_path"] = path
-        result = self.entity_controller.update(self.entity_id, {"custom_metadata": metadata})
-        if isinstance(result, Error):
-            self.ctx.log("error", f"No se pudo asociar la imagen: {result.error}")
-            return
-        self._show_image(path)
-        self.ctx.log("info", "Imagen asociada a la hoja")
+        """Menú de retrato: subir archivo, buscar en internet, reencuadrar o
+        quitar. El flujo (editor de encuadre incluido) vive en portrait_flow."""
+        portrait_flow.open_image_menu(self)
 
-    def _show_image(self, path: str):
+    def _show_image(self, path: str, crop=None):
         # FOCO-20: miniatura integrada en la cabecera — siempre visible; sin
-        # imagen queda el marco punteado como placeholder.
-        from pathlib import Path as _Path
-        if not path or not _Path(path).exists():
+        # imagen queda el marco punteado como placeholder. BETA2-IMG: la ruta
+        # guardada es relativa al asset store (absoluta = legacy F04) y la
+        # miniatura muestra el ENCUADRE elegido; en foco alimenta la banda de
+        # la TARJETA vía on_portrait (UI2-06).
+        resolved = portrait_flow.resolve_portrait_path(self.ctx, path)
+        if callable(self.on_portrait):
+            self.on_portrait(resolved, crop)
+        if resolved is None:
             self.image_preview.clear()
             self.image_btn.setText("Imagen…")
             return
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
+        pixmap = portrait_cache.portrait_pixmap(resolved, crop, 128)
+        if pixmap is None:
             self.image_preview.clear()
             return
-        self.image_preview.setPixmap(
-            pixmap.scaled(
-                self.image_preview.size(),
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.image_preview.setPixmap(pixmap)
         self.image_btn.setText("Cambiar…")
 
     def _update_color_swatch(self, hex_color: str):
@@ -776,7 +806,9 @@ class NodeDetailPanel(QWidget):
         meta = getattr(self._entity, "custom_metadata", {}) or {}
         has_custom = bool(meta.get("_node_color"))
         if not has_custom:
-            self._update_color_swatch(_default_color_for_type(type_val))
+            # UI2-20: una rama usa el color del contenedor (se guarda como tal).
+            color_kind = "contenedor" if is_branch_type(type_val) else type_val
+            self._update_color_swatch(_default_color_for_type(color_kind))
         self._update_nature_visibility()
         self._schedule_autosave()
 
@@ -788,7 +820,15 @@ class NodeDetailPanel(QWidget):
         except ValueError:
             is_being = False
         self.nature_combo.setVisible(is_being)
-        self.nature_label.setVisible(is_being)
+        # UI2-07/12: en la Ficha del Foco no hay labels de formulario — se
+        # oculta el WRAPPER entero del chip (icono incluido; un icono huérfano
+        # sin combo confunde) y el label permanece oculto siempre.
+        if self.variant == "foco":
+            wrapper = getattr(self, "_nature_chip_wrapper", None)
+            if wrapper is not None:
+                wrapper.setVisible(is_being)
+        else:
+            self.nature_label.setVisible(is_being)
 
     # ------------------------------------------------------------------
     # Auto-save (debounced)
@@ -796,6 +836,8 @@ class NodeDetailPanel(QWidget):
 
     def _connect_autosave_signals(self):
         """Connect all editable field signals to the debounced auto-save timer."""
+        if self.preview_patch is not None:
+            return  # PLAY-16: el preview no autoguarda — cero riesgo de escribir canon
         self.name_edit.textEdited.connect(self._schedule_autosave)
         self.brief_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.extended_edit.textChanged.connect(self._schedule_autosave_if_active)
@@ -805,11 +847,6 @@ class NodeDetailPanel(QWidget):
         self.nature_combo.currentIndexChanged.connect(self._schedule_autosave)
         # BETA1-UX2C: el lapso de vida ya no se edita aquí (se estira el nodo en
         # la cronología), así que no hay campos de año que autoguardar.
-
-    def _on_relation_link(self, relation_id: str) -> None:
-        """BETA2-FOCO: una relación de la lista se abre en su panel adyacente."""
-        if callable(self.on_open_relation) and relation_id:
-            self.on_open_relation(relation_id)
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -1058,33 +1095,11 @@ class NodeDetailPanel(QWidget):
 
     # BETA1-UX2C: lapso de vida (solo lectura) -------------------------
 
-    def _era_name_for_year(self, year) -> str:
-        """Nombre de era para *year* usando las eras EFECTIVAS (las mismas que
-        pinta la cronológica: dominio o derivadas del calendario completo)."""
-        if year is None:
-            return ""
-        project = self._project()
-        if project is None:
-            return ""
-        try:
-            from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras
-            for era in effective_eras(project):
-                start = getattr(era, "start_year", None)
-                end = getattr(era, "end_year", None)
-                if start is None or int(year) < int(start):
-                    continue
-                if end is None or int(year) < int(end):
-                    return str(getattr(era, "name", "") or "")
-        except Exception:
-            return ""
-        return ""
+    def _sync_nature_combo(self, entity) -> None:
+        """BETA1-J07: sincroniza el combo de naturaleza temporal con la entidad.
 
-    def _refresh_lifespan_label(self, entity) -> None:
-        """Muestra el lapso derivado de birth/death (origen → fin/presente) y el
-        estado de datación (BETA1-J06: Por datar / Sin fundamentar / Datado…)."""
-        from hosts.DesktopHostPySide.widgets.candidate_review_panel import dating_badge_label
-
-        # BETA1-J07: sincroniza el combo de naturaleza temporal con la entidad.
+        BETA2-FOCO-27: el lapso de vida se define en la cronología del pie del
+        editor (arrastre + hitos); ya no se pinta como texto en el formulario."""
         span = getattr(entity, "life_span", None)
         nature_value = getattr(getattr(span, "nature", None), "value", "mortal")
         self.nature_combo.blockSignals(True)
@@ -1092,25 +1107,6 @@ class NodeDetailPanel(QWidget):
         self.nature_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.nature_combo.blockSignals(False)
         self._update_nature_visibility()
-
-        badge = dating_badge_label(entity)
-        birth = getattr(entity, "birth_year", None)
-        death = getattr(entity, "death_year", None)
-        if birth is None:
-            self.lifespan_label.setText(
-                f"Lapso de vida: [{badge}] · dátalo aquí o en la Cronología"
-            )
-            return
-
-        def part(year: int) -> str:
-            era = self._era_name_for_year(year)
-            return f"año {int(year)}" + (f" · {era}" if era else "")
-
-        if death is None:
-            text = f"Lapso de vida:  origen {part(birth)}  →  presente"
-        else:
-            text = f"Lapso de vida:  origen {part(birth)}  →  fin {part(death)}"
-        self.lifespan_label.setText(f"{text}   [{badge}]")
 
     def _worldbuilding_active(self) -> bool:
         project = self._project()
@@ -1171,26 +1167,34 @@ class NodeDetailPanel(QWidget):
                 self.save_btn.setEnabled(False)
                 return
             entity = result.value
-            # BETA1-F04: imagen asociada (si la hay)
+            # BETA1-F04/BETA2-IMG: retrato asociado (si lo hay), con encuadre
             metadata = dict(getattr(entity, "custom_metadata", {}) or {})
-            self._show_image(str(metadata.get("_image_path", "")))
+            self._show_image(str(metadata.get("_image_path", "")), metadata.get("_image_crop"))
             self._entity = entity
             kind = _enum_value(getattr(entity, "entity_type", None), "entidad")
+            # UI2-20: una rama se guarda con el marcador interno 'contenedor'; el
+            # combo y el resumen muestran su TIPO DE RAMA real (tree_type) para
+            # poder re-tiparla. Una hoja muestra su propio tipo.
+            display_kind = kind
+            if kind.lower() == "contenedor":
+                tree_kind = str(metadata.get("tree_type", "") or "").lower()
+                if is_branch_type(tree_kind) and tree_kind != "contenedor":
+                    display_kind = tree_kind
             self.title.setText(getattr(entity, "name", "Sin nombre") or "Sin nombre")
-            # B39: badge shows "Rama" for branch types, "Hoja" otherwise
-            b39_label = "Rama" if kind.lower() in BRANCH_TYPES else "Hoja"
-            self.type_badge.setText(b39_label)
+            # UI2-20: badge Rama/Hoja derivado del tipo (is_branch_type).
+            self.type_badge.setText("Rama" if is_branch_type(kind) else "Hoja")
             canon_val = _enum_value(getattr(entity, "canon_state", None), "")
             # FOCO-20 + canon total: la línea resumen muestra el TIPO; el único
             # estado que existe de cara al usuario es «fantasma» (badge propio).
-            self.summary.setText(enum_human(kind))
+            self.summary.setText(enum_human(display_kind))
             self._refresh_layer_combo(entity)
 
             self.name_edit.setText(getattr(entity, "name", ""))
-            self._set_combo_value(self.type_combo, kind)
+            self._set_combo_value(self.type_combo, display_kind)
 
-            # BETA1-UX2C: lapso de vida solo-lectura (se edita en la cronología)
-            self._refresh_lifespan_label(entity)
+            # BETA2-FOCO-27: solo se sincroniza la naturaleza temporal; el lapso se
+            # define en la cronología del pie del editor.
+            self._sync_nature_combo(entity)
             self.brief_edit.setPlainText(getattr(entity, "brief_description", "") or "")
             self.extended_edit.setPlainText(getattr(entity, "extended_description", "") or "")
 
@@ -1213,53 +1217,101 @@ class NodeDetailPanel(QWidget):
             else:
                 self._update_color_swatch(_default_color_for_type(kind))
 
-            self._refresh_context(entity)
             if self.related_milestones_panel is not None:
                 self.related_milestones_panel.refresh()
             self.set_advanced_mode(self.ctx.advanced_mode)
 
-            # B39/FOCO-20: «Convertir en rama» (menú ⋯) solo para hojas; un
-            # fantasma se convierte primero en entidad real (rail de Foco).
-            is_branch = kind.lower() in BRANCH_TYPES or kind.lower() == "contenedor"
-            self.convert_to_branch_action.setVisible(not is_branch)
-            self.convert_to_branch_action.setEnabled(not self._is_ghost)
-            self.more_menu_btn.setVisible(not is_branch)
+            # UI2-20: el menú ⋯ «Convertir en rama» desapareció — la ramitud se
+            # deriva del tipo (elige un tipo de rama en el combo).
+            # PLAY-16: en preview, el patch propuesto se aplica ENCIMA del canon
+            # recién cargado y las acciones laterales se retiran.
+            if self.preview_patch is not None:
+                self._apply_preview_patch()
         finally:
             self._refreshing = False
 
-    def _refresh_context(self, entity):
-        # BETA2-UX-03: el resumen «Contexto» (relations_label/campaigns_label)
-        # era dato-no-UI y se eliminó. Aquí solo se construye la lista VIVA de
-        # relaciones clicables del formulario (_rebuild_relation_rows).
-        project = self._project()
-        if project is None:
-            return
-        entity_id = getattr(entity, "id", "")
-        relation_rows: list[tuple[str, str]] = []
-        for relation in getattr(project, "relations", []) or []:
-            src = getattr(relation, "source_id", "")
-            tgt = getattr(relation, "target_id", "")
-            if entity_id not in {src, tgt}:
+    # ------------------------------------------------------------------
+    # PLAY-16: modo preview (propuesta de la IA sobre la ficha real)
+    # ------------------------------------------------------------------
+
+    _PREVIEW_GOLD = "#BBAA66"  # GOLD_SOFT: resaltado de campos propuestos
+
+    def _apply_preview_patch(self) -> None:
+        patch = dict(self.preview_patch or {})
+        # Snapshot del canon TAL COMO lo normaliza el guardado (diff coherente).
+        self._preview_base = {
+            "name": self.name_edit.text().strip(),
+            "entity_type": self.type_combo.currentData()
+            or self.type_combo.currentText().strip().lower(),
+            "brief_description": self.brief_edit.toPlainText().strip(),
+            "extended_description": self.extended_edit.toPlainText().strip(),
+            "narrative_importance": self.importance_combo.currentData() or "medio",
+            "temporal_nature": self.nature_combo.currentData(),
+        }
+        renderers = {
+            "name": lambda v: self.name_edit.setText(str(v)),
+            "entity_type": lambda v: self._set_combo_value(self.type_combo, str(v)),
+            "brief_description": lambda v: self.brief_edit.setPlainText(str(v)),
+            "extended_description": lambda v: self.extended_edit.setPlainText(str(v)),
+            "narrative_importance": lambda v: self._set_combo_value(
+                self.importance_combo, str(v)
+            ),
+            "temporal_nature": lambda v: self._set_combo_value(self.nature_combo, str(v)),
+        }
+        widgets = {
+            "name": self.name_edit,
+            "entity_type": self.type_combo,
+            "brief_description": self.brief_edit,
+            "extended_description": self.extended_edit,
+            "narrative_importance": self.importance_combo,
+            "temporal_nature": self.nature_combo,
+        }
+        self._preview_extra = {}
+        for key, value in patch.items():
+            render = renderers.get(key)
+            if render is None:
+                # El panel no renderiza este campo (años, tags, alias…): viaja
+                # tal cual en el diff y la superficie de revisión lo lista.
+                self._preview_extra[key] = value
                 continue
-            outgoing = src == entity_id
-            other = self._entity_by_id(tgt if outgoing else src)
-            kind_text = enum_human(
-                _enum_value(getattr(relation, "relation_type", None), "relación")
+            render(value)
+            widget = widgets[key]
+            canon = self._preview_base.get(key)
+            widget.setStyleSheet(
+                widget.styleSheet() + f" border: 2px solid {self._PREVIEW_GOLD};"
             )
-            relation_id = str(getattr(relation, "id", "") or "")
-            # FOCO-20: fila real con glifo de dirección (todas, sin tope).
-            direction = _enum_value(getattr(relation, "direction", None), "")
-            glyph = "↔" if direction == "bidireccional" else ("→" if outgoing else "←")
-            ghost_mark = (
-                "  ·  fantasma"
-                if _enum_value(getattr(relation, "canon_state", None), "") == "fantasma"
-                else ""
-            )
-            other_name = getattr(other, "name", "?") if other else "Elemento vinculado"
-            relation_rows.append(
-                (relation_id, f"{glyph}  {kind_text} · {other_name}{ghost_mark}")
-            )
-        self._rebuild_relation_rows(relation_rows)
+            widget.setToolTip(f"Propuesta de la IA — canon actual: «{canon}»")
+        # Acciones laterales fuera: el preview solo revisa, no navega ni guarda solo.
+        for side in (getattr(self, "save_btn", None), getattr(self, "more_menu_btn", None)):
+            if side is not None:
+                side.setVisible(False)
+
+    def preview_extra_fields(self) -> dict:
+        """Campos propuestos que la ficha no renderiza (los lista el revisor)."""
+        return dict(self._preview_extra)
+
+    def preview_payload(self) -> dict:
+        """PLAY-16: diff contra el canon (propuesto por la IA + retoques del
+        usuario en los widgets) SIN escribir nada."""
+        current = {
+            "name": self.name_edit.text().strip(),
+            "entity_type": self.type_combo.currentData()
+            or self.type_combo.currentText().strip().lower(),
+            "brief_description": self.brief_edit.toPlainText().strip(),
+            "extended_description": self.extended_edit.toPlainText().strip(),
+            "narrative_importance": self.importance_combo.currentData() or "medio",
+            "temporal_nature": self.nature_combo.currentData(),
+        }
+        diff = {
+            key: value
+            for key, value in current.items()
+            if value != self._preview_base.get(key)
+        }
+        diff.update(self._preview_extra)
+        return diff
+
+    # UI2-06: _refresh_context desapareció — la lista viva de relaciones es la
+    # pestaña «Relaciones» de la tarjeta del Foco (relations_panel.py).
 
     # ------------------------------------------------------------------
     # Advanced mode
@@ -1279,29 +1331,70 @@ class NodeDetailPanel(QWidget):
         self._autosave_timer.stop()
         self._do_save(refresh_after=True)
 
+    def _mention_targets_provider(self):
+        """Proveedor (id, name, kind) de elementos mencionables por @nombre."""
+
+        def provider():
+            ps = getattr(self.entity_controller, "ps", None)
+            project = getattr(ps, "active_project", None)
+            return build_known_targets(project) if project is not None else []
+
+        return provider
+
+    def _sync_structured_references(self, field_texts: dict) -> None:
+        """Resuelve las @menciones de la prosa a referencias estructuradas (MEM-03)."""
+        ps = getattr(self.entity_controller, "ps", None)
+        if ps is None or getattr(ps, "active_project", None) is None:
+            return
+        hints: dict[str, tuple[str, str]] = {}
+        for ms in getattr(self, "_mention_supports", {}).values():
+            hints.update(ms.hints())
+        try:
+            StructuredReferenceService(ps).sync_element_references(
+                MemoryTargetKind.ENTITY, self.entity_id, field_texts, hints=hints
+            )
+        except Exception:  # noqa: BLE001 — nunca romper el guardado por las @menciones
+            pass
+
     def _do_save(self, *, refresh_after: bool = True):
         """Core save logic. refresh_after=True for manual save, False for auto-save."""
         _apptrace(f"UI node _do_save entity_id={self.entity_id!r} refresh_after={refresh_after}")
         if self._entity is None:
             return
+        # PLAY-16: en preview el guardado NO escribe canon — emite el diff.
+        if self.preview_patch is not None:
+            if self.on_preview_save is not None:
+                self.on_preview_save(self.preview_payload())
+            return
 
-        # Determine entity_type — prefer combo data (enum value), fall back to text
+        # Determine the picked type from the combo (11 tipos + personalizados).
         type_data = self.type_combo.currentData()
         type_text = self.type_combo.currentText().strip()
         if type_data:
-            entity_type_value = type_data
+            picked = str(type_data)
         elif type_text:
-            # Custom type — store as string (lowered)
-            entity_type_value = type_text.lower()
+            picked = type_text.lower()  # tipo personalizado
         else:
-            entity_type_value = "nota"
-
-        # BETA2-FOCO-16 (canon total): el panel NO emite canon_state — el
-        # estado solo cambia por acciones explícitas (servicios/migración).
+            picked = "nota"
 
         # Build custom_metadata with colour
         meta = dict(getattr(self._entity, "custom_metadata", {}) or {})
         meta.pop("_visual_draft", None)
+
+        # UI2-20: la ramitud se DERIVA del tipo. Elegir un tipo de rama hace la
+        # entidad rama: el marcador interno sigue siendo 'contenedor' (motor de
+        # anidamiento intacto) y el tipo elegido se recuerda como tree_type (el
+        # kind mostrado). Elegir un tipo de hoja la deja como hoja — basta con
+        # cambiar el entity_type para promover/degradar (la ramitud es derivada).
+        if is_branch_type(picked):
+            entity_type_value = "contenedor"
+            if picked != "contenedor":
+                meta["tree_type"] = picked  # KEY_TREE_TYPE de tree_meta
+        else:
+            entity_type_value = picked
+
+        # BETA2-FOCO-16 (canon total): el panel NO emite canon_state — el
+        # estado solo cambia por acciones explícitas (servicios/migración).
         if self._current_color:
             meta["_node_color"] = self._current_color
         # Remove _node_color if it matches the default (no need to store)
@@ -1344,6 +1437,15 @@ class NodeDetailPanel(QWidget):
         if isinstance(result, Error):
             self.ctx.log("error", result.error)
             return
+        # BETA2-MEM-03: al guardar, resolver @menciones de la prosa → referencias
+        # estructuradas (sidecar). Preview jamás escribe canon ni referencias.
+        if not self.preview_patch:
+            self._sync_structured_references(
+                {
+                    "brief_description": payload["brief_description"],
+                    "extended_description": payload["extended_description"],
+                }
+            )
         self.ctx.log("info", "Elemento guardado")
         self.is_new = False
         self.ctx.selected_entity_id = self.entity_id

@@ -69,6 +69,8 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "coherence_repair":    ModelParams(temperature=0.2, max_tokens=2000),
     # BETA2-FOCO: riego — diagnóstico JSON acotado y analítico.
     "water_entity":        ModelParams(temperature=0.2, max_tokens=1400),
+    # BETA2-MEM-05: actualización de Memoria editorial — analítica, algo más amplia.
+    "update_memory":       ModelParams(temperature=0.35, max_tokens=2600),
     "review_graph":        ModelParams(temperature=0.3, max_tokens=3000),
     "detect_contradiction": ModelParams(temperature=0.2, max_tokens=2000),
     "detect_inconsistency": ModelParams(temperature=0.2, max_tokens=2000),
@@ -98,6 +100,9 @@ INTENT_PARAMS: dict[str, ModelParams] = {
     "suggest_relations":   ModelParams(temperature=0.55, max_tokens=2000),
     "analyze_coherence":   ModelParams(temperature=0.2, max_tokens=2600),
     "expand_worldbuilding": ModelParams(temperature=0.8, max_tokens=2600),
+    # BETA2-WIKI-13: sugerencia compuesta — creativa y algo más amplia (puede emitir
+    # hojas/ramas/relaciones/hitos/ediciones en una sola pasada).
+    "suggest_composite":   ModelParams(temperature=0.8, max_tokens=2800),
     "explain_from_causes": ModelParams(temperature=0.4, max_tokens=2200),
     "freeform_planning":   ModelParams(temperature=0.7, max_tokens=2000),
     "propose_milestones":  ModelParams(temperature=0.7, max_tokens=2200),

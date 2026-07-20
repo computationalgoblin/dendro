@@ -177,28 +177,13 @@ def test_node_colors_has_contenedor():
     assert '"contenedor"' in src.split("_NODE_COLORS")[1].split("}")[0], "_NODE_COLORS debe incluir contenedor"
 
 
-# ─── T8: Tree detail panel ─────────────────────────────────────────────
+# ─── T8: Tree detail panel — RETIRADO (BETA2-CLEANUP-PANELES) ──────────
+# El cajón de rama (TreeDetailPanel) se eliminó: la edición de ramas vive
+# ahora en el Modo Foco (NodeDetailPanel variant="foco").
 
-def test_tree_detail_panel_exists():
+def test_tree_detail_panel_removed():
     p = ROOT / "hosts/DesktopHostPySide/widgets/tree_detail_panel.py"
-    assert p.exists(), "tree_detail_panel.py debe existir"
-
-
-def test_tree_detail_panel_class():
-    src = _src("hosts/DesktopHostPySide/widgets/tree_detail_panel.py")
-    assert "class TreeDetailPanel" in src, "TreeDetailPanel debe existir"
-
-
-def test_tree_detail_panel_methods():
-    tree = _tree("hosts/DesktopHostPySide/widgets/tree_detail_panel.py")
-    methods = _class_methods(tree, "TreeDetailPanel")
-    expected = {"_get_members", "_save_name", "_save_brief", "_remove_member"}
-    assert expected <= methods, f"TreeDetailPanel metodos faltantes: {expected - methods}"
-
-
-def test_tree_detail_panel_membership_signal():
-    src = _src("hosts/DesktopHostPySide/widgets/tree_detail_panel.py")
-    assert "membershipChanged" in src, "TreeDetailPanel debe emitir membershipChanged"
+    assert not p.exists(), "tree_detail_panel.py debe estar eliminado (edición en Foco)"
 
 
 # ─── T9: Workspaces integration ────────────────────────────────────────
@@ -209,10 +194,12 @@ def test_workspaces_has_create_tree():
     assert "_create_tree_on_graph" in methods, "CreationWorkspace debe tener _create_tree_on_graph"
 
 
-def test_workspaces_has_open_tree_panel():
+def test_workspaces_no_open_tree_panel():
+    # BETA2-CLEANUP-PANELES: el cajón de rama se retiró; ya no debe existir
+    # _open_tree_panel (la edición de ramas ocurre en el Modo Foco).
     tree = _tree("hosts/DesktopHostPySide/views/workspaces.py")
     methods = _class_methods(tree, "CreationWorkspace")
-    assert "_open_tree_panel" in methods, "CreationWorkspace debe tener _open_tree_panel"
+    assert "_open_tree_panel" not in methods, "CreationWorkspace ya no debe abrir el cajón de rama"
 
 
 def test_workspaces_has_assign_node():
@@ -224,7 +211,6 @@ def test_workspaces_has_assign_node():
 def test_workspaces_routes_contenedor():
     src = _src("hosts/DesktopHostPySide/views/workspaces.py")
     assert "contenedor" in src, "Workspaces debe manejar contenedor en routing"
-    assert "_open_tree_panel" in src, "Workspaces debe llamar _open_tree_panel para contenedores"
 
 
 def test_workspaces_connects_assign_signal():
@@ -256,7 +242,6 @@ def test_all_files_compile():
         "packages/persistence/store.py",
         "packages/application/narrative_context_builder.py",
         "hosts/DesktopHostPySide/widgets/graph_canvas.py",
-        "hosts/DesktopHostPySide/widgets/tree_detail_panel.py",
         "hosts/DesktopHostPySide/views/workspaces.py",
     ]
     for rel in files:

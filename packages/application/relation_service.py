@@ -224,6 +224,7 @@ class RelationService:
     def update_relation(
         self, relation_id: str, data: dict[str, Any],
         history_service: Any = None,
+        impact_service: Any = None,
     ) -> Result[NarrativeRelation, str]:
         proj = self._active_project()
         if isinstance(proj, Error):
@@ -286,6 +287,12 @@ class RelationService:
                         operation="update_relation",
                     )
                     history_service.record(entry)
+                # BETA2-MEM-04: propaga impacto (Falta regar), sin romper el guardado.
+                if impact_service is not None:
+                    try:
+                        impact_service.propagate_change("relation", r.id)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return Ok(r)
         return Error(f"Relation with id '{relation_id}' not found")
 

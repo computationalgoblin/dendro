@@ -75,7 +75,9 @@ def test_e05_prompt_trace_store_writes_autorefreshing_html(tmp_path):
     assert "[REDACTED]" in html
 
 
-def test_e05_ai_job_service_traces_final_prompt_with_rag_context(tmp_path):
+def test_e05_ai_job_service_traces_prompt_without_rag_pack(tmp_path):
+    # BETA2-WIKI-05: el pipeline dejó de recuperar por RAG. La traza del prompt sigue
+    # existiendo (observabilidad), pero SIN context_pack ni secciones de autoridad.
     project = _make_project()
     store = AIPromptDebugTraceStore(tmp_path / "trace.html")
     service = AIJobService(
@@ -96,11 +98,8 @@ def test_e05_ai_job_service_traces_final_prompt_with_rag_context(tmp_path):
     assert len(store.entries) == 1
     entry = store.entries[0]
     assert entry.status == "ok"
-    assert entry.context_pack["schema"] == "context_pack/v1"
-    assert any(item["ref_id"] == "leaf-1" for item in entry.context_pack["items"])
-    # El pack se reparte por autoridad: leaf-1 (entidad canon) → canon_confirmado.
-    assert "canon_confirmado" in entry.model_user_message
-    assert "CANON CONFIRMADO" in entry.model_user_message
+    assert not entry.context_pack  # ya no hay pack RAG
+    assert "canon_confirmado" not in entry.model_user_message
 
 
 def test_e05_ai_job_service_traces_sanitized_provider_errors(tmp_path):

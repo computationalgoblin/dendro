@@ -53,6 +53,13 @@ _BASE_ES = (
     "inspiración OPCIONAL: tienes plena libertad para inventar más allá de él (NO es un límite)."
 )
 
+# BETA2-WIKI-13: los jobs que NO crean nada (riego = diagnóstico; memoria = página derivada)
+# no necesitan las secciones de CREACIÓN del base (DATACIÓN, NATURALEZA TEMPORAL, CALIDAD Y
+# ABSTENCIÓN): eran ~500 tokens irrelevantes por llamada. El núcleo (rol/terminología/config/
+# reglas de salida) se deriva del base cortando en DATACIÓN, para no divergir del literal.
+_BASE_CORE_ES = _BASE_ES.split("\n\nDATACIÓN (BETA1-J05):")[0]
+_NON_CREATION_INTENTS: frozenset[str] = frozenset({"water_entity", "update_memory"})
+
 # intent value (AIJobType.value) → task-specific block appended to the base.
 _INTENT_SPECS_ES: dict[str, str] = {
     "generate_entities": (
@@ -216,12 +223,19 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "sobre la entidad) en vez de crear uno nuevo: NUNCA dupliques un hito existente con otro "
         "del mismo año. Reserva hitos/hojas nuevos para lo que de verdad falta. Si el hito actual "
         "tiene un título genérico o de marcador (p.ej. «nuevo hito», «sin título», vacío), DEBES "
-        "proponer un `milestone_edits` con `field: \"title\"` que lo renombre con un título "
-        "narrativo concreto (y, si hace falta, otro con `field: \"description\"`). En CADA "
-        "`milestone_edits` incluye `target_id` con el id EXACTO del hito de `chrono_walk` que "
-        "editas (el actual es `chrono_walk.current.id`); así el cambio recae sobre el hito "
-        "correcto aunque renombres su título. Limita el nº de sugerencias a "
-        "`directivas.parametros.numero_sugerencias`.\n"
+        "proponer un `milestone_edits` cuyo `edit_fields` incluya `title` con un título narrativo "
+        "concreto (y, si hace falta, también `description`). En CADA `milestone_edits` incluye "
+        "`target_id` con el id EXACTO del hito de `chrono_walk` que editas (el actual es "
+        "`chrono_walk.current.id`); así el cambio recae sobre el hito correcto aunque renombres "
+        "su título. Limita el nº de sugerencias a `directivas.parametros.numero_sugerencias`.\n"
+        "Cada edición es UN objeto por elemento con `edit_fields`: un dict {campo: nuevo_valor} "
+        "con TODOS los campos que propones cambiar de ese elemento. Campos permitidos en "
+        "`entity_edits.edit_fields`: name, aliases, entity_type, brief_description, "
+        "extended_description (alias body), certainty_level, tags, exportable_notes, "
+        "narrative_importance, development_level, birth_year, death_year, life_span, "
+        "temporal_nature. Campos permitidos en `milestone_edits.edit_fields`: title, "
+        "description, body, year, milestone_type. PROHIBIDO proponer cambios de visibilidad, "
+        "secretos (private_notes), estado de canon o referencias internas por id: se descartan.\n"
         "Marca `stop_required=true` SOLO ante un problema DURO de este hito: contradicción, "
         "hueco causal crítico, motivación incompatible, orden temporal imposible, anillo "
         "superior contradicho o elemento necesario ausente. Las oportunidades menores NO "
@@ -232,10 +246,10 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "causal_gap|motivation_incompatibility|impossible_temporal_order|"
         'higher_ring_contradiction|missing_required_element|opportunity"}], "hitos": '
         '[{"title": "...", "summary": "...", "body": "...", "year": <int|null>, '
-        '"rationale": "..."}], "entity_edits": [{"entity_name": "...", "field": '
-        '"body|brief_description", "proposed_value": "...", "rationale": "..."}], '
+        '"rationale": "..."}], "entity_edits": [{"entity_name": "...", "edit_fields": '
+        '{"<campo>": "<nuevo valor>"}, "rationale": "..."}], '
         '"milestone_edits": [{"target_id": "id del hito", "target_name": "título del hito", '
-        '"field": "title|body|description", "proposed_value": "...", "rationale": "..."}], '
+        '"edit_fields": {"<campo>": "<nuevo valor>"}, "rationale": "..."}], '
         '"relations": [{"source_name": "...", '
         '"target_name": "...", "relation_type": "...", "description": "..."}], '
         '"open_questions": ["..."], "narrative_state": {"...": "..."}, "stop_required": '
@@ -247,7 +261,11 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "Evalúa SIEMPRE estas TRES métricas, cada una con un entero 0-100:\n"
         "- arraigo: cuán sostenida está por sus Raíces (contextos superiores, anillos previos, "
         "hitos, ramas, relaciones o escenarios que hacen verosímil su existencia). No exijas "
-        "causas directas: un contexto que la haga creíble también arraiga.\n"
+        "causas directas: un contexto que la haga creíble también arraiga. La COHERENCIA "
+        "TEMPORAL forma parte del arraigo: las fechas del LAPSO de la entidad y de sus HITOS "
+        "VINCULADOS deben ser consistentes con `cronologia` (eras y presente), con el propio "
+        "lapso y con los eventos de sus vecinas; toda incoherencia temporal RESTA arraigo y "
+        "debe aparecer en `risks`.\n"
         "- nutrida: desarrollo interno (descripciones, coherencia propia) e integración en su "
         "Entorno (vecinas, rama).\n"
         "- iluminada: cuánto proyecta Brotes (derivaciones, consecuencias, influencia, "
@@ -257,11 +275,71 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "mencionarlas como intención, pero NO cuentan como sostén real de ninguna métrica.\n"
         "PROHIBIDO proponer entidades, relaciones, hitos, ediciones o cambio alguno: este "
         "trabajo SOLO diagnostica; las sugerencias llegan por otra vía cuando el usuario las pide.\n"
+        "Atribuye además 'potencial_causal' (entero 0-100): la POTENCIALIDAD DE PROPAGACIÓN "
+        "CAUSAL de la entidad — cuánto puede, por su NATURALEZA y escala, propagar consecuencias "
+        "por el mundo (una guerra, una ley cósmica o una institución de poder: alto; un objeto "
+        "menor o un individuo común: bajo). Es un rasgo de QUÉ ES, independiente de cuántas "
+        "relaciones tenga escritas aún; ubica a la entidad en un anillo causal más o menos "
+        "fundamental.\n"
         "Responde SOLO con JSON válido, sin texto fuera del JSON, con esta forma exacta: "
         '{"scores": {"arraigo": <0-100>, "nutrida": <0-100>, "iluminada": <0-100>}, '
         '"summary": "resumen breve del estado narrativo de la entidad", '
         '"metric_explanations": {"arraigo": "...", "nutrida": "...", "iluminada": "..."}, '
-        '"risks": ["problema o riesgo principal", "..."]}'
+        '"risks": ["problema o riesgo principal", "..."], "potencial_causal": <0-100>}'
+    ),
+    # BETA2-MEM-05: actualización de la Memoria editorial derivada de UN elemento.
+    # La Memoria NO es canon: interpreta y resume; jamás declara elementos nuevos.
+    "update_memory": (
+        "TAREA: MEMORIA — actualiza la lectura editorial derivada de UN elemento del "
+        "proyecto (su Memoria), a partir del canon confirmado, referencias y Memoria previa.\n"
+        "La Memoria es DERIVADA, NO canon: interpretas y resumes; NO puedes declarar "
+        "entidades, relaciones ni hitos nuevos, ni afirmar como cierto lo que el canon no "
+        "sostiene. Ancla contradicciones/huecos a elementos existentes por su id.\n"
+        "Detecta contradicciones (kind=contradiccion), zonas sin desarrollar (kind=hueco), "
+        "preguntas abiertas (kind=pregunta_abierta) y supuestos tuyos (kind=supuesto).\n"
+        "Escribes una PÁGINA de wiki: 'resumen_editorial' es el lead de 1 línea (lo que se ve "
+        "en el índice) y 'cuerpo' es la síntesis editorial larga y navegable de la página. "
+        "'wikilinks' enlaza a los elementos relacionados por su id; 'tags' clasifica la página.\n"
+        "Registra la PARTICIPACIÓN TEMPORAL de la entidad cuando exista: su LAPSO (nacimiento/"
+        "muerte) y los HITOS en los que interviene, en el 'cuerpo', como 'wikilinks' "
+        "(ref_kind=milestone) y, si aporta causalidad, en 'notas_causales'. Es parte de quién "
+        "es; ubícala con `cronologia`. No inventes fechas ni hitos que el canon no sostenga.\n"
+        "Responde SOLO con JSON válido, sin texto fuera del JSON, con esta forma exacta: "
+        '{"resumen_editorial": "lead de 1 línea para el índice", '
+        '"cuerpo": "síntesis editorial larga de la página", '
+        '"estado_actual": "estado presente del elemento", '
+        '"tags": ["etiqueta", "..."], '
+        '"wikilinks": [{"ref_kind": "entity|relation|milestone|ring|branch", "ref_id": "<id>", '
+        '"nota": "..."}], '
+        '"notas_causales": ["causalidad relevante", "..."], '
+        '"issues": [{"kind": "contradiccion|hueco|pregunta_abierta|supuesto", '
+        '"texto": "...", "anclado_a": [{"ref_kind": "entity|relation|milestone|ring|branch", '
+        '"ref_id": "<id>"}]}], '
+        '"citations": [{"ref_kind": "entity|relation|milestone", "ref_id": "<id>", "nota": "..."}]}'
+    ),
+    # BETA2-WIKI-13: generación COMPUESTA de una Sugerencia (arraigo/iluminada). El PLAN
+    # (decidido por el análisis de intención) llega DENTRO del prompt del usuario y fija
+    # qué tipos producir. Genera SOLO esos tipos; todo son Semillas revisables, no canon.
+    "suggest_composite": (
+        "TAREA — SUGERENCIA COMPUESTA (Modo Foco). Recibes una ENTIDAD en foco, el CONTEXTO "
+        "de la wiki navegada, la PETICIÓN del usuario y un PLAN DE GENERACIÓN que ya decidió "
+        "QUÉ tipos de pieza proponer. Genera candidatos revisables que CUMPLAN el plan: nada "
+        "se integra al canon sin aceptación humana.\n"
+        "Produce SOLO los tipos que el plan pide (deja vacías las demás claves). Tipos posibles: "
+        "hojas (entidades nuevas), ramas (contenedores con sus hojas), relations (vínculos entre "
+        "entidades por nombre), hitos (eventos causales) y entity_edits (mejoras de un elemento "
+        "existente por su nombre EXACTO). Respeta el anillo/rama de la entidad en foco y la "
+        "causalidad superior; no inventes ids.\n"
+        'FORMATO: {"summary": "...", "report": "...", '
+        '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto|tecnologia|idioma", '
+        '"brief_description": "...", "body": "..."}], '
+        '"ramas": [{"name": "...", "entity_type": '
+        '"faccion|cultura|religion|institucion|sistema_magico|localizacion", "brief_description": "...", '
+        '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto", "brief_description": "..."}]}], '
+        '"relations": [{"source_name": "...", "target_name": "...", "relation_type": "...", "description": "..."}], '
+        '"hitos": [{"title": "...", "summary": "...", "body": "...", "rationale": "..."}], '
+        '"entity_edits": [{"entity_name": "nombre exacto", "field": "body|brief_description", '
+        '"proposed_value": "...", "rationale": "..."}]}'
     ),
 }
 
@@ -281,7 +359,9 @@ def system_prompt_for_intent(intent: str, lang: str = "es") -> str:
     spec = _INTENT_SPECS_ES.get(key)
     if spec is None:
         return get_prompt("command_bar", lang="es") or ""
-    return f"{_BASE_ES}\n\n{spec}"
+    # BETA2-WIKI-13: riego/memoria reciben solo el núcleo (sin secciones de creación).
+    base = _BASE_CORE_ES if key in _NON_CREATION_INTENTS else _BASE_ES
+    return f"{base}\n\n{spec}"
 
 
 def has_intent_prompt(intent: str) -> bool:

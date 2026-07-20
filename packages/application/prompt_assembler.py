@@ -38,7 +38,13 @@ _DUPLICATED_CONTEXT_KEYS = frozenset(
         "contexto_causal",  # → posicion_causal
         "vecindario",  # → vecindario
         "cronologia",  # → cronologia (sección determinista compacta)
-        "rag_context_pack",  # → canon / candidates / rag_auxiliar
+        "contexto_wiki",  # → contexto_wiki (BETA2-WIKI-05)
+        "wiki_bundle",  # alias de entrada del contexto de navegación
+        "memoria",  # legacy MEM-06 (retirado del ensamblado en WIKI-05)
+        "rag_context_pack",  # legacy RAG (retirado del ensamblado en WIKI-05)
+        # BETA2-WIKI-13: ya viajan en `seleccion` → no duplicar en contexto_autorizado.
+        "selected_entity_ids",
+        "selected_relation_ids",
     }
 )
 
@@ -106,6 +112,33 @@ def _configuracion_creativa(context: dict[str, Any]) -> dict[str, Any]:
     }
     section.update(brief)
     return section
+
+
+def _wiki_block(context: dict[str, Any]) -> dict[str, Any]:
+    """Contexto seleccionado por navegación de la wiki (BETA2-WIKI-05).
+
+    El consumidor (Sugerencias/Play, vía WikiNavigator) inyecta
+    ``context['contexto_wiki']`` = ``NavigationBundle.as_context_dict()`` — páginas
+    DERIVADAS (no canon) + canon leído + notas. Aquí solo se pasa a través; su
+    posición de autoridad (canon > páginas) la marca el propio bundle y el orden en
+    ``_build_sections``. Reemplaza al antiguo volcado fijo ``memoria_derivada``.
+    """
+    wiki = context.get("contexto_wiki")
+    if isinstance(wiki, dict) and (wiki.get("paginas") or wiki.get("canon")):
+        return wiki
+    return {}
+
+
+def _memoria_block(context: dict[str, Any]) -> dict[str, Any]:  # legacy WIKI-05: sin uso
+    """DEPRECADO (BETA2-WIKI-05): la Memoria ya no viaja como volcado fijo.
+
+    Se conserva la función para no romper importadores legacy; se elimina en la
+    limpieza posterior. El contexto de wiki lo aporta ahora ``_wiki_block``.
+    """
+    memoria = context.get("memoria")
+    if isinstance(memoria, dict) and memoria.get("bloques"):
+        return memoria
+    return {}
 
 
 def _mentions_block(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -248,15 +281,12 @@ _CHRONOLOGY_OUTPUT_FORMATS: dict[str, Any] = {
     ],
 }
 
-_CHRONOLOGY_HINT_TOKENS = (
-    "hito",
-    "cronolog",
-    "calendar",
-    "era",
-    "milestone",
-    "linea temporal",
-    "línea temporal",
-)
+# BETA2-WIKI-13: el esquema de cronología (formatos_h05) es grande y SOLO lo necesitan los
+# jobs que producen hitos/calendario. Antes se colgaba por match difuso de palabras sobre
+# todo el prompt — y "era" es subcadena de primera/manera/… y del nombre de las eras del
+# mundo — así que aparecía en CASI TODOS los jobs (riego, memoria, sugerencias). Ahora se
+# gatea por TIPO de job (determinista, sin falsos positivos).
+_CHRONOLOGY_FORMAT_INTENTS = frozenset({"propose_milestones", "chronology_walk_step"})
 
 
 def _intent_value(plan: Any) -> str:
@@ -267,10 +297,7 @@ def _intent_value(plan: Any) -> str:
 
 
 def _wants_chronology_formats(plan: Any) -> bool:
-    if _intent_value(plan) == "propose_milestones":
-        return True
-    text = f"{_intent_value(plan)} {getattr(plan, 'prompt', '')}".lower()
-    return any(token in text for token in _CHRONOLOGY_HINT_TOKENS)
+    return _intent_value(plan) in _CHRONOLOGY_FORMAT_INTENTS
 
 
 def _fase2_directives(context: dict[str, Any]) -> dict[str, Any] | None:
@@ -342,6 +369,7 @@ SECTION_LABELS: dict[str, str] = {
     "configuracion_creativa": "Configuración creativa",
     "cronologia": "Cronología",
     "canon_confirmado": "Canon confirmado",
+    "memoria_derivada": "Memoria derivada (no canónica)",
     "posicion_causal": "Posición causal",
     "seleccion": "Selección",
     "vecindario": "Vecindario",
@@ -558,13 +586,20 @@ class PromptAssembler:
             message["configuracion_creativa"] = config_creativa
 
         cronologia = context.get("cronologia") if isinstance(context, dict) else None
+        # BETA2-WIKI-13b: el CALENDARIO (eras + fecha presente) es el marco de referencia
+        # temporal — también lo necesitan riego (coherencia temporal) y memoria (ubicar y
+        # registrar la participación en hitos). Va a todo job que lo traiga en el contexto.
+        # (Lo que NO va a riego/memoria es `formatos_h05`, el esquema de CREAR hitos.)
         if isinstance(cronologia, dict) and cronologia:
             message["cronologia"] = cronologia
 
-        # Secciones por autoridad derivadas del rag_context_pack.
-        rag_sections = _rag_authority_sections(context)
-        if "canon_confirmado" in rag_sections:
-            message["canon_confirmado"] = rag_sections["canon_confirmado"]
+        # BETA2-WIKI-05: contexto seleccionado por navegación de la wiki (páginas
+        # derivadas + canon leído), DESPUÉS de config/cronología. Reemplaza el volcado
+        # fijo de Memoria (memoria_derivada) y las secciones del pack RAG. La autoridad
+        # (canon > páginas) la marca el propio bundle.
+        wiki = _wiki_block(context)
+        if wiki:
+            message["contexto_wiki"] = wiki
 
         causal = context.get("contexto_causal") if isinstance(context, dict) else None
         if isinstance(causal, dict) and causal:
@@ -575,10 +610,6 @@ class PromptAssembler:
         vecindario = context.get("vecindario") if isinstance(context, dict) else None
         if isinstance(vecindario, dict) and vecindario.get("items"):
             message["vecindario"] = vecindario
-        if "candidates_pendientes" in rag_sections:
-            message["candidates_pendientes"] = rag_sections["candidates_pendientes"]
-        if "rag_auxiliar" in rag_sections:
-            message["rag_auxiliar"] = rag_sections["rag_auxiliar"]
 
         # --- RESIDUAL (sin duplicados) ---
         message["contexto_autorizado"] = _context_for_prompt(context)

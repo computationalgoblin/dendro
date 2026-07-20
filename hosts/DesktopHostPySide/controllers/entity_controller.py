@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from packages.application.entity_service import EntityService
+from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.relation_service import RelationService
 from hosts.DesktopHostPySide.app_trace import _apptrace
 
@@ -13,6 +14,8 @@ class EntityController:
         self.ps = project_service
         self.es = EntityService(self.ps)
         self.rs = RelationService(self.ps)
+        # BETA2-MEM-04: motor de impacto (marca Falta regar al guardar canon).
+        self.impact = NarrativeImpactService(self.ps)
 
     def list_all(self):
         _apptrace(f"CTRL EntityController.list_all"[:120])
@@ -28,7 +31,7 @@ class EntityController:
 
     def update(self, eid, data):
         _apptrace(f"CTRL EntityController.update eid={eid!r}"[:120])
-        return self.es.update_entity(eid, data)
+        return self.es.update_entity(eid, data, impact_service=self.impact)
 
     def archive(self, eid):
         _apptrace(f"CTRL EntityController.archive eid={eid!r}"[:120])

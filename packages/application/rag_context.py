@@ -1,4 +1,9 @@
-"""Context retrieval for advanced narrative RAG (E04).
+"""LEGACY (BETA2-WIKI-11): recuperación RAG léxica retirada del pipeline (usa la wiki).
+
+No se invoca desde el ensamblado (WIKI-05 retiró el `rag_context_pack`). Se conserva
+importable hasta su borrado en la limpieza posterior a la épica.
+
+Context retrieval for advanced narrative RAG (E04).
 
 This module turns an AI job plan into a structured ContextPack. It only reads
 the in-memory corpus index; it never calls AI providers, persists data or

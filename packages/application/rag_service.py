@@ -1,4 +1,10 @@
-"""Minimal in-memory RAG service for E03.
+"""LEGACY (BETA2-WIKI-11): RAG léxico retirado del pipeline; usa la wiki+índice.
+
+Este módulo ya NO se invoca desde el ensamblado de prompt (`ai_jobs._with_rag_context`
+dejó de construir el `rag_context_pack` en WIKI-05 y el host dejó de pasar `rag_service`
+en WIKI-11). Se conserva importable para no romper tests hasta su borrado posterior.
+
+Minimal in-memory RAG service for E03.
 
 Retrieval and ContextPack construction are implemented in later E tickets. This
 service owns project indexes so UI/application code has one stable entry point.

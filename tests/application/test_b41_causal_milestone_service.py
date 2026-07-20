@@ -125,3 +125,77 @@ def test_causal_chain_and_gap_detection_helpers():
     assert [r.id for r in relations_without_hito.value] == ["rel_orphan"]
     assert isinstance(hitos_without_consequences, Ok)
     assert [h.id for h in hitos_without_consequences.value] == ["h_parent"]
+
+
+# ── Subhitos: contención temporal de 1 nivel (BETA2-SUB-01) ──────────────────
+
+
+@pytest.mark.application
+def test_set_and_list_subhitos():
+    ps, service, _ = _setup()
+    guerra = service.create_hito_manual({"title": "La Gran Guerra", "year": 100}).value
+    b1 = service.create_hito_manual({"title": "Batalla A", "year": 102}).value
+    b2 = service.create_hito_manual({"title": "Batalla B", "year": 101}).value
+
+    assert isinstance(service.set_milestone_parent(b1.id, guerra.id), Ok)
+    assert isinstance(service.set_milestone_parent(b2.id, guerra.id), Ok)
+
+    subhitos = service.list_subhitos(guerra.id)
+    assert isinstance(subhitos, Ok)
+    # ordenados por año
+    assert [h.title for h in subhitos.value] == ["Batalla B", "Batalla A"]
+    assert b1.parent_milestone_id == guerra.id
+
+
+@pytest.mark.application
+def test_set_parent_rejects_two_levels_and_self():
+    ps, service, _ = _setup()
+    guerra = service.create_hito_manual({"title": "Guerra", "year": 1}).value
+    batalla = service.create_hito_manual({"title": "Batalla", "year": 2}).value
+    escaramuza = service.create_hito_manual({"title": "Escaramuza", "year": 3}).value
+
+    assert isinstance(service.set_milestone_parent(batalla.id, guerra.id), Ok)
+    # el marco ya es subhito → 1 nivel
+    assert isinstance(service.set_milestone_parent(escaramuza.id, batalla.id), Error)
+    # auto-referencia
+    assert isinstance(service.set_milestone_parent(guerra.id, guerra.id), Error)
+    # un hito que ya contiene subhitos no puede volverse subhito
+    assert isinstance(service.set_milestone_parent(guerra.id, escaramuza.id), Error)
+
+
+@pytest.mark.application
+def test_clear_parent_makes_first_level():
+    ps, service, _ = _setup()
+    guerra = service.create_hito_manual({"title": "Guerra", "year": 1}).value
+    batalla = service.create_hito_manual({"title": "Batalla", "year": 2}).value
+    service.set_milestone_parent(batalla.id, guerra.id)
+
+    assert isinstance(service.clear_milestone_parent(batalla.id), Ok)
+    assert batalla.parent_milestone_id is None
+    assert service.list_subhitos(guerra.id).value == []
+
+
+@pytest.mark.application
+def test_create_subhito_convenience():
+    ps, service, _ = _setup()
+    guerra = service.create_hito_manual({"title": "Guerra", "year": 1}).value
+
+    created = service.create_subhito(guerra.id, {"title": "Batalla del Vado", "year": 3})
+
+    assert isinstance(created, Ok)
+    assert created.value.parent_milestone_id == guerra.id
+    assert [h.title for h in service.list_subhitos(guerra.id).value] == ["Batalla del Vado"]
+
+
+@pytest.mark.application
+def test_delete_marco_orphans_subhitos():
+    ps, service, _ = _setup()
+    guerra = service.create_hito_manual({"title": "Guerra", "year": 1}).value
+    batalla = service.create_hito_manual({"title": "Batalla", "year": 2}).value
+    service.set_milestone_parent(batalla.id, guerra.id)
+
+    assert isinstance(service.delete_hito(guerra.id), Ok)
+
+    # el subhito sigue existiendo pero ya sin marco
+    assert any(h.id == batalla.id for h in ps.active_project.causal_milestones)
+    assert batalla.parent_milestone_id is None

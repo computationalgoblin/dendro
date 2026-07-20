@@ -107,6 +107,7 @@ class ChronologyWalkService:
     candidate_service: CandidateService | None = None
     milestone_service: CausalMilestoneService | None = None
     history_service: Any = None
+    navigator: Any = None  # BETA2-WIKI-09: el paso del walk navega la wiki para su contexto
 
     # ── helpers de proyecto/hito ──────────────────────────────────────────
     def _proj(self) -> Result[Any, str]:
@@ -283,10 +284,124 @@ class ChronologyWalkService:
         hito = self._milestone_by_id(proj.value, session.current_milestone_id)
         if hito is None:
             return Error("El hito actual del recorrido no existe")
+        run = self._run_step_analysis(session, proj.value, hito)
+        if isinstance(run, Error):
+            return run
+        return Ok(self._fold_step(session, proj.value, hito, run.value))
 
+    def analyze_step_at(self, session_id: str, milestone_id: str) -> Result[dict[str, Any], str]:
+        """Analiza un hito SIN mutar la sesión (prefetch y desvíos causales).
+
+        Devuelve el mismo dict de resultado que ``analyze_step`` pero sin la
+        sección ``walk``: la memoria se pliega después con ``commit_step``,
+        cuando el usuario LLEGA de verdad a la escena.
+        """
+        found = self._get_session(session_id)
+        if isinstance(found, Error):
+            return found
+        session = found.value
+        proj = self._proj()
+        if isinstance(proj, Error):
+            return proj
+        hito = self._milestone_by_id(proj.value, str(milestone_id))
+        if hito is None:
+            return Error("El hito indicado no existe")
+        return self._run_step_analysis(session, proj.value, hito)
+
+    def commit_step(
+        self, session_id: str, milestone_id: str, result: dict[str, Any]
+    ) -> Result[dict[str, Any], str]:
+        """Pliega en la sesión un análisis obtenido con ``analyze_step_at``.
+
+        Solo se pliega el hito ACTUAL del recorrido: el resumen acumulado debe
+        crecer en el orden cronológico real, no en el orden del prefetch.
+        """
+        found = self._get_session(session_id)
+        if isinstance(found, Error):
+            return found
+        session = found.value
+        proj = self._proj()
+        if isinstance(proj, Error):
+            return proj
+        if str(milestone_id) != session.current_milestone_id:
+            return Error("El hito no es el actual del recorrido; no se puede plegar su análisis")
+        hito = self._milestone_by_id(proj.value, session.current_milestone_id)
+        if hito is None:
+            return Error("El hito actual del recorrido no existe")
+        return Ok(self._fold_step(session, proj.value, hito, dict(result or {})))
+
+    def step_scene(
+        self, session_id: str, milestone_id: str | None = None
+    ) -> Result[dict[str, Any], str]:
+        """Datos deterministas de la escena de un hito (sin IA, sin mutación).
+
+        Sin ``milestone_id`` describe el hito actual del recorrido; con él,
+        cualquier hito (desvíos causales en modo «visita»).
+        """
+        found = self._get_session(session_id)
+        if isinstance(found, Error):
+            return found
+        session = found.value
+        proj = self._proj()
+        if isinstance(proj, Error):
+            return proj
+        mid = str(milestone_id) if milestone_id else session.current_milestone_id
+        hito = self._milestone_by_id(proj.value, mid)
+        if hito is None:
+            return Error("El hito indicado no existe")
         ordered = self._ordered_milestones(proj.value)
+        idx = self._index_of(ordered, mid)
+        nxt = idx + 1 if session.direction is WalkDirection.FUTURE else idx - 1
+        next_id = ordered[nxt].id if 0 <= nxt < len(ordered) else None
+        year = getattr(hito, "year", None)
+        era_name = ""
+        chron = getattr(proj.value, "project_chronology", None)
+        if chron is not None and isinstance(year, int) and not isinstance(year, bool):
+            era = chron.era_for_year(year)
+            if era is not None:
+                era_name = str(getattr(era, "name", "") or "")
+        return Ok(
+            {
+                "session_id": session.id,
+                "status": session.status.value,
+                "direction": session.direction.value,
+                "hito": self._hito_brief(hito),
+                "era_name": era_name,
+                "position": idx + 1,
+                "total": len(ordered),
+                "next_milestone_id": next_id,
+                "causes": self._briefs_for_ids(
+                    proj.value, getattr(hito, "causal_parent_hito_ids", []) or []
+                ),
+                "consequences": self._briefs_for_ids(
+                    proj.value, getattr(hito, "causal_child_hito_ids", []) or []
+                ),
+                "open_problems": [
+                    dict(p) for p in session.open_problems if p.get("milestone_id") == mid
+                ],
+                "is_visited": mid in session.visited_milestone_ids,
+                "is_current": mid == session.current_milestone_id,
+            }
+        )
+
+    def _briefs_for_ids(self, proj: Any, ids: list[str]) -> list[dict[str, Any]]:
+        briefs: list[dict[str, Any]] = []
+        for mid in ids:
+            hito = self._milestone_by_id(proj, str(mid))
+            if hito is not None:
+                briefs.append(self._hito_brief(hito))
+        return briefs
+
+    def _run_step_analysis(
+        self, session: ChronologyWalkSession, proj: Any, hito: Any
+    ) -> Result[dict[str, Any], str]:
+        """Lanza el job de análisis de un hito. NO muta sesión ni proyecto."""
+        ordered = self._ordered_milestones(proj)
         idx = self._index_of(ordered, hito.id)
-        context = self._build_step_context(session, proj.value, hito, ordered, idx)
+        context = self._build_step_context(session, proj, hito, ordered, idx)
+        # BETA2-WIKI-09: navega la wiki para traer contexto coherente del paso (sin
+        # prompt de usuario; corre en el worker del walk, no bloquea la UI).
+        self._attach_wiki_context(context, hito)
         sentido = "el futuro" if session.direction is WalkDirection.FUTURE else "el pasado"
         prompt = (
             f"Analiza el hito «{getattr(hito, 'title', '')}» dentro del recorrido cronológico "
@@ -300,9 +415,34 @@ class ChronologyWalkService:
             return run
         job = run.value
         result = dict(getattr(job, "result", None) or {})
-        payload = dict(result.get("model_payload") or {})
+        result["job_id"] = job.id
+        return Ok(result)
 
-        # Actualizar memoria de sesión.
+    def _attach_wiki_context(self, context: dict[str, Any], hito: Any) -> None:
+        """WIKI-09: adjunta ``contexto_wiki`` navegando la wiki (best-effort)."""
+        if self.navigator is None:
+            return
+        try:
+            from packages.application.wiki_navigator import NavigationRequest
+
+            res = self.navigator.assemble_context(
+                NavigationRequest(
+                    intent=AIJobType.CHRONOLOGY_WALK_STEP.value,
+                    focus_ids=[hito.id],
+                    focus_kind="milestone",
+                )
+            )
+            bundle = res.value if isinstance(res, Ok) else None
+            if bundle is not None and not bundle.is_empty():
+                context["contexto_wiki"] = bundle.as_context_dict()
+        except Exception:  # noqa: BLE001 — la navegación nunca rompe el paso del walk
+            pass
+
+    def _fold_step(
+        self, session: ChronologyWalkSession, proj: Any, hito: Any, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Pliega un análisis en la memoria de sesión y arma la sección ``walk``."""
+        payload = dict(result.get("model_payload") or {})
         if hito.id not in session.visited_milestone_ids:
             session.visited_milestone_ids.append(hito.id)
         self._fold_issues(session, hito.id, payload.get("issues"))
@@ -314,20 +454,30 @@ class ChronologyWalkService:
         stopped = self._should_stop(payload)
         if stopped:
             session.status = WalkStatus.PAUSED
+        # BETA2-PLAY: registra la observación del paso en el historial de cada
+        # entidad afectada del hito (lectura + issues, tengan o no edición). Se
+        # pliega SOLO aquí (analyze/commit), no en el prefetch → sin duplicados.
+        self._record_observation(session, hito, payload)
         session.touch()
-        _touch_project(proj.value)
+        _touch_project(proj)
 
+        ordered = self._ordered_milestones(proj)
+        idx = self._index_of(ordered, hito.id)
         result["walk"] = {
             "session_id": session.id,
             "milestone_id": hito.id,
+            "milestone_title": str(getattr(hito, "title", "")),
+            "milestone_year": getattr(hito, "year", None),
+            "position": idx + 1,
+            "total": len(ordered),
             "stopped": stopped,
             "stop_reason": str(payload.get("stop_reason") or "") if stopped else "",
             "open_problems": [dict(p) for p in session.open_problems if not p.get("resolved")],
             "accumulated_summary": session.accumulated_summary,
             "status": session.status.value,
-            "job_id": job.id,
+            "job_id": str(result.get("job_id") or ""),
         }
-        return Ok(result)
+        return result
 
     def record_decision(
         self, session_id: str, decision: str, note: str = ""
@@ -348,6 +498,40 @@ class ChronologyWalkService:
         for problem in session.open_problems:
             if problem.get("milestone_id") == session.current_milestone_id:
                 problem["resolved"] = True
+        if session.status is WalkStatus.PAUSED:
+            session.status = WalkStatus.ACTIVE
+        session.touch()
+        _touch_project(self.project_service.active_project)
+        return Ok(session)
+
+    def defer_problems(self, session_id: str, note: str = "") -> Result[ChronologyWalkSession, str]:
+        """Aplaza los problemas abiertos del hito actual SIN fingir resolución.
+
+        El problema queda marcado ``deferred`` (sigue sin ``resolved``): deja de
+        bloquear el avance pero permanece vivo y reaparece en el informe final.
+        Resolver (decisión, reparación aplicada) sigue ganando a aplazar.
+        """
+        found = self._get_session(session_id)
+        if isinstance(found, Error):
+            return found
+        session = found.value
+        deferred = 0
+        for problem in session.open_problems:
+            if problem.get("milestone_id") == session.current_milestone_id and not problem.get(
+                "resolved"
+            ):
+                problem["deferred"] = True
+                deferred += 1
+        if not deferred:
+            return Error("No hay problemas abiertos que aplazar en este hito")
+        session.decisions.append(
+            {
+                "milestone_id": session.current_milestone_id,
+                "decision": "aplazado",
+                "note": str(note),
+                "at": _now_iso(),
+            }
+        )
         if session.status is WalkStatus.PAUSED:
             session.status = WalkStatus.ACTIVE
         session.touch()
@@ -552,7 +736,53 @@ class ChronologyWalkService:
             return "milestone"
         if pd.get("edit_proposed_value"):
             return "edit"
+        # PLAY-15: patch multi-campo — mismo bucket de aplicación que las ediciones.
+        if isinstance(pd.get("edit_fields"), dict) and pd.get("edit_fields"):
+            return "edit"
         return "report"
+
+    def _record_observation(
+        self, session: ChronologyWalkSession, hito: Any, payload: dict[str, Any]
+    ) -> None:
+        """BETA2-PLAY: deja la lectura del paso en el historial de las entidades
+        afectadas (traza, no canon). No-op sin ``history_service`` inyectado."""
+        if self.history_service is None:
+            return
+        record = getattr(self.history_service, "record", None)
+        if not callable(record):
+            return
+        lectura = str(payload.get("summary") or payload.get("report") or "").strip()
+        issues = payload.get("issues")
+        obs_lines: list[str] = []
+        if isinstance(issues, list):
+            for issue in issues:
+                if isinstance(issue, dict):
+                    title = str(issue.get("title") or issue.get("kind") or "").strip()
+                    desc = str(issue.get("description") or "").strip()
+                    if title or desc:
+                        obs_lines.append(f"• {title}: {desc}".strip(": "))
+        description = lectura
+        if obs_lines:
+            description = (description + "\n" + "\n".join(obs_lines)).strip()
+        if not description:
+            return
+        from packages.domain.source_history import HistoryEventType
+
+        for entity_id in getattr(hito, "affected_entity_ids", []) or []:
+            try:
+                record(
+                    HistoryEventType.OBSERVACION_RECORRIDO,
+                    description=description,
+                    affected_entity_ids=[str(entity_id)],
+                    change_origin="recorrido_cronologico",
+                    metadata={
+                        "session_id": session.id,
+                        "milestone_id": str(getattr(hito, "id", "")),
+                        "object_type": "chronology_walk",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — la traza nunca rompe el recorrido
+                pass
 
     # ── lógica interna ────────────────────────────────────────────────────
     def _fold_issues(self, session: ChronologyWalkSession, milestone_id: str, issues: Any) -> None:
@@ -614,8 +844,12 @@ class ChronologyWalkService:
 
     @staticmethod
     def _has_unresolved_for(session: ChronologyWalkSession, milestone_id: str) -> bool:
+        # Un problema aplazado (deferred) NO bloquea: sigue vivo pero el usuario
+        # decidió explícitamente seguir; reaparece en el informe final.
         return any(
-            p.get("milestone_id") == milestone_id and not p.get("resolved")
+            p.get("milestone_id") == milestone_id
+            and not p.get("resolved")
+            and not p.get("deferred")
             for p in session.open_problems
         )
 
@@ -646,6 +880,9 @@ class ChronologyWalkService:
                 str(p.get("title") or p.get("description") or "") for p in unresolved
             ],
         )
+        deferred = [dict(p) for p in unresolved if p.get("deferred")]
+        if deferred:
+            report.metadata["deferred_problems"] = deferred
         proj.chronology_walk_reports.append(report)
         session.report_id = report.id
         return report

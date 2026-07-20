@@ -247,3 +247,44 @@ def test_apply_step_resolves_open_problem_and_unblocks_advance():
     # aquí h1 es el único; avanzar hacia el futuro completa el recorrido sin error).
     adv = svc.advance(session.id)
     assert isinstance(adv, Ok)
+
+
+@pytest.mark.application
+def test_apply_step_multi_field_patch_with_user_edits():
+    """PLAY-15/17: patch `edit_fields` atómico; `edited_data` trae el dict COMPLETO.
+
+    El merge de apply_step sobre proposed_data es shallow: quien revisa en el
+    preview debe emitir el `edit_fields` entero ya fusionado, no un parcial.
+    """
+    ps, _es, cs, svc, session, devian = _setup()
+    edit_cand = cs.create_candidate(
+        {
+            "candidate_type": "sugerencia_ia",
+            "proposed_data": {
+                "edit_kind": "entity_edits",
+                "edit_target_name": "Devian",
+                "edit_fields": {"brief_description": "Propuesta de la IA.", "birth_year": -120},
+            },
+        }
+    ).value
+
+    res = svc.apply_step(
+        session.id,
+        [
+            {
+                "candidate_id": edit_cand.id,
+                "edited_data": {
+                    "edit_fields": {
+                        "brief_description": "Versión retocada por el usuario.",
+                        "birth_year": -120,
+                    }
+                },
+            }
+        ],
+    )
+
+    assert isinstance(res, Ok)
+    assert res.value["failed"] == []
+    updated = next(e for e in ps.active_project.entities if e.id == devian.id)
+    assert updated.brief_description == "Versión retocada por el usuario."
+    assert updated.birth_year == -120

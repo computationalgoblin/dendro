@@ -71,6 +71,10 @@ FIXED_SECTIONS: frozenset[str] = frozenset(
         "menciones",
         "configuracion_creativa",
         "cronologia",
+        # BETA2-WIKI-05: el contexto seleccionado por navegación de la wiki (páginas
+        # derivadas + canon) viaja reservado entero; ya viene acotado por el presupuesto
+        # del WikiNavigator. Reemplaza al antiguo volcado fijo `memoria_derivada`.
+        "contexto_wiki",
         "contexto_autorizado",
         "formatos_h05",
     }
@@ -102,6 +106,8 @@ INTENT_TO_TIER: dict[str, ContextTier] = {
     "improve_text": ContextTier.FAST_LOCAL,
     # BETA2-FOCO: el riego usa contexto COMPACTO por entidad (nunca el proyecto entero).
     "water_entity": ContextTier.FAST_LOCAL,
+    # BETA2-MEM-05: la Memoria editorial necesita más contexto causal que el riego.
+    "update_memory": ContextTier.CAUSAL,
     "generate_text": ContextTier.BALANCED,
     "generate_entities": ContextTier.BALANCED,
     "generate_tree": ContextTier.BALANCED,
@@ -116,6 +122,8 @@ INTENT_TO_TIER: dict[str, ContextTier] = {
     "create_ring_template": ContextTier.CAUSAL,
     "chronology_walk_step": ContextTier.CAUSAL,
     "expand_worldbuilding": ContextTier.SUBGRAPH,
+    # BETA2-WIKI-13: la sugerencia compuesta abarca varios tipos → contexto de subgrafo.
+    "suggest_composite": ContextTier.SUBGRAPH,
     "freeform_planning": ContextTier.SUBGRAPH,
     "review_graph": ContextTier.GLOBAL,
     "unknown": ContextTier.BALANCED,

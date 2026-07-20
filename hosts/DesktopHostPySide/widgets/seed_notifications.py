@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
-from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QMenu, QPushButton, QVBoxLayout, QWidget
 
+from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
+    GOLD_DEEP,
+    GOLD_PRESS,
+    INK_INVERSE,
     INK_SOFT,
     SURFACE_HI,
     TICK_INTERVAL,
@@ -29,6 +33,18 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 _ERROR_COLOR = "#C0392B"
 _DOT_DIAMETER = 34
 _MARGIN = 18
+_PILL_HEIGHT = 30  # BETA2-PULIDO-01: ambas píldoras (🌱/💧) miden lo mismo
+
+
+def _pill_style(base: str, hover: str) -> str:
+    """BETA2-PULIDO-01: QSS único de las píldoras del rincón (🌱 y 💧) —
+    mismo radio, padding, tipografía y feedback de hover/pressed."""
+    return (
+        f"QPushButton {{ background: {base}; color: {INK_INVERSE}; border: none; "
+        "border-radius: 15px; padding: 0px 14px; font-weight: 700; font-size: 12px; }} "
+        f"QPushButton:hover {{ background: {hover}; }} "
+        f"QPushButton:pressed {{ background: {GOLD_PRESS}; }}"
+    )
 
 
 class SeedNotification(QWidget):
@@ -47,7 +63,15 @@ class SeedNotification(QWidget):
         super().__init__(parent)
         self.candidate_id = candidate_id
         self.kind = kind
-        self._accent = QColor(_ERROR_COLOR if kind == "error" else GOLD)
+        # BETA2-FOCO-34: el aviso «cultivo» (entidad regada, revisar) usa el tono
+        # del riego (GOLD_DEEP) para leerse como parte del jardín, no como semilla.
+        if kind == "error":
+            accent = _ERROR_COLOR
+        elif kind == "cultivo":
+            accent = GOLD_DEEP
+        else:
+            accent = GOLD
+        self._accent = QColor(accent)
         self._phase = 0.0
         # SEM02: estado de marchitado (al rechazar): encoge y se apaga.
         self._withering = False
@@ -129,12 +153,22 @@ class SeedNotification(QWidget):
         painter.setPen(QPen(QColor(SURFACE_HI), 1.5))
         painter.drawEllipse(QRectF(cx - core_r, cy - core_r, core_r * 2, core_r * 2))
 
-        # Marca interior (semilla / aspa de error).
+        # Marca interior (semilla / aspa de error / gota de cultivo).
         painter.setPen(QPen(QColor(SURFACE_HI), 2.0))
         if self.kind == "error":
             o = core_r * 0.45
             painter.drawLine(int(cx - o), int(cy - o), int(cx + o), int(cy + o))
             painter.drawLine(int(cx - o), int(cy + o), int(cx + o), int(cy - o))
+        elif self.kind == "cultivo":
+            # Gota (riego): revisar la entidad actualizada en Cultivo.
+            r = core_r * 0.5
+            path = QPainterPath()
+            path.moveTo(cx, cy - r)
+            path.cubicTo(cx + r * 1.05, cy, cx + r * 0.7, cy + r, cx, cy + r)
+            path.cubicTo(cx - r * 0.7, cy + r, cx - r * 1.05, cy, cx, cy - r)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(SURFACE_HI)))
+            painter.drawPath(path)
         else:
             painter.setBrush(QBrush(QColor(INK_SOFT)))
             seed_r = core_r * 0.28
@@ -144,7 +178,19 @@ class SeedNotification(QWidget):
 class SeedNotificationLayer(QWidget):
     """Pila de notificaciones anclada a la esquina inferior derecha del padre."""
 
-    reviewRequested = Signal(str)
+    reviewRequested = Signal(str)  # noqa: N815 — convención Qt de señales
+    # BETA2-JARDIN-03: recorrido de sedientas — emite la siguiente entidad por
+    # regar (la más antigua primero). UI2-04: vive en el clic derecho del badge.
+    thirstyRequested = Signal(str)  # noqa: N815 — convención Qt de señales
+    # UI2-04: clic primario del badge — regar TODAS las sedientas (el workspace
+    # pasa la lista por la autorización visible antes de lanzar el lote).
+    waterAllRequested = Signal(list)  # noqa: N815 — convención Qt de señales
+    # BETA2-FOCO-34: clic en un aviso «cultivo» — enfocar la entidad regada y
+    # abrir su pestaña Cultivo para revisar el diagnóstico recién generado.
+    cultivoReviewRequested = Signal(str)  # noqa: N815 — convención Qt de señales
+    # BETA2-FOCO-35: clic en el badge «Regando x/y» durante un lote — pedir el
+    # popover de detalle del progreso (en vez de lanzar otro riego).
+    waterProgressRequested = Signal()  # noqa: N815 — convención Qt de señales
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -166,13 +212,47 @@ class SeedNotificationLayer(QWidget):
         # sutil; los objetos SeedNotification se conservan ocultos (API + wither).
         self._count_badge = QPushButton(self)
         self._count_badge.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._count_badge.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: #FCF8EC; border: none; "
-            "border-radius: 15px; padding: 6px 14px; font-weight: 700; font-size: 12px; }"
-        )
+        self._count_badge.setStyleSheet(_pill_style(GOLD, GOLD_DEEP))
         self._count_badge.clicked.connect(self._on_count_clicked)
         self._count_badge.hide()
         self._box.addWidget(self._count_badge, alignment=Qt.AlignmentFlag.AlignRight)
+        # BETA2-FOCO-36: badge de avisos de Cultivo AGREGADOS (un contador en vez
+        # de un dot por entidad regada). Clic → revisar el más antiguo.
+        self._cultivo_badge = QPushButton(self)
+        self._cultivo_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cultivo_badge.setStyleSheet(_pill_style(GOLD_DEEP, GOLD))
+        self._cultivo_badge.clicked.connect(self._on_cultivo_clicked)
+        self._cultivo_badge.hide()
+        self._box.addWidget(self._cultivo_badge, alignment=Qt.AlignmentFlag.AlignRight)
+        # BETA2-JARDIN-03: badge hermano «💧 N» — salud global del jardín
+        # (entidades por regar). Mismo lenguaje de píldora, tono más profundo.
+        self._thirsty_ids: list[str] = []
+        # BETA2-FOCO-34: regables totales (falta_regar + regada). El badge no
+        # desaparece tras regar; con solo regadas muestra «Regar de nuevo».
+        self._waterable_ids: list[str] = []
+        self._thirsty_idx = 0
+        self._watering_done = 0
+        self._watering_total = 0
+        self._water_badge = QPushButton(self)
+        self._water_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._water_badge.setStyleSheet(_pill_style(GOLD_DEEP, GOLD))
+        # UI2-04: gota SVG teñida del sistema de iconos (adiós emoji 💧 azul,
+        # que dependía de la fuente del sistema y rompía la paleta).
+        self._water_badge.setIcon(icons.icon("tool_water", color=INK_INVERSE, size=14))
+        self._water_badge.setIconSize(QSize(14, 14))
+        self._water_badge.clicked.connect(self._on_water_clicked)
+        self._water_badge.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._water_badge.customContextMenuRequested.connect(self._on_water_menu)
+        self._water_badge.hide()
+        self._box.addWidget(self._water_badge, alignment=Qt.AlignmentFlag.AlignRight)
+        # BETA2-PULIDO-01: ranuras ESTABLES — misma altura fija y conservar el
+        # hueco al ocultarse: 🌱 vive siempre en la ranura superior y 💧 en la
+        # inferior, así la esquina no «baila» al aparecer/desaparecer una.
+        for badge in (self._count_badge, self._cultivo_badge, self._water_badge):
+            badge.setFixedHeight(_PILL_HEIGHT)
+            policy = badge.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            badge.setSizePolicy(policy)
         if parent is not None:
             parent.installEventFilter(self)
         self.hide()
@@ -190,18 +270,24 @@ class SeedNotificationLayer(QWidget):
         dot.clicked.connect(self._on_clicked)
         self._notifications[candidate_id] = dot
         if kind == "error":
-            # Los errores (pocos, transitorios) siguen como dot visible que se
-            # descarta al pulsarlo.
+            # Los errores (transitorios) siguen como dot VISIBLE que se descarta
+            # al pulsarlo.
             self._box.addWidget(dot, alignment=Qt.AlignmentFlag.AlignRight)
         else:
-            # BETA2-UX-07: el candidato se agrega en el badge de conteo; su objeto
-            # se conserva OCULTO (para la API y la animación de marchitado).
+            # BETA2-UX-07/FOCO-36: candidatos (🌱) y avisos de cultivo (🔔) se
+            # agregan en su badge de conteo; el objeto se conserva OCULTO.
             dot.hide()
         self._sync_count()
+        self._sync_cultivo_badge()
         self._reflow()
 
     def _candidate_ids(self) -> list[str]:
-        return [cid for cid, dot in self._notifications.items() if dot.kind != "error"]
+        # Solo semillas: ni errores ni avisos de cultivo cuentan en el badge 🌱.
+        return [cid for cid, dot in self._notifications.items() if dot.kind == "candidate"]
+
+    def _cultivo_ids(self) -> list[str]:
+        # BETA2-FOCO-36: entidades regadas pendientes de revisar en Cultivo.
+        return [cid for cid, dot in self._notifications.items() if dot.kind == "cultivo"]
 
     def _sync_count(self) -> None:
         ids = self._candidate_ids()
@@ -222,6 +308,118 @@ class SeedNotificationLayer(QWidget):
         if ids:
             self.reviewRequested.emit(ids[0])
 
+    def _sync_cultivo_badge(self) -> None:
+        # BETA2-FOCO-36: un solo badge con contador para todos los avisos de Cultivo.
+        n = len(self._cultivo_ids())
+        if n:
+            self._cultivo_badge.setText(f"🔔 {n} por revisar")
+            self._cultivo_badge.setToolTip(
+                "Entidades regadas por revisar en Cultivo — clic abre la más antigua"
+            )
+            self._cultivo_badge.show()
+        else:
+            self._cultivo_badge.hide()
+
+    def _on_cultivo_clicked(self) -> None:
+        # BETA2-FOCO-36: abre la revisión de la entidad regada más antigua y la
+        # descarta (decrementa el contador).
+        ids = self._cultivo_ids()
+        if ids:
+            oldest = ids[0]
+            self.cultivoReviewRequested.emit(oldest)
+            self.remove(oldest)
+
+    # ── BETA2-JARDIN-03: sedientas ─────────────────────────────────────────
+
+    @property
+    def thirsty_ids(self) -> list[str]:
+        return list(self._thirsty_ids)
+
+    def set_thirsty(self, entity_ids: list[str]) -> None:
+        """Compat: sedientas == regables (comportamiento previo a FOCO-34)."""
+        self.set_waterable(entity_ids, entity_ids)
+
+    def set_waterable(self, thirsty_ids: list[str], waterable_ids: list[str]) -> None:
+        """BETA2-FOCO-34: fija sedientas (``falta_regar``) y regables totales
+        (incluye ``regada``). El badge no desaparece tras regar: con solo regadas
+        muestra «Regar de nuevo». El índice del recorrido sobrevive a refrescos."""
+        self._thirsty_ids = [str(entity_id) for entity_id in (thirsty_ids or []) if entity_id]
+        self._waterable_ids = [str(entity_id) for entity_id in (waterable_ids or []) if entity_id]
+        if self._thirsty_ids:
+            self._thirsty_idx %= len(self._thirsty_ids)
+        else:
+            self._thirsty_idx = 0
+        self._sync_water_badge()
+        self._reflow()
+
+    def set_watering_progress(self, done: int, total: int) -> None:
+        """UI2-04: progreso del lote de riego en la propia píldora («Regando
+        D/T…», deshabilitada); (0, 0) restaura el conteo de sedientas."""
+        self._watering_done = max(0, int(done))
+        self._watering_total = max(0, int(total))
+        self._sync_water_badge()
+        self._reflow()
+
+    def _sync_water_badge(self) -> None:
+        if self._watering_total > 0:
+            self._water_badge.setText(
+                f"Regando {self._watering_done}/{self._watering_total}…"
+            )
+            # BETA2-FOCO-35: clicable en lote → abre el popover de progreso.
+            self._water_badge.setToolTip("Riego en curso — clic para ver el detalle del lote")
+            self._water_badge.setEnabled(True)
+            self._water_badge.show()
+            return
+        self._water_badge.setEnabled(True)
+        if self._thirsty_ids:
+            n = len(self._thirsty_ids)
+            self._water_badge.setText(f"{n} por regar")
+            self._water_badge.setToolTip(
+                "Entidades sedientas del jardín — clic: regar todas (con autorización) · "
+                "clic derecho: recorrerlas en Foco"
+            )
+            self._water_badge.show()
+        elif self._waterable_ids:
+            # BETA2-FOCO-34: nada sediento, pero hay regadas → permitir re-regar.
+            n = len(self._waterable_ids)
+            self._water_badge.setText(f"Regar de nuevo ({n})")
+            self._water_badge.setToolTip(
+                "Todas regadas — clic: volver a regar (con autorización) para un "
+                "diagnóstico fresco"
+            )
+            self._water_badge.show()
+        else:
+            self._water_badge.hide()
+
+    def _on_water_clicked(self) -> None:
+        # BETA2-FOCO-35: durante un lote el clic abre el popover de progreso (no
+        # lanza otro riego).
+        if self._watering_total > 0:
+            self.waterProgressRequested.emit()
+            return
+        # UI2-04/FOCO-34: regar las sedientas si las hay; si no, re-regar todas
+        # las regables (diagnóstico fresco). Autorización en el host.
+        ids = self._thirsty_ids or self._waterable_ids
+        if not ids:
+            return
+        self.waterAllRequested.emit(list(ids))
+
+    def emit_next_thirsty(self) -> None:
+        """Recorrido de sedientas (JARDIN-03): emite la siguiente, cíclico."""
+        if not self._thirsty_ids:
+            return
+        entity_id = self._thirsty_ids[self._thirsty_idx % len(self._thirsty_ids)]
+        self._thirsty_idx = (self._thirsty_idx + 1) % len(self._thirsty_ids)
+        self.thirstyRequested.emit(entity_id)
+
+    def _on_water_menu(self, pos) -> None:
+        if not self._thirsty_ids or self._watering_total > 0:
+            return
+        menu = QMenu(self._water_badge)
+        action = menu.addAction("Recorrer sedientas en Foco (una a una)")
+        action.triggered.connect(self.emit_next_thirsty)
+        menu.exec(self._water_badge.mapToGlobal(pos))
+
     def remove(self, candidate_id: str, *, withered: bool = False) -> None:
         # SEM02: ``withered`` reproduce la animación de marchitado antes de quitar
         # la notificación (al rechazar el candidato). Las de error se quitan ya.
@@ -239,10 +437,11 @@ class SeedNotificationLayer(QWidget):
             return
         dot.stop()
         if dot.kind == "error":
-            self._box.removeWidget(dot)  # los candidatos no estaban montados (badge)
+            self._box.removeWidget(dot)  # candidatos/cultivo no estaban montados (badge)
         dot.setParent(None)
         dot.deleteLater()
         self._sync_count()
+        self._sync_cultivo_badge()
         self._reflow()
 
     def clear(self) -> None:
@@ -251,6 +450,10 @@ class SeedNotificationLayer(QWidget):
 
     def has(self, candidate_id: str) -> bool:
         return candidate_id in self._notifications
+
+    def progress_anchor(self) -> QPushButton:
+        """BETA2-FOCO-35: ancla (el badge 💧) para el popover de progreso del lote."""
+        return self._water_badge
 
     def set_bottom_offset(self, px: int) -> None:
         """Margen inferior extra (p. ej. para no solapar la command bar)."""
@@ -264,29 +467,48 @@ class SeedNotificationLayer(QWidget):
     def reanchor(self) -> None:
         """Recoloca la capa; el host la llama tras mover sus clusters."""
         self.adjustSize()
-        if self._notifications:
+        if self._notifications or self._thirsty_ids or self._waterable_ids:
             self.show()
             self.raise_()  # por encima de los clusters de botones
 
     # ── geometría ────────────────────────────────────────────────────────
 
     def _on_clicked(self, candidate_id: str) -> None:
-        # Las notificaciones de candidato abren su revisión; las de error se
-        # descartan al pulsarlas.
+        # Candidatos → revisión; errores → se descartan; cultivo → enfoca la
+        # entidad y abre Cultivo, luego se descarta (BETA2-FOCO-34).
         dot = self._notifications.get(candidate_id)
         if dot is not None and dot.kind == "error":
+            self.remove(candidate_id)
+            return
+        if dot is not None and dot.kind == "cultivo":
+            self.cultivoReviewRequested.emit(candidate_id)
             self.remove(candidate_id)
             return
         self.reviewRequested.emit(candidate_id)
 
     def _reflow(self) -> None:
-        if not self._notifications:
+        if not self._notifications and not self._thirsty_ids and not self._waterable_ids:
             self.hide()
             return
+        # BETA2-PULIDO-01: activar el layout ANTES de medir — sin esto,
+        # adjustSize puede leer la altura vieja (una píldora) y el anclaje del
+        # host coloca la capa pisando la píldora Guardar.
+        self._box.activate()
         self.adjustSize()
         self._reposition()
         self.show()
         self.raise_()
+        # Asentamiento diferido: re-ancla una vez con la geometría definitiva
+        # (los show() recién hechos publican LayoutRequest asíncronos).
+        QTimer.singleShot(0, self._settle)
+
+    def _settle(self) -> None:
+        """BETA2-PULIDO-01: segunda pasada de anclaje tras asentar el layout."""
+        if not self.isVisible():
+            return
+        self._box.activate()
+        self.adjustSize()
+        self._reposition()
 
     def _reposition(self) -> None:
         # SEM04: el host ancla (encima del cluster derecho) si fijó callback;
