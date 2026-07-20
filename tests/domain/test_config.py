@@ -45,7 +45,7 @@ class TestAppConfig:
 
     def test_default_version(self):
         config = AppConfig()
-        assert config.app_version == "0.1.0"
+        assert config.app_version == "0.9.0b1"
 
     def test_default_debug(self):
         config = AppConfig()

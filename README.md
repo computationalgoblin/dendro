@@ -1,104 +1,75 @@
-# narrative-architect
+# Dendro (narrative-architect)
 
-Aplicación de escritorio para creación narrativa, worldbuilding, escritura y
-dirección de partidas de rol asistida por IA.
+**Dendro** es una aplicación de escritorio para creación narrativa, worldbuilding,
+escritura y dirección de partidas de rol asistida por IA.
 
 El núcleo conceptual es una **base de conocimiento narrativa estructurada**:
 no un chatbot, no una wiki pasiva, no un VTT y no un grafo decorativo.
-La IA asiste, sugiere y genera candidatos, pero **nunca modifica el canon
-directamente** sin aceptación explícita del usuario.
+La IA asiste, sugiere y cultiva candidatos ("semillas"), pero **nunca modifica el
+canon** sin aceptación explícita del usuario.
 
-## Estado actual
+> **¿Usuario final?** Lee [README-USUARIO.md](README-USUARIO.md): descargar,
+> ejecutar `Dendro.exe`, configurar tu proveedor de IA y crear tu primer proyecto.
+> Estado: **beta** (0.9.0b1). El resto de este documento es para desarrollo.
 
-Fundación de proyecto completada. Ver tickets en `.kanban/tickets/`.
+## Desarrollo
 
-**Próximo ticket:** `B01-T02` — Configuración base, logging y manejo de errores
-(actualmente en Backlog).
+```bash
+# Entorno: virtualenv del repo (deps ya instaladas)
+.venv/Scripts/python -m pytest                       # pruebas (ver scripts/run_all_tests.py)
+.venv/Scripts/python -m ruff check packages/ tests/  # lint
+
+# CLI
+python -m narrative_architect <comando> [--project RUTA]
+
+# Escritorio (PySide6, extra `desktop`)
+python -m hosts.DesktopHostPySide.main
+
+# Build del ejecutable Windows (PyInstaller, extra `dev`)
+python scripts/build_desktop.py     # → dist/Dendro/Dendro.exe
+```
 
 ## Estructura del repositorio
 
 ```
-.kanban/                    — Sistema Kanban (tickets, templates, resúmenes)
-├── KANBAN.md              — Visión general del Kanban
-├── tickets/               — Tickets individuales (B01-T01, B01-T02...)
-├── templates/             — Plantillas
-└── resumenes/             — Resúmenes técnicos de cierre
-
+.kanban/                   — Kanban (tickets, plantillas, resúmenes de cierre)
 packages/
-├── domain/                — Modelo de dominio puro (sin dependencias externas)
-├── application/           — Casos de uso, comandos, servicios
-├── infrastructure/        — IA, importadores, exportadores, adaptadores
-├── persistence/           — Almacenamiento, repositorios, migraciones
-└── ui/                    — Interfaz de escritorio
-
-docs/
-├── contracts/             — Contratos autoritativos
-│   ├── contrato_fases     — Orden de implementación por bloques
-│   ├── reglas-trabajo.md  — Reglas operativas de desarrollo
-│   └── perfiles/          — Perfiles de agente
-├── architecture/          — Documentos de arquitectura
-│   └── contrato_arquitectura.md
-
-tests/                     — Pruebas
-├── test_sanity.py         — Pruebas de sanidad
-└── architecture/          — Pruebas de reglas de dependencia
-
+├── domain/                — Modelo de dominio puro (stdlib, sin dependencias)
+├── application/           — Casos de uso, servicios, orquestación de IA
+├── infrastructure/        — Adaptadores de proveedores de IA
+├── persistence/           — ProjectStore + migraciones de esquema versionadas
+└── ui/                    — Host CLI
+hosts/DesktopHostPySide/   — Host de escritorio (PySide6)
+packaging/                 — Spec de PyInstaller
+docs/contracts/            — Contratos autoritativos (mandan sobre sugerencias)
+tests/                     — Pruebas por capa (ver CLAUDE.md para el runner)
 AGENTS.md                  — Reglas fundamentales del proyecto
-```
-
-## Desarrollo con Docker
-
-```bash
-# Construir
-docker compose build
-
-# Entrar al contenedor
-docker compose run --rm dev
-```
-
-Dentro del contenedor:
-
-```bash
-# Ejecutar pruebas
-pytest
-
-# Lint
-ruff check packages/ tests/
 ```
 
 ## Arquitectura limpia
 
 ```
-Interfaz → Aplicación → Dominio
-Infraestructura → Aplicación/Dominio mediante adaptadores
-Persistencia → Dominio mediante repositorios
-IA/Importadores/Exportadores → Aplicación mediante servicios desacoplados
+ui → application → domain
+infrastructure → application/domain
+persistence → domain
 ```
 
-El dominio **no depende** de UI, IA, PDF, frameworks visuales ni proveedores externos.
+El dominio **no depende** de UI, IA, frameworks visuales ni proveedores externos.
+Las reglas de dependencia se verifican estáticamente en `tests/architecture/`.
 
 ## Principios
 
 1. **El core manda** — el modelo de dominio es la fuente de verdad.
 2. **El grafo no es la base de datos** — es una vista interactiva.
-3. **La IA no modifica canon** — produce candidatos, no muta.
-4. **Importación documental no entra directo a canon** — pasa por bandeja de revisión.
-5. **Todo cambio relevante es trazable** — origen, estado, historial.
-6. **Secretos y visibilidad se respetan siempre** — no filtrar información no autorizada.
-7. **No modelos paralelos** — si el core lo representa, reutilizar.
-8. **La UI no escribe en persistencia** — siempre a través de servicios.
-9. **La aplicación funciona sin IA** — la IA es asistencia opcional.
-10. **Contratos prevalecen** — sobre sugerencias creativas de agentes.
+3. **La IA no modifica canon** — produce candidatos revisables, no muta.
+4. **Todo cambio relevante es trazable** — origen, estado, historial.
+5. **Secretos y visibilidad se respetan siempre** — no filtrar información no autorizada.
+6. **No modelos paralelos** — si el core lo representa, reutilizar.
+7. **La UI no escribe en persistencia** — siempre a través de servicios.
+8. **La aplicación funciona sin IA** — la IA es asistencia opcional.
+9. **Contratos prevalecen** — sobre sugerencias creativas de agentes.
 
 ## Kanban
 
-El trabajo se organiza mediante Kanban en `.kanban/`.
-
-Columnas: Backlog → Ready → In Progress → Review → Testing → Done
-(con Blocked para bloqueos)
-
-Todo trabajo nace de un ticket. No se implementa funcionalidad sin ticket.
-
-## Perfiles de agente
-
-Ver `docs/contracts/perfiles/` para las definiciones completas de cada perfil.
+Todo trabajo nace de un ticket en `.kanban/` (Backlog → Ready → In Progress →
+Review → Testing → Done). El estado vivo está en `.kanban/KANBAN.md`.

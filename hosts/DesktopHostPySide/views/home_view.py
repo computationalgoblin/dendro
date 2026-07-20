@@ -714,6 +714,12 @@ class HomeView(QWidget):
         self._btn_config.clicked.connect(lambda: self._action("config_menu"))
         bottom_row.addWidget(self._btn_config)
 
+        # SHIP-04: identidad — versión y qué es Dendro, siempre a un clic.
+        self._btn_about = QuietIconButton("ⓘ", "Acerca de")
+        self._btn_about.setToolTip("Versión y créditos de Dendro")
+        self._btn_about.clicked.connect(lambda: self._action("about"))
+        bottom_row.addWidget(self._btn_about)
+
         # BETA1-F01: música ambiental — opcional, APAGADA por defecto,
         # control visible y discreto. Si QtMultimedia no está, no aparece.
         self._music = _AmbientMusic() if _HAS_AUDIO else None

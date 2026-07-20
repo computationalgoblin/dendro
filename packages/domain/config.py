@@ -48,7 +48,7 @@ class AppConfig:
     app_name: str = "narrative-architect"
     """Application name, used in logging and metadata."""
 
-    app_version: str = "0.1.0"
+    app_version: str = "0.9.0b1"
     """Current application version (semver)."""
 
     debug: bool = False

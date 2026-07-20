@@ -149,6 +149,8 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("config_menu", self._open_config_panel)
         # SHIP-02: los recientes del Home abren el proyecto por ruta a un clic.
         self.home_view.register_callback("open_recent", self._open_project_path)
+        # SHIP-04: Acerca de Dendro (versión + identidad).
+        self.home_view.register_callback("about", self._open_about_dialog)
         # BETA2-MEM-10: visor editorial de Memoria (función de proyecto).
         self.home_view.register_callback("memory_menu", self._open_memory_panel)
         self.home_view.register_callback("new_project", self._new_project)
@@ -545,6 +547,23 @@ class MainWindow(QMainWindow):
         panel = AISettingsPanel(self.ai, on_status=self._handle_ai_status)
         self.ctx.left_drawer.set_content(panel, title="Ajustes IA")
         self.ctx.left_drawer.open()
+
+    def _open_about_dialog(self):
+        """SHIP-04: identidad mínima — qué es Dendro y qué versión corre."""
+        _apptrace("UI open_about")
+        from packages.domain.config import AppConfig
+
+        version = AppConfig().app_version
+        QMessageBox.about(
+            self,
+            "Acerca de Dendro",
+            f"<b>Dendro</b> — arquitecto narrativo<br>"
+            f"Versión {version} (beta)<br><br>"
+            "Un escritorio tranquilo para crear mundos, relatos y sesiones. "
+            "La IA sugiere y cultiva; tu canon solo cambia cuando tú aceptas.<br><br>"
+            "Tus proyectos se guardan donde tú eliges; preferencias y registros, "
+            "en <code>~/.narrative-architect</code>.",
+        )
 
     def _handle_ai_status(self, msg: str):
         """Log AI status and refresh contextual AI consumers after settings changes."""
