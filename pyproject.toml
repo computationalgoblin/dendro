@@ -4,19 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "narrative-architect"
-version = "0.1.0"
+version = "0.9.0b1"
 description = "Aplicación de escritorio para creación narrativa, worldbuilding, escritura y dirección de partidas de rol asistida por IA"
 requires-python = ">=3.12"
 authors = [
     { name = "Narrative Architect Team" },
 ]
+# El paquete base (packages/) es 100% stdlib: no tiene dependencias runtime.
+# Verificado 2026-07-21 (BETA2-SHIP-05): numpy y pymupdf NO se usan en ninguna
+# capa — pertenecían al subsistema de importación de documentos retirado en
+# BETA1-CLEANUP-IMPORT. PySide6 (host de escritorio) vive en el extra `desktop`.
+dependencies = []
 
 [project.scripts]
 narrative-architect = "narrative_architect.__main__:main"
 
+[project.gui-scripts]
+# `hosts` es un paquete namespace PEP 420 (sin __init__.py); se descubre vía
+# `namespaces = true` más abajo, por lo que este entry point resuelve al instalar.
+dendro = "hosts.DesktopHostPySide.main:main"
+
 [project.optional-dependencies]
 dev = [
     "graphifyy==0.8.37",
+    "pyinstaller>=6.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.4.0",
@@ -27,7 +38,9 @@ desktop = [
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["packages*", "narrative_architect*", "hosts*"]
 exclude = ["tests*", "scripts*", "ai_outputs*", "manual_pre_b27*", "manual_test_b01_b18*"]
+namespaces = true
 
 [tool.ruff]
 target-version = "py312"
