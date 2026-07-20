@@ -26,8 +26,7 @@ graphify-out/cost.json
 .env.local
 
 # Backups atómicos del ProjectStore y artefactos transitorios (BETA1-UX4)
-*.bak.1
-*.bak.2
+*.bak.*
 *.bak
 dendro_crash.log
 graphify-out/.graphify_uncached.txt
