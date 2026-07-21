@@ -23,10 +23,10 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.config import AppConfig, load_settings
 from packages.domain.logging import configure_logging, get_logger
 from packages.domain.result import Error, Ok, Result
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
@@ -44,7 +44,7 @@ class AppContext:
 
     config: AppConfig
     logger: logging.Logger
-    project_store: ProjectStore = field(default_factory=ProjectStore)
+    project_store: ProjectRepository = field(default_factory=default_repository)
 
     @property
     def data_dir(self) -> Path:
@@ -90,8 +90,9 @@ def initialize(
                 f"Cannot create data directory '{data_dir}': {e}"
             )
 
-        # 4. Create ProjectStore
-        project_store = ProjectStore()
+        # 4. Create ProjectStore (vía la raíz de composición del puerto,
+        #    DC-AUDIT-03: application no importa persistence estáticamente)
+        project_store = default_repository()
 
         context = AppContext(
             config=config,

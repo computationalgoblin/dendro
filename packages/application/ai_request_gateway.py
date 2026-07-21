@@ -18,7 +18,7 @@ from typing import Any
 
 from packages.application.context_sanitizer import sanitize_nested
 from packages.application.output_schema_validator import ValidationResult, validate_ai_output
-from packages.infrastructure.ai_provider import AIProvider, create_provider, provider_chat
+from packages.application.ai_provider_port import AIProvider, provider_chat, resolve_provider
 
 
 DEFAULT_AI_TIMEOUT_SECONDS = 300
@@ -192,7 +192,7 @@ class AIRequestGateway:
 
     def __init__(self, provider: AIProvider | None = None,
                  provider_name: str = "simulated"):
-        self.provider = provider or create_provider(provider_name)
+        self.provider = provider or resolve_provider(provider_name)
 
     def execute(self, request: GatewayRequest) -> GatewayResponse:
         """Execute an AI request through the pipeline."""

@@ -6,15 +6,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.result import Result
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
 class ProjectMaintenanceService:
     """Safe maintenance facade over persistence backup/restore operations."""
 
-    store: ProjectStore = field(default_factory=ProjectStore)
+    store: ProjectRepository = field(default_factory=default_repository)
 
     def create_backup(self, project_path: Path | str) -> Result[Path, str]:
         """Create a validated backup of a project file."""

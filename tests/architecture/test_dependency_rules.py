@@ -41,33 +41,19 @@ LAYER_RULES: list[tuple[str, str, set[str]]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Deuda de capas CONGELADA (BETA1-AUDIT-03).
+# Deuda de capas congelada (BETA1-AUDIT-03) — SALDADA 2026-07-21 (DC-AUDIT-03).
 #
-# El guard histórico era vacuo (trataba `packages` entero como stdlib), así que
-# estas violaciones se acumularon sin aviso. Se congelan aquí como baseline
-# explícita —igual que EXPECTED_PARENTLESS_WIDGETS en desktop—: cualquier
-# violación NUEVA rompe el test; al resolver una entrada hay que retirarla
-# (la metaprueba de vigencia lo exige). El desacople real (puerto AIProvider,
-# raíz de composición para ProjectStore) es DC-AUDIT-03 en product_debt_map.
+# Las 10 violaciones application → infrastructure/persistence se invirtieron
+# con puertos en application y resolución dinámica en la raíz de composición:
+# - `ai_provider_port.py` (contrato AIProvider + provider_chat + resolve_provider
+#   vía importlib; infrastructure re-exporta por compatibilidad).
+# - `repository_port.py` (Protocol ProjectRepository + default_repository +
+#   current_schema_version vía importlib).
+# El set queda vacío a propósito: cualquier violación nueva rompe el test y
+# NO debe volver a congelarse aquí sin un ticket que lo justifique (la
+# metaprueba de vigencia exige retirar toda entrada que deje de existir).
 # ---------------------------------------------------------------------------
-DOCUMENTED_LAYER_DEBT: frozenset[str] = frozenset({
-    # application → infrastructure: el puerto AIProvider vive en infrastructure
-    # y lo consume application (inversión pendiente, DC-AUDIT-03).
-    "packages/application/ai_context_actions.py: illegal import from 'packages.infrastructure.ai_provider'",
-    "packages/application/ai_jobs.py: illegal import from 'packages.infrastructure.ai_provider'",
-    "packages/application/ai_request_gateway.py: illegal import from 'packages.infrastructure.ai_provider'",
-    "packages/application/command_bar_planner.py: illegal import from 'packages.infrastructure.ai_provider'",
-    "packages/application/orchestrator_service.py: illegal import from 'packages.infrastructure.ai_provider'",
-    # application → persistence: los servicios construyen/usan ProjectStore
-    # directamente; falta un puerto de repositorio + raíz de composición.
-    "packages/application/bootstrap.py: illegal import from 'packages.persistence.store'",
-    "packages/application/entity_service.py: illegal import from 'packages.persistence.store'",
-    "packages/application/project_maintenance_service.py: illegal import from 'packages.persistence.store'",
-    "packages/application/project_service.py: illegal import from 'packages.persistence.schema'",
-    "packages/application/project_service.py: illegal import from 'packages.persistence.store'",
-    "packages/application/relation_service.py: illegal import from 'packages.persistence.store'",
-    "packages/application/source_service.py: illegal import from 'packages.persistence.store'",
-})
+DOCUMENTED_LAYER_DEBT: frozenset[str] = frozenset()
 
 # Always-allowed top-level modules (stdlib + project namespace)
 ALWAYS_ALLOWED = {

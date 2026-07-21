@@ -37,8 +37,8 @@ from packages.domain.entity import (
     VisibilityState,
     validate_entity,
 )
+from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.result import Error, Ok, Result
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
@@ -51,12 +51,13 @@ class EntityService:
 
     Attributes:
         project_service: The active ``ProjectService`` (stateful).
-        store: The ``ProjectStore`` used for all persistence operations.
+        store: Repositorio de proyectos (``ProjectRepository``) usado para
+            todas las operaciones de persistencia.
         _current_path: Path last used for persistence (set on save).
     """
 
     project_service: Any  # ProjectService (avoid circular import)
-    store: ProjectStore = field(default_factory=ProjectStore)
+    store: ProjectRepository = field(default_factory=default_repository)
     _current_path: Path | None = None
 
     # ------------------------------------------------------------------

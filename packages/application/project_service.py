@@ -8,10 +8,9 @@ save, save_as, close, validate, and configuration access.
 Usage::
 
     from pathlib import Path
-    from packages.persistence.store import ProjectStore
     from packages.application.project_service import ProjectService
 
-    svc = ProjectService(ProjectStore())
+    svc = ProjectService()
     result = svc.create(name="My World")
     if result.is_ok():
         svc.save(Path("my-world.json"))
@@ -23,10 +22,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.repository_port import (
+    ProjectRepository,
+    current_schema_version,
+    default_repository,
+)
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok, Result
-from packages.persistence.schema import CURRENT_SCHEMA_VERSION
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
@@ -37,11 +39,12 @@ class ProjectService:
     and ``save_as()`` operate on when no explicit project is passed.
 
     Attributes:
-        store: The ``ProjectStore`` used for persistence operations.
+        store: Repositorio de proyectos (``ProjectRepository``) usado para
+            las operaciones de persistencia.
         active_project: The currently open project, or ``None``.
     """
 
-    store: ProjectStore = field(default_factory=ProjectStore)
+    store: ProjectRepository = field(default_factory=default_repository)
     active_project: Project | None = None
 
     # ------------------------------------------------------------------
@@ -278,9 +281,10 @@ class ProjectService:
         """Return the current schema version used by new projects.
 
         Returns:
-            ``CURRENT_SCHEMA_VERSION`` (currently 2).
+            La ``CURRENT_SCHEMA_VERSION`` de persistencia, resuelta vía el
+            puerto de repositorio (application no importa persistence).
         """
-        return CURRENT_SCHEMA_VERSION
+        return current_schema_version()
 
     # ------------------------------------------------------------------
     # Internal helpers

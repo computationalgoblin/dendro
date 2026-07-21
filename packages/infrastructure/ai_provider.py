@@ -1,73 +1,17 @@
-"""AI Provider abstraction + SimulatedAIProvider (B15-T02)."""
+"""Implementaciones de proveedor de IA + factoría (B15-T02).
+
+DC-AUDIT-03: el contrato ``AIProvider`` y ``provider_chat`` viven ahora en el
+puerto de application (``packages.application.ai_provider_port``); aquí se
+re-exportan por compatibilidad (infrastructure → application es dirección
+legal) y quedan las implementaciones concretas + ``create_provider``, que la
+capa application resuelve por import dinámico (``resolve_provider``).
+"""
 
 from __future__ import annotations
 
-import inspect
-from abc import ABC, abstractmethod
+from packages.application.ai_provider_port import AIProvider, provider_chat
 
-
-def provider_chat(
-    provider,
-    system_prompt: str,
-    user_message: str,
-    *,
-    timeout=None,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    json_mode: bool = False,
-):
-    """Call ``provider.chat`` tolerating older / narrower chat() signatures.
-
-    BETA1-AI01 added temperature/max_tokens/json_mode, but test doubles and
-    third-party providers may not accept them. We pass only the kwargs the
-    callee actually declares (or all of them if it has ``**kwargs``), so the new
-    params are applied when supported and skipped otherwise — without masking a
-    real TypeError raised inside the provider.
-    """
-    fn = provider.chat
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        params = {}
-    has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-    kwargs: dict = {}
-    for name, value in (
-        ("timeout", timeout),
-        ("temperature", temperature),
-        ("max_tokens", max_tokens),
-        ("json_mode", json_mode),
-    ):
-        if has_var_kw or name in params:
-            kwargs[name] = value
-    return fn(system_prompt, user_message, **kwargs)
-
-
-class AIProvider(ABC):
-    @property
-    @abstractmethod
-    def provider_name(self) -> str:
-        ...
-
-    # BETA1-AI01: callers can tune generation per intent and ask for JSON.
-    # Defaults keep every existing `chat(system, user, timeout)` call working.
-    def chat(
-        self,
-        system_prompt: str,
-        user_message: str,
-        timeout=None,
-        *,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        json_mode: bool = False,
-    ):
-        """Direct chat with a custom system prompt. Returns ``(text, error)``.
-
-        - ``temperature`` / ``max_tokens``: per-intent generation params. ``None``
-          means "provider default". Subclasses that ignore them keep working.
-        - ``json_mode``: request a strict JSON object response when the provider
-          supports it (e.g. OpenAI ``response_format``).
-        """
-        return None, "Not implemented"
+__all__ = ["AIProvider", "SimulatedAIProvider", "create_provider", "provider_chat"]
 
 
 class SimulatedAIProvider(AIProvider):

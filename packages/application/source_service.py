@@ -11,16 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.entity import NarrativeEntity
 from packages.domain.result import Error, Ok, Result
 from packages.domain.source_history import Source, SourceType
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
 class SourceService:
     project_service: Any  # ProjectService
-    store: ProjectStore = field(default_factory=ProjectStore)
+    store: ProjectRepository = field(default_factory=default_repository)
     _current_path: Path | None = None
 
     def _active_project(self):

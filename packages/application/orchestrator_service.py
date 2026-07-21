@@ -14,10 +14,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application.ai_provider_port import resolve_provider
 from packages.application.ai_request_gateway import AIRequestGateway, GatewayRequest
 from packages.domain.ai_models import AuthorizedContext
 from packages.domain.result import Error, Ok, Result
-from packages.infrastructure.ai_provider import create_provider
 
 
 def _now() -> datetime:
@@ -107,7 +107,7 @@ class OrchestratorService:
         self._cs = candidate_service
         self._ss = source_service
         self._hs = history_service
-        self._provider = create_provider(provider_name)
+        self._provider = resolve_provider(provider_name)
 
     def _proj(self):
         p = self._ps.active_project

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from packages.application.repository_port import ProjectRepository, default_repository
 from packages.application.temporal_dating import normalize_relation_dating
 from packages.domain.custom_types import CustomFieldValue
 from packages.domain.entity import CanonState, VisibilityState
@@ -25,7 +26,6 @@ from packages.domain.relation import (
 )
 from packages.domain.result import Error, Ok, Result
 from packages.domain.temporal_span import TemporalSpan
-from packages.persistence.store import ProjectStore
 
 
 @dataclass
@@ -39,12 +39,12 @@ class RelationService:
 
     Attributes:
         project_service: The active ``ProjectService`` (stateful).
-        store: The ``ProjectStore``.
+        store: Repositorio de proyectos (``ProjectRepository``).
         _current_path: Path used for persistence.
     """
 
     project_service: Any  # ProjectService
-    store: ProjectStore = field(default_factory=ProjectStore)
+    store: ProjectRepository = field(default_factory=default_repository)
     _current_path: Path | None = None
 
     # ------------------------------------------------------------------
