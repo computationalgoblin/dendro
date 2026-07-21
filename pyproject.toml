@@ -8,8 +8,10 @@ version = "0.9.0b1"
 description = "Aplicación de escritorio para creación narrativa, worldbuilding, escritura y dirección de partidas de rol asistida por IA"
 requires-python = ">=3.12"
 authors = [
-    { name = "Narrative Architect Team" },
+    { name = "Angel Exposito" },
 ]
+# Beta cerrada: licencia propietaria de evaluación (ver LICENSE en la raíz).
+license = { text = "Proprietary — Beta Evaluation License" }
 # El paquete base (packages/) es 100% stdlib: no tiene dependencias runtime.
 # Verificado 2026-07-21 (BETA2-SHIP-05): numpy y pymupdf NO se usan en ninguna
 # capa — pertenecían al subsistema de importación de documentos retirado en

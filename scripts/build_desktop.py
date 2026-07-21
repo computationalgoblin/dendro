@@ -25,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = REPO_ROOT / "packaging" / "dendro.spec"
 DIST_DIR = REPO_ROOT / "dist" / "Dendro"
 README_USUARIO = REPO_ROOT / "README-USUARIO.md"
+# SHIP-06: la licencia de evaluación beta viaja dentro del zip.
+LICENSE_PATH = REPO_ROOT / "LICENSE"
 # SHIP-05: proyecto de ejemplo curado — viaja junto al exe para que la primera
 # apertura no sea un lienzo vacío.
 EJEMPLOS_DIR = REPO_ROOT / "ejemplos"
@@ -80,6 +82,12 @@ def main() -> int:
         print("[BUILD] Copiada la carpeta ejemplos/ (proyecto de muestra) junto al exe.")
     else:
         print("[AVISO] No existe ejemplos/; el zip irá sin proyecto de muestra.")
+
+    if LICENSE_PATH.exists():
+        shutil.copy2(LICENSE_PATH, DIST_DIR / "LICENSE.txt")
+        print("[BUILD] Copiada la LICENSE junto al exe.")
+    else:
+        print("[AVISO] No existe LICENSE; el zip irá sin licencia (no distribuir así).")
 
     print(f"[OK] Distribuible listo en {DIST_DIR}")
     print("     Para publicar: comprime la carpeta dist/Dendro/ en un zip.")

@@ -59,3 +59,9 @@ la app intenta seguir viva, te lo avisa y deja un rastro en
 `C:\Users\<tu usuario>\.narrative-architect\dendro_crash.log` — adjúntalo cuando
 reportes un problema, junto con qué estabas haciendo. Tus datos están a salvo:
 cada guardado conserva la copia `.bak` anterior.
+
+## Licencia
+
+Esta beta se entrega solo para evaluación personal (ver el fichero `LICENSE`):
+no compartas el zip ni el enlace de descarga. **Los mundos y relatos que crees
+con Dendro son tuyos.**
