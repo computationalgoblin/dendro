@@ -24,10 +24,22 @@ _MAIN_WINDOW = Path("hosts/DesktopHostPySide/main_window.py")
 
 @pytest.fixture(autouse=True)
 def _restore_excepthook():
+    import faulthandler
+
     prev_hook, prev_notifier = sys.excepthook, desktop_main._crash_notifier
+    prev_stderr = sys.stderr
     yield
     sys.excepthook = prev_hook
     desktop_main._crash_notifier = prev_notifier
+    sys.stderr = prev_stderr
+    faulthandler.disable()
+    stream = desktop_main._faulthandler_stream
+    if stream is not None:
+        try:
+            stream.close()
+        except Exception:  # noqa: BLE001 — limpieza best-effort
+            pass
+        desktop_main._faulthandler_stream = None
 
 
 def test_crash_log_lives_in_user_datadir(tmp_path, monkeypatch):
@@ -62,6 +74,27 @@ def test_notifier_failure_never_breaks_guard(tmp_path, monkeypatch):
         raise ValueError("boom")
     except ValueError:
         sys.excepthook(*sys.exc_info())  # no debe propagar pese al notifier roto
+
+
+def test_guard_survives_windowed_mode_without_stderr(tmp_path, monkeypatch):
+    """SHIP-06: en el exe PyInstaller windowed sys.stderr es None — el guard no
+    puede reventar al instalarse (era el crash de arranque del 0.9.0b1 inicial)."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sys, "stderr", None)
+    desktop_main._install_crash_guard()  # no debe lanzar RuntimeError
+    # El volcado nativo queda apuntando al fichero de crashes del data_dir.
+    assert desktop_main._faulthandler_stream is not None
+
+    notified: list[Path] = []
+    desktop_main.set_crash_notifier(notified.append)
+    try:
+        raise ValueError("boom sin consola")
+    except ValueError:
+        sys.excepthook(*sys.exc_info())  # el hook tampoco puede tocar stderr=None
+
+    log = tmp_path / ".narrative-architect" / "dendro_crash.log"
+    assert "boom sin consola" in log.read_text(encoding="utf-8")
+    assert notified == [log]
 
 
 def test_wizard_creation_asks_for_save_path():

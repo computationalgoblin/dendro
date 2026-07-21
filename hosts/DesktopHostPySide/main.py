@@ -35,6 +35,11 @@ def _crash_log_path() -> Path:
         return Path.cwd() / "dendro_crash.log"
 
 
+# SHIP-06: faulthandler retiene el descriptor, no el objeto — el stream del volcado
+# nativo debe seguir vivo durante toda la sesión (módulo, no local).
+_faulthandler_stream = None
+
+
 def _install_crash_guard() -> None:
     """BETA1-UX2D: la app NO debe cerrarse de golpe ante una excepción suelta.
 
@@ -45,19 +50,38 @@ def _install_crash_guard() -> None:
       ``dendro_crash.log`` en el data_dir del usuario, SHIP-03) y DEVUELVE el
       control al bucle de eventos, de modo que un fallo aislado no tumba la
       sesión. Si hay notificador registrado, el usuario ve un aviso no bloqueante.
+
+    SHIP-06: en el exe empaquetado sin consola (PyInstaller ``console=False``)
+    ``sys.stderr``/``sys.stdout`` son ``None`` — ``faulthandler.enable()`` a secas
+    reventaba ANTES de crear la ventana. Sin consola, el volcado nativo va
+    directamente a ``dendro_crash.log``; y el hook solo escribe a stderr si existe.
     """
-    faulthandler.enable()
+    global _faulthandler_stream
 
     log_path = _crash_log_path()
+
+    stream = sys.stderr
+    if stream is None:
+        try:
+            stream = log_path.open("a", encoding="utf-8")
+            _faulthandler_stream = stream
+        except Exception:  # noqa: BLE001 — el guard nunca impide arrancar
+            stream = None
+    if stream is not None:
+        try:
+            faulthandler.enable(file=stream)
+        except Exception:  # noqa: BLE001 — el guard nunca impide arrancar
+            pass
 
     def hook(exc_type, exc_value, exc_tb):
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc_value, exc_tb)
             return
         text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-        sys.stderr.write("\n[DENDRO] Excepción no controlada (la app sigue viva):\n")
-        sys.stderr.write(text)
-        sys.stderr.flush()
+        if sys.stderr is not None:
+            sys.stderr.write("\n[DENDRO] Excepción no controlada (la app sigue viva):\n")
+            sys.stderr.write(text)
+            sys.stderr.flush()
         try:
             with log_path.open("a", encoding="utf-8") as fh:
                 fh.write("=== excepción ===\n")
