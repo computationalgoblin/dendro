@@ -36,6 +36,25 @@ def _home(recents=None):
     return HomeView(ctx), ctx
 
 
+# ── QSS del Home: sin hojas de estilo inválidas (SHIP-07) ────────────────────
+
+
+def test_home_has_no_invalid_stylesheets(_app):
+    """SHIP-07: HomeNode tenía un `}}` literal (línea plain-string dentro de una
+    concatenación de f-strings) → Qt descartaba TODA la hoja y la tarjeta perdía
+    bordes redondeados y hover. Guarda contra esa clase de fallo en todo el Home."""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    warnings: list[str] = []
+    prev = qInstallMessageHandler(lambda mode, ctx, msg: warnings.append(msg))
+    try:
+        _home()
+    finally:
+        qInstallMessageHandler(prev)
+    bad = [w for w in warnings if "parse stylesheet" in w.lower()]
+    assert not bad, f"QSS inválido al construir el Home: {bad}"
+
+
 # ── Botones primarios con etiqueta ───────────────────────────────────────────
 
 

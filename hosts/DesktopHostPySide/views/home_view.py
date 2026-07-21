@@ -501,7 +501,7 @@ class HomeNode(QFrame):
         self._border_default = border
         self.setStyleSheet(
             f"QFrame#dendroNode {{ background: {bg}; border: 1px solid {border}; "
-            "border-radius: 36px; }} "
+            f"border-radius: 36px; }} "
             f"QFrame#dendroNode:hover {{ background: {WHITE}; border: 2px solid {GOLD}; }}"
         )
 
