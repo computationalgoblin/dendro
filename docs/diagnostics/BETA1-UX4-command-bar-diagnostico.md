@@ -1,3 +1,5 @@
+> **OBSOLETO (2026-07-21):** la command bar fue retirada de la UI (BETA2-WIKI-10) y borrada físicamente en la limpieza post-épica. Documento conservado solo como historia.
+
 # BETA1-UX4 — Diagnóstico de los comandos de la command bar
 
 Diagnóstico end-to-end **con proveedor real** (Z.ai `glm-5.1`) usando el arnés

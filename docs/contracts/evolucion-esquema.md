@@ -8,14 +8,15 @@ de proyecto de narrative-architect. Aplica a la persistencia de proyectos
 
 ## 1. Estado actual
 
-### Schema version: 1
+### Schema version: 39 (cierre de beta, 2026-07-21)
 
-El proyecto actualmente usa **schema v1** para todos los archivos de proyecto.
-La versión actual y máxima soportada se definen en `packages/persistence/schema.py`:
+La versión actual y máxima soportada se definen en `packages/persistence/schema.py`
+(**la fuente de verdad es siempre el código**, no este documento — v39 al cierre de
+beta: subhitos v36, memoria v37, referencias v38, wiki v39; historial completo en §4):
 
 ```python
-CURRENT_SCHEMA_VERSION: int = 1
-MAX_SUPPORTED_VERSION: int = 1
+CURRENT_SCHEMA_VERSION: int = 39
+MAX_SUPPORTED_VERSION: int = CURRENT_SCHEMA_VERSION
 ```
 
 ### Formato de archivo

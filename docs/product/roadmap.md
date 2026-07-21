@@ -1,44 +1,47 @@
-# Roadmap — Dendro / Narrative Architect (BETA baseline)
+# Roadmap — Dendro / Narrative Architect (BETA)
 
-Última actualización: 2026-06-10 — Cierre de exploración, baseline B44.
+Última actualización: 2026-07-21 — cierre técnico de la fase BETA.
 
-## Fase completada: Exploración (B1-B44)
+## Fase completada: Exploración (B1–B44)
 
-Fundación → dominio → persistencia → CLI → Desktop UI → IA → worldbuilding → coherencia → árboles → anillos → física de grafo.
+Fundación → dominio → persistencia → CLI → Desktop UI → IA → worldbuilding →
+coherencia → árboles → anillos → física de grafo. 44 bloques, 30+ suites.
 
-44 bloques implementados, 30+ suites de tests, schema v23.
+## Fase actual: BETA — implementación COMPLETA, pendiente de smokes de usuario
 
-## Fase actual: BETA
+Estado operativo autoritativo: [.kanban/KANBAN.md](../../.kanban/KANBAN.md).
+Épicas entregadas (todas con tests en verde):
 
-## Actualizacion 2026-07-10 - BETA2-MEM
+- **BETA1** — recorte de runtime (A), estabilidad IA/trazabilidad (D), UX (F/UX,
+  plegada), datación temporal (J), cronología (CRON), estabilidad Qt (K),
+  escalabilidad y navegación a escala (L01/L02), auditoría (AUDIT). Fases C/G/I
+  canceladas por decisión de producto (2026-07-03).
+- **BETA2** — Foco+Jardín (FOCO/JARDIN), retratos (IMG), memoria narrativa (MEM)
+  reencuadrada a **wiki+índice navegable** (WIKI, método Karpathy), calendario por
+  eras (CAL), modo Play (PLAY), subhitos (SUB), hover (HOVER), pulido (PULIDO/UI2),
+  cleanup de paneles, y **propuestas estructurales** (STRUCT: ring_move,
+  ascending_exception, branch_move, ring_create/merge — completa 2026-07-21).
+- **Limpieza post-WIKI (2026-07-21)**: purga física del legacy IA (command bar,
+  RAG léxico, acciones contextuales), deuda técnica a **cero**
+  ([product_debt_map.md](product_debt_map.md)), capas sin allowlist, y baseline
+  de tests **en verde total** (core 2140 + arch 11 + ui).
 
-La fase BETA incorpora la epica **BETA2-MEM - Memoria narrativa viva, @menciones estructuradas y riego causal**.
+Esquema de persistencia: **v39** (fuente de verdad: `packages/persistence/schema.py`).
 
-Contrato autoritativo: `docs/contracts/memoria_narrativa.md`.
+## Puerta de cierre de BETA
 
-Objetivo de producto: que Dendro mantenga una Memoria editorial derivada del canon, actualizada mediante Regar, usada por toda IA, enriquecida por @menciones estructuradas y conectada con anillos/propuestas estructurales sin que la IA modifique canon directamente.
+La única puerta restante es la **batería de smokes manuales del usuario** en
+plataforma real: ver [beta_closure_checklist.md](beta_closure_checklist.md)
+(sustituto ligero de la fase G de validación, cancelada). Lo que falle en un
+smoke vuelve como ticket de remediación al tablero.
 
-Orden operativo:
+## Deuda activa
 
-1. Contrato de Memoria.
-2. Modelo y persistencia.
-3. @menciones estructuradas.
-4. Impacto y Falta regar.
-5. Servicio IA de Memoria.
-6. RAG/prompts.
-7. Regar v2.
-8. Potencia causal/anillos.
-9. UI de Cultivo/Foco.
-10. Visor editorial en Configuracion.
-11. QA integral.
-Pendiente de contrato. Sin bloques activos.
+**Cero deuda abierta** al cierre técnico — ver [product_debt_map.md](product_debt_map.md)
+(única fuente; el antiguo `KNOWN_ISSUES.md` nunca llegó a existir).
 
-## Deuda activa (hereda BETA)
+## Post-beta (sin comprometer)
 
-Ver `KNOWN_ISSUES.md` y `docs/product/product_debt_map.md`.
-
-10 bugs con fix WSL sin validación Windows. Deuda DC-026..DC-045 diversa.
-
-## Orden TBD
-
-El contrato BETA definirá alcance y orden.
+Candidatos anotados en tickets/cierres: refinar el tipo semántico de las
+excepciones ascendentes vía IA, altas/bajas incrementales del canvas (L01
+follow-up), gestión de imágenes más allá de retratos (FOCO), pin manual de zona.

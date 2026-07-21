@@ -1,3 +1,5 @@
+> **OBSOLETO (2026-07-21):** la command bar fue retirada de la UI (BETA2-WIKI-10) y borrada físicamente en la limpieza post-épica. Documento conservado solo como historia.
+
 # PLAN: Reestructuración del prompt de la command bar — cono de autoridad + presupuesto configurable
 
 ## Objetivo
