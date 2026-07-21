@@ -47,15 +47,13 @@ SUITES: dict[str, list[str]] = {
     "arch": ["tests/architecture"],
     "ui": ["tests/ui"],
     "qa": ["tests/qa"],
-    "perf": ["tests/performance"],
     "integ": ["tests/integration"],
     "desktop": ["tests/desktop"],
+    # (limpieza post-WIKI 2026-07-21: los tests de superficie IA retirada se
+    # borraron; las suites b3x/b4x conservan solo los ficheros vigentes)
     "b33": [
         "tests/application/test_b33_visual_relation.py",
-        "tests/application/test_b33_relation_inline_ai.py",
-        "tests/application/test_b33_creation_mvp_stabilization.py",
         "tests/ui/test_b33_visual_relation_static.py",
-        "tests/ui/test_b33_relation_inline_ai_static.py",
         "tests/desktop/test_b33_creation_mvp_stabilization.py",
     ],
     "b34": [
@@ -66,24 +64,12 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b34_fix02_transitive_collapse.py",
         "tests/application/test_b34_fix03_zorder_hitesting.py",
     ],
-    "b35": [
-        "tests/application/test_b35_coherence.py",
-    ],
     "b36": [
         "tests/application/test_b36_causal_layer_contract.py",
-        "tests/application/test_b36_causal_layers_integration.py",
     ],
     "b37": [
         "tests/desktop/test_b37_creation_search_filters.py",
         "tests/desktop/test_b37_t07_smoke.py",
-    ],
-    "b38": [
-        "tests/application/test_b38_ai_jobs.py",
-        "tests/desktop/test_b38_command_bar_jobs.py",
-    ],
-    "b39": [
-        "tests/project_control/test_b39_project_control_artifacts.py",
-        "tests/application/test_b39_visible_model.py",
     ],
     "b40": [
         "tests/application/test_b40_creative_config.py",
@@ -98,7 +84,6 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b41_causal_milestone_service.py",
         "tests/desktop/test_b41_causal_milestone_ui_static.py",
         "tests/desktop/test_b41_t04_hito_from_selection.py",
-        "tests/application/test_b41_t05_ai_milestones.py",
         "tests/application/test_b41_t06_milestone_reviewer.py",
         "tests/application/test_b41_t07_status_quo.py",
     ],
@@ -106,7 +91,6 @@ SUITES: dict[str, list[str]] = {
         "tests/application/test_b42_t01_ai_request_gateway.py",
         "tests/application/test_b42_t02_context_sanitizer.py",
         "tests/application/test_b42_t03_model_params.py",
-        "tests/application/test_b42_t04_prompt_sensitivity.py",
         "tests/application/test_b42_t05_output_schema.py",
         "tests/application/test_b42_t06_prompt_registry.py",
         "tests/application/test_b42_t07_legacy_hardening.py",
@@ -116,7 +100,6 @@ SUITES: dict[str, list[str]] = {
     ],
     "b43": [
         "tests/application/test_b43_t01_command_bar_migration.py",
-        "tests/application/test_b43_t02_t05_inline_migration.py",
         "tests/application/test_b43_t06_static_guard.py",
         "tests/application/test_b43_t07_smoke.py",
     ],

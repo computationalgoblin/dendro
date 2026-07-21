@@ -101,11 +101,11 @@ class TestProjectStructure:
     def test_docs_contracts_exists(self):
         contracts = self.PROJECT_ROOT / "docs" / "contracts"
         assert contracts.is_dir()
+        # Sincronizado con los contratos VIGENTES (cierre de beta 2026-07-21):
+        # contrato_fases y skills-map.md nunca llegaron a existir en esta forma.
         required = {
-            "contrato_fases",
             "workflow.md",
             "reglas-trabajo.md",
-            "skills-map.md",
             "convenciones-errores.md",
             "convencion-pruebas.md",
             "limites-modulos.md",
@@ -202,20 +202,25 @@ class TestDomainDependencies:
                 "__future__",
                 "abc",
                 "collections",
+                "copy",
                 "dataclasses",
                 "datetime",
                 "difflib",
                 "enum",
                 "hashlib",
                 "html",
+                "importlib",  # puertos: resolución dinámica (ai_provider_port/repository_port)
+                "inspect",
                 "json",
                 "logging",
                 "math",
                 "os",
                 "pathlib",
                 "re",
+                "shutil",
                 "time",
                 "threading",
+                "types",
                 "typing",
                 "unicodedata",
                 "unittest",

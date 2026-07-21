@@ -16,7 +16,8 @@ def test_graph_drag_emits_visual_relation_create_and_rejection_paths():
     assert "_finish_relation_drag" in text
     assert "_relation_drag_arrow_path" in text
     assert "QGraphicsPathItem" in text
-    assert "Flecha provisional de relación" in text
+    # (el comentario «Flecha provisional de relación» se reescribió en BETA1-F05;
+    # la flecha sigue pineada por _relation_drag_arrow_path/QGraphicsPathItem)
     assert "set_drag_highlight(True)" in text
     assert "No se puede crear una relación sobre el mismo elemento" in text
     assert "Relación cancelada" in text
@@ -38,8 +39,8 @@ def test_relation_panel_supports_required_normal_fields_and_no_external_windows(
         "Origen → destino",
         "Destino → origen",
         "Bidireccional",
-        "Descripción:",
-        "Cuerpo:",
+        "Descripción breve",  # BETA1-F05: etiquetas rediseñadas (antes «Descripción:»)
+        "Cuerpo",
         "Notas:",
         "Color de la arista",
         "_visual_draft",

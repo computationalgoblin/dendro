@@ -293,59 +293,10 @@ def test_b44_creation_payload_uses_active_ring_and_ignores_unclassified(qapp):
     assert "layer_ids" not in payload
 
 
-def _scope_workspace(monkeypatch, *, focused: str, active: str, layers):
-    """CreationWorkspace mínima para ejercitar `_current_context_scope` sin Qt real."""
-    import packages.application.creative_context as cc
-    monkeypatch.setattr(cc, "project_creative_brief", lambda project: {})
-    monkeypatch.setattr(cc, "selected_entity_creative_context", lambda project, ids=None: [])
-    monkeypatch.setattr(cc, "selected_branch_creative_context", lambda project, ids=None: [])
-
-    ws = CreationWorkspace.__new__(CreationWorkspace)
-    project = SimpleNamespace(
-        id="proj",
-        worldbuilding_active=True,
-        world_layers=[SimpleNamespace(id=lid, name=lid, metadata={}) for lid in layers],
-    )
-    ws._get_active_project = lambda: project
-    ws._chrono_context_hito_ids = []
-    canvas = SimpleNamespace(
-        _visual_filter=VisualFilterState(),
-        _ring_display_name=lambda rid: rid,
-    )
-    ws.graph = SimpleNamespace(
-        canvas=canvas,
-        focused_ring_id=lambda: focused,
-        active_ring_id=lambda: active,
-        selected_entity_ids=lambda: [],
-        selected_relation_ids=lambda: [],
-        active_filter_count=lambda: 0,
-    )
-    return ws
-
-
-def test_ux5c_context_scope_uses_selected_ring_not_only_focused(qapp, monkeypatch):
-    """Regresión UX5c-fix: un anillo SELECCIONADO (clic simple, sin enfocar) debe
-    viajar en el scope como `active_ring_id`. Antes el scope solo miraba el anillo
-    ENFOCADO, así que una entidad creada sobre una mera selección nacía «sin anillo»
-    y sin el contexto temático del anillo (incoherente con su trama)."""
-    ws = _scope_workspace(
-        monkeypatch, focused="", active="designio_oculto", layers=["designio_oculto"]
-    )
-
-    scope = ws._current_context_scope()
-
-    assert scope["active_ring_id"] == "designio_oculto"  # ← el arreglo: alimenta layer_ids + brief
-    assert scope["focused_ring_id"] == ""  # el breadcrumb de zoom sigue vacío sin enfocar
-    assert scope["focus_label"] == ""
-
-
-def test_ux5c_context_scope_drops_stale_active_ring(qapp, monkeypatch):
-    """Un anillo activo que ya no existe en el proyecto no debe filtrarse al scope."""
-    ws = _scope_workspace(monkeypatch, focused="", active="anillo_borrado", layers=["otro"])
-
-    scope = ws._current_context_scope()
-
-    assert scope["active_ring_id"] == ""
+# (Los tests UX5c de `_current_context_scope` se retiraron con la command bar:
+# el método se borró en la limpieza post-WIKI; el flujo vivo de Sugerencias pasa
+# siempre un scope explícito. El anillo activo sigue cubierto por
+# `_with_active_ring_payload` arriba.)
 
 
 def test_b44_concentric_widget_opens_with_empty_project(qapp):

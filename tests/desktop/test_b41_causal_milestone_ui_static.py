@@ -12,7 +12,8 @@ def test_b41_creation_workspace_exposes_create_hito_button_and_panel():
     assert "Crear hito" in text
     assert "CausalMilestonePanel" in text
     assert "_open_hito_panel" in text
-    assert "_milestone_btn" in text
+    # (el pin de `_milestone_btn` se retiró: el botón dedicado de la toolbar
+    # desapareció en los rediseños BETA1/2; el panel se abre por _open_hito_panel)
 
 
 def test_b41_hito_ui_uses_cards_not_technical_table_or_json():
