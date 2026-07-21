@@ -2,19 +2,35 @@
 from __future__ import annotations
 
 import faulthandler
+import os
 import sys
 import traceback
 from pathlib import Path
 
-try:
-    from PySide6.QtWidgets import QApplication
-except ImportError:
-    print("PySide6 not installed. Run: pip install narrative-architect[desktop]")
-    sys.exit(1)
-from hosts.DesktopHostPySide.main_window import MainWindow
-from hosts.DesktopHostPySide.widgets.design_system import apply_light_theme
-
 _crash_notifier = None
+
+# SHIP-06: en el exe empaquetado sin consola (PyInstaller ``console=False``) los
+# streams estándar son ``None`` y algún import del árbol revienta ANTES de crear
+# la ventana (comprobado: el MISMO exe arranca si el proceso recibe handles
+# reales). Sintetizamos stdio de inmediato y los imports pesados (Qt/MainWindow)
+# se hacen DENTRO de ``main()``, tras instalar el crash-guard, para que cualquier
+# fallo de import acabe en ``dendro_crash.log`` y no en un diálogo mudo.
+_stdio_synthesized = False
+_stdio_refs: list = []  # mantiene vivos los streams sintéticos toda la sesión
+
+
+def _ensure_windowed_stdio() -> None:
+    """Sustituye stdout/stderr ``None`` (modo windowed) por streams reales."""
+    global _stdio_synthesized
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            try:
+                stream = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+            except Exception:  # noqa: BLE001 — el stdio nunca impide arrancar
+                continue
+            _stdio_refs.append(stream)
+            setattr(sys, name, stream)
+            _stdio_synthesized = True
 
 
 def set_crash_notifier(notifier) -> None:
@@ -61,7 +77,9 @@ def _install_crash_guard() -> None:
     log_path = _crash_log_path()
 
     stream = sys.stderr
-    if stream is None:
+    if stream is None or _stdio_synthesized:
+        # Sin consola real (o con stdio sintético a devnull), el volcado nativo
+        # de un segfault solo sirve si va al fichero de crashes.
         try:
             stream = log_path.open("a", encoding="utf-8")
             _faulthandler_stream = stream
@@ -121,8 +139,19 @@ def _enable_msaa() -> None:
 
 
 def main():
+    _ensure_windowed_stdio()
     _install_crash_guard()
     _enable_msaa()
+    # SHIP-06: los imports pesados van DESPUÉS del guard — un fallo al importar
+    # queda registrado en dendro_crash.log en vez de matar la app sin rastro.
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        print("PySide6 not installed. Run: pip install narrative-architect[desktop]")
+        sys.exit(1)
+    from hosts.DesktopHostPySide.main_window import MainWindow
+    from hosts.DesktopHostPySide.widgets.design_system import apply_light_theme
+
     app = QApplication(sys.argv)
     # BETA2-FOCO-17: tema claro SIEMPRE (Fusion + paleta Dendro). Sin esto,
     # Windows en modo oscuro imponía texto casi blanco sobre pergamino y

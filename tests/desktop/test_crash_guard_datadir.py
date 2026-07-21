@@ -40,6 +40,13 @@ def _restore_excepthook():
         except Exception:  # noqa: BLE001 — limpieza best-effort
             pass
         desktop_main._faulthandler_stream = None
+    for synthetic in desktop_main._stdio_refs:
+        try:
+            synthetic.close()
+        except Exception:  # noqa: BLE001 — limpieza best-effort
+            pass
+    desktop_main._stdio_refs.clear()
+    desktop_main._stdio_synthesized = False
 
 
 def test_crash_log_lives_in_user_datadir(tmp_path, monkeypatch):
@@ -95,6 +102,29 @@ def test_guard_survives_windowed_mode_without_stderr(tmp_path, monkeypatch):
     log = tmp_path / ".narrative-architect" / "dendro_crash.log"
     assert "boom sin consola" in log.read_text(encoding="utf-8")
     assert notified == [log]
+
+
+def test_windowed_stdio_synthesized(monkeypatch):
+    """SHIP-06: el exe windowed sintetiza stdout/stderr reales — los imports del
+    árbol dejan de reventar con streams None (causa raíz del segundo crash)."""
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    desktop_main._ensure_windowed_stdio()
+    assert sys.stdout is not None
+    assert sys.stderr is not None
+    sys.stderr.write("escribible de verdad\n")  # no revienta
+    assert desktop_main._stdio_synthesized is True
+
+
+def test_main_orders_stdio_then_guard_then_imports():
+    """El orden es el seguro: stdio → guard → imports pesados (así un fallo de
+    import acaba en dendro_crash.log, no en el diálogo mudo del bootloader)."""
+    src = Path("hosts/DesktopHostPySide/main.py").read_text(encoding="utf-8")
+    body = src.split("def main():")[1]
+    stdio = body.index("_ensure_windowed_stdio()")
+    guard = body.index("_install_crash_guard()")
+    heavy = body.index("from hosts.DesktopHostPySide.main_window import MainWindow")
+    assert stdio < guard < heavy
 
 
 def test_wizard_creation_asks_for_save_path():
