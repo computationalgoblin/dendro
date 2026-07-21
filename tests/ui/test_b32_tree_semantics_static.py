@@ -73,8 +73,10 @@ def test_entity_type_has_contenedor():
 
 
 def test_schema_v21():
-    src = _src("packages/persistence/schema.py")
-    assert "CURRENT_SCHEMA_VERSION: int = 21" in src, "Schema debe ser v21"
+    # El esquema siguió evolucionando (v39 al cierre de beta): el contrato B32
+    # es que la versión sea >= 21, no un pin exacto.
+    from packages.persistence.schema import CURRENT_SCHEMA_VERSION
+    assert CURRENT_SCHEMA_VERSION >= 21, "Schema debe ser al menos v21"
 
 
 def test_migration_v20_to_v21_exists():
@@ -173,8 +175,10 @@ def test_canvas_widget_forwards_signal():
 
 
 def test_node_colors_has_contenedor():
-    src = _src("hosts/DesktopHostPySide/widgets/graph_canvas.py")
-    assert '"contenedor"' in src.split("_NODE_COLORS")[1].split("}")[0], "_NODE_COLORS debe incluir contenedor"
+    # _NODE_COLORS es hoy un alias de ENTITY_KIND_PALETTE (design system):
+    # se comprueba en runtime, no rebanando el fuente.
+    from hosts.DesktopHostPySide.widgets.graph_canvas import _NODE_COLORS
+    assert "contenedor" in _NODE_COLORS, "_NODE_COLORS debe incluir contenedor"
 
 
 # ─── T8: Tree detail panel — RETIRADO (BETA2-CLEANUP-PANELES) ──────────
@@ -219,9 +223,10 @@ def test_workspaces_connects_assign_signal():
 
 
 def test_workspaces_create_tree_button():
+    # El botón ⊞ dedicado desapareció en los rediseños BETA1/2: hoy la rama se
+    # crea desde el Mapa/Foco («Nueva rama», BETA2-CLEANUP-PANELES).
     src = _src("hosts/DesktopHostPySide/views/workspaces.py")
-    assert "⊞" in src, "Workspaces debe tener boton ⊞ para crear contenedor"
-    assert "Crear contenedor" in src, "Boton debe tener tooltip 'Crear contenedor'"
+    assert "Nueva rama" in src, "Workspaces debe conservar el camino de crear rama"
 
 
 # ─── T10: Narrative context builder has tree_membership ────────────────

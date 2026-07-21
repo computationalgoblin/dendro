@@ -21,13 +21,10 @@ def test_generic_english_rewrite_stub_is_not_present():
     assert "Rewritten description in a different style" not in text
 
 
-def test_ai_boundaries_contract_exists():
-    text = CONTRACT.read_text(encoding="utf-8")
-    for phrase in [
-        "IA inline",
-        "Candidatos globales IA",
-        "Importación documental",
-        "Diagnóstico/incidencias",
-        'run_node_action("improve_text")',
-    ]:
-        assert phrase in text
+def test_ai_boundaries_surface_removed():
+    # El contrato b32-ai-action-boundaries.md acotaba la superficie de acciones
+    # IA contextuales/inline; esa superficie se BORRÓ en la limpieza post-WIKI
+    # (2026-07-21). La frontera vigente es la ausencia del módulo: la IA solo
+    # entra por Regar/Sugerencias/wiki/cronología y nunca escribe canon.
+    assert not (ROOT / "packages" / "application" / "ai_context_actions.py").exists()
+    assert not CONTRACT.exists()  # el contrato retirado no debe resucitar solo

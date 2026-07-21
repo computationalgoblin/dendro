@@ -1,6 +1,6 @@
 # Product Debt Map — Dendro / Narrative Architect (BETA baseline)
 
-Última actualización: 2026-07-21 (cierre de beta) — **cero deuda abierta**: DC-AUDIT-03 saldada (puertos), DC-AUDIT-02 cerrada (validación efectiva por flujo), DC-040 mitigada (sharding del runner), DC-001..024 descartadas por prescripción.
+Última actualización: 2026-07-21 (cierre de beta) — **una sola deuda abierta (DC-CLI-DRIFT, baja, post-beta)**. Resto saldado/cerrado: DC-AUDIT-03 (puertos), DC-AUDIT-02 (validación efectiva por flujo), DC-040 (sharding del runner), DC-001..024 (prescripción).
 
 ## Deuda activa
 
@@ -23,6 +23,7 @@
 | DC-UX4-HITO | editar:hito no aplica | media | cerrada (causa real: el hito seleccionado no llegaba al contexto; se inyecta `selected_milestones` + `_apply_edit` edita `year`; verificado en real 1200→1300) | UX4 |
 | DC-AUDIT-01 | La GUI no tiene punto de exportación (al retirar la vista de import/export desapareció su único consumidor; ExportService sigue vivo y accesible solo por CLI `export`) | media | descartada — decisión de producto 2026-07-03: la exportación queda vía CLI `narrative-architect export` | AUDIT-01 |
 | DC-AUDIT-02 | output_schema_validator no cubre los AIJobType nuevos y la ruta principal de jobs llama al gateway con validate=False (la validación efectiva la hace _extract_json/stage_results) | baja | cerrada (2026-07-21): tras el recorte post-WIKI la validación efectiva es POR FLUJO y dedicada — `watering_payload` (riego), `memory_payload` (memoria), `stage_results`/`_extract_json` (semillas), parseo acotado del navegador wiki — y ningún caller vivo usa `validate=True`; el validador genérico queda como opción del gateway. No se ampliará su cobertura | AUDIT-03 |
+| DC-CLI-DRIFT | El host CLI no siguió la evolución del producto desktop: ~23 tests de `tests/ui/test_*_cli.py` (layer/config/gallery/entity) esperan el modelo VIEJO — capas por defecto persistidas (hoy son virtuales: se mergean en vista, `foco_rings.effective_rank_map`/`_effective_world_layers`), secciones de config pre-PA04 (`general.*`), filtros de galería (superficie desconectada en BETA1-A). Fallan aislados (no es el flake de ordenación DC-040). Cerrar post-beta: decidir si el CLI se actualiza al modelo efectivo o se recorta formalmente a project/export | baja | abierta (registrada 2026-07-21, no bloquea beta: el producto es el host desktop) | cierre-beta |
 | DC-AUDIT-03 | Violaciones de capas congeladas en DOCUMENTED_LAYER_DEBT (tests/architecture): application importaba infrastructure.ai_provider y persistence.store/schema | media | SALDADA (2026-07-21) — puertos en application: `ai_provider_port.py` (contrato AIProvider + provider_chat + `resolve_provider` por import dinámico; infrastructure re-exporta por compatibilidad) y `repository_port.py` (Protocol `ProjectRepository` + `default_repository` + `current_schema_version` por import dinámico). `DOCUMENTED_LAYER_DEBT` queda vacío y el guard corre sin allowlist | AUDIT-03 |
 
 ## Deuda cerrada

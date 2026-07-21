@@ -9,10 +9,12 @@ restante es la batería de smokes manuales del usuario.
 
 - [x] Tablero sin Backlog / In Progress / Review / Blocked en épicas de beta
       (BETA2-STRUCT completa 7/7; residuos BETA1 resueltos o superados).
-- [x] Suites automáticas en verde: `core` (2140) + `arch` (11) + `ui` — **baseline
-      rojo eliminado** (antes ~26 rojos crónicos de pins/legacy).
-- [x] Deuda técnica a cero en `product_debt_map.md` (DC-AUDIT-03 saldada con
-      puertos; resto cerrado/mitigado/descartado con justificación).
+- [x] Suites automáticas en verde: `core` (2140) + `arch` (11) + `sanity` +
+      `infra` + `b3x/b4x` + statics de `ui` — **baseline rojo crónico eliminado**
+      (antes ~60-69). Excepción documentada: la familia CLI de `tests/ui`
+      (DC-CLI-DRIFT, post-beta; el CLI no siguió al desktop).
+- [x] Deuda técnica saldada en `product_debt_map.md` salvo UNA entrada abierta y
+      consciente (DC-CLI-DRIFT, baja, post-beta).
 - [x] Purga física del legacy IA (command bar, RAG léxico, acciones contextuales,
       `_LEGACY_AI_UI`) — el árbol no arrastra superficie retirada.
 - [x] Esquema v39; carga de proyectos antiguos sin pérdida (migraciones v1→v39).

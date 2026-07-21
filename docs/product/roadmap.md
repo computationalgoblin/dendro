@@ -37,7 +37,8 @@ smoke vuelve como ticket de remediación al tablero.
 
 ## Deuda activa
 
-**Cero deuda abierta** al cierre técnico — ver [product_debt_map.md](product_debt_map.md)
+**Una sola deuda abierta** al cierre técnico (DC-CLI-DRIFT: el host CLI no siguió
+la evolución del desktop; baja, post-beta) — ver [product_debt_map.md](product_debt_map.md)
 (única fuente; el antiguo `KNOWN_ISSUES.md` nunca llegó a existir).
 
 ## Post-beta (sin comprometer)
