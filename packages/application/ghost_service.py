@@ -2,10 +2,10 @@
 
 Un fantasma es una entidad normal con ``canon_state = fantasma``: tiene los
 mismos campos, persiste, puede relacionarse (relaciones fantasma) y vive en el
-lienzo translúcido, pero NO cuenta ni exporta como canon pleno: el RAG
-(``corpus_indexer``), las exportaciones (``export_service``) y el contexto de
-audiencias no-gm lo excluyen; en audiencia gm entra con su ``canon_state``
-visible y los prompts lo tratan como intención, no como sostén.
+lienzo translúcido, pero NO cuenta ni exporta como canon pleno: las
+exportaciones (``export_service``) y el contexto de audiencias no-gm lo
+excluyen; en audiencia gm entra con su ``canon_state`` visible y los prompts lo
+tratan como intención, no como sostén.
 
 La conversión a entidad real es SIEMPRE una acción explícita del usuario —
 nunca ocurre por rellenar campos — y toda operación queda trazada en historial.
@@ -18,6 +18,17 @@ from typing import Any
 from packages.domain.entity import CanonState, NarrativeEntity
 from packages.domain.result import Error, Ok, Result
 from packages.domain.source_history import HistoryEventType
+
+# Estados de canon que no cuentan como canon pleno para contexto/exportación.
+# (Vivía en el corpus_indexer del RAG léxico, retirado en la limpieza post-WIKI.)
+ARCHIVED_CANON_STATES: frozenset[str] = frozenset({
+    "archivado",
+    "descartado",
+    "obsoleto",
+    # BETA2-FOCO: los nodos fantasma son borradores internos — su intención
+    # llega al contexto por otra vía, marcada; nunca como canon.
+    "fantasma",
+})
 
 
 class GhostService:

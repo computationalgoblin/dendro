@@ -14,8 +14,8 @@ from packages.application.ai_jobs import (
     AIJobType,
     CommandBarIntent,
     build_job_plan,
-    build_model_user_message,
 )
+from packages.application.prompt_assembler import build_model_user_message
 from packages.domain.result import Ok
 
 

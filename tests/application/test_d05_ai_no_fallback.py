@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 
-from packages.application.ai_context_actions import AIContextActionService
+
 from packages.application.ai_jobs import AIJobService, AIJobStatus, AIJobType
 from packages.application.ai_observability import AIObservabilityLog
 from packages.domain.result import Error, Ok
-from packages.infrastructure.ai_provider import AIProvider, SimulatedAIProvider
+from packages.infrastructure.ai_provider import AIProvider
 
 
 class D05Provider(AIProvider):
@@ -70,15 +69,5 @@ def test_d05_ai_job_candidates_include_trace_metadata() -> None:
     assert log.latest.output_size > 0
 
 
-@pytest.mark.application
-def test_d05_context_actions_do_not_use_simulated_provider_by_default() -> None:
-    service = AIContextActionService(
-        project_service=SimpleNamespace(active_project=None),
-        candidate_service=SimpleNamespace(),
-        provider=SimulatedAIProvider(),
-    )
-
-    result = service.run_node_text_suggestion("node-1", prompt_hint="Mejorar")
-
-    assert isinstance(result, Error)
-    assert "IA no configurada" in result.error
+# (El tercer test de D05 cubría AIContextActionService — módulo borrado en la
+# limpieza post-WIKI junto con la superficie de acciones contextuales IA.)

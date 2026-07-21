@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import (
     QEvent,
-    QSettings,
     QSize,
-    QStringListModel,
     Qt,
     QThread,
     QTimer,
@@ -24,7 +22,6 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
-    QCompleter,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -35,12 +32,8 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
-    QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
-    QSpinBox,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -48,7 +41,6 @@ from PySide6.QtWidgets import (
 
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
-from hosts.DesktopHostPySide.controllers.ai_context_controller import AIContextController
 from hosts.DesktopHostPySide.controllers.causal_milestone_controller import (
     CausalMilestoneController,
 )
@@ -60,7 +52,6 @@ from hosts.DesktopHostPySide.widgets.graph_canvas import (
     GraphCanvasWidget,
     GraphSearchResult,
     VisualFilterState,
-    relation_family,
 )
 from hosts.DesktopHostPySide.widgets.filter_popover import FilterPopover
 from hosts.DesktopHostPySide.controllers.ghost_controller import GhostController
@@ -85,7 +76,6 @@ from hosts.DesktopHostPySide.widgets.chrono_canvas import (
     MilestoneQuickCreatePanel,
 )
 from hosts.DesktopHostPySide.controllers.era_controller import EraController
-from hosts.DesktopHostPySide.widgets.coherence_panel import CoherencePanel
 from hosts.DesktopHostPySide.widgets.relation_detail_panel import RelationDetailPanel
 from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.settings_panels import _human_error as _human_ai_error
@@ -97,7 +87,6 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SectionHeader,
     enum_human,
     human_ref,
-    make_scroll_area,
     pulse_feedback,
     GOLD,
     GOLD_DEEP,
@@ -113,41 +102,16 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     LINE,
     POPUP_BG,
     RADIUS_CAPSULE,
-    SPACE_LG,
-    SPACE_MD,
-    SPACE_SM,
-    SPACE_XL,
     SURFACE,
     SURFACE_HI,
     TYPE_CAPTION_PX,
 )
 from packages.domain.result import Error
-from packages.domain.world_layer import default_world_layers
 from packages.application.ai_jobs import (
     AIJobService,
     AIJobType,
-    CommandAction,
-    CommandScope,
-    ACTION_LABELS,
-    SCOPE_LABELS,
-    valid_scopes_for_action,
-    job_type_for_command,
-    job_type_for_action,
-)
-from packages.application.command_expansion import (
-    example_for_command,
-    order_context_by_causality,
-    plan_command_jobs,
 )
 from packages.infrastructure.openai_compatible_provider import get_provider
-from packages.application.ai_request_gateway import ModelParams
-from packages.application.context_budget import (
-    DEFAULT_TIER,
-    INTENT_TO_TIER,
-    TIER_INPUT_TOKENS,
-    TIER_OUTPUT_TOKENS,
-)
-from hosts.DesktopHostPySide.widgets.radial_tuner import RadialTuner
 from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
 from hosts.DesktopHostPySide.widgets.seed_notifications import SeedNotificationLayer
 from hosts.DesktopHostPySide.widgets.seed_audio import ZenBell
@@ -164,7 +128,6 @@ from hosts.DesktopHostPySide.widgets.qt_lifecycle import (
 )
 from packages.application import coherence_repair
 from packages.application.ai_prompt_debug import AIPromptDebugTraceStore
-from packages.application.rag_service import RAGService
 
 
 class _SimpleFormPanel(QWidget):
@@ -605,110 +568,6 @@ class NarrativeWorkbench(QWidget):
         self._chips_layout.addStretch(1)
 
 
-class AIJobsPanel(_SimpleFormPanel):
-    """Visible queue/list for command-bar AI jobs."""
-
-    def __init__(self, workspace: "CreationWorkspace"):
-        super().__init__(
-            "Tareas IA", "Jobs de Dendro en segundo plano. Ninguno canoniza automáticamente."
-        )
-        self.workspace = workspace
-        self.jobs_layout = QVBoxLayout()
-        self.jobs_layout.setSpacing(10)
-        self.layout.addLayout(self.jobs_layout)
-        self.layout.addStretch(1)
-        self.refresh()
-
-    def refresh(self):
-        while self.jobs_layout.count():
-            item = self.jobs_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-        jobs = self.workspace.ai_job_service.list_jobs()
-        if not jobs:
-            self.jobs_layout.addWidget(
-                EmptyState("Sin tareas IA", "Lanza una petición desde la command bar.")
-            )
-            return
-        for job in reversed(jobs):
-            card = Card(self._job_title(job), self._job_description(job))
-            rag_label = QLabel(self._job_rag_status(job))
-            rag_label.setObjectName("mutedLabel")
-            rag_label.setWordWrap(True)
-            rag_label.setStyleSheet(
-                "font-size: 11px; color: #6F6A42; background: transparent; border: none;"
-            )
-            card.layout.addWidget(rag_label)
-            progress = QProgressBar()
-            progress.setRange(0, 100)
-            progress.setValue(int(max(0.0, min(1.0, float(getattr(job, "progress", 0.0)))) * 100))
-            card.layout.addWidget(progress)
-            # SEM03: sin «Ver resultado» (los candidatos germinan como semillas);
-            # se mantiene «Cancelar» para tareas en curso.
-            row = QHBoxLayout()
-            cancel = QPushButton("Cancelar")
-            cancel.setEnabled(
-                getattr(job, "cancellable", True)
-                and str(getattr(job, "status", ""))
-                not in {
-                    "AIJobStatus.READY_FOR_REVIEW",
-                    "AIJobStatus.FAILED",
-                    "AIJobStatus.CANCELLED",
-                }
-            )
-            cancel.clicked.connect(lambda _, jid=getattr(job, "id", ""): self._cancel(jid))
-            row.addStretch(1)
-            row.addWidget(cancel)
-            card.layout.addLayout(row)
-            self.jobs_layout.addWidget(card)
-
-    def _job_title(self, job) -> str:
-        prompt = str(getattr(job, "prompt", "") or "Tarea IA").replace("\n", " ")
-        return prompt[:80]
-
-    def _job_description(self, job) -> str:
-        status = getattr(getattr(job, "status", ""), "value", getattr(job, "status", ""))
-        job_type = getattr(getattr(job, "type", ""), "value", getattr(job, "type", ""))
-        message = getattr(job, "message", "") or ""
-        error = getattr(job, "error", "") or ""
-        if error:
-            message = f"{message}: {error}"
-        return f"{str(job_type).replace('_', ' ')} · {status} · {message}"
-
-    def _job_rag_status(self, job) -> str:
-        status = str(getattr(getattr(job, "status", ""), "value", getattr(job, "status", "")))
-        active = status in {
-            "queued",
-            "building_context",
-            "planning",
-            "waiting_for_model",
-            "running",
-            "postprocessing",
-        }
-        plan = getattr(job, "plan", {}) or {}
-        context = plan.get("context", {}) if isinstance(plan, dict) else {}
-        pack = context.get("rag_context_pack", {}) if isinstance(context, dict) else {}
-        if not isinstance(pack, dict) or not pack:
-            return "RAG: preparando contexto" if active else "RAG: sin contexto registrado"
-
-        warnings = [str(item) for item in (pack.get("warnings") or []) if str(item)]
-        items = pack.get("items") if isinstance(pack.get("items"), list) else []
-        tokens = int(pack.get("tokens_estimated", 0) or 0)
-        if warnings and not items:
-            return f"RAG: {'; '.join(warnings)}"
-        truncated = " · truncado" if pack.get("truncated") else ""
-        warning_text = f" · aviso: {'; '.join(warnings)}" if warnings else ""
-        return f"RAG: contexto listo ({len(items)} items, {tokens} tokens){truncated}{warning_text}"
-
-    def _cancel(self, job_id: str):
-        result = self.workspace.ai_job_service.cancel_job(job_id)
-        if isinstance(result, Error):
-            self.workspace.ctx.log("warning", result.error)
-        self.workspace._sync_jobs_indicator()
-        self.refresh()
-
-
 # SEM04: tipos de job que NO germinan una semilla en el grafo. Solo los que NO
 # producen un candidato revisable: texto inline (se queda en el panel) y la
 # reparación de coherencia (abre su propio panel de cambios). Los análisis
@@ -718,14 +577,6 @@ _NO_SEED_JOB_TYPES = {"improve_text", "generate_text", "repair_coherence"}
 
 # UX5: jobs de edición → las entidades seleccionadas germinan mientras corre el job.
 _EDIT_JOB_TYPES = {"edit_entities", "edit_relation", "edit_ring", "edit_milestone"}
-
-# BETA2-WIKI-10: la superficie de IA legada (command bar Acción×Ámbito + texto libre,
-# acciones IA del menú contextual, barras IA de los paneles de detalle, generación suelta
-# de la toolbar, coherencia y texto inline) queda RETIRADA de la UI. La IA sobrevive solo
-# como Regar + Sugerencias (con petición) + wiki + creación cronológica. Se conserva el
-# código (legacy) tras este guard para borrarlo en la limpieza posterior (WIKI-11+).
-_LEGACY_AI_UI = False
-
 
 class _AIJobWorker(QThread):
     """Run an AI job outside the UI thread."""
@@ -816,35 +667,6 @@ class _PlayPrefetchWorker(QThread):
                 self.failed.emit(res.error)
                 return
             self.finishedOk.emit(self.milestone_id, self.epoch, res.value)
-        except Exception as exc:  # pragma: no cover - defensive thread boundary
-            self.failed.emit(str(exc))
-
-
-class _ContextPreviewWorker(QThread):
-    """UX3: calcula la vista previa de contexto fuera del hilo de UI.
-
-    El cálculo hace retrieval real (RAG), así que puede tardar; se ejecuta en un
-    hilo para no congelar la barra mientras se muestra «Calculando contexto…»."""
-
-    ready = Signal(dict)
-    failed = Signal(str)
-
-    def __init__(self, service: AIJobService, job_type, prompt: str, scope: dict):
-        super().__init__()
-        self.service = service
-        self.job_type = job_type
-        self.prompt = prompt
-        self.scope = scope
-
-    def run(self):
-        try:
-            result = self.service.preview_context(
-                self.job_type, self.prompt, context_scope=self.scope, explicit=True
-            )
-            if isinstance(result, Error):
-                self.failed.emit(result.error)
-                return
-            self.ready.emit(dict(result.value))
         except Exception as exc:  # pragma: no cover - defensive thread boundary
             self.failed.emit(str(exc))
 
@@ -1410,9 +1232,6 @@ class CreationWorkspace(QWidget):
         self.candidate_controller = candidate_controller
         self.source_controller = source_controller
         self.layer_controller = layer_controller
-        self.ai_context_controller = None
-        self.rag_service = getattr(self.ctx, "rag_service", None) or RAGService()
-        self.ctx.rag_service = self.rag_service
         self.prompt_trace_store = (
             getattr(self.ctx, "ai_prompt_trace_store", None) or AIPromptDebugTraceStore.default()
         )
@@ -1462,9 +1281,6 @@ class CreationWorkspace(QWidget):
         project_controller = getattr(ctx, "project_controller", None)
         project_service = getattr(project_controller, "ps", None)
         if project_service is not None:
-            self.ai_context_controller = AIContextController(
-                project_service, ai_job_service=self.ai_job_service
-            )
             self._milestone_ctrl = CausalMilestoneController(project_service)
             self._chronology_ctrl = ProjectChronologyController(project_service)
             self.era_controller = EraController(project_service)  # BETA1-G03
@@ -1514,7 +1330,6 @@ class CreationWorkspace(QWidget):
 
         # Graph canvas (takes all space)
         self.graph = GraphCanvasWidget(self.ctx)
-        self.graph.set_ai_controller(self.ai_context_controller)
         # BETA2-CLEANUP-PANELES: el clic simple ya NO abre el cajón de detalle
         # (retirado); la edición vive en el Foco (doble clic / "Editar" → Foco).
         # BETA2-FOCO-14: doble click en el Mapa (solo lectura) → entrar a Foco.
@@ -1538,7 +1353,6 @@ class CreationWorkspace(QWidget):
         self.graph.contextCreateEntityInTreeRequested.connect(self._create_entity_in_tree)
         self.graph.contextCreateSubtreeRequested.connect(self._create_subtree_in_tree)
         self.graph.contextDeleteRequested.connect(self._delete_selected)
-        self.graph.contextAIActionRequested.connect(self._run_context_ai_action)
         # BETA1-B02: Escape closes the contextual drawer after the canvas has
         # cancelled modes and cleared the selection
         self.graph.escapePressed.connect(self._on_canvas_escape)
@@ -1765,14 +1579,10 @@ class CreationWorkspace(QWidget):
         layout.addWidget(self.play, 1)
         self._active_view = "concentric"  # el arranque fuerza "foco" al final de _build_ui
 
-        # Command bar area replaces the old bottom button toolbar.
         # BETA2-WIKI-10: la command bar (Acción×Ámbito + texto libre) queda RETIRADA de la
-        # UI. La única vía creativa de IA con prompt libre es ahora Sugerir (petición en Foco).
-        if _LEGACY_AI_UI:
-            self._command_bar = self._build_command_bar()
-            layout.addWidget(self._command_bar)
-        else:
-            self._command_bar = None
+        # UI. La única vía creativa de IA con prompt libre es Sugerir (petición en Foco).
+        # El atributo se conserva en None: varios consumidores (floater de estado) lo miran.
+        self._command_bar = None
 
         # BETA2-UI2-10: el cluster flotante izquierdo desapareció — la búsqueda
         # es Ctrl+B (sin botón) y los filtros viven en el embudo del pill
@@ -1891,47 +1701,11 @@ class CreationWorkspace(QWidget):
 
         # BETA1-F02: crear hoja/rama/relación viven SOLO en los menús
         # contextuales del canvas (B01) — sin duplicados permanentes en barra.
-        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
-        self._coherence_btn = icon_btn(
-            "!",
-            "Selecciona nodos o relaciones para analizar coherencia",
-            self._open_coherence_panel,
-            enabled=False,
-        )
+        # BETA2-WIKI-11: los botones IA ocultos de la toolbar (sugerir hoja/rama/
+        # relación, coherencia, tareas, resumen) se han eliminado con sus handlers.
         # BETA2-UI2-10: sin botones "Buscar" (Ctrl+B) ni "Filtro" (embudo del
         # pill temporal, con badge de activos).
         icon_btn("Anillos", "Selector de anillos: recorrer las capas", self._open_ring_panel)
-        self._jobs_btn = icon_btn("Tareas", "Tareas IA en segundo plano", self._open_ai_jobs_panel)
-        self._jobs_btn.setStyleSheet(text_btn_style)
-        self._jobs_btn.setFixedWidth(74)
-        self._suggest_branch_btn = icon_btn("Rama IA", "Sugerir rama con IA", self._suggest_branch)
-        self._suggest_branch_btn.setStyleSheet(text_btn_style)
-        self._suggest_branch_btn.setFixedWidth(74)
-        self._suggest_relation_btn = icon_btn(
-            "Rel IA",
-            "Selecciona nodos para sugerir relaciones con IA",
-            self._suggest_relation,
-            enabled=False,
-        )
-        self._suggest_relation_btn.setStyleSheet(disabled_style)
-        self._suggest_relation_btn.setFixedWidth(66)
-        self._summary_btn = icon_btn(
-            "Resumen",
-            "Selecciona elementos para resumir con IA",
-            self._summarize_selection,
-            enabled=False,
-        )
-        self._summary_btn.setStyleSheet(disabled_style)
-        self._summary_btn.setFixedWidth(78)
-        for ai_button in (
-            self._suggest_entity_btn,
-            self._coherence_btn,
-            self._jobs_btn,
-            self._suggest_branch_btn,
-            self._suggest_relation_btn,
-            self._summary_btn,
-        ):
-            ai_button.setVisible(False)
         # BETA2-UI2-10: la gestión de anillos/eras es contextual — clic derecho
         # en un anillo del Mapa (editar/crear/eliminar) y clic en la banda de
         # era de la Cronología (editar) o su menú contextual (crear).
@@ -2974,10 +2748,6 @@ class CreationWorkspace(QWidget):
         play_widget = getattr(self, "play", None)
         if play_widget is not None:
             play_widget.setVisible(play_on)
-        # Command bar visible en Foco y Mapa; oculta en Cronología y Play.
-        bar = getattr(self, "_command_bar", None)
-        if bar is not None:
-            bar.setVisible(view not in ("chrono", "play"))
         walk_btn = getattr(self, "_walk_toggle_btn", None)
         if walk_btn is not None:
             walk_btn.setVisible(chrono_on)  # CRON: entrada al recorrido solo en cronológica
@@ -3791,7 +3561,6 @@ class CreationWorkspace(QWidget):
         if getattr(self, "_active_view", "") != "play":
             self.set_active_view("play")
         self.play.show_epilogue(report, project)
-        drawer.open()
 
     @_qt_safe_slot
     def _refresh_chrono_only(self) -> None:
@@ -4047,15 +3816,14 @@ class CreationWorkspace(QWidget):
             self._position_floats()
 
     def _position_floats(self):
-        """Coloca los clusters a ambos lados de la command bar y el
-        breadcrumb de foco arriba a la izquierda."""
-        bar = getattr(self, "_command_bar", None)
+        """Coloca los clusters flotantes y el breadcrumb de foco arriba a la
+        izquierda."""
         # R6: raised and static — aligned with the chronology toggle, no sway.
         # BETA2-WIKI-10: la command bar se retiró (era el ancla de `top`). Antes esta
         # función hacía `return` si no existía y dejaba la píldora Guardar/💧 y la
         # leyenda del jardín en (0,0) — arriba-izquierda. Sin command bar, `top` se
         # ancla abajo-derecha (como el resto de floats del Mapa).
-        top = (bar.y() - 66) if bar is not None else max(58, self.height() - 62)
+        top = max(58, self.height() - 62)
         # BETA2-UX-08: gutter «Sin ubicar» arriba-derecha, bajo la píldora de modos.
         gutter = getattr(self, "_chrono_gutter", None)
         if gutter is not None and gutter.isVisible():
@@ -4111,8 +3879,7 @@ class CreationWorkspace(QWidget):
             x = right.x() + right.width() - layer.width()
             y = right.y() - layer.height() - 10
         else:
-            bar = getattr(self, "_command_bar", None)
-            top = (bar.y() - 66) if bar is not None else (self.height() - 134)
+            top = self.height() - 134
             x = self.width() - layer.width() - margin
             y = top - layer.height() - 10
         layer.move(max(0, x), max(0, y))
@@ -4149,9 +3916,6 @@ class CreationWorkspace(QWidget):
             if app is not None:
                 app.installEventFilter(self)
                 self._tab_filter_installed = True
-        # UX3: onboarding de 1ª vez del flujo IA (diferido para que haya geometría;
-        # Qt omite el callback si el widget se destruye antes de dispararse).
-        QTimer.singleShot(0, self._maybe_show_ai_coachmark)
 
     def hideEvent(self, event):  # noqa: N802 (Qt API)
         # FOCO-28: retira el filtro de Tab al ocultar la Creación (simétrico a
@@ -4200,660 +3964,6 @@ class CreationWorkspace(QWidget):
     # (en vez de taparla). Constante compartida → sin número mágico duplicado.
     COMMAND_BAR_HEIGHT = 68
 
-    def _build_command_bar(self) -> QWidget:
-        """Bottom B38 contextual AI command bar. Creates jobs, never mutates canon."""
-        bar = QFrame()
-        bar.setObjectName("aiCommandBar")
-        bar.setStyleSheet(
-            f"QFrame#aiCommandBar {{ background: {SURFACE_HI}; border-top: 1px solid {LINE}; }}"
-        )
-        bar.setFixedHeight(self.COMMAND_BAR_HEIGHT)
-        # BETA1-UX2B: la barra siempre ocupa todo el ancho (no encoge al cerrar un
-        # drawer). Márgenes laterales más contenidos para dar aire al campo.
-        bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        # BETA1-G08: separación por borde + superficie sólida (sin efecto
-        # gráfico, que cacheaba el render y ocultaba botones al actualizar).
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(SPACE_XL + SPACE_LG, SPACE_MD, SPACE_XL + SPACE_LG, SPACE_MD)
-        layout.setSpacing(SPACE_SM)
-
-        prompt_label = QLabel("Dendro")
-        prompt_label.setStyleSheet(
-            f"color: {GOLD_DEEP}; font-size: 12px; font-weight: 700; letter-spacing: 0.4px; "
-            f"background: transparent; border: none; padding-right: 4px;"
-        )
-        prompt_label.setToolTip(
-            "Las respuestas IA son semillas revisables; no cambian canon automáticamente."
-        )
-        layout.addWidget(prompt_label)
-
-        # BETA1-UX2B: botón "?" que explica el sistema de prompts (no es intuitivo).
-        self._prompt_help_btn = QPushButton("?")
-        self._prompt_help_btn.setObjectName("promptHelpBtn")
-        self._prompt_help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._prompt_help_btn.setFixedSize(22, 22)
-        self._prompt_help_btn.setToolTip("Cómo funcionan los prompts de Dendro")
-        self._prompt_help_btn.setStyleSheet(
-            f"QPushButton#promptHelpBtn {{ background: {GOLD_TINT}; color: {GOLD_DEEP}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: 11px; font-size: 12px; "
-            f"font-weight: 700; }} "
-            f"QPushButton#promptHelpBtn:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
-        )
-        self._prompt_help_btn.clicked.connect(self._open_prompt_help)
-        layout.addWidget(self._prompt_help_btn)
-
-        # Deterministic intent: two selectors replace the keyword classifier.
-        # Selector 1 (Acción) drives Selector 2 (Ámbito).
-        self._build_intent_selectors()
-        layout.addWidget(self._action_selector)
-        layout.addWidget(self._scope_selector)
-        # UX3: caption "Cuántas" bajo el stepper para que se entienda qué controla.
-        self._count_spin_box = self._captioned_tuner(self._count_spin, "Cuántas")
-        layout.addWidget(self._count_spin_box)
-        # BETA2-UX-04: los diales expertos (Creatividad, Longitud, Contexto) salen
-        # de la barra permanente a un popover «Avanzado» plegable. Se reparentan
-        # los MISMOS RadialTuner (conservan Auto/manual y el reset por doble-clic);
-        # «Cuántas» permanece en la barra mínima.
-        self._advanced_tuners_popup = QFrame(self, Qt.WindowType.Popup)
-        self._advanced_tuners_popup.setObjectName("advancedTunersPopup")
-        self._advanced_tuners_popup.setStyleSheet(
-            f"QFrame#advancedTunersPopup {{ background: {SURFACE_HI}; "
-            f"border: 1px solid {LINE}; border-radius: 12px; }}"
-        )
-        _adv_row = QHBoxLayout(self._advanced_tuners_popup)
-        _adv_row.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
-        _adv_row.setSpacing(18)
-        _adv_row.addWidget(self._captioned_tuner(self._temp_tuner, "Creatividad"))
-        _adv_row.addWidget(self._captioned_tuner(self._tokens_tuner, "Longitud respuesta"))
-        _adv_row.addWidget(self._captioned_tuner(self._budget_tuner, "Contexto"))
-        self._advanced_tuners_btn = QPushButton("Avanzado")
-        self._advanced_tuners_btn.setToolTip(
-            "Ajustes avanzados de IA: creatividad, longitud de respuesta y "
-            "presupuesto de contexto (tokens). Por defecto en Auto."
-        )
-        self._advanced_tuners_btn.setStyleSheet(
-            f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_CAPSULE}px; min-width: 64px; "
-            f"min-height: 36px; font-size: 12px; font-weight: 700; padding: 0 12px; }} "
-            f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
-        )
-        self._advanced_tuners_btn.clicked.connect(self._toggle_advanced_tuners)
-        layout.addWidget(self._advanced_tuners_btn)
-
-        self._command_input = QLineEdit()
-        self._command_input.setObjectName("aiCommandInput")
-        self._command_input.setPlaceholderText(
-            "Describe qué quieres… usa @ para referenciar una entidad o hito"
-        )
-        self._command_input.setToolTip(
-            "La acción y el ámbito los eliges en los dos selectores de la izquierda.\n"
-            "Escribe @ para referenciar una entidad o hito existente (máx 2) — aparece un autocompletado.\n"
-            "Editar usa hasta 6 elementos seleccionados; Crear relación, hasta 6 pares.\n"
-            "Crear con una rama seleccionada inserta la entidad dentro de ella; @ solo referencia (no inserta)."
-        )
-        self._command_input.setStyleSheet(
-            f"QLineEdit#aiCommandInput {{ background: #FFFFFF; "
-            f"border: 1px solid {LINE}; border-radius: {RADIUS_CAPSULE}px; padding: 9px 16px; "
-            f"font-size: 13px; color: {INK}; }} "
-            f"QLineEdit#aiCommandInput:hover {{ border-color: {GOLD_SOFT}; }} "
-            f"QLineEdit#aiCommandInput:focus {{ border: 2px solid {GOLD}; padding: 8px 15px; background: #FFFFFF; }}"
-        )
-        self._command_input.returnPressed.connect(self._submit_ai_command)
-        self._setup_mention_autocomplete()
-        # BETA1-UX2B: mínimo razonable para que el campo NO colapse (la barra se
-        # veía "enana") cuando se abre el drawer derecho y el ancho disponible baja.
-        self._command_input.setMinimumWidth(200)
-        layout.addWidget(self._command_input, 1)
-
-        # UX3: vista previa del contexto antes de enviar (editable, no-modal).
-        self._command_preview_btn = QPushButton("Vista previa")
-        self._command_preview_btn.setToolTip(
-            "Ver y ajustar qué contexto recibirá la IA antes de crear"
-        )
-        self._command_preview_btn.setStyleSheet(
-            f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: {RADIUS_CAPSULE}px; min-width: 64px; "
-            f"min-height: 36px; font-size: 12px; font-weight: 700; padding: 0 12px; }} "
-            f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_STRONG}; }}"
-        )
-        self._command_preview_btn.clicked.connect(self._open_context_preview)
-        layout.addWidget(self._command_preview_btn)
-
-        # UX11: indicador de actividad orgánico, visible mientras hay trabajo de IA
-        # en vuelo o se calcula la vista previa (puntos sin metáfora de semilla).
-        self._busy_indicator = BusyIndicator(diameter=18)
-        self._busy_indicator.set_period_ms(self.ctx.animation_duration(900))
-        self._busy_indicator.setToolTip("Dendro está trabajando…")
-        layout.addWidget(self._busy_indicator)
-
-        self._command_submit_btn = QPushButton("Crear")
-        self._command_submit_btn.setToolTip("Crear una tarea IA revisable")
-        self._command_submit_btn.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: {INK_INVERSE}; border: none; "
-            f"border-radius: {RADIUS_CAPSULE}px; min-width: 64px; min-height: 36px; "
-            f"font-size: 12px; font-weight: 700; }} "
-            f"QPushButton:hover {{ background: {GOLD_DEEP}; }} "
-            f"QPushButton:pressed {{ background: {GOLD_PRESS}; padding-top: 2px; }}"
-        )
-        self._command_submit_btn.clicked.connect(self._submit_ai_command)
-        layout.addWidget(self._command_submit_btn)
-
-        self._job_status_label = QLabel("")
-        self._job_status_label.setStyleSheet(
-            f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;"
-        )
-        self._job_status_label.setToolTip(
-            "Estado de las tareas IA. Todo resultado queda pendiente de revisión."
-        )
-        # BETA1-UX2B: el label ya no muestra texto persistente ("Sin tareas IA…")
-        # ni reserva 190px; queda vacío en reposo y solo muestra avisos transitorios.
-        layout.addWidget(self._job_status_label)
-        return bar
-
-    def _open_prompt_help(self) -> None:
-        """BETA1-UX2B: popover que explica, de un vistazo, cómo se usan los
-        prompts (no es intuitivo). Se cierra al hacer clic fuera (Qt.Popup)."""
-        pop = QFrame(self, Qt.WindowType.Popup)
-        pop.setObjectName("promptHelpPopover")
-        pop.setStyleSheet(
-            f"QFrame#promptHelpPopover {{ background: {SURFACE_HI}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: 12px; }}"
-        )
-        col = QVBoxLayout(pop)
-        col.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
-        col.setSpacing(8)
-        title = QLabel("Cómo funcionan los prompts de Dendro")
-        title.setStyleSheet(
-            f"color: {INK_STRONG}; font-size: 14px; font-weight: 700; "
-            f"background: transparent; border: none;"
-        )
-        col.addWidget(title)
-        body = QLabel(
-            "<b>1 · Acción × Ámbito.</b> Elige en los dos selectores QUÉ hace la IA "
-            "(Crear, Editar, Analizar, Explicar, Expandir) y SOBRE QUÉ (Hoja, Rama, "
-            "Relación, Anillo, Hito). Si la acción no usa ámbito, el 2º selector se oculta.<br>"
-            "<b>2 · Tu texto.</b> Describe el matiz que quieres. Escribe <b>@</b> para "
-            "referenciar una entidad o hito existente (hasta 2).<br>"
-            "<b>3 · Selección.</b> Editar/Analizar usan lo que tengas seleccionado en el "
-            "grafo (hasta 6 elementos). Al <b>crear una rama</b>, las entidades seleccionadas "
-            "se <b>insertan dentro de ella</b> como miembros; al <b>crear una entidad</b> con "
-            "una <b>rama seleccionada</b>, la entidad nace <b>dentro de esa rama</b>. Para solo "
-            "<b>referenciar</b> algo sin insertarlo, usa <b>@</b>.<br>"
-            "<b>4 · Avanzado.</b> «Cuántas» está en la barra; creatividad, longitud "
-            "y contexto viven en el botón <b>Avanzado</b> (plegado por defecto) y van en "
-            "<i>Auto</i>. Arrástralos o haz clic para fijar un número exacto; doble clic "
-            "vuelve a Auto.<br>"
-            "<b>Importante:</b> toda salida es una <b>semilla revisable</b> que germina en el "
-            "jardín — nunca cambia el canon por sí sola."
-        )
-        body.setWordWrap(True)
-        body.setTextFormat(Qt.TextFormat.RichText)
-        body.setMaximumWidth(440)
-        body.setStyleSheet(f"color: {INK}; font-size: 12px; background: transparent; border: none;")
-        col.addWidget(body)
-        # Ejemplo en vivo para la celda Acción×Ámbito seleccionada ahora mismo.
-        example = example_for_command(
-            self._action_selector.currentData(), self._scope_selector.currentData()
-        )
-        hint = QLabel(f"Ejemplo para lo que tienes elegido:<br><i>«{example}»</i>")
-        hint.setWordWrap(True)
-        hint.setTextFormat(Qt.TextFormat.RichText)
-        hint.setMaximumWidth(440)
-        hint.setStyleSheet(
-            f"color: {INK_MUTED}; font-size: 12px; background: transparent; border: none;"
-        )
-        col.addWidget(hint)
-        pop.adjustSize()
-        btn = self._prompt_help_btn
-        top_left = btn.mapToGlobal(btn.rect().topLeft())
-        pop.move(top_left.x(), top_left.y() - pop.height() - 8)
-        pop.show()
-        self._prompt_help_popover = pop  # mantener referencia viva
-
-    # -- UX3: coachmark de 1ª vez (onboarding ligero del flujo IA) -----------
-
-    _AI_COACHMARK_KEY = "creation/ai_coachmark_seen"
-
-    def _ai_coachmark_pending(self) -> bool:
-        """True si el onboarding del flujo IA aún no se ha mostrado nunca."""
-        try:
-            seen = QSettings("Dendro", "DesktopHost").value(
-                self._AI_COACHMARK_KEY, False, type=bool
-            )
-            return not bool(seen)
-        except Exception:  # pragma: no cover - defensive (settings backend)
-            return False
-
-    def _mark_ai_coachmark_seen(self) -> None:
-        try:
-            QSettings("Dendro", "DesktopHost").setValue(self._AI_COACHMARK_KEY, True)
-        except Exception:  # pragma: no cover - defensive
-            pass
-
-    def _ai_coachmark_steps(self) -> list[tuple[QWidget, str]]:
-        """Pasos (widget ancla, texto) del onboarding, en orden."""
-        return [
-            (
-                self._action_selector,
-                "1 / 3 · Elige QUÉ hace la IA y SOBRE QUÉ con estos dos selectores.",
-            ),
-            (
-                self._command_input,
-                "2 / 3 · Describe el matiz. Escribe @ para referenciar una entidad o hito.",
-            ),
-            (
-                self._command_preview_btn,
-                "3 / 3 · Pulsa «Vista previa» para ver y ajustar el contexto antes de crear. "
-                "Todo resultado es una semilla revisable.",
-            ),
-        ]
-
-    @_qt_safe_slot
-    def _maybe_show_ai_coachmark(self) -> None:
-        if getattr(self, "_ai_coachmark_shown", False):
-            return
-        if not self.isVisible() or not self._ai_coachmark_pending():
-            return
-        self._ai_coachmark_shown = True
-        self._show_ai_coachmark_step(0)
-
-    def _show_ai_coachmark_step(self, index: int) -> None:
-        steps = self._ai_coachmark_steps()
-        if index >= len(steps):
-            self._mark_ai_coachmark_seen()
-            return
-        anchor, text = steps[index]
-        last = index == len(steps) - 1
-        pop = QFrame(self, Qt.WindowType.Popup)
-        pop.setObjectName("aiCoachmark")
-        pop.setStyleSheet(
-            f"QFrame#aiCoachmark {{ background: {SURFACE_HI}; "
-            f"border: 1px solid {GOLD_SOFT}; border-radius: 12px; }}"
-        )
-        col = QVBoxLayout(pop)
-        col.setContentsMargins(16, 14, 16, 14)
-        col.setSpacing(10)
-        label = QLabel(text)
-        label.setWordWrap(True)
-        label.setMaximumWidth(320)
-        label.setStyleSheet(
-            f"color: {INK}; font-size: 12px; background: transparent; border: none;"
-        )
-        col.addWidget(label)
-        btn = QPushButton("Entendido" if last else "Siguiente")
-        btn.setStyleSheet(
-            f"QPushButton {{ background: {GOLD}; color: {INK_INVERSE}; border: none; "
-            f"border-radius: 14px; min-height: 28px; padding: 0 14px; "
-            f"font-size: 12px; font-weight: 700; }} "
-            f"QPushButton:hover {{ background: {GOLD_DEEP}; }}"
-        )
-
-        def _advance():
-            pop.close()
-            self._show_ai_coachmark_step(index + 1)
-
-        btn.clicked.connect(_advance)
-        col.addWidget(btn, alignment=Qt.AlignmentFlag.AlignRight)
-        pop.adjustSize()
-        top_left = anchor.mapToGlobal(anchor.rect().topLeft())
-        pop.move(top_left.x(), top_left.y() - pop.height() - 10)
-        pop.show()
-        self._ai_coachmark_popover = pop  # referencia viva del paso actual
-
-    def _build_intent_selectors(self) -> None:
-        """Build the two command-bar selectors that resolve the AIJobType.
-
-        Selector 1 (Acción) drives Selector 2 (Ámbito): changing the action
-        repopulates the valid scopes through valid_scopes_for_action, the single
-        source of truth shared with the application layer.
-        """
-        combo_style = (
-            f"QComboBox {{ background: {SURFACE}; border: 1px solid {LINE}; "
-            f"border-radius: 16px; padding: 6px 12px; font-size: 12px; color: {INK}; }} "
-            f"QComboBox:hover {{ border-color: {GOLD_SOFT}; }} "
-            f"QComboBox:focus {{ border: 1px solid {GOLD}; }} "
-            f"QComboBox::drop-down {{ border: none; width: 18px; }}"
-        )
-        action = QComboBox()
-        action.setObjectName("aiActionSelector")
-        action.setToolTip("Qué quieres que haga la IA (pasa el ratón por cada opción)")
-        action.setStyleSheet(combo_style)
-        action_tips = {
-            CommandAction.CREAR: (
-                "Crea elementos nuevos del ámbito elegido. Hoja/Rama: hasta 3 "
-                "sugerencias; Relación: 1 job por par (máx 6); Anillo: plantilla "
-                "causal (sin selección)."
-            ),
-            CommandAction.EDITAR: (
-                "Modifica descripción y cuerpo de lo seleccionado (máx 6). "
-                "Referencia otra entidad o hito con @ (máx 2)."
-            ),
-            CommandAction.ANALIZAR: (
-                "Analiza la coherencia de la selección o de todo el proyecto. "
-                "Si excede 6 entidades, se trocea en análisis consecutivos."
-            ),
-            CommandAction.EXPLICAR: (
-                "Razonamiento deductivo: crea hitos/entidades que expliquen la "
-                "selección; con @ modifica el texto de las entidades referenciadas."
-            ),
-            CommandAction.EXPANDIR: "Inverso de Explicar: expande el worldbuilding a partir de la selección.",
-        }
-        self._action_tips = action_tips  # reusado por _populate_action_selector
-
-        scope = QComboBox()
-        scope.setObjectName("aiScopeSelector")
-        scope.setToolTip("Sobre qué actúa la IA")
-        scope.setStyleSheet(combo_style)
-        self._scope_tips = {
-            CommandScope.HOJA: "Personajes, objetos, lugares… (nodos hoja).",
-            CommandScope.RAMA: "Agrupaciones: facción, cultura, religión, institución, trama…",
-            CommandScope.RELACION: "Vínculos entre entidades.",
-            CommandScope.ANILLO: "Estrato causal / capa de worldbuilding.",
-            CommandScope.HITO: "Acontecimiento causal en la cronología.",
-        }
-
-        # F2.5: number of suggestions (Crear Hoja/Rama, max 3). Hidden otherwise.
-        count = BotanicalSpinBox()
-        count.setObjectName("aiSuggestionCount")
-        count.setRange(1, 3)
-        count.setValue(1)
-        count.setPrefix("× ")
-        count.setToolTip("Número de sugerencias a generar (máx 3)")
-        count.setStyleSheet(
-            f"QSpinBox {{ background: {SURFACE}; border: 1px solid {LINE}; "
-            f"border-radius: 16px; padding: 5px 8px; font-size: 12px; color: {INK}; min-width: 96px; }} "
-            f"QSpinBox:hover {{ border-color: {GOLD_SOFT}; }}"
-        )
-
-        # PA02: tres tuners en modo AUTO por defecto. En Auto muestran el valor
-        # por defecto de la tarea (hint) y NO envían override: manda el tier/intent.
-        # Al arrastrar pasan a manual; doble clic vuelve a Auto. Topes = máximos de
-        # tier (entrada hasta 600k, salida hasta 24k) para tareas que soportan más.
-        temp_tuner = RadialTuner(minimum=0.0, maximum=1.0, value=0.7, is_integer=False, auto=True)
-        temp_tuner.setToolTip(
-            "CREATIVIDAD (temperatura del modelo).\n"
-            "Auto = usa la recomendada para esta tarea (número mostrado).\n"
-            "Arrastra ↑/↓ para forzar un valor; doble clic = volver a Auto.\n"
-            "Abajo = preciso y consistente; arriba = más creativo y variado."
-        )
-        tokens_tuner = RadialTuner(
-            minimum=256, maximum=24000, value=2000, is_integer=True, auto=True
-        )
-        tokens_tuner.setToolTip(
-            "LONGITUD DE RESPUESTA — cuántos tokens puede generar la IA (el largo "
-            "de su respuesta).\n"
-            "Auto = el máximo por defecto de esta tarea (número mostrado).\n"
-            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto.\n"
-            "Más alto = respuestas más largas; más bajo = más cortas y rápidas."
-        )
-        budget_tuner = RadialTuner(
-            minimum=2000, maximum=600000, value=24000, is_integer=True, auto=True
-        )
-        budget_tuner.setToolTip(
-            "CONTEXTO — presupuesto TOTAL de contexto del prompt (tokens).\n"
-            "Se reserva primero lo fijo (config creativa, canon, tu petición) y el "
-            "resto se reparte por secciones según la tarea; a más presupuesto, se "
-            "recupera e incluye MÁS contexto del proyecto.\n"
-            "Auto = el presupuesto por defecto de esta tarea (número mostrado).\n"
-            "Arrastra ↑/↓ para forzar; doble clic = volver a Auto."
-        )
-
-        self._action_selector = action
-        self._scope_selector = scope
-        self._count_spin = count
-        self._temp_tuner = temp_tuner
-        self._tokens_tuner = tokens_tuner
-        self._budget_tuner = budget_tuner
-        self._populate_action_selector()
-        action.currentIndexChanged.connect(lambda _=0: self._refresh_scope_selector())
-        scope.currentIndexChanged.connect(lambda _=0: self._on_function_changed())
-        self._refresh_scope_selector()
-
-    def _on_function_changed(self) -> None:
-        self._update_count_visibility()
-        self._update_scope_enabled()
-        self._update_command_placeholder()
-        self._sync_tuner_recommendations()
-
-    def _update_command_placeholder(self) -> None:
-        """Descubribilidad: el placeholder del input muestra un ejemplo de orden
-        para la celda Acción×Ámbito actual (fuente única en command_expansion)."""
-        field = getattr(self, "_command_input", None)
-        if field is None:
-            return
-        action_value = self._action_selector.currentData()
-        scope_value = self._scope_selector.currentData()
-        example = example_for_command(action_value, scope_value)
-        field.setPlaceholderText(f"Ej.: {example}  ·  usa @ para referenciar")
-
-    def _update_scope_enabled(self) -> None:
-        """BETA1-UX2B: el 2º selector (Ámbito) se OCULTA cuando la acción no lo
-        usa (Analizar/Explicar/Expandir lo deciden por la selección, no por el
-        ámbito), en vez de quedarse visible pero gris —que confundía—. También
-        se oculta si la acción solo admite un ámbito (o ninguno)."""
-        scope = getattr(self, "_scope_selector", None)
-        if scope is None:
-            return
-        action_value = self._action_selector.currentData()
-        scope_driven = action_value in (
-            CommandAction.ANALIZAR.value,
-            CommandAction.EXPLICAR.value,
-            CommandAction.EXPANDIR.value,
-        )
-        try:
-            scopes = valid_scopes_for_action(action_value)
-        except ValueError:
-            scopes = list(CommandScope)
-        show = (not scope_driven) and len(scopes) > 1
-        scope.setVisible(show)
-        if show:
-            scope.setToolTip("Sobre qué actúa la IA")
-
-    def _captioned_tuner(self, tuner, caption: str):
-        """Envuelve un tuner con una etiqueta visible debajo (qué controla)."""
-        box = QWidget(self)
-        v = QVBoxLayout(box)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(1)
-        v.addWidget(tuner, alignment=Qt.AlignmentFlag.AlignHCenter)
-        label = QLabel(caption, box)
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        label.setStyleSheet(
-            f"font-size: {TYPE_CAPTION_PX}px; color: {INK_MUTED}; "
-            f"background: transparent; border: none;"
-        )
-        v.addWidget(label)
-        return box
-
-    def _toggle_advanced_tuners(self) -> None:
-        # BETA2-UX-04: muestra/oculta el popover de diales expertos, anclado
-        # encima del botón «Avanzado». Qt.Popup se cierra al pulsar fuera.
-        popup = self._advanced_tuners_popup
-        if popup.isVisible():
-            popup.hide()
-            return
-        popup.adjustSize()
-        btn = self._advanced_tuners_btn
-        anchor = btn.mapToGlobal(btn.rect().topLeft())
-        popup.move(anchor.x(), anchor.y() - popup.height() - 8)
-        popup.show()
-
-    def _sync_tuner_recommendations(self) -> None:
-        """PA02: muestra el default por tarea como HINT y ajusta topes por tier.
-
-        No fuerza valores: los tuners siguen en Auto (sin override) salvo que el
-        usuario los haya tocado. Así el presupuesto real lo deciden los tiers.
-        """
-        if getattr(self, "_temp_tuner", None) is None:
-            return
-        try:
-            job_type = self._selected_command_job_type()
-        except ValueError:
-            return
-        intent = job_type.value
-        params = ModelParams.from_intent(intent)
-        tier = INTENT_TO_TIER.get(intent, DEFAULT_TIER)
-        self._temp_tuner.set_hint(params.temperature)
-        self._tokens_tuner.set_hint(TIER_OUTPUT_TOKENS[tier])
-        self._budget_tuner.set_hint(TIER_INPUT_TOKENS[tier])
-
-    def _populate_action_selector(self) -> None:
-        """Rellena el selector de Acción con todas las acciones disponibles."""
-        combo = getattr(self, "_action_selector", None)
-        if combo is None:
-            return
-        previous = combo.currentData()
-        combo.blockSignals(True)
-        combo.clear()
-        tips = getattr(self, "_action_tips", {})
-        for act in CommandAction:
-            idx = combo.count()
-            combo.addItem(ACTION_LABELS[act], act.value)
-            combo.setItemData(idx, tips.get(act, ""), Qt.ItemDataRole.ToolTipRole)
-        if previous is not None:
-            j = combo.findData(previous)
-            if j >= 0:
-                combo.setCurrentIndex(j)
-        combo.blockSignals(False)
-
-    def _refresh_scope_selector(self) -> None:
-        """Repopulate the scope selector with the scopes valid for the action."""
-        action_value = self._action_selector.currentData()
-        try:
-            scopes = valid_scopes_for_action(action_value)
-        except ValueError:
-            scopes = list(CommandScope)
-        previous = self._scope_selector.currentData()
-        self._scope_selector.blockSignals(True)
-        self._scope_selector.clear()
-        tips = getattr(self, "_scope_tips", {})
-        for i, sc in enumerate(scopes):
-            self._scope_selector.addItem(SCOPE_LABELS[sc], sc.value)
-            self._scope_selector.setItemData(i, tips.get(sc, ""), Qt.ItemDataRole.ToolTipRole)
-        if previous is not None:
-            idx = self._scope_selector.findData(previous)
-            if idx >= 0:
-                self._scope_selector.setCurrentIndex(idx)
-        self._scope_selector.blockSignals(False)
-        self._on_function_changed()
-
-    def _update_count_visibility(self) -> None:
-        """Show the suggestion-count stepper only for Crear Hoja/Rama."""
-        spin = getattr(self, "_count_spin", None)
-        if spin is None:
-            return
-        action_value = self._action_selector.currentData()
-        scope_value = self._scope_selector.currentData()
-        visible = action_value == CommandAction.CREAR.value and scope_value in (
-            CommandScope.HOJA.value,
-            CommandScope.RAMA.value,
-        )
-        # UX3: ocultar el contenedor con caption (no solo el stepper) para que la
-        # etiqueta "Cuántas" no quede suelta cuando no aplica.
-        box = getattr(self, "_count_spin_box", None)
-        (box or spin).setVisible(visible)
-
-    def _known_mention_targets(self) -> list[tuple[str, str, str]]:
-        """(id, name, type) of entities + milestones, for @mention resolution."""
-        targets: list[tuple[str, str, str]] = []
-        project = self._get_active_project()
-        if project is not None:
-            for e in getattr(project, "entities", []) or []:
-                name = str(getattr(e, "name", "") or "").strip()
-                if name:
-                    targets.append((str(getattr(e, "id", "")), name, "entity"))
-        ctrl = getattr(self, "_milestone_ctrl", None)
-        if ctrl is not None:
-            try:
-                for m in ctrl.list_all():
-                    title = str(getattr(m, "title", "") or "").strip()
-                    if title:
-                        targets.append((str(getattr(m, "id", "")), title, "milestone"))
-            except Exception:
-                pass
-        return targets
-
-    def _causal_context_pack(self, scope: dict) -> dict:
-        """Causal-ordered context (Anillos→Ramas→Hojas) from the current selection.
-
-        Built only when there is a selection — a whole-project pack would bloat
-        the prompt. Feeds order_context_by_causality so the model reads the most
-        causally-upstream context first.
-        """
-        project = self._get_active_project()
-        if project is None:
-            return {}
-        selected = {str(x) for x in (scope.get("selected_entity_ids") or [])}
-        if not selected:
-            return {}
-
-        def _enum_value(obj, attr):
-            raw = getattr(obj, attr, "")
-            return str(getattr(raw, "value", raw) or "")
-
-        entities = []
-        for e in getattr(project, "entities", []) or []:
-            eid = str(getattr(e, "id", ""))
-            if eid not in selected:
-                continue
-            entities.append(
-                {
-                    "id": eid,
-                    "name": str(getattr(e, "name", "")),
-                    "display_type": str(getattr(e, "display_type", "") or ""),
-                    "entity_type": _enum_value(e, "entity_type"),
-                    "layer_ids": [str(x) for x in (getattr(e, "layer_ids", []) or [])],
-                }
-            )
-        relations = []
-        for r in getattr(project, "relations", []) or []:
-            s, t = str(getattr(r, "source_id", "")), str(getattr(r, "target_id", ""))
-            if s in selected and t in selected:
-                relations.append(
-                    {
-                        "id": str(getattr(r, "id", "")),
-                        "source_id": s,
-                        "target_id": t,
-                        "relation_type": _enum_value(r, "relation_type"),
-                    }
-                )
-        ring_ids = {lid for ent in entities for lid in ent["layer_ids"]}
-        rings = []
-        for ring in getattr(project, "world_layers", []) or []:
-            rid = str(getattr(ring, "id", ""))
-            if rid in ring_ids:
-                rings.append(
-                    {
-                        "id": rid,
-                        "name": str(getattr(ring, "name", "")),
-                        "order": int(getattr(ring, "order", 0) or 0),
-                    }
-                )
-        milestones = []
-        ctrl = getattr(self, "_milestone_ctrl", None)
-        if ctrl is not None:
-            try:
-                for m in ctrl.list_all():
-                    affected = {str(x) for x in (getattr(m, "affected_entity_ids", []) or [])}
-                    layers = {str(x) for x in (getattr(m, "layer_ids", []) or [])}
-                    if (affected & selected) or (layers & ring_ids):
-                        milestones.append(
-                            {
-                                "id": str(getattr(m, "id", "")),
-                                "title": str(getattr(m, "title", "")),
-                                "layer_ids": list(layers),
-                                "affected_entity_ids": list(affected),
-                            }
-                        )
-            except Exception:
-                pass
-        return order_context_by_causality(
-            entities=entities,
-            relations=relations,
-            rings=rings,
-            milestones=milestones,
-        )
-
     def _project_service(self):
         """Resolve the active ProjectService (used to build narrative context)."""
         project_controller = getattr(self.ctx, "project_controller", None)
@@ -4865,121 +3975,7 @@ class CreationWorkspace(QWidget):
         proyecto. Se conserva como hook no-op por compatibilidad de llamadas."""
         return
 
-    def _neighborhood_pack(self, scope: dict) -> dict:
-        """Vecindario por saltos desde la selección (CONO). Vacío si no hay selección."""
-        project = self._get_active_project()
-        if project is None:
-            return {}
-        selected = [str(x) for x in (scope.get("selected_entity_ids") or []) if x]
-        if not selected:
-            return {}
-        project_service = self._project_service()
-        if project_service is None:
-            return {}
-        from packages.application.narrative_context_builder import NarrativeContextBuilder
-
-        builder = NarrativeContextBuilder(project_service)
-        return builder.build_neighborhood_pack(selected, audience="gm", max_hops=2)
-
-    def _enrich_mentions_in_scope(self, scope: dict, project) -> None:
-        """Añade brief (mini-ficha) a cada mención resuelta, in-place."""
-        mentions = scope.get("mentions")
-        if not isinstance(mentions, dict) or project is None:
-            return
-        refs = mentions.get("refs") or []
-        if not refs:
-            return
-        index = {}
-        for e in getattr(project, "entities", []) or []:
-            index[str(getattr(e, "id", ""))] = e
-        milestones = {}
-        ctrl = getattr(self, "_milestone_ctrl", None)
-        if ctrl is not None:
-            try:
-                for m in ctrl.list_all():
-                    milestones[str(getattr(m, "id", ""))] = m
-            except Exception:
-                pass
-        for ref in refs:
-            if not isinstance(ref, dict):
-                continue
-            rid = str(ref.get("ref_id") or "")
-            target = index.get(rid) or milestones.get(rid)
-            if target is None:
-                continue
-            ref["brief"] = {
-                "name": str(getattr(target, "name", "") or ""),
-                "type": str(getattr(getattr(target, "entity_type", ""), "value", "milestone")),
-                "layer_ids": [str(x) for x in (getattr(target, "layer_ids", []) or [])],
-                "brief_description": str(getattr(target, "brief_description", "") or "")[:400],
-            }
-
-    # F2.9: @mention autocomplete in the command input ---------------------
-
-    def _setup_mention_autocomplete(self) -> None:
-        """Popup completer that suggests entity/milestone names after '@'."""
-        self._mention_model = QStringListModel(self)
-        completer = QCompleter(self._mention_model, self)
-        completer.setCaseSensitivity(Qt.CaseInsensitive)
-        completer.setFilterMode(Qt.MatchContains)
-        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        completer.setWidget(self._command_input)
-        completer.activated[str].connect(self._insert_mention_completion)
-        self._mention_completer = completer
-        self._command_input.textEdited.connect(self._on_command_text_edited)
-
-    def _current_mention_fragment(self) -> tuple[int, str] | None:
-        """(@-index, text-after-@) for the mention being typed at the cursor."""
-        text = self._command_input.text()
-        cursor = self._command_input.cursorPosition()
-        before = text[:cursor]
-        at = before.rfind("@")
-        if at < 0:
-            return None
-        fragment = before[at + 1 :]
-        # A mention ends at a hard delimiter; past it we are no longer in a token.
-        if any(ch in fragment for ch in (",", "@", "\n", ";")):
-            return None
-        return at, fragment
-
-    def _on_command_text_edited(self, _text: str) -> None:
-        completer = getattr(self, "_mention_completer", None)
-        if completer is None:
-            return
-        frag = self._current_mention_fragment()
-        if frag is None:
-            completer.popup().hide()
-            return
-        _at, fragment = frag
-        names = sorted({name for _id, name, _t in self._known_mention_targets()})
-        self._mention_model.setStringList(names)
-        completer.setCompletionPrefix(fragment)
-        if completer.completionCount() == 0:
-            completer.popup().hide()
-            return
-        rect = self._command_input.cursorRect()
-        rect.setWidth(completer.popup().sizeHintForColumn(0) + 24)
-        completer.complete(rect)
-
-    def _insert_mention_completion(self, choice: str) -> None:
-        frag = self._current_mention_fragment()
-        if frag is None:
-            return
-        at, _fragment = frag
-        text = self._command_input.text()
-        cursor = self._command_input.cursorPosition()
-        new_text = f"{text[:at]}@{choice} {text[cursor:]}"
-        self._command_input.setText(new_text)
-        self._command_input.setCursorPosition(at + 1 + len(choice) + 1)
-
-    def _selected_command_job_type(self) -> AIJobType:
-        """Resolve the two selectors to a deterministic AIJobType."""
-        return job_type_for_command(
-            self._action_selector.currentData(),
-            self._scope_selector.currentData(),
-        )
-
-    # B38 persistent layer drawer and command bar
+    # B38 persistent layer drawer
 
     def _start_relation_mode(self):
         """Guide the existing drag-to-connect relation flow; no parallel mode."""
@@ -5065,217 +4061,6 @@ class CreationWorkspace(QWidget):
             self._layer_flyout.update_toggle_state(False)
         self.ctx.log("info", "Vista concéntrica de anillos activa")
 
-    def _current_context_scope(self) -> dict:
-        project = self._get_active_project()
-        layer_ids = tuple(
-            getattr(
-                getattr(self.graph, "canvas", None), "_visual_filter", VisualFilterState()
-            ).layer_ids
-        )
-        focused_ring_id = (
-            self.graph.focused_ring_id() if hasattr(self.graph, "focused_ring_id") else ""
-        )
-        # UX5c-fix: el anillo activo para crear/coherenciar entidades es el SELECCIONADO
-        # (clic simple) o el enfocado (doble clic) — `active_ring_id()` ya resuelve esa
-        # precedencia (override de menú > foco > selección). Antes el scope solo miraba
-        # el ENFOCADO, así que una entidad creada sobre un anillo meramente seleccionado
-        # nacía «sin anillo» y sin contexto temático del anillo (incoherente).
-        active_ring_id = (
-            self.graph.active_ring_id() if hasattr(self.graph, "active_ring_id") else ""
-        )
-        selected_entity_ids = self.graph.selected_entity_ids() if hasattr(self, "graph") else []
-        selected_relation_ids = self.graph.selected_relation_ids() if hasattr(self, "graph") else []
-        # Validate both ids still exist; a deleted/unfocused ring → empty, so it never
-        # leaks into the payload nor the RAG query. focus_label sigue reflejando solo el
-        # anillo ENFOCADO (breadcrumb de zoom), no la selección.
-        ring_ids = (
-            {str(getattr(wl, "id", "")) for wl in (getattr(project, "world_layers", []) or [])}
-            if project is not None
-            else set()
-        )
-        if active_ring_id and str(active_ring_id) not in ring_ids:
-            active_ring_id = ""  # stale active ring on a layer that no longer exists
-        focus_label = ""
-        if focused_ring_id and str(focused_ring_id) in ring_ids:
-            canvas = getattr(self.graph, "canvas", None)
-            namer = getattr(canvas, "_ring_display_name", None)
-            name = namer(focused_ring_id) if callable(namer) else ""
-            focus_label = f"Anillo: {name}" if name else "Anillo enfocado"
-        elif focused_ring_id:
-            focused_ring_id = ""  # stale focus on a ring that no longer exists
-        creative_brief = {}
-        if project is not None:
-            # PA04: la config por rama se eliminó; solo viaja el perfil creativo global.
-            from packages.application.creative_context import project_creative_brief
-
-            creative_brief = project_creative_brief(project)
-        return {
-            "project_id": str(getattr(project, "id", "")) if project is not None else "",
-            "worldbuilding_active": bool(getattr(project, "worldbuilding_active", False))
-            if project is not None
-            else False,
-            "selected_entity_ids": selected_entity_ids,
-            "selected_relation_ids": selected_relation_ids,
-            # F3.6: hitos activados en la vista cronológica persisten junto a la
-            # selección del grafo y el prompt (command bar compartida).
-            "selected_milestone_ids": list(getattr(self, "_chrono_context_hito_ids", []) or []),
-            "active_layer_ids": list(layer_ids),
-            "active_ring_id": active_ring_id,
-            "focused_ring_id": focused_ring_id,
-            "focus_label": focus_label,
-            "visual_filters_active": self.graph.active_filter_count()
-            if hasattr(self, "graph")
-            else 0,
-            "creative_brief": creative_brief,
-            "creative_context": [],
-            "branch_creative_context": [],
-        }
-
-    def _build_submit_scope_and_plan(self, prompt: str):
-        """Arma el context_scope base (selección + tuners + packs) y el plan de
-        jobs determinista. Único origen compartido por crear y previsualizar, para
-        que la vista previa refleje exactamente lo que se enviará."""
-        base_scope = self._current_context_scope()
-        # PA02: solo se envía override si el tuner NO está en Auto. En Auto manda
-        # el default por tarea (temperatura del intent; tokens/contexto del tier).
-        if not self._temp_tuner.is_auto:
-            base_scope["model_temperature"] = self._temp_tuner.value()
-        if not self._tokens_tuner.is_auto:
-            base_scope["model_max_tokens"] = int(self._tokens_tuner.value())
-        causal = self._causal_context_pack(base_scope)
-        if causal:
-            base_scope["contexto_causal"] = causal
-        vecindario = self._neighborhood_pack(base_scope)
-        if vecindario:
-            base_scope["vecindario"] = vecindario
-        if getattr(self, "_budget_tuner", None) is not None and not self._budget_tuner.is_auto:
-            base_scope["prompt_budget_tokens"] = int(self._budget_tuner.value())
-        plan = plan_command_jobs(
-            self._action_selector.currentData(),
-            self._scope_selector.currentData(),
-            prompt,
-            selected_entity_ids=base_scope.get("selected_entity_ids") or [],
-            selected_relation_ids=base_scope.get("selected_relation_ids") or [],
-            known_mentions=self._known_mention_targets(),
-            suggestion_count=self._count_spin.value(),
-            active_ring_id=str(
-                base_scope.get("focused_ring_id") or base_scope.get("active_ring_id") or ""
-            ),
-        )
-        return base_scope, plan
-
-    def _submit_ai_command(self, *, exclusions: dict | None = None):
-        _apptrace(f"WS submit_ai_command prompt={self._command_input.text().strip()[:60]}")
-        prompt = self._command_input.text().strip()
-        if not prompt:
-            self._job_status_label.setText("Escribe una orden para Dendro")
-            return
-        # Deterministic expansion: the two selectors + selection + params decide
-        # the job(s) — no keyword classification. plan_command_jobs handles the
-        # per-cell behaviour (fan-out, ring-template guard, batching, count, @).
-        base_scope, plan = self._build_submit_scope_and_plan(prompt)
-        if plan.error:
-            self._job_status_label.setText(plan.error)
-            self.ctx.log("error", plan.error)
-            return
-        for warning in plan.warnings:
-            self.ctx.log("warning", warning)
-
-        created_ids: list[str] = []
-        for planned in plan.jobs:
-            scope = dict(base_scope)
-            scope.update(planned.context_overrides)
-            # UX3: exclusiones elegidas en la vista previa viajan con el job; el
-            # ensamblador las aplica al ejecutar (misma fuente que la preview).
-            if exclusions and (exclusions.get("sections") or exclusions.get("item_ids")):
-                scope["preview_exclusions"] = exclusions
-            self._enrich_mentions_in_scope(scope, self._get_active_project())
-            result = self.ai_job_service.create_job(
-                planned.job_type, planned.prompt, context_scope=scope, explicit=True
-            )
-            if isinstance(result, Error):
-                self._job_status_label.setText(result.error)
-                self.ctx.log("error", result.error)
-                continue
-            created_ids.append(result.value.id)
-        if not created_ids:
-            return
-
-        self._command_input.clear()
-        label = plan.jobs[0].job_type.value.replace("_", " ")
-        n = len(created_ids)
-        self._job_status_label.setText(
-            f"{n} jobs creados: {label}" if n > 1 else f"Job creado: {label}"
-        )
-        pulse_feedback(self._job_status_label)
-        self._sync_jobs_indicator()
-        self.ctx.log(
-            "info",
-            f"{n} job(s) IA creado(s): resultado revisable, sin cambios automáticos en canon",
-        )
-        self._open_prompt_trace_page()
-        for jid in created_ids:
-            self._start_ai_job_worker(jid)
-
-    def _open_context_preview(self):
-        """UX3: calcula y muestra la vista previa editable del contexto del primer
-        job planificado. No crea ningún job; el cálculo va en un hilo ligero."""
-        prompt = self._command_input.text().strip()
-        if not prompt:
-            self._job_status_label.setText("Escribe una orden para previsualizar")
-            return
-        base_scope, plan = self._build_submit_scope_and_plan(prompt)
-        if plan.error:
-            self._job_status_label.setText(plan.error)
-            self.ctx.log("error", plan.error)
-            return
-        planned = plan.jobs[0]
-        scope = dict(base_scope)
-        scope.update(planned.context_overrides)
-        self._enrich_mentions_in_scope(scope, self._get_active_project())
-        self._job_status_label.setText("Calculando contexto…")
-        if not hasattr(self, "_preview_workers"):
-            self._preview_workers = set()
-        worker = _ContextPreviewWorker(self.ai_job_service, planned.job_type, planned.prompt, scope)
-        worker.ready.connect(self._on_context_preview_ready)
-        worker.failed.connect(self._on_context_preview_failed)
-        worker.finished.connect(
-            lambda w=worker: self._preview_workers.discard(w) if _qt_alive(self) else None
-        )
-        worker.finished.connect(self._refresh_busy_indicator)
-        self._preview_workers.add(worker)
-        track_worker(worker)  # apagado ordenado al cerrar la app
-        worker.start()
-        self._refresh_busy_indicator()  # UX11: actividad visible al calcular preview
-
-    def _on_context_preview_ready(self, preview: dict):
-        from hosts.DesktopHostPySide.widgets.context_preview_panel import ContextPreviewPanel
-
-        self._job_status_label.setText("")
-        panel = ContextPreviewPanel(
-            preview,
-            on_apply=self._submit_with_preview_overrides,
-            on_refresh=self._open_context_preview,
-        )
-        drawer = self.ctx.drawer
-        if drawer is not None:
-            drawer.set_content(panel, title="Vista previa de contexto")
-            drawer.open()
-
-    def _on_context_preview_failed(self, error: str):
-        self._job_status_label.setText(f"No se pudo previsualizar: {error}")
-        self.ctx.log("error", f"Vista previa de contexto fallida: {error}")
-
-    def _submit_with_preview_overrides(self, excluded_sections: list, excluded_item_ids: list):
-        """Crea el job aplicando las exclusiones marcadas en la vista previa."""
-        exclusions = {
-            "sections": list(excluded_sections or []),
-            "item_ids": list(excluded_item_ids or []),
-        }
-        if self.ctx.drawer is not None:
-            self.ctx.drawer.close()
-        self._submit_ai_command(exclusions=exclusions)
-
     def _launch_toolbar_ai_job(
         self,
         prompt: str,
@@ -5287,9 +4072,9 @@ class CreationWorkspace(QWidget):
         if project is None:
             self.ctx.log("error", "No hay proyecto activo")
             return False
-        scope = (
-            dict(scope_override) if scope_override is not None else self._current_context_scope()
-        )
+        # BETA2-WIKI-11: `_current_context_scope` se eliminó con la command bar; los
+        # callers vivos (Sugerencias) SIEMPRE pasan scope_override.
+        scope = dict(scope_override) if scope_override is not None else {}
         # Toolbar quick-actions carry an explicit intent; never classify text.
         result = self.ai_job_service.create_job(
             job_type, prompt, context_scope=scope, explicit=True
@@ -5556,49 +4341,16 @@ class CreationWorkspace(QWidget):
         except RuntimeError:  # widget Qt ya destruido
             self._busy_indicator = None
 
-    def _open_ai_jobs_panel(self):
-        drawer = self.ctx.drawer
-        if drawer is None:
-            return
-        panel = AIJobsPanel(self)
-        self._ai_jobs_panel = panel
-        drawer.set_content(panel, title="Tareas IA")
-        drawer.open()
-
     def _refresh_ai_jobs_panel_if_open(self):
-        panel = getattr(self, "_ai_jobs_panel", None)
-        if panel is not None and hasattr(panel, "refresh"):
-            try:
-                panel.refresh()
-            except RuntimeError:
-                self._ai_jobs_panel = None
+        # BETA2-WIKI-11: el panel «Tareas IA» (AIJobsPanel) se eliminó con la
+        # superficie IA legada. Hook no-op: el pipeline compartido de jobs lo
+        # sigue invocando en sus transiciones de estado.
+        return
 
     def _sync_jobs_indicator(self):
-        btn = getattr(self, "_jobs_btn", None)
-        if btn is None:
-            return
-        jobs = self.ai_job_service.list_jobs()
-        active = [
-            j
-            for j in jobs
-            if getattr(getattr(j, "status", ""), "value", getattr(j, "status", ""))
-            in {
-                "queued",
-                "building_context",
-                "planning",
-                "waiting_for_model",
-                "running",
-                "postprocessing",
-            }
-        ]
-        ready = [
-            j
-            for j in jobs
-            if getattr(getattr(j, "status", ""), "value", getattr(j, "status", ""))
-            == "ready_for_review"
-        ]
-        total = len(active) + len(ready)
-        btn.setText(f"Tareas {total}" if total else "Tareas")
+        # BETA2-WIKI-11: el botón «Tareas» de la toolbar se eliminó con la
+        # superficie IA legada. Hook no-op invocado por el pipeline compartido.
+        return
 
     # ── PA-Semillas: revisión por-candidato desde la notificación ──────────
 
@@ -6277,61 +5029,6 @@ class CreationWorkspace(QWidget):
         n_e = len(entity_ids)
         n_r = len(relation_ids)
 
-        button = getattr(self, "_coherence_btn", None)
-        if button is not None:
-            button.setEnabled(has_selection)
-            button.setStyleSheet(
-                self._toolbar_btn_style if has_selection else self._toolbar_disabled_style
-            )
-            button.setToolTip(
-                f"Analizar coherencia: {n_e} nodo(s), {n_r} relacion(es)"
-                if has_selection
-                else "Selecciona nodos o relaciones para analizar coherencia"
-            )
-
-        for attr, base in (
-            ("_suggest_entity_btn", "Sugerir hoja"),
-            ("_suggest_branch_btn", "Sugerir rama"),
-        ):
-            btn = getattr(self, attr, None)
-            if btn is not None and btn.isEnabled():
-                btn.setToolTip(
-                    f"{base} con IA (contexto: {n_e} nodo(s), {n_r} relacion(es) seleccionado(s))"
-                    if has_selection
-                    else f"{base} con IA (contexto: todo el proyecto)"
-                )
-        # D04 explicit enablement for actions born disabled.
-        branch_btn = getattr(self, "_suggest_branch_btn", None)
-        if branch_btn is not None:
-            branch_btn.setToolTip(
-                f"Sugerir rama con IA (contexto: {n_e} nodo(s), {n_r} relacion(es))"
-                if has_selection
-                else "Sugerir rama con IA (contexto: foco/anillo actual)"
-            )
-        relation_btn = getattr(self, "_suggest_relation_btn", None)
-        if relation_btn is not None:
-            can_suggest_relation = n_e >= 2 or n_r > 0
-            relation_btn.setEnabled(can_suggest_relation)
-            relation_btn.setStyleSheet(
-                self._toolbar_btn_style if can_suggest_relation else self._toolbar_disabled_style
-            )
-            relation_btn.setToolTip(
-                f"Sugerir relaciones con IA (contexto: {n_e} nodo(s), {n_r} relacion(es))"
-                if can_suggest_relation
-                else "Selecciona al menos dos hojas o una relacion para sugerir relaciones"
-            )
-        summary_btn = getattr(self, "_summary_btn", None)
-        if summary_btn is not None:
-            summary_btn.setEnabled(has_selection)
-            summary_btn.setStyleSheet(
-                self._toolbar_btn_style if has_selection else self._toolbar_disabled_style
-            )
-            summary_btn.setToolTip(
-                f"Resumir seleccion con IA ({n_e} nodo(s), {n_r} relacion(es))"
-                if has_selection
-                else "Selecciona elementos para resumir con IA"
-            )
-
         # Delete button: enabled when something is selected
         del_btn = getattr(self, "_delete_btn", None)
         if del_btn is not None:
@@ -6348,41 +5045,6 @@ class CreationWorkspace(QWidget):
                 del_btn.setToolTip(f"Eliminar: {', '.join(parts)}")
             else:
                 del_btn.setToolTip("Selecciona algo para eliminar")
-
-    def _run_context_ai_action(self, action: str):
-        entity_ids = self.graph.selected_entity_ids()
-        relation_ids = self.graph.selected_relation_ids()
-        if not (entity_ids or relation_ids):
-            self.ctx.log("info", "Selecciona hojas, ramas o relaciones para usar IA contextual")
-            return
-        selection_hint = f"{len(entity_ids)} elemento(s), {len(relation_ids)} relacion(es)"
-        prompts = {
-            "suggest_nodes": (
-                "A partir de la seleccion actual del grafo, sugiere hojas/nodos candidatos que completen "
-                "el contexto narrativo. Devuelve solo candidatos revisables; no modifiques canon."
-            ),
-            "suggest_branches": (
-                "A partir de la seleccion actual del grafo, sugiere ramas candidatas para agrupar, explicar "
-                "o expandir estos elementos. Devuelve solo candidatos revisables; no modifiques canon."
-            ),
-            "suggest_relations": (
-                "A partir de la seleccion actual del grafo, sugiere relaciones candidatas entre hojas, ramas "
-                "y relaciones relevantes. Usa endpoints reales del contexto cuando existan. No modifiques canon."
-            ),
-            "analyze_coherence": (
-                "Analiza la coherencia narrativa de la seleccion actual del grafo. Detecta tensiones, huecos, "
-                "contradicciones y oportunidades. Devuelve un informe revisable; no modifiques canon."
-            ),
-        }
-        prompt = prompts.get(action)
-        if not prompt:
-            self.ctx.log("warning", f"Accion IA contextual desconocida: {action}")
-            return
-        self._launch_toolbar_ai_job(
-            prompt,
-            f"IA contextual sobre seleccion ({selection_hint})...",
-            job_type_for_action(action),
-        )
 
     def _delete_selected(self):
         """Delete selected entities and/or relations."""
@@ -6433,29 +5095,6 @@ class CreationWorkspace(QWidget):
         if focused or (breadcrumb is not None and breadcrumb.isVisible()):
             self.clear_focus_scope()
 
-    def _open_coherence_panel(self):
-        entity_ids = self.graph.selected_entity_ids()
-        relation_ids = self.graph.selected_relation_ids()
-        if not (entity_ids or relation_ids):
-            self.ctx.log(
-                "info", "Selecciona uno o varios nodos/relaciones para analizar coherencia"
-            )
-            return
-        if self.ai_context_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "IA contextual no disponible para coherencia")
-            return
-        panel = CoherencePanel(
-            self.ctx,
-            self.ai_context_controller,
-            self.entity_controller,
-            self.relation_controller,
-            entity_ids=entity_ids,
-            relation_ids=relation_ids,
-            on_saved=self.refresh,
-        )
-        self.ctx.drawer.set_content(panel, title="Coherencia")
-        self.ctx.drawer.open()
-
     def _open_utility(self, view, title: str | None = None):
         """Open a utility view in the right drawer."""
         drawer = self.ctx.drawer
@@ -6464,169 +5103,6 @@ class CreationWorkspace(QWidget):
         resolved_title = title or _utility_title(view)
         drawer.set_content(view, title=resolved_title)
         drawer.open()
-
-    # Suggest node / relation via AI
-
-    def _suggest_branch(self):
-        """Suggest 1-2 branch candidates from the current creation context."""
-        prompt = (
-            "Sugiere 1-2 ramas candidatas para el contexto actual de Creacion. "
-            "Una rama debe ser un grupo, sistema, faccion, cultura, institucion, trama u organizacion. "
-            "Devuelve solo candidatos revisables; no modifiques canon."
-        )
-        self._launch_toolbar_ai_job(prompt, "Sugiriendo ramas IA...", AIJobType.GENERATE_TREE)
-
-    def _summarize_selection(self):
-        """Summarize the current graph selection as a reviewable AI report."""
-        entity_ids = self.graph.selected_entity_ids()
-        relation_ids = self.graph.selected_relation_ids()
-        if not (entity_ids or relation_ids):
-            self.ctx.log("info", "Selecciona elementos para resumir con IA")
-            return
-        prompt = (
-            "Resume la seleccion actual del grafo de forma narrativa. "
-            "Incluye entidades, relaciones, huecos y preguntas abiertas. "
-            "Devuelve un informe revisable, no cambios de canon."
-        )
-        self._launch_toolbar_ai_job(prompt, "Resumiendo seleccion IA...", AIJobType.REVIEW_GRAPH)
-
-    def _suggest_node(self):
-        """Ask AI to suggest missing entities. Uses graph selection as context if available."""
-        if self.ai_context_controller is None:
-            self.ctx.log("error", "IA no configurada. Verifica proveedor en Ajustes.")
-            return
-        project = self._get_active_project()
-        if project is None:
-            self.ctx.log("error", "No hay proyecto activo")
-            return
-
-        # Selection takes priority; fall back to all entities
-        sel_e = self.graph.selected_entity_ids()
-        sel_r = self.graph.selected_relation_ids()
-        if sel_e:
-            entity_ids = sel_e
-            relation_ids = sel_r
-            context_label = f"{len(sel_e)} nodo(s) seleccionado(s)"
-        else:
-            entity_ids = [getattr(e, "id", "") for e in getattr(project, "entities", []) or []]
-            relation_ids = []
-            context_label = "todo el proyecto"
-
-        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
-        if btn:
-            btn.setEnabled(False)
-            btn.setToolTip("Consultando IA...")
-
-        self._suggest_worker = _SuggestWorker(
-            self.ai_context_controller,
-            action="suggest_missing_nodes",
-            entity_ids=entity_ids,
-            relation_ids=relation_ids,
-        )
-        self._suggest_entity_btn = icon_btn("IA", "Sugerir hoja con IA", self._suggest_node)
-        track_worker(self._suggest_worker)  # apagado ordenado al cerrar la app
-        self._suggest_worker.start()
-        self.ctx.log("info", f"Consultando IA para sugerir hojas (contexto: {context_label})...")
-
-    def _suggest_relation(self):
-        """Ask AI to suggest missing relations. Uses graph selection as context if available."""
-        sel_e = self.graph.selected_entity_ids()
-        sel_r = self.graph.selected_relation_ids()
-        if len(sel_e) < 2 and not sel_r:
-            self.ctx.log(
-                "info",
-                "Selecciona al menos dos hojas o una relacion para sugerir relaciones con IA",
-            )
-            return
-        prompt = (
-            "Sugiere relaciones candidatas entre los elementos seleccionados. "
-            "Usa endpoints reales del contexto si existen; si no, usa nombres. "
-            "Devuelve solo candidatos de relacion revisables, sin modificar canon."
-        )
-        self._launch_toolbar_ai_job(
-            prompt, "Sugiriendo relaciones IA...", AIJobType.SUGGEST_RELATIONS
-        )
-        return
-
-        if self.ai_context_controller is None:
-            self.ctx.log("error", "IA no configurada. Verifica proveedor en Ajustes.")
-            return
-        project = self._get_active_project()
-        if project is None:
-            self.ctx.log("error", "No hay proyecto activo")
-            return
-
-        sel_e = self.graph.selected_entity_ids()
-        sel_r = self.graph.selected_relation_ids()
-        if sel_e:
-            entity_ids = sel_e
-            relation_ids = sel_r
-            context_label = f"{len(sel_e)} nodo(s) seleccionado(s)"
-        else:
-            entity_ids = [getattr(e, "id", "") for e in getattr(project, "entities", []) or []]
-            relation_ids = []
-            context_label = "todo el proyecto"
-
-        btn = getattr(self, "_suggest_relation_btn", None)
-        if btn:
-            btn.setEnabled(False)
-            btn.setToolTip("Consultando IA...")
-
-        self._suggest_rel_worker = _SuggestWorker(
-            self.ai_context_controller,
-            action="suggest_missing_relations",
-            entity_ids=entity_ids,
-            relation_ids=relation_ids,
-        )
-        self._suggest_rel_worker.finished.connect(
-            lambda: self._on_suggest_done(
-                "relación", "_suggest_relation_btn", "_suggest_rel_worker"
-            )
-        )
-        track_worker(self._suggest_rel_worker)  # apagado ordenado al cerrar la app
-        self._suggest_rel_worker.start()
-        self.ctx.log(
-            "info", f"Consultando IA para sugerir relaciones (contexto: {context_label})..."
-        )
-
-    @_qt_safe_slot
-    def _on_suggest_done(self, kind: str, btn_attr: str, worker_attr: str):
-        """Handle AI suggestion result (works for both nodes and relations)."""
-        btn = getattr(self, btn_attr, None)
-        if btn:
-            btn.setEnabled(True)
-            tooltip_base = "Sugerir hoja" if kind == "nodo" else "Sugerir relación"
-            btn.setToolTip(f"{tooltip_base} con IA (selecciona nodos como contexto)")
-
-        worker = getattr(self, worker_attr, None)
-        if worker is None:
-            return
-        result = worker.result
-        setattr(self, worker_attr, None)
-
-        if result is None:
-            self.ctx.log("error", f"La sugerencia IA de {kind} falló sin resultado")
-            return
-        if isinstance(result, Error):
-            self.ctx.log("error", f"Error IA: {result.error}")
-            return
-
-        value = result.value
-        candidate_count = len(getattr(value, "candidates", []) or [])
-        preview_count = len(getattr(value, "previews", []) or [])
-
-        if candidate_count == 0 and preview_count == 0:
-            raw = getattr(value, "raw_text", "") or ""
-            if raw:
-                self.ctx.log("info", f"IA: {raw[:200]}")
-            else:
-                self.ctx.log("info", f"La IA no generó sugerencias de {kind}")
-            return
-
-        self.ctx.log("info", f"IA sugirió {candidate_count} candidato(s) de {kind}")
-        # SEM03: refresh() rehidrata los nuevos candidatos como semillas
-        # germinantes (notificaciones); ya no se abre la bandeja legacy.
-        self.refresh()
 
     def _create_entity_on_graph(self) -> str:
         """Create a new entity, add node to graph center, open detail panel.
@@ -6949,44 +5425,6 @@ class CreationWorkspace(QWidget):
         if hid:
             self._open_milestone_detail_panel(hid)
 
-    def _suggest_related_milestone(self, target_kind: str, target_id: str) -> bool:
-        """Launch a reviewable AI job anchored to one existing detail-panel target."""
-        target_kind = str(target_kind or "entity")
-        target_id = str(target_id or "")
-        if not target_id:
-            self.ctx.log("warning", "Selecciona un elemento para sugerir un hito relacionado")
-            return False
-        scope = self._current_context_scope()
-        scope["selected_entity_ids"] = []
-        scope["selected_relation_ids"] = []
-        scope["h05_target_kind"] = target_kind
-        scope["h05_target_id"] = target_id
-        if target_kind in {"entity", "branch"}:
-            scope["selected_entity_ids"] = [target_id]
-        elif target_kind == "relation":
-            scope["selected_relation_ids"] = [target_id]
-            relation = self._relation_by_id(target_id)
-            endpoints = (
-                [
-                    str(getattr(relation, "source_id", "") or ""),
-                    str(getattr(relation, "target_id", "") or ""),
-                ]
-                if relation is not None
-                else []
-            )
-            scope["selected_entity_ids"] = [entity_id for entity_id in endpoints if entity_id]
-        prompt = (
-            "Sugiere un hito causal relacionado con la seleccion actual. "
-            "Devuelve el resultado como candidato revisable, sin modificar canon. "
-            "Incluye titulo, descripcion, justificacion, clave temporal narrativa y orden relativo si procede."
-        )
-        return self._launch_toolbar_ai_job(
-            prompt,
-            "Sugiriendo hito relacionado...",
-            AIJobType.PROPOSE_MILESTONES,
-            scope_override=scope,
-        )
-
     def _create_hito_from_selection(self):
         """Create a hito from current graph selection (B41-T04).
 
@@ -7027,23 +5465,19 @@ class CreationWorkspace(QWidget):
         drawer.open()
 
     def refresh_ai_controller(self):
-        """Rebuild contextual AI controller after provider/settings changes."""
-        # Re-resolve the provider so a real provider configured at runtime takes
-        # effect on the shared command-bar service (and the context actions).
+        """Re-resuelve el proveedor IA tras cambios de ajustes/proveedor.
+
+        BETA2-WIKI-11: el AIContextController (acciones IA contextuales) se
+        eliminó; solo queda refrescar el proveedor del AIJobService compartido
+        y el controller de cronología del proyecto activo."""
         if getattr(self, "ai_job_service", None) is not None:
             self.ai_job_service.set_provider(get_provider())
         project_controller = getattr(self.ctx, "project_controller", None)
         project_service = getattr(project_controller, "ps", None)
         if project_service is None:
-            self.ai_context_controller = None
             self._chronology_ctrl = None
         else:
-            self.ai_context_controller = AIContextController(
-                project_service, ai_job_service=self.ai_job_service
-            )
             self._chronology_ctrl = ProjectChronologyController(project_service)
-        if hasattr(self, "graph"):
-            self.graph.set_ai_controller(self.ai_context_controller)
 
     def set_advanced_mode(self, enabled: bool):
         self._advanced_mode = bool(enabled)
@@ -7213,7 +5647,7 @@ class CreationWorkspace(QWidget):
             on_saved=self.refresh,
             # BETA2-WIKI-10: la barra IA del panel de relación (generar/refinar sugerencia
             # de texto) y la sugerencia de hito quedan RETIRADAS de la UI.
-            ai_controller=self.ai_context_controller if _LEGACY_AI_UI else None,
+            ai_controller=None,
             entity_controller=self.entity_controller,
             milestone_controller=self._milestone_ctrl,
             is_new=is_new,
@@ -7221,7 +5655,7 @@ class CreationWorkspace(QWidget):
                 rid, kind="relation"
             ),
             on_open_milestones=self._open_milestone_chronology_view,
-            on_suggest_milestone=self._suggest_related_milestone if _LEGACY_AI_UI else None,
+            on_suggest_milestone=None,
         )
         self.ctx.drawer.set_content(panel, title="Relación")
         self.ctx.drawer.open()
@@ -7234,16 +5668,6 @@ class CreationWorkspace(QWidget):
         for entity in getattr(project, "entities", []) or []:
             if getattr(entity, "id", None) == entity_id:
                 return entity
-        return None
-
-    def _relation_by_id(self, relation_id: str):
-        pc = self.ctx.project_controller
-        project = pc.ps.active_project if pc else None
-        if project is None:
-            return None
-        for relation in getattr(project, "relations", []) or []:
-            if getattr(relation, "id", None) == relation_id:
-                return relation
         return None
 
     def _entity_label(self, entity_id: str) -> str:
@@ -7419,33 +5843,3 @@ class CreationWorkspace(QWidget):
         self.refresh()
         if relation_id:
             self._open_relation_panel(relation_id, is_new=True)
-
-
-class _SuggestWorker(QThread):
-    """Background worker for AI suggestions (nodes or relations) - keeps UI responsive."""
-
-    def __init__(
-        self,
-        ai_controller,
-        action: str,
-        entity_ids: list[str] | None = None,
-        relation_ids: list[str] | None = None,
-    ):
-        super().__init__()
-        self.ai_controller = ai_controller
-        self.action = action
-        self.entity_ids = entity_ids or []
-        self.relation_ids = relation_ids or []
-        self.result = None
-
-    def run(self):
-        try:
-            self.result = self.ai_controller.graph_action(
-                self.action,
-                entity_ids=self.entity_ids,
-                relation_ids=self.relation_ids,
-            )
-        except Exception as exc:
-            from packages.domain.result import Error as _Err
-
-            self.result = _Err(f"Worker exception: {exc}")

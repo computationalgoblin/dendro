@@ -32,8 +32,10 @@ class TestExportService:
         r = svc.export_entity_profile(p.entities[1].id, "public")
         assert isinstance(r, Error)
     def test_export_all_gm(self):
+        # export_all quedó reducido a entidades+relaciones (sin resumen de secretos).
         _, svc = _mk(); r = svc.export_all("gm")
-        assert isinstance(r, Ok); assert r.value["total_entities"] == 2; assert r.value["total_secrets"] == 1
+        assert isinstance(r, Ok); assert r.value["total_entities"] == 2
+        assert "total_relations" in r.value
 
 p = None
 try:

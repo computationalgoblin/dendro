@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from packages.application.ai_jobs import COMMAND_MATRIX, AIJobType
+from packages.application.ai_jobs import AIJobType
 from packages.application.command_prompts import has_intent_prompt, system_prompt_for_intent
 
 
@@ -49,10 +49,12 @@ def test_walk_prompt_asks_for_multicampo_edit_fields():
     assert "extended_description" in p and "milestone_type" in p
 
 
-def test_analyze_prompt_is_report_only():
-    p = system_prompt_for_intent("analyze_coherence")
-    assert "ANALIZAR COHERENCIA" in p
-    assert "issues" in p
+def test_retired_intents_fall_back_to_generic():
+    # Limpieza post-WIKI: los specs de análisis/planning se podaron; caen al genérico.
+    for retired in ("analyze_coherence", "repair_coherence", "review_graph",
+                    "explain_from_causes", "expand_worldbuilding", "freeform_planning"):
+        assert not has_intent_prompt(retired)
+        assert "TERMINOLOGÍA DE DENDRO" in system_prompt_for_intent(retired)
 
 
 def test_text_intents_use_inline_writing_prompt():
@@ -66,8 +68,9 @@ def test_unknown_intent_falls_back_to_generic_command_bar():
     assert not has_intent_prompt("totally_unknown_intent")
 
 
-def test_every_matrix_job_type_has_a_dedicated_prompt():
-    for job_type in set(COMMAND_MATRIX.values()):
-        assert has_intent_prompt(job_type.value), f"missing prompt for {job_type.value}"
-        # And the dedicated prompt is not the generic fallback.
-        assert "TERMINOLOGÍA DE DENDRO" not in system_prompt_for_intent(job_type.value)
+def test_live_job_types_have_a_dedicated_prompt():
+    # Superficie viva post-WIKI: Regar + Sugerencias + wiki + cronología (+ ediciones).
+    for value in ("water_entity", "update_memory", "generate_entities", "suggest_relations",
+                  "edit_entities", "chronology_walk_step", "suggest_composite"):
+        assert has_intent_prompt(value), f"missing prompt for {value}"
+        assert "TERMINOLOGÍA DE DENDRO" not in system_prompt_for_intent(value)

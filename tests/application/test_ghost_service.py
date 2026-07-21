@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from packages.application.corpus_indexer import ARCHIVED_CANON_STATES
+from packages.application.ghost_service import ARCHIVED_CANON_STATES
 from packages.application.entity_service import EntityService
 from packages.application.export_service import ExportService
 from packages.application.ghost_service import GhostService

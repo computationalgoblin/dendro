@@ -187,4 +187,4 @@ def test_eternal_is_dated_without_year():
 def test_milestone_to_dict_field_count_unchanged_by_j01():
     # as_temporal_span es vista computada: J01 NO añade campos persistidos al
     # hito (su conteo de baseline, 23, queda intacto).
-    assert len(CausalMilestone(title="x", year=1).to_dict()) == 23
+    assert len(CausalMilestone(title="x", year=1).to_dict()) == 24  # +parent_milestone_id (BETA2-SUB)

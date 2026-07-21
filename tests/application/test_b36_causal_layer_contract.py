@@ -127,6 +127,9 @@ def test_apply_default_causal_metadata_preserves_custom_values_by_default() -> N
 def test_project_save_load_roundtrip_conserves_causal_metadata() -> None:
     now = datetime.now(timezone.utc)
     project = Project(id="proj_b36", name="B36", created_at=now, updated_at=now)
+    # Project() ya no auto-puebla las capas por defecto (las siembra el servicio
+    # de creación); el contrato que se prueba es el roundtrip del metadata causal.
+    project.world_layers = default_world_layers()
     layer = next(layer for layer in project.world_layers if layer.id == "layer_metafisica")
     set_causal_rank(layer, 7)
     set_causal_role(layer, "custom_root")
@@ -144,6 +147,7 @@ def test_project_save_load_roundtrip_conserves_causal_metadata() -> None:
 def test_narrative_context_builder_exposes_causal_summary_via_helper() -> None:
     now = datetime.now(timezone.utc)
     project = Project(id="proj_b36", name="B36", created_at=now, updated_at=now, worldbuilding_active=True)
+    project.world_layers = default_world_layers()
 
     class ProjectServiceStub:
         active_project = project
@@ -163,7 +167,6 @@ def test_ui_and_ai_do_not_access_causal_metadata_directly() -> None:
     audited_paths = [
         root / "hosts" / "DesktopHostPySide",
         root / "packages" / "infrastructure",
-        root / "packages" / "application" / "ai_context_actions.py",
     ]
     forbidden = [
         'metadata["causal_rank"]',

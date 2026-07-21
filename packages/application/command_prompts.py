@@ -144,64 +144,6 @@ _INTENT_SPECS_ES: dict[str, str] = {
         'FORMATO: {"summary": "...", "report": "...", "milestone_edits": [{"target_name": "título del hito", '
         '"field": "title|body|description|year", "proposed_value": "...", "rationale": "..."}]}'
     ),
-    "analyze_coherence": (
-        "TAREA — ANALIZAR COHERENCIA. Analiza la coherencia causal, motivacional, tonal y de continuidad del "
-        "contexto. NO crees ni edites elementos.\n"
-        'FORMATO: {"summary": "...", "report": "informe estructurado", "issues": [{"title": "...", '
-        '"description": "...", "severity": "baja|media|alta"}], "proposals": [{"title": "...", '
-        '"description": "..."}], "open_questions": ["..."]}'
-    ),
-    "repair_coherence": (
-        "TAREA — REPARAR COHERENCIA. Recibes un INFORME de incoherencias y el CANON ACTUAL de las "
-        "entidades implicadas. Devuelve CAMBIOS CONCRETOS YA REDACTADOS que resuelven cada problema "
-        "REPARABLE: nunca repitas la sugerencia literal (p. ej. «definir mejor la relación»); escribe el "
-        "VALOR FINAL completo que debería tener el canon. Si un problema es vago o exige criterio humano y "
-        "no se puede convertir en un cambio concreto, OMÍTELO (no lo inventes). NO toques anillos.\n"
-        "Para editar usa el nombre EXACTO de la entidad/relación del canon recibido. Tipos:\n"
-        "- edit_entity: reescribe `brief_description` o `body` de una entidad existente.\n"
-        "- edit_relation / create_relation: tipo y/o descripción y/o cuerpo de una relación entre dos "
-        "entidades (existente o nueva).\n"
-        "- create_entity: hoja nueva necesaria para la coherencia.\n"
-        "- create_milestone: hito causal nuevo.\n"
-        'FORMATO: {"summary": "...", "report": "...", "repair_changes": [{"change_type": '
-        '"edit_entity|edit_relation|create_relation|create_entity|create_milestone", "rationale": "...", '
-        '"entity_name": "...", "field": "brief_description|body", "proposed_value": "...", '
-        '"source_name": "...", "target_name": "...", "relation_type": "...", "description": "...", '
-        '"body": "...", "name": "...", "entity_type": "...", "brief_description": "...", '
-        '"title": "...", "summary": "..."}]}'
-    ),
-    "review_graph": (
-        "TAREA — REVISAR EL GRAFO. Audita y propón mejoras. NO crees ni edites elementos automáticamente.\n"
-        'FORMATO: {"summary": "...", "report": "...", "issues": [...], "proposals": [...], "open_questions": [...]}'
-    ),
-    "explain_from_causes": (
-        "TAREA — EXPLICAR DESDE CAUSAS (razonamiento deductivo). Según "
-        "`directivas.parametros.modo_explicar`: si 'modificar_referencias', devuelve `entity_edits` para que "
-        "las @referencias expliquen la selección (no crees nada nuevo); si 'crear_en_anillo_activo', crea "
-        "hitos y/o hojas en el anillo activo (respeta el máximo) que expliquen la selección.\n"
-        'FORMATO: {"summary": "...", "report": "...", '
-        '"milestones": [{"title": "...", "summary": "...", "body": "...", "chronology_position": "...", '
-        '"rationale": "..."}], '
-        '"hojas": [{"name": "...", "entity_type": '
-        '"personaje|criatura|objeto|tecnologia|idioma", "brief_description": "..."}], '
-        '"entity_edits": [{"entity_name": "nombre exacto", "field": "body|brief_description", '
-        '"proposed_value": "...", "rationale": "..."}]}'
-    ),
-    "expand_worldbuilding": (
-        "TAREA — EXPANDIR WORLDBUILDING. Expande hacia abajo a partir de la selección/anillo, generando "
-        "candidatos coherentes con la causalidad superior.\n"
-        'FORMATO: {"summary": "...", "report": "...", '
-        '"hojas": [{"name": "...", "entity_type": '
-        '"personaje|criatura|objeto|tecnologia|idioma", "brief_description": "..."}], '
-        '"ramas": [{"name": "...", "entity_type": '
-        '"faccion|cultura|religion|institucion|sistema_magico|localizacion", "brief_description": "...", '
-        '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto", "brief_description": "..."}]}], '
-        '"relations": [{"source_name": "...", "target_name": "...", "relation_type": "...", "description": "..."}]}'
-    ),
-    "freeform_planning": (
-        "TAREA — PLANIFICAR. Devuelve un plan revisable, sin canonizar.\n"
-        'FORMATO: {"summary": "...", "report": "...", "proposals": [...], "open_questions": [...]}'
-    ),
     "chronology_walk_step": (
         "TAREA — RECORRIDO CRONOLÓGICO (un hito). Eres un editor que recorre la cronología "
         "hito por hito. Analiza SOLO el hito actual, pero usa el CONTEXTO ESTRATIFICADO que "

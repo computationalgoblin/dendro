@@ -65,7 +65,9 @@ def test_gateway_sanitizes_nested_context_before_provider_call():
         context={"project": {"name": "Demo", "api_key": "secret-value"}},
     ))
 
-    system_prompt = provider.chat.call_args.kwargs["system_prompt"]
+    # provider_chat invoca chat de forma posicional (system, user, **params).
+    call = provider.chat.call_args
+    system_prompt = call.kwargs.get("system_prompt") or call.args[0]
     assert "secret-value" not in system_prompt
     assert "api_key" not in system_prompt
 

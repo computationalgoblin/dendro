@@ -35,7 +35,7 @@ def _find_inline_prompts(directory: str) -> list[tuple[str, int, str]]:
             if fname in ALLOWLIST:
                 continue
             fpath = os.path.join(root, fname)
-            with open(fpath) as f:
+            with open(fpath, encoding="utf-8") as f:
                 for lineno, line in enumerate(f, 1):
                     # Skip imports and comments
                     stripped = line.strip()

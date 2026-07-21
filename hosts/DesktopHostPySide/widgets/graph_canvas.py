@@ -93,7 +93,6 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     RADIUS_LG,
     SAGE,
     SPACE_2XL,
-    SURFACE,
     SURFACE_HI,
 )
 from packages.application.portrait_crop import parse_crop
@@ -2098,7 +2097,6 @@ class GraphCanvasView(QGraphicsView):
     contextCreateEntityInTreeRequested = Signal(str)  # parent tree entity_id
     contextCreateSubtreeRequested = Signal(str)  # parent tree entity_id
     contextDeleteRequested = Signal()
-    contextAIActionRequested = Signal(str)
     # BETA1-B02: emitted after Escape has cancelled modes and cleared the
     # selection, so the workspace can close contextual surfaces (drawer).
     escapePressed = Signal()
@@ -3441,33 +3439,12 @@ class GraphCanvasView(QGraphicsView):
         menu = QMenu(self)
         menu.addAction("Crear hoja aquí", self.contextCreateEntityRequested.emit)
         menu.addAction("Crear rama aquí", self.contextCreateTreeRequested.emit)
-        if self._selected_entity_ids or self._selected_relation_ids:
-            self._add_ai_context_menu(menu)
+        # BETA2-WIKI-11: las acciones IA del menú contextual (sugerir hojas/ramas/
+        # relaciones, coherencia) se eliminaron; la IA es solo Regar/Sugerir en Foco.
         if self._layout_mode_active == "concentric_rings":
             menu.addSeparator()
             menu.addAction("Crear anillo…", self.ringCreateRequested.emit)
         return menu
-
-    def _add_ai_context_menu(self, menu: QMenu) -> None:
-        # BETA2-WIKI-10: las acciones IA del menú contextual (generar hojas/ramas/
-        # relaciones, analizar coherencia) quedan RETIRADAS de la UI. La IA es ahora solo
-        # Regar/Sugerir desde el Foco. Método conservado como no-op (borrado en limpieza).
-        return
-        menu.addSeparator()
-        ai_menu = QMenu("IA sobre seleccion", menu)
-        menu.addMenu(ai_menu)
-        ai_menu.addAction(
-            "Sugerir hojas", lambda: self.contextAIActionRequested.emit("suggest_nodes")
-        )
-        ai_menu.addAction(
-            "Sugerir ramas", lambda: self.contextAIActionRequested.emit("suggest_branches")
-        )
-        ai_menu.addAction(
-            "Sugerir relaciones", lambda: self.contextAIActionRequested.emit("suggest_relations")
-        )
-        ai_menu.addAction(
-            "Analizar coherencia", lambda: self.contextAIActionRequested.emit("analyze_coherence")
-        )
 
     def _node_context_menu(self, item: GraphNodeItem) -> QMenu:
         entity_id = item.node.entity_id
@@ -3513,7 +3490,6 @@ class GraphCanvasView(QGraphicsView):
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
             ring_action.setToolTip("")
-        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -3548,7 +3524,6 @@ class GraphCanvasView(QGraphicsView):
             ring_action = menu.addAction("Mover a anillo")
             ring_action.setEnabled(False)
             ring_action.setToolTip("")
-        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar", self.contextDeleteRequested.emit)
         return menu
@@ -3557,7 +3532,6 @@ class GraphCanvasView(QGraphicsView):
         relation_id = item.edge.relation_id
         menu = QMenu(self)
         menu.addAction("Editar relación", lambda: self.relationSelected.emit(relation_id))
-        self._add_ai_context_menu(menu)
         menu.addSeparator()
         menu.addAction("Eliminar relación", self.contextDeleteRequested.emit)
         return menu
@@ -6490,7 +6464,6 @@ class GraphCanvasWidget(QWidget):
     contextCreateEntityInTreeRequested = Signal(str)
     contextCreateSubtreeRequested = Signal(str)
     contextDeleteRequested = Signal()
-    contextAIActionRequested = Signal(str)
     # BETA1-B02
     escapePressed = Signal()
     # BETA1-B03
@@ -6504,7 +6477,6 @@ class GraphCanvasWidget(QWidget):
         super().__init__()
         self.ctx = ctx
         self._advanced_mode = bool(ctx.advanced_mode)
-        self.ai_controller = None
         stored_mode = str(getattr(ctx, "creation_layout_mode", "free") or "free")
         self._layout_mode = (
             stored_mode if stored_mode in {"free", "layered", "concentric_rings"} else "free"
@@ -6596,7 +6568,6 @@ class GraphCanvasWidget(QWidget):
         )
         self.canvas.contextCreateSubtreeRequested.connect(self.contextCreateSubtreeRequested.emit)
         self.canvas.contextDeleteRequested.connect(self.contextDeleteRequested.emit)
-        self.canvas.contextAIActionRequested.connect(self.contextAIActionRequested.emit)
         # BETA1-B02
         self.canvas.escapePressed.connect(self.escapePressed.emit)
         # BETA1-B03
@@ -7014,9 +6985,6 @@ class GraphCanvasWidget(QWidget):
         pc = self.ctx.project_controller
         return pc.ps.active_project if pc else None
 
-    def set_ai_controller(self, ai_controller):
-        self.ai_controller = ai_controller
-
     def selected_entity_ids(self) -> list[str]:
         return self.canvas.selected_entity_ids()
 
@@ -7227,25 +7195,6 @@ class GraphCanvasWidget(QWidget):
 
     def center_selection(self) -> bool:
         return self.canvas.center_selection()
-
-    def run_graph_ai_action(self, action_type: str):
-        if self.ai_controller is None:
-            return
-        project = self._project()
-        entity_ids = [
-            getattr(entity, "id", "")
-            for entity in getattr(project, "entities", []) or []
-            if getattr(entity, "id", "")
-        ]
-        relation_ids = [
-            getattr(relation, "id", "")
-            for relation in getattr(project, "relations", []) or []
-            if getattr(relation, "id", "")
-        ]
-        self.ai_controller.graph_action(
-            action_type, entity_ids=entity_ids, relation_ids=relation_ids
-        )
-        self.refresh()
 
     def _entity_selected(self, entity_id: str):
         self.ctx.selected_entity_id = entity_id

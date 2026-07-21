@@ -124,10 +124,12 @@ class TestWorkspaceWiring:
         assert "def set_active_view" in source
         assert "creation/active_view" in source  # clave QSettings conservada (compat)
 
-    def test_command_bar_hidden_in_chrono(self):
+    def test_command_bar_fully_removed(self):
         source = _WORKSPACES.read_text(encoding="utf-8")
-        # BETA2-PLAY: la command bar también se oculta en la vista inmersiva.
-        assert 'bar.setVisible(view not in ("chrono", "play"))' in source
+        # Limpieza post-WIKI (2026-07-21): la command bar se BORRÓ físicamente
+        # (antes solo estaba apagada tras _LEGACY_AI_UI). Pin de ausencia.
+        assert "_build_command_bar" not in source
+        assert "_LEGACY_AI_UI" not in source
 
     def test_mode_pill_and_foco_refresh_wiring(self):
         source = _WORKSPACES.read_text(encoding="utf-8")

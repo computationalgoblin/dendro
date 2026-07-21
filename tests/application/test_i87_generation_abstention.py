@@ -28,10 +28,11 @@ def test_free_creation_keeps_hygiene_without_caging(intent: str) -> None:
     assert "FUENTE PRIMARIA" not in prompt
 
 
-def test_expand_worldbuilding_free_by_default() -> None:
-    # expand_worldbuilding también crea → hereda la higiene, pero NO enjaula por defecto.
+def test_expand_worldbuilding_spec_retired_falls_back_to_generic() -> None:
+    # Limpieza post-WIKI: el intent expand_worldbuilding se retiró; su prompt
+    # cae al genérico (que conserva la higiene de abstención).
     prompt = system_prompt_for_intent("expand_worldbuilding")
-    assert "Ante la duda, NO lo propongas" in prompt
+    assert "TERMINOLOGÍA DE DENDRO" in prompt
     assert "extrae SOLO lo que el texto respalda" not in prompt
 
 

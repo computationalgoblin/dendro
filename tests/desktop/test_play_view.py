@@ -631,7 +631,7 @@ class TestWorkspaceWiring:
         assert 'if view not in ("foco", "concentric", "chrono", "play"):' in source
         assert "self.play = PlayView(" in source
         assert "play_widget.setVisible(play_on)" in source
-        assert 'bar.setVisible(view not in ("chrono", "play"))' in source
+        # (el pin de la command bar se retiró: la barra se borró en la limpieza post-WIKI)
 
     def test_walk_config_opens_play_and_exit_returns_to_chrono(self):
         source = _WORKSPACES.read_text(encoding="utf-8")

@@ -33,7 +33,7 @@ from packages.domain.entity import (
 
 class TestEntityType:
     def test_has_20_values(self):
-        assert len(EntityType) == 20
+        assert len(EntityType) == 21
 
     def test_known_values(self):
         assert EntityType.PERSONAJE.value == "personaje"

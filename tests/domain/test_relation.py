@@ -19,7 +19,7 @@ from packages.domain.relation import (
 
 class TestRelationType:
     def test_has_38_values(self):
-        assert len(RelationType) == 38
+        assert len(RelationType) == 41
 
     def test_known_values(self):
         assert RelationType.PERTENECE_A.value == "pertenece_a"

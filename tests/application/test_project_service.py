@@ -15,6 +15,7 @@ from pathlib import Path
 
 from packages.application.project_service import ProjectService
 from packages.domain.result import Error, Ok
+from packages.persistence.schema import CURRENT_SCHEMA_VERSION
 from packages.persistence.store import ProjectStore
 
 # ---------------------------------------------------------------------------
@@ -365,4 +366,4 @@ class TestModifySaveReloadRoundtrip:
 class TestGetSchemaVersion:
     def test_returns_nine(self):
         svc = ProjectService()
-        assert svc.get_schema_version() == 20
+        assert svc.get_schema_version() == CURRENT_SCHEMA_VERSION
