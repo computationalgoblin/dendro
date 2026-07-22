@@ -443,8 +443,19 @@ class ChronologyWalkService:
     ) -> dict[str, Any]:
         """Pliega un análisis en la memoria de sesión y arma la sección ``walk``."""
         payload = dict(result.get("model_payload") or {})
-        if hito.id not in session.visited_milestone_ids:
+        # BETA2-SHIP-07: idempotencia por hito. Un re-pliegue del MISMO hito
+        # (carrera: worker viejo aún vivo + «Reintentar» lanza un 2º, o commit de
+        # prefetch seguido de análisis) NO debe duplicar open_problems, la línea de
+        # resumen ni el historial — antes cada pliegue appendeaba y la duplicación
+        # se persistía e inflaba el informe y el prompt del paso siguiente.
+        refold = hito.id in session.visited_milestone_ids
+        if not refold:
             session.visited_milestone_ids.append(hito.id)
+        else:
+            # El análisis fresco SUSTITUYE los problemas previos de este hito.
+            session.open_problems = [
+                p for p in session.open_problems if p.get("milestone_id") != hito.id
+            ]
         self._fold_issues(session, hito.id, payload.get("issues"))
         narrative_state = payload.get("narrative_state")
         if isinstance(narrative_state, dict):
@@ -457,7 +468,9 @@ class ChronologyWalkService:
         # BETA2-PLAY: registra la observación del paso en el historial de cada
         # entidad afectada del hito (lectura + issues, tengan o no edición). Se
         # pliega SOLO aquí (analyze/commit), no en el prefetch → sin duplicados.
-        self._record_observation(session, hito, payload)
+        # BETA2-SHIP-07: en un re-pliegue no se re-observa (evita duplicar traza).
+        if not refold:
+            self._record_observation(session, hito, payload)
         session.touch()
         _touch_project(proj)
 
@@ -817,6 +830,10 @@ class ChronologyWalkService:
             return
         title = str(getattr(hito, "title", "")).strip()
         line = f"- {title}: {step_summary}" if title else f"- {step_summary}"
+        # BETA2-SHIP-07: defensa anti-duplicado — si esta misma línea ya es la cola
+        # del resumen (re-pliegue del mismo hito), no la repitas.
+        if session.accumulated_summary.rstrip().endswith(line):
+            return
         combined = (
             (session.accumulated_summary + "\n" + line).strip()
             if session.accumulated_summary
