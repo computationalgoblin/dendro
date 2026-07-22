@@ -235,6 +235,13 @@ class CandidateService:
         if isinstance(rc, Error):
             return rc
         c = rc.value
+        # BETA2-SHIP-07: idempotencia. Un candidato ya resuelto no se vuelve a
+        # materializar — si no, una segunda aceptación (reintento tras error, o el
+        # mismo candidato accesible desde la notificación de semilla Y el panel de
+        # revisión) duplicaba canon: entidad duplicada, o hito con id REPETIDO que
+        # sobrevivía al round-trip. Solo PENDIENTE/POSPUESTO pueden aceptarse.
+        if c.state not in (CandidateState.PENDIENTE, CandidateState.POSPUESTO):
+            return Error(f"El candidato ya fue resuelto (estado: {c.state.value})")
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
@@ -462,16 +469,53 @@ class CandidateService:
             has_dst = any(wl.id == dst for wl in layers)
             if not src or not dst or src == dst or not has_src or not has_dst:
                 return Error("Fusión de anillos inválida (origen/destino)")
+
+            def _remap(ids: list) -> list:
+                out = [lid for lid in (ids or []) if lid != src]
+                if src in (ids or []) and dst not in out:
+                    out.append(dst)
+                return out
+
             for ent in list(getattr(proj.value, "entities", []) or []):
                 if src in (ent.layer_ids or []):
-                    new = [lid for lid in ent.layer_ids if lid != src]
-                    if dst not in new:
-                        new.append(dst)
+                    new = _remap(ent.layer_ids)
                     if self.entity_service is not None:
-                        self.entity_service.update_entity(ent.id, {"layer_ids": new})
+                        applied = self.entity_service.update_entity(ent.id, {"layer_ids": new})
+                        # BETA2-SHIP-07: si un miembro no se reasigna, NO borres el
+                        # anillo (dejaría entidades apuntando a un anillo fantasma).
+                        if isinstance(applied, Error):
+                            return applied
                     else:
                         ent.layer_ids = new
                         ent.touch()
+            # BETA2-SHIP-07: reconcilia TODAS las referencias al anillo borrado. Antes
+            # solo se remapeaban entidades; relaciones e hitos conservaban layer_ids
+            # ['src'] → anillo fantasma tras recargar, que ninguna agrupación por
+            # anillo reconocía y el usuario no podía re-clasificar.
+            for rel in list(getattr(proj.value, "relations", []) or []):
+                if src in (getattr(rel, "layer_ids", None) or []):
+                    rel.layer_ids = _remap(rel.layer_ids)
+                    if hasattr(rel, "touch"):
+                        rel.touch()
+            for ms in list(getattr(proj.value, "causal_milestones", []) or []):
+                if src in (getattr(ms, "layer_ids", None) or []):
+                    ms.layer_ids = _remap(ms.layer_ids)
+                if src in (getattr(ms, "affected_layer_ids", None) or []):
+                    ms.affected_layer_ids = _remap(ms.affected_layer_ids)
+            # Referencias causales entre las capas restantes (metadata, CSV).
+            for wl in layers:
+                if wl.id == src:
+                    continue
+                meta = getattr(wl, "metadata", None)
+                if not isinstance(meta, dict):
+                    continue
+                raw = str(meta.get("causal_parent_layer_ids") or "")
+                parents = [p.strip() for p in raw.split(",") if p.strip()]
+                if src in parents:
+                    parents = [p for p in parents if p != src]
+                    if dst != wl.id and dst not in parents:
+                        parents.append(dst)
+                    meta["causal_parent_layer_ids"] = ",".join(parents)
             proj.value.world_layers = [wl for wl in layers if wl.id != src]
             if hasattr(proj.value, "touch"):
                 proj.value.touch()
@@ -924,23 +968,31 @@ class CandidateService:
 
     @staticmethod
     def _resolve_relation_endpoints_by_name(project: Any, proposed_data: dict) -> tuple[str, str]:
-        """Resolve source_name/target_name to real entity IDs by fuzzy name match."""
-        source_name = str(proposed_data.get("source_name") or "").strip().lower()
-        target_name = str(proposed_data.get("target_name") or "").strip().lower()
+        """Resuelve source_name/target_name a ids de entidad por nombre.
+
+        BETA2-SHIP-07: en DOS pasadas — una coincidencia EXACTA gana SIEMPRE sobre
+        una parcial, sea cual sea el orden de inserción. Antes, un único bucle fijaba
+        el id en la primera coincidencia (exacta O subcadena), así que una subcadena
+        de una entidad anterior ('ana' ⊂ 'Susana') tapaba la 'Ana' exacta posterior y
+        el canon guardaba la relación con la entidad EQUIVOCADA en silencio."""
         entities = list(getattr(project, "entities", []) or [])
-        sid = ""
-        tid = ""
-        for entity in entities:
-            name = str(getattr(entity, "name", "")).strip().lower()
-            if not sid and source_name and name == source_name:
-                sid = str(getattr(entity, "id", ""))
-            elif not sid and source_name and source_name in name:
-                sid = str(getattr(entity, "id", ""))
-            if not tid and target_name and name == target_name:
-                tid = str(getattr(entity, "id", ""))
-            elif not tid and target_name and target_name in name:
-                tid = str(getattr(entity, "id", ""))
-        return sid, tid
+
+        def _resolve(want: str) -> str:
+            want = want.strip().lower()
+            if not want:
+                return ""
+            for entity in entities:  # 1ª pasada: exacta
+                if str(getattr(entity, "name", "")).strip().lower() == want:
+                    return str(getattr(entity, "id", ""))
+            for entity in entities:  # 2ª pasada: subcadena (solo si no hubo exacta)
+                if want in str(getattr(entity, "name", "")).strip().lower():
+                    return str(getattr(entity, "id", ""))
+            return ""
+
+        return (
+            _resolve(str(proposed_data.get("source_name") or "")),
+            _resolve(str(proposed_data.get("target_name") or "")),
+        )
 
 
 __all__ = ["CandidateService"]
