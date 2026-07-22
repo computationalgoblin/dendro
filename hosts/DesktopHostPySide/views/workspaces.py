@@ -1992,7 +1992,7 @@ class CreationWorkspace(QWidget):
             return
         result = self.watering_service.pause(entity_id)
         if isinstance(result, Error):
-            self.ctx.log("error", result.error)
+            self.ctx.notify(result.error, "error")
             return
         self.ctx.request_save_silent()
         self.foco._refresh_tool_context()
@@ -2008,7 +2008,7 @@ class CreationWorkspace(QWidget):
             return
         result = self.watering_service.resume(entity_id)
         if isinstance(result, Error):
-            self.ctx.log("error", result.error)
+            self.ctx.notify(result.error, "error")
             return
         self.ctx.request_save_silent()
         self.foco._refresh_tool_context()
@@ -2041,7 +2041,7 @@ class CreationWorkspace(QWidget):
             return
         estimate = getattr(service.estimate(eligible), "value", None)
         if estimate is None:
-            self.ctx.log("error", "No se pudo estimar el coste del riego.")
+            self.ctx.notify("No se pudo estimar el coste del riego.", "error")
             return
         project = self._get_active_project()
         names = [
@@ -2268,7 +2268,7 @@ class CreationWorkspace(QWidget):
             return
         request = service.build_suggestion_request(entity_id, metric, str(peticion).strip())
         if isinstance(request, Error):
-            self.ctx.log("error", request.error)
+            self.ctx.notify(request.error, "error")
             return
         payload = request.value
         lines = [
@@ -2506,7 +2506,7 @@ class CreationWorkspace(QWidget):
         project.candidates.append(candidate)
         result = controller.accept(candidate.id)
         if isinstance(result, Error):
-            self.ctx.log("error", getattr(result, "error", "No se pudo aplicar el ajuste"))
+            self.ctx.notify(getattr(result, "error", "No se pudo aplicar el ajuste"), "error")
             return
         # PERSISTIR: aceptar movió la entidad de anillo en memoria; hay que guardar
         # (como riego/sugerencias). Sin esto el cambio se perdía y "no pasaba nada".
@@ -2603,7 +2603,7 @@ class CreationWorkspace(QWidget):
         inicia por el PRINCIPIO de la cronología (el hito más temprano)."""
         ctrl = self.chronology_walk_controller
         if ctrl is None:
-            self.ctx.log("error", "Recorrido cronológico no disponible")
+            self.ctx.notify("Recorrido cronológico no disponible", "error")
             return
         if not isinstance(ctrl.active(), Error):
             self._start_or_continue_walk("")
@@ -2793,7 +2793,7 @@ class CreationWorkspace(QWidget):
         equivalente al de entidades pero con campos propios del hito."""
         drawer = getattr(self.ctx, "drawer", None)
         if self._milestone_ctrl is None or drawer is None:
-            self.ctx.log("error", "No se pudo abrir el detalle del hito")
+            self.ctx.notify("No se pudo abrir el detalle del hito", "error")
             return
         from hosts.DesktopHostPySide.widgets.milestone_detail_panel import MilestoneDetailPanel
 
@@ -2821,7 +2821,7 @@ class CreationWorkspace(QWidget):
         reabre/continúa; si no, abre la configuración para iniciar uno nuevo."""
         ctrl = self.chronology_walk_controller
         if ctrl is None:
-            self.ctx.log("error", "Recorrido cronológico no disponible")
+            self.ctx.notify("Recorrido cronológico no disponible", "error")
             return
         active = ctrl.active()
         if not isinstance(active, Error):
@@ -2839,7 +2839,7 @@ class CreationWorkspace(QWidget):
         """Abre el panel de configuración del recorrido para el hito dado."""
         drawer = getattr(self.ctx, "drawer", None)
         if self.chronology_walk_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo iniciar el recorrido cronológico")
+            self.ctx.notify("No se pudo iniciar el recorrido cronológico", "error")
             return
         from hosts.DesktopHostPySide.widgets.chronology_walk_config_panel import (
             ChronologyWalkConfigPanel,
@@ -2869,7 +2869,7 @@ class CreationWorkspace(QWidget):
             cfg.get("aggressiveness"),
         )
         if isinstance(res, Error):
-            self.ctx.log("error", res.error)
+            self.ctx.notify(res.error, "error")
             return
         self._walk_session_id = res.value.id
         self._open_play_view()
@@ -3304,7 +3304,7 @@ class CreationWorkspace(QWidget):
             return
         res = ctrl.apply_step(sid, list(items or []))
         if isinstance(res, Error):
-            self.ctx.log("error", res.error)
+            self.ctx.notify(res.error, "error")
             return
         applied = res.value.get("applied") or []
         failed = res.value.get("failed") or []
@@ -3519,7 +3519,7 @@ class CreationWorkspace(QWidget):
             return
         res = ctrl.decide(sid, str(decision))
         if isinstance(res, Error):
-            self.ctx.log("warning", res.error)
+            self.ctx.notify(res.error, "error")
             return
         self.ctx.log("info", "Decisión registrada; puedes avanzar.")
 
@@ -3530,7 +3530,7 @@ class CreationWorkspace(QWidget):
             return
         res = ctrl.stop(sid)
         if isinstance(res, Error):
-            self.ctx.log("warning", res.error)
+            self.ctx.notify(res.error, "error")
             return
         self._open_walk_report(sid)
 
@@ -3669,7 +3669,7 @@ class CreationWorkspace(QWidget):
             return
         result = self._milestone_ctrl.create_manual(dict(payload or {}))
         if isinstance(result, Error):
-            self.ctx.log("warning", result.error)
+            self.ctx.notify(result.error, "error")
             return
         created = getattr(result, "value", None)
         milestone_id = str(getattr(created, "id", "") or "")
@@ -3718,7 +3718,7 @@ class CreationWorkspace(QWidget):
         affected.append(str(entity_id))
         result = self._milestone_ctrl.update(str(milestone_id), {"affected_entity_ids": affected})
         if isinstance(result, Error):
-            self.ctx.log("warning", result.error)
+            self.ctx.notify(result.error, "error")
             return
 
         def _after():
@@ -3742,7 +3742,7 @@ class CreationWorkspace(QWidget):
         }
         result = controller.update(str(entity_id), payload)
         if isinstance(result, Error):
-            self.ctx.log("warning", result.error)
+            self.ctx.notify(result.error, "error")
             return
         # BETA1-UX2D (crash): refresh() reconstruye la escena cronológica
         # (scene.clear()). Esta señal se emite DENTRO del mouseReleaseEvent de la
@@ -3951,11 +3951,11 @@ class CreationWorkspace(QWidget):
             return
         pc = getattr(self.ctx, "project_controller", None)
         if pc is None:
-            self.ctx.log("error", "No hay proyecto que guardar")
+            self.ctx.notify("No hay proyecto que guardar", "error")
             return
         result = pc.save()
         if hasattr(result, "error"):
-            self.ctx.log("error", f"Error guardando: {result.error}")
+            self.ctx.notify(f"Error guardando: {result.error}", "error")
         else:
             self.ctx.log("info", "Proyecto guardado")
 
@@ -4004,7 +4004,7 @@ class CreationWorkspace(QWidget):
         project = self._get_active_project()
         active = bool(project and getattr(project, "worldbuilding_active", False))
         if not active:
-            self.ctx.log("warning", "La vista de anillos requiere Worldbuilding activado")
+            self.ctx.notify("La vista de anillos requiere Worldbuilding activado", "error")
             return
         layer_mode = bool(getattr(getattr(self.graph, "canvas", None), "_layer_mode_active", False))
         if layer_mode:
@@ -4024,7 +4024,7 @@ class CreationWorkspace(QWidget):
             f"ctx_layout={getattr(self.ctx, 'creation_layout_mode', '')!r}",
         )
         if project is None:
-            self.ctx.log("warning", "Abre o crea un proyecto para usar la vista concéntrica")
+            self.ctx.notify("Abre o crea un proyecto para usar la vista concéntrica", "error")
             return
         canvas = getattr(self.graph, "canvas", None)
         current = (
@@ -4070,7 +4070,7 @@ class CreationWorkspace(QWidget):
     ) -> bool:
         project = self._get_active_project()
         if project is None:
-            self.ctx.log("error", "No hay proyecto activo")
+            self.ctx.notify("No hay proyecto activo", "error")
             return False
         # BETA2-WIKI-11: `_current_context_scope` se eliminó con la command bar; los
         # callers vivos (Sugerencias) SIEMPRE pasan scope_override.
@@ -4374,7 +4374,7 @@ class CreationWorkspace(QWidget):
         candidate = self._find_candidate(candidate_id)
         controller = self.candidate_controller
         if candidate is None or controller is None:
-            self.ctx.log("warning", "No se pudo abrir la revisión de la semilla")
+            self.ctx.notify("No se pudo abrir la revisión de la semilla", "error")
             return
         panel = CandidateReviewPanel(
             candidate,
@@ -4395,7 +4395,7 @@ class CreationWorkspace(QWidget):
             drawer.set_content(panel, title="Revisar semilla")
             drawer.open()
         else:
-            self.ctx.log("warning", "No se pudo abrir la revisión de la semilla")
+            self.ctx.notify("No se pudo abrir la revisión de la semilla", "error")
 
     def _close_candidate_review(self):
         # SEM04: cerrar la revisión SIN decidir — la semilla sigue pendiente, sin
@@ -4484,7 +4484,7 @@ class CreationWorkspace(QWidget):
         entity_service = getattr(cs, "entity_service", None) if cs else None
         relation_service = getattr(cs, "relation_service", None) if cs else None
         if project is None or entity_service is None or relation_service is None:
-            self.ctx.log("error", "No se pudo aplicar la reparación (servicios no disponibles)")
+            self.ctx.notify("No se pudo aplicar la reparación (servicios no disponibles)", "error")
             return
         applied = 0
         for change in changes:
@@ -4509,7 +4509,7 @@ class CreationWorkspace(QWidget):
             # grafo/cronología con el canon reparado (igual que aceptar un candidato).
             self._save_project_from_canvas()
         else:
-            self.ctx.log("warning", "No se aplicó ninguna reparación")
+            self.ctx.notify("No se aplicó ninguna reparación", "error")
         self._close_candidate_review()
         self._on_suggestion_changed()
         self._rehydrate_seed_notifications()
@@ -5071,7 +5071,7 @@ class CreationWorkspace(QWidget):
                 else:
                     deleted += 1
         if errors:
-            self.ctx.log("error", f"Errores al eliminar: {'; '.join(errors)}")
+            self.ctx.notify(f"Errores al eliminar: {'; '.join(errors)}", "error")
         if deleted > 0:
             self.ctx.log("info", f"Eliminado(s): {deleted} elemento(s)")
             # Close drawer if it shows a deleted entity/relation
@@ -5111,7 +5111,7 @@ class CreationWorkspace(QWidget):
         BETA1-B01 context-menu composition can chain existing routes.
         """
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
+            self.ctx.notify("No se pudo crear hoja: servicio no disponible", "error")
             return ""
         result = self.entity_controller.create(
             self._with_active_ring_payload(
@@ -5125,7 +5125,7 @@ class CreationWorkspace(QWidget):
             )
         )
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando hoja: {result.error}")
+            self.ctx.notify(f"Error creando hoja: {result.error}", "error")
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
@@ -5140,11 +5140,11 @@ class CreationWorkspace(QWidget):
 
     def _create_entity_with_payload(self, data: dict, *, open_panel: bool = True) -> str:
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
+            self.ctx.notify("No se pudo crear hoja: servicio no disponible", "error")
             return ""
         result = self.entity_controller.create(data)
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando hoja: {result.error}")
+            self.ctx.notify(f"Error creando hoja: {result.error}", "error")
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
@@ -5161,7 +5161,7 @@ class CreationWorkspace(QWidget):
         Returns the new entity id ("" on failure); see _create_entity_on_graph.
         """
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
+            self.ctx.notify("No se pudo crear rama: servicio no disponible", "error")
             return ""
         result = self.entity_controller.create(
             self._with_active_ring_payload(
@@ -5175,7 +5175,7 @@ class CreationWorkspace(QWidget):
             )
         )
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando rama: {result.error}")
+            self.ctx.notify(f"Error creando rama: {result.error}", "error")
             return ""
         entity = result.value
         entity_id = getattr(entity, "id", "")
@@ -5218,11 +5218,11 @@ class CreationWorkspace(QWidget):
             },
         )
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo crear rama: servicio no disponible")
+            self.ctx.notify("No se pudo crear rama: servicio no disponible", "error")
             return
         result = self.entity_controller.create(payload)
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error creando rama: {result.error}")
+            self.ctx.notify(f"Error creando rama: {result.error}", "error")
             return
         entity_id = getattr(result.value, "id", "")
         self.ctx.log("info", "Rama creada")
@@ -5235,15 +5235,15 @@ class CreationWorkspace(QWidget):
     def _assign_node_to_tree(self, entity_id: str, tree_id: str):
         """Assign entity (or container) to a container tree. Removes old 'contiene' first."""
         if self.relation_controller is None:
-            self.ctx.log("error", "No se pudo asignar a la rama: servicio no disponible")
+            self.ctx.notify("No se pudo asignar a la rama: servicio no disponible", "error")
             return
         # Check for cycle
         if entity_id == tree_id:
-            self.ctx.log("error", "Una rama no puede contenerse a sí misma")
+            self.ctx.notify("Una rama no puede contenerse a sí misma", "error")
             return
         # Check for nesting cycle: tree_id must not be inside entity_id
         if self._is_nested_in(tree_id, entity_id):
-            self.ctx.log("error", "Anidamiento cíclico: la rama destino ya pertenece al origen")
+            self.ctx.notify("Anidamiento cíclico: la rama destino ya pertenece al origen", "error")
             return
         # Remove any existing 'contiene' relation pointing to this entity
         self._remove_tree_membership(entity_id)
@@ -5258,7 +5258,7 @@ class CreationWorkspace(QWidget):
             "Pertenencia semántica (rama)",
         )
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error asignando a la rama: {result.error}")
+            self.ctx.notify(f"Error asignando a la rama: {result.error}", "error")
             return
         self._sync_entity_to_tree_ring(entity_id, tree_id)
         self.ctx.log("info", "Hoja asignada a la rama")
@@ -5267,7 +5267,7 @@ class CreationWorkspace(QWidget):
     def _open_ring_create_panel(self):
         """BETA2-CLEANUP-PANELES: 'Crear anillo' → RingPanel unificado (crear)."""
         if self.layer_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
+            self.ctx.notify("No se pudo crear anillo: servicio no disponible", "error")
             return
         panel = RingPanel(self.layer_controller, self.refresh)
         self.ctx.drawer.set_content(panel, title="Nuevo anillo")
@@ -5276,7 +5276,7 @@ class CreationWorkspace(QWidget):
     def _open_ring_edit_panel(self, ring_id: str):
         """BETA2-CLEANUP-PANELES: 'Editar anillo' → RingPanel unificado (editar)."""
         if self.layer_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo editar anillo: servicio no disponible")
+            self.ctx.notify("No se pudo editar anillo: servicio no disponible", "error")
             return
         panel = RingPanel(self.layer_controller, self.refresh, ring_id=ring_id)
         self.ctx.drawer.set_content(panel, title="Editar anillo")
@@ -5320,7 +5320,7 @@ class CreationWorkspace(QWidget):
         confirmation. Entities keep their layer ids: they show as 'Sin
         clasificar' and the ring can be restored from the layers view."""
         if self.layer_controller is None:
-            self.ctx.log("error", "No se pudo eliminar anillo: servicio no disponible")
+            self.ctx.notify("No se pudo eliminar anillo: servicio no disponible", "error")
             return
         ring = self.layer_controller.get(ring_id) if hasattr(self.layer_controller, "get") else None
         name = str(getattr(getattr(ring, "value", None), "name", ring_id))
@@ -5336,7 +5336,7 @@ class CreationWorkspace(QWidget):
             return
         result = self.layer_controller.hide(ring_id)
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error eliminando anillo: {result.error}")
+            self.ctx.notify(f"Error eliminando anillo: {result.error}", "error")
             return
         self.ctx.log("info", f"Anillo eliminado: {name}")
         self.refresh()
@@ -5347,11 +5347,11 @@ class CreationWorkspace(QWidget):
         Non-ring layer ids (if any) are preserved; only world-layer ids are
         swapped for the chosen ring."""
         if self.entity_controller is None:
-            self.ctx.log("error", "No se pudo mover al anillo: servicio no disponible")
+            self.ctx.notify("No se pudo mover al anillo: servicio no disponible", "error")
             return
         entity = self._entity_by_id(entity_id)
         if entity is None:
-            self.ctx.log("error", "No se pudo mover al anillo: elemento no encontrado")
+            self.ctx.notify("No se pudo mover al anillo: elemento no encontrado", "error")
             return
         pc = self.ctx.project_controller
         project = pc.ps.active_project if pc else None
@@ -5364,7 +5364,7 @@ class CreationWorkspace(QWidget):
         ]
         result = self.entity_controller.update(entity_id, {"layer_ids": new_layer_ids})
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error moviendo al anillo: {result.error}")
+            self.ctx.notify(f"Error moviendo al anillo: {result.error}", "error")
             return
         for child_id in self._contained_descendant_ids(entity_id):
             child = self._entity_by_id(child_id)
@@ -5390,7 +5390,7 @@ class CreationWorkspace(QWidget):
         'contiene' membership via the existing route. The item stays in the
         project (and in its ring), it just stops belonging to the branch."""
         if self.relation_controller is None:
-            self.ctx.log("error", "No se pudo extraer de la rama: servicio no disponible")
+            self.ctx.notify("No se pudo extraer de la rama: servicio no disponible", "error")
             return
         self._remove_tree_membership(entity_id)
         self.ctx.log("info", "Elemento extraído de la rama")
@@ -5407,7 +5407,7 @@ class CreationWorkspace(QWidget):
         """Open the causal milestone creation/review drawer (B41-T03)."""
         drawer = self.ctx.drawer
         if self._milestone_ctrl is None or drawer is None:
-            self.ctx.log("error", "No se pudo abrir hitos: servicio no disponible")
+            self.ctx.notify("No se pudo abrir hitos: servicio no disponible", "error")
             return
         panel = CausalMilestonePanel(self._milestone_ctrl, on_created=self.refresh)
         drawer.set_content(panel, title="Hitos causales")
@@ -5434,7 +5434,9 @@ class CreationWorkspace(QWidget):
         """
         drawer = self.ctx.drawer
         if self._milestone_ctrl is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear hito desde selección: servicio no disponible")
+            self.ctx.notify(
+                "No se pudo crear hito desde selección: servicio no disponible", "error"
+            )
             return
 
         prefill: dict = {}
@@ -5585,7 +5587,7 @@ class CreationWorkspace(QWidget):
     def open_entity_create(self):
         drawer = self.ctx.drawer
         if self.entity_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear hoja: servicio no disponible")
+            self.ctx.notify("No se pudo crear hoja: servicio no disponible", "error")
             return
         ring_id = self._active_creation_ring_id()
         ring = (
@@ -5605,7 +5607,7 @@ class CreationWorkspace(QWidget):
     def open_source_create(self):
         drawer = self.ctx.drawer
         if self.source_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear fuente: servicio no disponible")
+            self.ctx.notify("No se pudo crear fuente: servicio no disponible", "error")
             return
         panel = SourceQuickCreatePanel(self.source_controller, on_created=self.refresh)
         drawer.set_content(panel, title="Nueva fuente")
@@ -5614,7 +5616,7 @@ class CreationWorkspace(QWidget):
     def open_layer_create(self):
         drawer = self.ctx.drawer
         if self.layer_controller is None or drawer is None:
-            self.ctx.log("error", "No se pudo crear anillo: servicio no disponible")
+            self.ctx.notify("No se pudo crear anillo: servicio no disponible", "error")
             return
         panel = RingPanel(self.layer_controller, self.refresh)
         drawer.set_content(panel, title="Nuevo anillo")
@@ -5627,7 +5629,7 @@ class CreationWorkspace(QWidget):
 
     def _open_relation_panel(self, relation_id: str, *, is_new: bool = False):
         if self.relation_controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo abrir el panel de relación")
+            self.ctx.notify("No se pudo abrir el panel de relación", "error")
             return
         # BETA1-F05: diagnóstico — si la construcción del panel falla, que
         # se vea el motivo en vez de un click que "no hace nada".
@@ -5637,7 +5639,7 @@ class CreationWorkspace(QWidget):
             import traceback
 
             _apptrace("relation_panel_error " + traceback.format_exc(limit=4))
-            self.ctx.log("error", f"El panel de relación falló al construirse: {exc}")
+            self.ctx.notify(f"El panel de relación falló al construirse: {exc}", "error")
 
     def _open_relation_panel_impl(self, relation_id: str, *, is_new: bool = False):
         panel = RelationDetailPanel(
@@ -5807,20 +5809,20 @@ class CreationWorkspace(QWidget):
 
     def _on_relation_create_rejected(self, message: str):
         if message and message != "Relación cancelada":
-            self.ctx.log("warning", message)
+            self.ctx.notify(message, "error")
 
     def _open_relation_create_panel(self, source_id: str, target_id: str):
         controller = self.relation_controller
         if controller is None or self.ctx.drawer is None:
-            self.ctx.log("error", "No se pudo crear relación: servicio no disponible")
+            self.ctx.notify("No se pudo crear relación: servicio no disponible", "error")
             return
         if source_id == target_id:
-            self.ctx.log("warning", "No se puede crear una relación sobre la misma entidad")
+            self.ctx.notify("No se puede crear una relación sobre la misma entidad", "error")
             return
         # BETA1-B03: 'contiene' is structural, not narrative - it must not
         # block creating a real relation between a branch and its content.
         if self._relation_exists(source_id, target_id, ignore_structural=True):
-            self.ctx.log("warning", "Ya existe una relación entre esas entidades")
+            self.ctx.notify("Ya existe una relación entre esas entidades", "error")
             return
         result = controller.create(
             source_id,
@@ -5835,7 +5837,7 @@ class CreationWorkspace(QWidget):
             },
         )
         if isinstance(result, Error):
-            self.ctx.log("error", result.error)
+            self.ctx.notify(result.error, "error")
             return
         relation = result.value
         relation_id = getattr(relation, "id", "")

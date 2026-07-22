@@ -588,7 +588,7 @@ class MilestoneDetailPanel(PanelScaffold):
         result = self.controller.create_subhito(self.milestone_id, data)
         if isinstance(result, Error):
             if self.ctx is not None:
-                self.ctx.log("warning", result.error)
+                self.ctx.notify(result.error, "error")
             return
         self.new_subhito_edit.clear()
         self._after_subhito_change()
@@ -602,7 +602,7 @@ class MilestoneDetailPanel(PanelScaffold):
         result = self.controller.set_parent(child_id, self.milestone_id)
         if isinstance(result, Error):
             if self.ctx is not None:
-                self.ctx.log("warning", result.error)
+                self.ctx.notify(result.error, "error")
             return
         self._after_subhito_change()
 
@@ -616,7 +616,7 @@ class MilestoneDetailPanel(PanelScaffold):
         result = self.controller.clear_parent(child_id)
         if isinstance(result, Error):
             if self.ctx is not None:
-                self.ctx.log("warning", result.error)
+                self.ctx.notify(result.error, "error")
             return
         self._after_subhito_change()
 
@@ -742,7 +742,7 @@ class MilestoneDetailPanel(PanelScaffold):
         result = self.controller.delete(self.milestone_id)
         if isinstance(result, Error):
             if self.ctx is not None:
-                self.ctx.log("warning", result.error)
+                self.ctx.notify(result.error, "error")
             return
         if self.on_saved:
             self.on_saved()

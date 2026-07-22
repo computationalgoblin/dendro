@@ -1037,12 +1037,12 @@ class NodeDetailPanel(QWidget):
         # Use EntityController.es (EntityService) directly
         entity_service = getattr(self.entity_controller, "es", None) if self.entity_controller else None
         if entity_service is None:
-            self.ctx.log("error", "No se pudo convertir en rama: servicio no disponible")
+            self.ctx.notify("No se pudo convertir en rama: servicio no disponible", "error")
             return
         from packages.domain.result import Error
         result = entity_service.convert_to_branch(self.entity_id)
         if isinstance(result, Error):
-            self.ctx.log("error", f"Error convirtiendo en rama: {result.error}")
+            self.ctx.notify(f"Error convirtiendo en rama: {result.error}", "error")
             return
         self.ctx.log("info", "Hoja convertida en rama")
         # Refresh graph

@@ -1111,7 +1111,7 @@ class RelationDetailPanel(QWidget):
     def archive(self):
         result = self.relation_controller.archive(self.relation_id)
         if isinstance(result, Error):
-            self.ctx.log("error", result.error)
+            self.ctx.notify(result.error, "error")
             return
         self.ctx.log("info", "Relación archivada")
         if self.on_saved is not None:
