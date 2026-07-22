@@ -1482,6 +1482,12 @@ class FocoView(QWidget):
         """
         from hosts.DesktopHostPySide.widgets.node_detail_panel import NodeDetailPanel
 
+        # BETA2-SHIP-07: volcar el autoguardado pendiente del formulario SALIENTE
+        # antes de destruirlo. Navegar a otra entidad (flechas, satélite, Ctrl+B)
+        # remonta el formulario y hacía deleteLater() con el temporizador de 800 ms
+        # aún armado → se perdía en silencio lo recién escrito. close_editor ya
+        # volcaba; esta ruta no. El flush actúa sobre el _form_panel actual.
+        self._flush_form_autosave()
         if self._form_panel is not None:
             self._form_panel.deleteLater()
         self._form_panel = NodeDetailPanel(
