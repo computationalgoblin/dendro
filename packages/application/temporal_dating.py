@@ -79,12 +79,48 @@ def normalize_entity_dating(entity: NarrativeEntity, *, nature=None) -> None:
     entity.set_life_span(span)
 
 
+def _apply_mirror_years_to_span(span: TemporalSpan, birth_year, death_year) -> None:
+    """Actualiza SOLO el eje entero de un lapso YA existente, preservando su
+    datación rica (precisión/era/fecha-mundo/notas) y su naturaleza.
+
+    BETA2-SHIP-07: antes se reconstruía con ``from_years`` en cada guardado que
+    tocara birth/death (incluido el pass-through del panel de ficha), lo que
+    borraba en silencio precisión/era/notas y devolvía la naturaleza a MORTAL
+    (un inmortal pasaba a mortal al arrastrar su línea de vida). Ahora solo se
+    mueve el año; los descriptores y la naturaleza se conservan."""
+    if span.start is None:
+        span.start = EventTemporality()
+    span.start.year = birth_year
+    if birth_year is not None and span.start.precision is TemporalPrecision.UNKNOWN:
+        span.start.precision = TemporalPrecision.EXACT
+    if death_year is not None:
+        if span.end is not None:
+            span.end.year = death_year
+            if span.end.precision is TemporalPrecision.UNKNOWN:
+                span.end.precision = TemporalPrecision.EXACT
+        else:
+            span.end = EventTemporality(year=death_year, precision=TemporalPrecision.EXACT)
+        span.ongoing = False
+    else:
+        span.end = None
+        span.ongoing = True
+    # La naturaleza (inmortal/eterno) gobierna la coherencia de los extremos.
+    apply_nature_semantics(span)
+
+
 def reconcile_entity_dating(entity: NarrativeEntity, changed_keys: set[str]) -> None:
     """Para updates: respeta qué campo tocó el usuario (mirror vs life_span)."""
     if "life_span" in changed_keys and entity.life_span is not None:
         entity.set_life_span(entity.life_span)
     elif changed_keys & {"birth_year", "death_year"}:
-        entity.set_life_span(TemporalSpan.from_years(entity.birth_year, entity.death_year))
+        # BETA2-SHIP-07: si ya hay lapso rico, solo mover el año (no reconstruir,
+        # que destruía precisión/era/notas/naturaleza). from_years solo cuando no
+        # hay lapso previo del que preservar nada.
+        if entity.life_span is not None:
+            _apply_mirror_years_to_span(entity.life_span, entity.birth_year, entity.death_year)
+            entity.set_life_span(entity.life_span)
+        else:
+            entity.set_life_span(TemporalSpan.from_years(entity.birth_year, entity.death_year))
     else:
         normalize_entity_dating(entity)
 
