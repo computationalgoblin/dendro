@@ -48,7 +48,7 @@ class NextStepChip(QPushButton):
         self.setStyleSheet(
             f"QPushButton {{ background: {GOLD_TINT}; color: {GOLD_DEEP}; "
             f"border: 1px solid {GOLD_SOFT}; border-radius: 12px; "
-            "padding: 3px 12px; text-align: left; }} "
+            f"padding: 3px 12px; text-align: left; }} "
             # PULIDO-03: hover por FONDO (gramática única de chips accionables).
             f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_INVERSE}; }}"
         )

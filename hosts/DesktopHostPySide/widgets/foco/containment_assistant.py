@@ -81,7 +81,7 @@ class ContainmentAssistantPanel(QWidget):
         option_style = (
             f"QPushButton {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; "
             f"border-radius: 10px; color: {INK_STRONG}; padding: 12px 14px; "
-            "text-align: left; font-size: 13px; }} "
+            f"text-align: left; font-size: 13px; }} "
             f"QPushButton:hover {{ border-color: {GOLD}; }}"
         )
         self.move_button = QPushButton(

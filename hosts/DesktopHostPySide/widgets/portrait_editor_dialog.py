@@ -201,7 +201,7 @@ class PortraitEditorDialog(QDialog):
         save_btn.setDefault(True)
         save_btn.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; color: {WHITE}; border: none; "
-            "border-radius: 8px; padding: 6px 18px; font-weight: 600; }}"
+            f"border-radius: 8px; padding: 6px 18px; font-weight: 600; }}"
         )
         save_btn.clicked.connect(self.accept)
         buttons.addWidget(save_btn)

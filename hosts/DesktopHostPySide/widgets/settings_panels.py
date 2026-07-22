@@ -565,6 +565,9 @@ _CHATBOT_SYSTEM_PROMPT_EN = (
 _FONT_SIZE_MAP = {"Pequeño": "small", "Mediano": "medium", "Grande": "large"}
 _FONT_SIZE_MAP_REV = {"small": 0, "medium": 1, "large": 2}
 _FONT_FAMILY_MAP = {"Georgia": "Georgia", "Courier New": "Courier New", "Serif genérico": "serif"}
+# SHIP-07: valor persistido → etiqueta del combo (para reseleccionar «Serif genérico»,
+# cuyo valor guardado es «serif» y no casaba con findText → se perdía al reabrir).
+_FONT_FAMILY_MAP_REV = {v: k for k, v in _FONT_FAMILY_MAP.items()}
 _ANIM_MAP = {"Baja": "low", "Normal": "normal", "Alta": "high"}
 _ANIM_MAP_REV = {"low": 0, "normal": 1, "high": 2}
 
@@ -590,7 +593,7 @@ def _build_appearance_tab(ctx, on_apply=None, parent: QWidget | None = None) -> 
     # Font family
     font_family_combo = QComboBox()
     font_family_combo.addItems(list(_FONT_FAMILY_MAP.keys()))
-    fam_idx = font_family_combo.findText(ctx.font_family)
+    fam_idx = font_family_combo.findText(_FONT_FAMILY_MAP_REV.get(ctx.font_family, ctx.font_family))
     font_family_combo.setCurrentIndex(fam_idx if fam_idx >= 0 else 0)
     form.addRow("Familia tipográfica", font_family_combo)
 
@@ -675,7 +678,9 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
     temp_slider = QSlider(Qt.Orientation.Horizontal)
     temp_slider.setRange(0, 20)  # 0.0 - 2.0 with 0.1 steps
     temp_slider.setValue(int(round(float(getattr(ctx, "ai_temperature", 0.7)) * 10)))
-    temp_label = QLabel("0.7")
+    # SHIP-07: la etiqueta arrancaba fija en «0.7» aunque el valor guardado fuera
+    # otro; se sincroniza con el valor real del deslizador.
+    temp_label = QLabel(f"{temp_slider.value() / 10:.1f}")
     temp_row = QHBoxLayout()
     temp_row.addWidget(temp_slider)
     temp_row.addWidget(temp_label)
@@ -759,6 +764,15 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
                 ia_status_label.setText(_human_error(str(error)))
                 return
             provider = getattr(resp, "provider", "?")
+            # SHIP-07: «simulated» NO es una conexión real — decir «Conectado:
+            # simulated» engañaba (luego regar/sugerir fallan con «IA no
+            # configurada»). Se avisa claramente de que no generará contenido.
+            if str(provider) == "simulated":
+                ia_status_label.setText(
+                    "Modo simulado: no generará contenido real. Elige un proveedor "
+                    "compatible con OpenAI y añade tu API key para activar la IA."
+                )
+                return
             ia_status_label.setText(f"Conectado: {provider}")
             if on_status:
                 on_status(f"Conectado: {provider}")
@@ -863,6 +877,7 @@ class ConfigPanel(QWidget):
         ai_controller=None,
         on_status=None,
         on_apply=None,
+        initial_tab: int = 0,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -888,5 +903,8 @@ class ConfigPanel(QWidget):
         # Tab 2: IA
         ia = _build_ia_tab(ctx, ai_controller, on_status, self)
         self.tabs.addTab(ia, "IA")
+        # SHIP-07: el aviso de «IA no configurada» abre este panel directo en la
+        # pestaña IA (0=Apariencia, 1=IA).
+        self.tabs.setCurrentIndex(1 if initial_tab == 1 else 0)
 
         root.addWidget(self.tabs, stretch=1)

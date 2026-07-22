@@ -41,7 +41,7 @@ def _pill_style(base: str, hover: str) -> str:
     mismo radio, padding, tipografía y feedback de hover/pressed."""
     return (
         f"QPushButton {{ background: {base}; color: {INK_INVERSE}; border: none; "
-        "border-radius: 15px; padding: 0px 14px; font-weight: 700; font-size: 12px; }} "
+        f"border-radius: 15px; padding: 0px 14px; font-weight: 700; font-size: 12px; }} "
         f"QPushButton:hover {{ background: {hover}; }} "
         f"QPushButton:pressed {{ background: {GOLD_PRESS}; }}"
     )

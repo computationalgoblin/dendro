@@ -229,7 +229,7 @@ class ImageSearchDialog(QDialog):
         self.use_btn.setEnabled(False)
         self.use_btn.setStyleSheet(
             f"QPushButton {{ background: {GOLD}; color: {WHITE}; border: none; "
-            "border-radius: 8px; padding: 8px 16px; font-weight: 600; }} "
+            f"border-radius: 8px; padding: 8px 16px; font-weight: 600; }} "
             "QPushButton:disabled { background: #C9C0A0; }"
         )
         self.use_btn.clicked.connect(self._pick_current)

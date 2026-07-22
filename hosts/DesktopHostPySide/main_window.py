@@ -58,7 +58,7 @@ from hosts.DesktopHostPySide.widgets import icons
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive, shutdown_workers
 from hosts.DesktopHostPySide.widgets.right_drawer import RightDrawer
 from hosts.DesktopHostPySide.widgets.left_drawer import LeftDrawer
-from hosts.DesktopHostPySide.widgets.settings_panels import AISettingsPanel, ConfigPanel, ProjectPanel
+from hosts.DesktopHostPySide.widgets.settings_panels import ConfigPanel, ProjectPanel
 from hosts.DesktopHostPySide.widgets.toast_layer import ToastLayer
 
 
@@ -450,6 +450,11 @@ class MainWindow(QMainWindow):
         """SHIP-02: abre un proyecto por ruta (auto-carga y recientes del Home)."""
         if not path:
             self._refresh_recent_project_option()
+            # SHIP-07: sin proyecto, refrescar el Home para que la tarjeta
+            # «Creación» se atenúe y muestre «Abre o crea un proyecto» — si no,
+            # arrancaba encendida e invitando a «ENTRAR» pero inerte.
+            if hasattr(self, "home_view"):
+                self.home_view.refresh()
             return
         if not Path(path).exists():
             self.log_msg("El proyecto ya no existe; se ha quitado de recientes")
@@ -541,11 +546,23 @@ class MainWindow(QMainWindow):
         self.ctx.left_drawer.open()
 
     def _open_ai_settings(self):
+        # SHIP-07: el aviso «IA no configurada» abre la MISMA ConfigPanel que la
+        # Home (persiste vía ctx.save_preferences y prueba conexión en un hilo),
+        # abierta directamente en la pestaña IA. El antiguo AISettingsPanel no
+        # persistía la clave (se perdía al reiniciar) y congelaba la UI al probar.
         _apptrace("UI open_ai_settings")
         if self.ctx.left_drawer is None:
             return
-        panel = AISettingsPanel(self.ai, on_status=self._handle_ai_status)
-        self.ctx.left_drawer.set_content(panel, title="Ajustes IA")
+        if self.ctx.drawer is not None and self.ctx.drawer.isVisible():
+            self.ctx.drawer.close()
+        panel = ConfigPanel(
+            ctx=self.ctx,
+            ai_controller=self.ai,
+            on_status=self._handle_ai_status,
+            on_apply=self._apply_live_preferences,
+            initial_tab=1,
+        )
+        self.ctx.left_drawer.set_content(panel, title="Configuración")
         self.ctx.left_drawer.open()
 
     def _open_about_dialog(self):

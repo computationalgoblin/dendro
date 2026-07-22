@@ -373,7 +373,7 @@ class NodeDetailPanel(QWidget):
         self.image_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.image_btn.setStyleSheet(
             f"QPushButton {{ border: none; background: transparent; color: {_MUTED_COLOR}; "
-            "font-size: 11px; text-align: center; }} "
+            f"font-size: 11px; text-align: center; }} "
             f"QPushButton:hover {{ color: {_TITLE_COLOR}; }}"
         )
         self.image_btn.clicked.connect(self._pick_image)
