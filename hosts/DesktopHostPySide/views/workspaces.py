@@ -2127,6 +2127,8 @@ class CreationWorkspace(QWidget):
         self._watering_progress_popover = WateringProgressPopover(
             entries, done, self._batch_total, parent=self
         )
+        # WS-K: el botón «Cancelar riego» del popover corta el lote en curso.
+        self._watering_progress_popover.cancelRequested.connect(self._cancel_watering_batch)
         self._watering_progress_popover.open_above(self._seed_notifications.progress_anchor())
 
     def _refresh_watering_progress_popover(self, *, finished: bool = False) -> None:
@@ -3347,7 +3349,16 @@ class CreationWorkspace(QWidget):
         self.ctx.log("error", str(error))
         # PLAY-04: sin proveedor/fallo, la escena sigue legible y navegable.
         if self._active_view == "play":
-            self.play.show_error(str(error))
+            # WS-K: error HUMANIZADO (401/403/timeout/…) como el resto de la app, no el
+            # string crudo del proveedor en medio de la escena inmersiva.
+            self.play.show_error(_human_ai_error(str(error)))
+            if (
+                self.ai_job_service is not None
+                and self.ai_job_service.provider_unconfigured()
+                and not getattr(self, "_ai_config_hint_shown", False)
+            ):
+                self._ai_config_hint_shown = True
+                self._show_ai_config_help()
 
     @_qt_safe_slot
     def _on_walk_worker_stopped(self) -> None:

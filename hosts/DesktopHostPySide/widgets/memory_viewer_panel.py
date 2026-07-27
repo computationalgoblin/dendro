@@ -117,6 +117,18 @@ class MemoryViewerPanel(QWidget):
         )
         right.addWidget(self.resumen, 1)
 
+        # WS-K: el CUERPO de la página de wiki (lo que la IA mantiene y navega) también
+        # se muestra — antes solo se veía la línea de lead, ocultando lo que el usuario
+        # pagó por generar. Solo lectura: el cuerpo lo escribe Regar, no se edita a mano.
+        right.addWidget(overline_label("CUERPO (PÁGINA WIKI)"))
+        self.cuerpo = QTextEdit()
+        self.cuerpo.setReadOnly(True)
+        self.cuerpo.setStyleSheet(
+            f"QTextEdit {{ font-family: {FONT_SERIF}; font-size: 13px; color: {INK_MUTED}; "
+            f"border: 1px solid {LINE_SOFT}; border-radius: 8px; padding: 8px; }}"
+        )
+        right.addWidget(self.cuerpo, 1)
+
         # Diff de regeneración (oculto salvo cuando hay propuesta pendiente).
         self.diff_box = QLabel("")
         self.diff_box.setWordWrap(True)
@@ -200,6 +212,7 @@ class MemoryViewerPanel(QWidget):
             self.header.setText("Selecciona una Memoria")
             self.freshness.setText("")
             self.resumen.setPlainText("")
+            self.cuerpo.setPlainText("")
         else:
             name = (
                 "Proyecto"
@@ -212,6 +225,7 @@ class MemoryViewerPanel(QWidget):
                 f" · Fuentes: {len(block.citations)}"
             )
             self.resumen.setPlainText(block.resumen_editorial)
+            self.cuerpo.setPlainText(getattr(block, "cuerpo", "") or "")
         # Diff de propuesta pendiente.
         self.diff_box.setVisible(has_pending)
         self.accept_btn.setVisible(has_pending)

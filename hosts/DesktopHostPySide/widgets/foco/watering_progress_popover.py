@@ -10,8 +10,16 @@ con su estado (regada / regando / error / pendiente) y el resumen de su informe.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD_DEEP,
@@ -35,6 +43,9 @@ class WateringProgressPopover(Popover):
     Se construye una vez y se refresca en sitio con ``update_progress`` para que,
     si el usuario lo deja abierto, siga el avance del lote sin reabrirlo."""
 
+    # WS-K: el usuario puede cortar un lote de riego en curso (control de coste de API).
+    cancelRequested = Signal()  # noqa: N815 — convención de señales Qt (camelCase)
+
     def __init__(self, entries: list[dict], done: int, total: int, parent=None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(260)
@@ -57,6 +68,18 @@ class WateringProgressPopover(Popover):
         self._col.addStretch(1)
         self._scroll.setWidget(holder)
         self._layout.addWidget(self._scroll)
+
+        # WS-K: cortar el lote en curso. El worker cancela ENTRE pasos y conserva los
+        # parciales; el botón se oculta al terminar el lote.
+        self._cancel_btn = QPushButton("Cancelar riego")
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(
+            f"QPushButton {{ color: {_ERROR}; font-size: 11px; font-weight: 700; "
+            "background: transparent; border: none; text-align: left; }"
+        )
+        self._cancel_btn.clicked.connect(self.cancelRequested.emit)
+        self._layout.addWidget(self._cancel_btn)
+
         self.update_progress(entries, done, total)
 
     # ── API ─────────────────────────────────────────────────────────────────
@@ -67,6 +90,8 @@ class WateringProgressPopover(Popover):
         """Refresca título + filas en sitio (FOCO-39: el popover sigue el lote)."""
         verb = "completado" if finished else "en curso"
         self._title.setText(f"Riego {verb} · {int(done)}/{int(total)}")
+        if hasattr(self, "_cancel_btn"):
+            self._cancel_btn.setVisible(not finished)  # WS-K: solo mientras el lote corre
         # Reconstruye las filas antes del stretch final (el conteo es estable
         # durante un lote, así que la altura no baila).
         while self._col.count() > 1:
