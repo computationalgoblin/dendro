@@ -80,6 +80,9 @@ class AppContext:
     # UX13: salida de avisos transitorios (toasts). La fija MainWindow; si no hay
     # sink, notify() degrada a log y la UI no se rompe (CLI/tests).
     notify_sink: Callable[[str, str], None] | None = None
+    # WS-O: salida de avisos de recuperación PERSISTENTES (banner con «Abrir
+    # registro» + de-dup). La fija MainWindow; sin sink, degrada a notify/log.
+    recovery_sink: Callable[[str], None] | None = None
     advanced_mode: bool = False
     drawer: Any = None  # RightDrawer reference (set by MainWindow)
     left_drawer: Any = None  # LeftDrawer reference (set by MainWindow)
@@ -250,4 +253,21 @@ class AppContext:
             try:
                 self.notify_sink(message, kind)
             except Exception:  # noqa: BLE001 - el aviso nunca rompe el flujo
+                pass
+
+    def notify_recovery(self, message: str) -> None:
+        """WS-O: aviso de recuperación PERSISTENTE (banner con «Abrir registro»),
+        para fallos serios (apertura/guardado). Fail-soft: sin sink, cae a
+        ``notify(..., "error")``; siempre queda traza en el log."""
+        self.log("error", message)
+        if self.recovery_sink is not None:
+            try:
+                self.recovery_sink(message)
+                return
+            except Exception:  # noqa: BLE001 - el aviso nunca rompe el flujo
+                pass
+        if self.notify_sink is not None:
+            try:
+                self.notify_sink(message, "error")
+            except Exception:  # noqa: BLE001
                 pass

@@ -12,7 +12,7 @@ al clic. Sin QGraphicsDropShadowEffect (vacía widgets dinámicos; lección G08)
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
@@ -54,10 +54,16 @@ class Toast(QFrame):
         *,
         kind: str = "info",
         duration_ms: int = _DEFAULT_DURATION_MS,
+        action_label: str = "",
+        on_action=None,
+        dedup_key: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.kind = kind if kind in _KINDS else "info"
+        # WS-O: clave de de-dup (evita el spam de avisos idénticos en tormentas
+        # de error). Vacía → se de-duplica por el propio mensaje.
+        self.dedup_key = dedup_key or message
         bg, fg, accent = _KINDS[self.kind]
         self.setObjectName("toast")
         # Barra de acento a la izquierda (borde grueso) + fondo cálido redondeado.
@@ -72,8 +78,27 @@ class Toast(QFrame):
         label = QLabel(message)
         label.setWordWrap(True)
         label.setStyleSheet(f"color: {fg}; background: transparent; border: none; font-size: 13px;")
-        box.addWidget(label)
-        self.setMaximumWidth(420)
+        box.addWidget(label, 1)
+        # WS-O: acción persistente (p. ej. «Abrir registro») para los avisos de
+        # recuperación — un banner que se queda hasta que el usuario actúa/descarta.
+        if action_label:
+            self.action_button = QPushButton(action_label, self)
+            self.action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.action_button.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: 1px solid {accent}; "
+                f"border-radius: 10px; color: {fg}; font-size: 12px; font-weight: 700; "
+                f"padding: 3px 10px; }} "
+                f"QPushButton:hover {{ background: {GOLD}; color: {INK_STRONG}; }}"
+            )
+
+            def _run_action():
+                if callable(on_action):
+                    on_action()
+                self._dismiss()
+
+            self.action_button.clicked.connect(_run_action)
+            box.addWidget(self.action_button, 0)
+        self.setMaximumWidth(460)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -123,18 +148,52 @@ class ToastLayer(QWidget):
         return list(self._toasts)
 
     def show_toast(
-        self, message: str, *, kind: str = "info", duration_ms: int = _DEFAULT_DURATION_MS
+        self,
+        message: str,
+        *,
+        kind: str = "info",
+        duration_ms: int = _DEFAULT_DURATION_MS,
+        action_label: str = "",
+        on_action=None,
+        dedup_key: str = "",
     ) -> Toast:
+        # WS-O: de-dup — si ya hay un aviso idéntico en pantalla, no lo repetimos
+        # (evita la tormenta de toasts cuando algo falla en bucle).
+        key = dedup_key or message
+        for existing in self._toasts:
+            if getattr(existing, "dedup_key", None) == key:
+                return existing
         # Limita la pila: descarta el más antiguo si se supera el máximo.
         while len(self._toasts) >= _MAX_VISIBLE:
             self._remove(self._toasts[0])
-        toast = Toast(message, kind=kind, duration_ms=duration_ms, parent=self)
+        toast = Toast(
+            message,
+            kind=kind,
+            duration_ms=duration_ms,
+            action_label=action_label,
+            on_action=on_action,
+            dedup_key=key,
+            parent=self,
+        )
         toast.dismissed.connect(self._remove)
         self._toasts.append(toast)
         self._box.addWidget(toast, alignment=Qt.AlignmentFlag.AlignRight)
         self._reflow()
         toast.show_animated()
         return toast
+
+    def show_recovery(self, message: str, *, on_open_log=None) -> Toast:
+        """WS-O: aviso de recuperación PERSISTENTE (no se desvanece) con «Abrir
+        registro» y de-dup. Sustituye al toast fugaz con ruta incopiable para los
+        fallos serios (apertura/guardado)."""
+        return self.show_toast(
+            message,
+            kind="error",
+            duration_ms=0,  # persistente hasta que el usuario actúa/descarta
+            action_label="Abrir registro",
+            on_action=on_open_log,
+            dedup_key=f"recovery::{message}",
+        )
 
     def set_bottom_offset(self, px: int) -> None:
         self._bottom_offset = max(0, int(px))

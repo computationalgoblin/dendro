@@ -116,6 +116,11 @@ class MainWindow(QMainWindow):
         self.ctx.notify_sink = lambda msg, kind="info": self._toast_layer.show_toast(
             msg, kind=kind
         )
+        # WS-O: los fallos serios (apertura/guardado) usan un banner persistente
+        # con «Abrir registro», en vez de un toast fugaz con ruta incopiable.
+        self.ctx.recovery_sink = lambda msg: self._toast_layer.show_recovery(
+            msg, on_open_log=self._open_logs_folder
+        )
         self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
         # PA02: auto-carga el último proyecto al arrancar (queda cargado pero el
@@ -477,7 +482,8 @@ class MainWindow(QMainWindow):
                 # WS-C: fallo VISIBLE (antes solo statusbar → parecía olvido de datos) y,
                 # en aperturas explícitas, ofrecer restaurar una copia .bak si la hay.
                 if not (offer_restore and self._offer_backup_restore(path, result.error)):
-                    self.ctx.notify(f"No se pudo abrir el proyecto: {result.error}", "error")
+                    # WS-O: banner PERSISTENTE con «Abrir registro» (no un toast fugaz).
+                    self.ctx.notify_recovery(f"No se pudo abrir el proyecto: {result.error}")
                 return
             self.ctx.remember_project(path)
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
@@ -485,7 +491,7 @@ class MainWindow(QMainWindow):
             self._refresh_recent_project_option()
         except Exception as exc:
             if not (offer_restore and self._offer_backup_restore(path, str(exc))):
-                self.ctx.notify(f"No se pudo abrir el proyecto: {exc}", "error")
+                self.ctx.notify_recovery(f"No se pudo abrir el proyecto: {exc}")
 
     def _offer_backup_restore(self, path: str, error: str) -> bool:
         """WS-C: si abrir falló y hay copias `.bak`, ofrecer restaurar la más reciente.
@@ -647,14 +653,21 @@ class MainWindow(QMainWindow):
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
         if box.clickedButton() is open_logs:
-            from PySide6.QtCore import QUrl
-            from PySide6.QtGui import QDesktopServices
+            self._open_logs_folder()
 
-            try:
-                data_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:  # noqa: BLE001
-                pass
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
+    def _open_logs_folder(self) -> None:
+        """WS-O: abre la carpeta de registros (About + banner de recuperación)."""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from hosts.DesktopHostPySide.app_context import _log_dir
+
+        data_dir = _log_dir()
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
 
     def _handle_ai_status(self, msg: str):
         """Log AI status and refresh contextual AI consumers after settings changes."""
