@@ -86,7 +86,6 @@ class AppContext:
     advanced_mode: bool = False
     drawer: Any = None  # RightDrawer reference (set by MainWindow)
     left_drawer: Any = None  # LeftDrawer reference (set by MainWindow)
-    rag_service: Any = None
     ai_prompt_trace_store: Any = None
     # UX33: guardado SIN UI ruidosa (sin toast/refresh/cierre de cajón ni diálogo). Lo fija MainWindow.
     request_save_silent: Callable[[], bool] | None = None

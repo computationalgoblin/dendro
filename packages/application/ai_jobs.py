@@ -1336,7 +1336,6 @@ class AIJobService:
         allow_simulated: bool = False,
         observability_log: AIObservabilityLog | None = None,
         timeout_seconds: int = DEFAULT_AI_TIMEOUT_SECONDS,
-        rag_service: Any | None = None,
         project_provider: Callable[[], Any] | None = None,
         prompt_trace_store: Any | None = None,
         gateway: AIRequestGateway | None = None,
@@ -1352,7 +1351,6 @@ class AIJobService:
         self.allow_simulated = allow_simulated
         self.observability_log = observability_log or AIObservabilityLog()
         self.timeout_seconds = max(1, int(timeout_seconds or DEFAULT_AI_TIMEOUT_SECONDS))
-        self._rag_service = rag_service
         self._project_provider = project_provider
         self._prompt_trace_store = prompt_trace_store
         # Presupuesto de contexto por tier (entrada/salida) según el intent.
@@ -1441,7 +1439,7 @@ class AIJobService:
             intent=intent.to_dict(),
         )  # efímero: NO se registra en self._jobs
         plan = build_job_plan(intent, prompt, context, job_id=job.id)
-        plan = self._with_rag_context(job, plan)
+        plan = self._with_deterministic_context(job, plan)
         raw = PromptAssembler(self._budget).preview(plan)
         return Ok(build_context_preview(raw))
 
@@ -1599,7 +1597,7 @@ class AIJobService:
         )
         return Ok((intent, build_job_plan(intent, job.prompt, job.context_scope, job_id=job.id)))
 
-    def _with_rag_context(self, job: AIJob, plan: AIJobPlan) -> AIJobPlan:
+    def _with_deterministic_context(self, job: AIJob, plan: AIJobPlan) -> AIJobPlan:
         """Inyecta el contexto determinista del proyecto en el plan (BETA2-WIKI-05).
 
         Ya NO recupera por RAG léxico ni vuelca la Memoria fija: el contexto relevante
@@ -1734,7 +1732,7 @@ class AIJobService:
             self._record_observability(job, status="error", error_type="planner_error")
             return planned
         intent, plan = planned.value
-        plan = self._with_rag_context(job, plan)
+        plan = self._with_deterministic_context(job, plan)
         job.intent = intent.to_dict()
         job.type = intent.intent_type
         job.plan = plan.to_dict()
