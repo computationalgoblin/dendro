@@ -1779,8 +1779,10 @@ class AIJobService:
                 max_tokens=max_tokens,
             ))
             text, error = gw.text, gw.error
+            truncated = bool(getattr(gw, "truncated", False))
         except Exception as exc:
             text, error = None, str(exc)
+            truncated = False
         elapsed = time.monotonic() - started
 
         cancelled = cancelled_error()
@@ -1816,6 +1818,17 @@ class AIJobService:
         else:
             payload = _extract_json(text)
             result = stage_results(payload, job)
+        # WS-K: si la respuesta se cortó por longitud y no salió ningún candidato,
+        # decirlo claramente en vez de "Listo para revisar" con cero semillas.
+        if truncated and not is_text:
+            # La cola del JSON queda corrupta al cortarse → lo poco que se leyó es
+            # sospechoso (a menudo un candidato de reserva "no estructurado"). Se
+            # marca y se avisa en el resumen en vez de un "Listo" engañoso.
+            result["truncated"] = True
+            result["summary"] = (
+                "La respuesta de la IA se cortó (límite de longitud); puede faltar "
+                "contenido. Acota la petición o sube el presupuesto de tokens."
+            )
         self._trace_prompt_response(job_id=job.id, status="ok", response_text=text, elapsed_ms=elapsed * 1000)
         result["provider"] = provider_name
         result["timeout_seconds"] = self.timeout_seconds

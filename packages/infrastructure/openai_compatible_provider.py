@@ -43,6 +43,9 @@ class OpenAICompatibleProvider(AIProvider):
         self.api_key = api_key or os.environ.get("NARRATIVE_AI_API_KEY", "")
         self.model = model or os.environ.get("NARRATIVE_AI_MODEL", "gpt-4o-mini")
         self.timeout = int(os.environ.get("NARRATIVE_AI_TIMEOUT", str(timeout or 300)))
+        # WS-K: canal lateral con el `finish_reason` de la última respuesta
+        # ("length" = truncada por max_tokens). No cambia la firma de chat().
+        self.last_finish_reason = ""
 
     def chat(self, system_prompt: str, user_message: str, timeout=None, *,
              temperature: float | None = None, max_tokens: int | None = None,
@@ -80,8 +83,12 @@ class OpenAICompatibleProvider(AIProvider):
             )
             resp = urllib.request.urlopen(req, timeout=timeout_val)
             body = json.loads(resp.read())
-            return body.get("choices", [{}])[0].get("message", {}).get("content", "")
+            choice = body.get("choices", [{}])[0]
+            # WS-K: registra por qué terminó la generación (length = truncada).
+            self.last_finish_reason = str(choice.get("finish_reason", "") or "")
+            return choice.get("message", {}).get("content", "")
 
+        self.last_finish_reason = ""  # se rellena en _send con la respuesta real
         try:
             try:
                 text = _send(json_mode)

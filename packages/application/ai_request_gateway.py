@@ -153,6 +153,8 @@ class GatewayResponse:
     error: str | None
     intent: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    # WS-K: True si el proveedor cortó la respuesta por longitud (max_tokens).
+    truncated: bool = False
     _parsed_json: Any = field(default=None, repr=False)
 
     @property
@@ -227,6 +229,10 @@ class AIRequestGateway:
             max_tokens=params.max_tokens,
             json_mode=request.json_mode,
         )
+        # WS-K: el proveedor deja el motivo de fin en un canal lateral (no cambia
+        # la firma de chat); "length" = respuesta cortada por max_tokens.
+        finish_reason = str(getattr(self.provider, "last_finish_reason", "") or "")
+        truncated = finish_reason == "length"
 
         # The job pipeline (validate=False) parses and stages results itself;
         # only validate when the caller relies on the gateway's schema check.
@@ -252,6 +258,8 @@ class AIRequestGateway:
             "error_type": "provider_error" if error else ("validation" if not validation.is_valid else None),
             "validation_error": validation.error,
             "retry_hint": validation.retry_hint,
+            "finish_reason": finish_reason,
+            "truncated": truncated,
         }
         if error or not validation.is_valid:
             return GatewayResponse(
@@ -259,6 +267,7 @@ class AIRequestGateway:
                 error=error or validation.error,
                 intent=request.intent,
                 metadata=metadata,
+                truncated=truncated,
                 _parsed_json=validation.parsed if validation.is_valid else None,
             )
         return GatewayResponse(
@@ -266,6 +275,7 @@ class AIRequestGateway:
             error=error,
             intent=request.intent,
             metadata=metadata,
+            truncated=truncated,
             _parsed_json=validation.parsed if isinstance(validation.parsed, (dict, list)) else None,
         )
 

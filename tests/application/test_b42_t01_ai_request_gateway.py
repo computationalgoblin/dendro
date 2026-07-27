@@ -185,6 +185,37 @@ class TestGatewayExecution:
         assert not result.is_valid
         assert "Connection error" in result.error
 
+    def test_gateway_flags_truncated_when_finish_reason_length(self):
+        # WS-K: el canal lateral last_finish_reason="length" → respuesta cortada.
+        mock_provider = MagicMock()
+        mock_provider.chat.return_value = ('{"entities": [', None)  # JSON cortado
+        mock_provider.provider_name = "mock"
+        mock_provider.last_finish_reason = "length"
+
+        gw = AIRequestGateway(provider=mock_provider)
+        result = gw.execute(
+            GatewayRequest(intent="generate_entities", user_prompt="x", context={})
+        )
+        assert result.truncated is True
+        assert result.metadata.get("truncated") is True
+        assert result.metadata.get("finish_reason") == "length"
+
+    def test_gateway_not_truncated_on_normal_stop(self):
+        mock_provider = MagicMock()
+        mock_provider.chat.return_value = ('{"entities": []}', None)
+        mock_provider.provider_name = "mock"
+        mock_provider.last_finish_reason = "stop"
+
+        gw = AIRequestGateway(provider=mock_provider)
+        result = gw.execute(
+            GatewayRequest(intent="generate_entities", user_prompt="x", context={})
+        )
+        assert result.truncated is False
+
+    def test_gateway_response_truncated_defaults_false(self):
+        resp = GatewayResponse(text="ok", error=None, intent="chat")
+        assert resp.truncated is False
+
     def test_gateway_records_metadata(self):
         mock_provider = MagicMock()
         mock_provider.chat.return_value = ("OK", None)
