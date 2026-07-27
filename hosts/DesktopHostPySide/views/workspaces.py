@@ -1804,8 +1804,43 @@ class CreationWorkspace(QWidget):
             "Estado de las tareas IA. Todo resultado queda pendiente de revisión."
         )
         row.addWidget(self._job_status_label)
+        # WS-K: cancelar el job de IA en curso (Regar/Sugerencia individual) — corta
+        # el coste de API y libera la UI. Visible solo mientras hay un job corriendo.
+        self._job_cancel_btn = QPushButton("Cancelar")
+        self._job_cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._job_cancel_btn.setToolTip("Cancelar la tarea de IA en curso")
+        self._job_cancel_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {GOLD_SOFT}; "
+            f"border-radius: 10px; color: {INK_STRONG}; font-size: 11px; font-weight: 700; "
+            f"padding: 2px 9px; }} "
+            f"QPushButton:hover {{ background: {GOLD_SOFT}; color: {INK_INVERSE}; }}"
+        )
+        self._job_cancel_btn.clicked.connect(self._cancel_active_ai_jobs)
+        self._job_cancel_btn.setVisible(False)
+        row.addWidget(self._job_cancel_btn)
         floater.setVisible(False)
         return floater
+
+    def _cancel_active_ai_jobs(self) -> None:
+        """WS-K: cancela el/los job(s) de IA en curso. ``cancel_job`` marca el job
+        CANCELLED (el worker descarta su resultado al volver del proveedor) y se
+        pide interrupción cooperativa; consistente con el cancelar del lote."""
+        workers = dict(getattr(self, "_ai_workers", {}) or {})
+        if not workers:
+            return
+        for job_id, worker in workers.items():
+            try:
+                self.ai_job_service.cancel_job(job_id)
+            except Exception:  # noqa: BLE001 — cancelar nunca rompe la UI
+                pass
+            try:
+                if worker.isRunning():
+                    worker.requestInterruption()
+            except RuntimeError:  # worker Qt ya destruido
+                pass
+        self._job_status_label.setText("Cancelado")
+        self._schedule_status_clear()
+        self._refresh_busy_indicator()
 
     def _sync_status_floater(self) -> None:
         """Muestra el floater de estado solo cuando hay texto y lo recoloca abajo-centro.
@@ -4353,6 +4388,15 @@ class CreationWorkspace(QWidget):
         """UX11: muestra el indicador de actividad mientras hay trabajo de IA en
         vuelo (jobs o cálculo de vista previa); lo oculta cuando no queda nada.
         Fail-soft: la barra puede no existir aún (tests) o haberse destruido."""
+        # WS-K: el botón «Cancelar» acompaña a los jobs de IA cancelables (no a los
+        # workers de vista previa), visible solo mientras haya uno corriendo. Va
+        # antes del early-return del indicador para actualizarse siempre.
+        cancel_btn = getattr(self, "_job_cancel_btn", None)
+        if cancel_btn is not None:
+            try:
+                cancel_btn.setVisible(bool(getattr(self, "_ai_workers", None)))
+            except RuntimeError:
+                pass
         indicator = getattr(self, "_busy_indicator", None)
         if indicator is None:
             return
