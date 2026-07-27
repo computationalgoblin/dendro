@@ -448,9 +448,12 @@ class MainWindow(QMainWindow):
 
     def _open_last_project(self):
         _apptrace(f"UI open_last_project path={self.ctx.last_project_path!r}")
-        self._open_project_path(self.ctx.last_project_path)
+        # WS-C: la auto-carga de arranque NO abre un modal de restauración (bloquearía el
+        # inicio); un fallo se avisa con toast. La restauración se ofrece en aperturas
+        # explícitas (recientes/diálogo), donde el usuario ya está interactuando.
+        self._open_project_path(self.ctx.last_project_path, offer_restore=False)
 
-    def _open_project_path(self, path: str):
+    def _open_project_path(self, path: str, *, offer_restore: bool = True):
         """SHIP-02: abre un proyecto por ruta (auto-carga y recientes del Home)."""
         if not path:
             self._refresh_recent_project_option()
@@ -469,8 +472,8 @@ class MainWindow(QMainWindow):
             result = self.controller.open(path)
             if isinstance(result, Error):
                 # WS-C: fallo VISIBLE (antes solo statusbar → parecía olvido de datos) y,
-                # si hay copias .bak, ofrecer restaurar en vez de degradar a Home vacío.
-                if not self._offer_backup_restore(path, result.error):
+                # en aperturas explícitas, ofrecer restaurar una copia .bak si la hay.
+                if not (offer_restore and self._offer_backup_restore(path, result.error)):
                     self.ctx.notify(f"No se pudo abrir el proyecto: {result.error}", "error")
                 return
             self.ctx.remember_project(path)
@@ -478,7 +481,7 @@ class MainWindow(QMainWindow):
             self._refresh_all_views()
             self._refresh_recent_project_option()
         except Exception as exc:
-            if not self._offer_backup_restore(path, str(exc)):
+            if not (offer_restore and self._offer_backup_restore(path, str(exc))):
                 self.ctx.notify(f"No se pudo abrir el proyecto: {exc}", "error")
 
     def _offer_backup_restore(self, path: str, error: str) -> bool:
