@@ -65,6 +65,7 @@ from packages.application.calendar_service import CalendarService
 from packages.domain.creative_config import ESTADO_OPCIONES
 from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
 from packages.domain.project import Project
+from packages.domain.world_layer import default_world_layers
 
 
 def _names_from_length_text(text: str) -> list[str]:
@@ -401,6 +402,30 @@ class ProjectWizard(QFrame):
             "Una plantilla creativa que rellena valores razonables. Opcional.",
         ))
 
+        # WS-D: anillos por defecto — un proyecto nuevo arrancaba con el Mapa
+        # VACÍO (sin anillos), sin explicar dónde va cada cosa. Marcado por
+        # defecto siembra las 16 capas causales predefinidas como esqueleto del
+        # Mapa; el usuario puede vaciarlo para empezar en blanco.
+        self.seed_rings_check = QCheckBox(
+            "Empezar con los anillos causales por defecto (recomendado)"
+        )
+        self.seed_rings_check.setChecked(True)
+        self.seed_rings_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.seed_rings_check.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: 13px; font-weight: 600; "
+            f"background: transparent; border: none;"
+        )
+        box.addWidget(self.seed_rings_check)
+        rings_hint = QLabel(
+            "El Mapa se organiza en anillos por potencia causal (de la metafísica "
+            "a la situación actual). Puedes reorganizarlos luego."
+        )
+        rings_hint.setWordWrap(True)
+        rings_hint.setStyleSheet(
+            f"color: {INK_MUTED}; font-size: 11px; background: transparent; border: none;"
+        )
+        box.addWidget(rings_hint)
+
         self.advanced_check = QCheckBox(
             "Configuración avanzada: rellenar todas las secciones ahora"
         )
@@ -516,6 +541,9 @@ class ProjectWizard(QFrame):
         return {
             "name": self._t(self.name_edit),
             "preset": self.preset_combo.currentData() or "",
+            "seed_default_rings": bool(
+                getattr(self, "seed_rings_check", None) and self.seed_rings_check.isChecked()
+            ),
             "primary_language": self._t(self.language_edit) or "es",
             "worldbuilding_active": True,  # PA02: siempre activo
             "identidad": {
@@ -563,6 +591,11 @@ class ProjectWizard(QFrame):
         preset = cfg.get("preset", "")
         if preset:
             apply_preset_to_project(project, preset)
+
+        # WS-D: siembra el esqueleto de anillos por defecto si el usuario lo pidió
+        # y el Mapa sigue vacío (no pisa anillos que un preset u otro paso ya creara).
+        if cfg.get("seed_default_rings") and not getattr(project, "world_layers", None):
+            project.world_layers = default_world_layers()
 
     @staticmethod
     def _truthy(value) -> bool:
