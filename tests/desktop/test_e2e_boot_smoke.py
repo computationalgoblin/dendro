@@ -74,6 +74,13 @@ def test_e2e_boot_open_navigate(app, tmp_path):
 
         # 4) El diálogo "Acerca de" (con acceso a registros, WS-O) se abre sin romper.
         w._open_about_dialog()
+
+        # 5) WS-D: el proyecto de ejemplo tiene puerta en Home y se abre.
+        assert w._bundled_sample_path() is not None
+        assert not w.home_view._btn_sample.isHidden()
+        w._open_sample_project()
+        sample_proj = w.controller.ps.active_project
+        assert sample_proj is not None and "Almendros" in (sample_proj.name or "")
     finally:
         w.controller.close()  # sin proyecto activo → closeEvent no abre modal
         w.close()

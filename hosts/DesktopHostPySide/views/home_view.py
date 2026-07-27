@@ -738,6 +738,15 @@ class HomeView(QWidget):
 
         bottom_row.addStretch(1)
 
+        # WS-D: puerta al proyecto de ejemplo — el asset viaja junto al exe pero no
+        # tenía superficie; un primer arranque quedaba en un Home vacío. Oculto hasta
+        # que MainWindow confirma que el ejemplo existe (set_sample_available).
+        self._btn_sample = QuietIconButton(label="Abrir ejemplo", icon_name="project")
+        self._btn_sample.setToolTip("Explora «La Flor de los Almendros», un proyecto de muestra")
+        self._btn_sample.clicked.connect(lambda: self._action("open_sample"))
+        self._btn_sample.setVisible(False)
+        bottom_row.addWidget(self._btn_sample)
+
         self._btn_project = QuietIconButton(label="Nuevo / abrir proyecto", icon_name="project")
         self._btn_project.setToolTip("Crear un proyecto nuevo o abrir uno existente")
         self._btn_project.clicked.connect(lambda: self._action("project_menu"))
@@ -797,6 +806,11 @@ class HomeView(QWidget):
 
     def register_callback(self, name: str, callback: Callable):
         self._callbacks[name] = callback
+
+    def set_sample_available(self, available: bool) -> None:
+        """WS-D: muestra «Abrir ejemplo» solo si el proyecto de muestra está presente."""
+        if hasattr(self, "_btn_sample"):
+            self._btn_sample.setVisible(bool(available))
 
     def refresh_recents(self) -> None:
         """SHIP-02: repuebla la lista de proyectos recientes (hasta 5, solo existentes)."""

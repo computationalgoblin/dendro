@@ -162,6 +162,9 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("save_project", self._save)
         self.home_view.register_callback("close_project", self._close_project)
         self.home_view.register_callback("ai_settings", self._open_ai_settings)
+        # WS-D: puerta al proyecto de ejemplo (visible solo si el asset viaja con la app).
+        self.home_view.register_callback("open_sample", self._open_sample_project)
+        self.home_view.set_sample_available(self._bundled_sample_path() is not None)
         # T05/H03: technical toggles are not exposed from Home.
 
         # Workspaces: la Creación recibe los controllers directamente (BETA2-UX-02).
@@ -702,6 +705,27 @@ class MainWindow(QMainWindow):
                 self.ctx.drawer.close()
         except Exception as exc:
             self.log_msg(f"Error creando proyecto: {exc}")
+
+    def _bundled_sample_path(self):
+        """WS-D: ruta del proyecto de ejemplo (junto al exe congelado; repo/ejemplos en dev)."""
+        import sys
+
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent / "ejemplos"
+        else:
+            base = Path(__file__).resolve().parents[2] / "ejemplos"
+        if not base.is_dir():
+            return None
+        samples = sorted(base.glob("**/*.json"))
+        return samples[0] if samples else None
+
+    def _open_sample_project(self) -> None:
+        """WS-D: abre el proyecto de muestra para explorar Dendro sin partir de cero."""
+        sample = self._bundled_sample_path()
+        if sample is None:
+            self.ctx.notify("No hay proyecto de ejemplo disponible.", "info")
+            return
+        self._open_project_path(str(sample))
 
     def _open_project(self):
         _apptrace("UI open_project")
