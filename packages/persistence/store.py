@@ -253,11 +253,20 @@ def _create_backup(path: Path) -> Path | None:
     if not path.exists():
         return None
 
-    # Find next backup index
-    idx = 1
+    # Índice ESTRICTAMENTE MONÓTONO: el backup más nuevo tiene siempre el índice más alto.
+    # (BETA-CIERRE WS-C) Antes se reusaba el índice libre más BAJO; como _rotate_backups
+    # asume «índice alto = más nuevo», eso hacía que la rotación borrara justo el backup
+    # recién creado y congelara las copias en los dos estados MÁS VIEJOS del fichero.
     base = str(path)
-    while Path(f"{base}{BACKUP_SUFFIX}.{idx}").exists():
-        idx += 1
+    existing_indices: list[int] = []
+    for p in path.parent.glob(f"{path.name}{BACKUP_SUFFIX}*"):
+        suffix = p.suffixes
+        if len(suffix) >= 2 and suffix[-2] == BACKUP_SUFFIX:
+            try:
+                existing_indices.append(int(suffix[-1].lstrip(".")))
+            except (ValueError, IndexError):
+                pass
+    idx = max(existing_indices, default=0) + 1
 
     backup_path = Path(f"{base}{BACKUP_SUFFIX}.{idx}")
     shutil.copy2(path, backup_path)
@@ -297,6 +306,28 @@ def save_project_data(
 
     # Atomic write
     return _write_json_atomic(payload, path)
+
+
+def _first_duplicate_id(items: Any) -> str | None:
+    """Return the first id that appears twice in ``items``, or None.
+
+    Tolerante (BETA-CIERRE WS-C): ignora elementos no-dict y sin id; solo detecta
+    ids repetidos, sin exigir la forma estructural completa (que rechazaría proyectos
+    antiguos migrados a los que ``Project.from_dict`` aún rellena defaults).
+    """
+    if not isinstance(items, list):
+        return None
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        iid = item.get("id", "")
+        if not iid:
+            continue
+        if iid in seen:
+            return str(iid)
+        seen.add(iid)
+    return None
 
 
 def load_project_data(path: Path) -> Result[dict[str, Any], str]:
@@ -522,6 +553,20 @@ def load_project_data(path: Path) -> Result[dict[str, Any], str]:
     structure_error = validate_project_structure(data)
     if structure_error is not None:
         return Error(structure_error)
+
+    # BETA-CIERRE WS-C: defensa contra ids DUPLICADOS (la corrupción por doble
+    # materialización que arregló SHIP-07). Los validadores existían pero no se
+    # invocaban en la carga: un proyecto con ids duplicados cargaba sin aviso y el
+    # índice se desincronizaba de la lista (editas una copia, guardas ambas).
+    # Solo unicidad — NO se exige la forma estructural: proyectos antiguos migrados
+    # pueden omitir campos que ``Project.from_dict`` rellena con defaults, y validarlos
+    # aquí rechazaría ficheros que hoy cargan sin problema.
+    dup = _first_duplicate_id(data.get("entities", []))
+    if dup is not None:
+        return Error(f"Corrupt project: duplicate entity id '{dup}'")
+    dup = _first_duplicate_id(data.get("relations", []))
+    if dup is not None:
+        return Error(f"Corrupt project: duplicate relation id '{dup}'")
 
     wu_errors = _validate_writing_units(data.get("writing_units", []))
     if wu_errors:
