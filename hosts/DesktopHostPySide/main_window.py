@@ -461,21 +461,66 @@ class MainWindow(QMainWindow):
                 self.home_view.refresh()
             return
         if not Path(path).exists():
-            self.log_msg("El proyecto ya no existe; se ha quitado de recientes")
+            self.ctx.notify("El proyecto ya no existe; se ha quitado de recientes.", "info")
             self.ctx.forget_missing_project(path)
             self._refresh_recent_project_option()
             return
         try:
             result = self.controller.open(path)
             if isinstance(result, Error):
-                self.log_msg(f"Error abriendo proyecto: {result.error}")
+                # WS-C: fallo VISIBLE (antes solo statusbar → parecía olvido de datos) y,
+                # si hay copias .bak, ofrecer restaurar en vez de degradar a Home vacío.
+                if not self._offer_backup_restore(path, result.error):
+                    self.ctx.notify(f"No se pudo abrir el proyecto: {result.error}", "error")
                 return
             self.ctx.remember_project(path)
             self.log_msg(f"Proyecto abierto: {Path(path).name}")
             self._refresh_all_views()
             self._refresh_recent_project_option()
         except Exception as exc:
-            self.log_msg(f"Error abriendo proyecto: {exc}")
+            if not self._offer_backup_restore(path, str(exc)):
+                self.ctx.notify(f"No se pudo abrir el proyecto: {exc}", "error")
+
+    def _offer_backup_restore(self, path: str, error: str) -> bool:
+        """WS-C: si abrir falló y hay copias `.bak`, ofrecer restaurar la más reciente.
+
+        La restauración va por ``ProjectMaintenanceService`` (la UI nunca escribe
+        persistencia directamente). Devuelve True si se restauró y reabrió con éxito.
+        """
+        from packages.application.project_maintenance_service import ProjectMaintenanceService
+
+        svc = ProjectMaintenanceService(self.controller.store)
+        try:
+            backups = svc.list_backups(Path(path))
+        except Exception:  # noqa: BLE001
+            backups = []
+        if not backups:
+            return False
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("No se pudo abrir el proyecto")
+        box.setText(
+            f"No se pudo abrir «{Path(path).name}»:\n{error}\n\n"
+            f"Hay {len(backups)} copia(s) de seguridad. ¿Restaurar la más reciente?"
+        )
+        restore_btn = box.addButton("Restaurar copia", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not restore_btn:
+            return False
+        res = svc.restore_backup(Path(path), backups[0])
+        if isinstance(res, Error):
+            self.ctx.notify(f"No se pudo restaurar la copia: {res.error}", "error")
+            return False
+        reopened = self.controller.open(path)
+        if isinstance(reopened, Error):
+            self.ctx.notify(f"Copia restaurada, pero no reabre: {reopened.error}", "error")
+            return False
+        self.ctx.remember_project(path)
+        self.ctx.notify("Proyecto restaurado desde una copia de seguridad.", "success")
+        self._refresh_all_views()
+        self._refresh_recent_project_option()
+        return True
 
     def _open_project_panel(self):
         _apptrace("UI open_project_panel")
@@ -663,7 +708,8 @@ class MainWindow(QMainWindow):
         try:
             result = self.controller.open(path)
             if isinstance(result, Error):
-                self.log_msg(f"Error abriendo proyecto: {result.error}")
+                if not self._offer_backup_restore(path, result.error):
+                    self.ctx.notify(f"No se pudo abrir el proyecto: {result.error}", "error")
                 return
             self.ctx.remember_project(path)
             self._refresh_recent_project_option()
@@ -672,7 +718,8 @@ class MainWindow(QMainWindow):
             if self.ctx.drawer:
                 self.ctx.drawer.close()
         except Exception as exc:
-            self.log_msg(f"Error abriendo proyecto: {exc}")
+            if not self._offer_backup_restore(path, str(exc)):
+                self.ctx.notify(f"No se pudo abrir el proyecto: {exc}", "error")
 
     def _close_project(self):
         _apptrace("UI close_project")
