@@ -119,12 +119,64 @@ jobs:
         run: |
           pytest tests/infrastructure tests/architecture -q -p no:cacheprovider
 
-      # INFORMATIVO — capas en migración v26/import. Hoy en rojo; visibles en el
-      # log sin bloquear. Al cerrarse la v26: subir estas carpetas al paso de
-      # arriba y borrar este paso (y su '|| true').
-      - name: Tests (capas en migración) — informativo
+      # PUERTA REAL (BETA-CIERRE WS-H) — el baseline rojo crónico se eliminó en el
+      # cierre de beta: domain/persistence/application están EN VERDE, así que una
+      # regresión aquí (modelo, migraciones, servicios — las capas que causan
+      # pérdida de datos) DEBE romper CI. Ya no es informativo.
+      - name: Tests core (domain + persistence + application) — bloqueante
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           pytest tests/domain tests/persistence tests/application \
-            -q -p no:cacheprovider || true
+            -q -p no:cacheprovider
+
+      # PUERTA — invariantes a nivel raíz. test_version_sync es release-blocking:
+      # la versión del exe debe cuadrar con pyproject.
+      - name: Tests raíz (version_sync + budget + neighborhood + sanity) — bloqueante
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest tests/test_version_sync.py tests/test_prompt_budget.py \
+            tests/test_neighborhood.py tests/test_positioning_copy.py \
+            tests/test_ws_m_window_fit.py tests/test_sanity.py \
+            -q -p no:cacheprovider
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Build del distribuible Windows (BETA-CIERRE WS-H / B6).
+  #
+  # CI nunca construía el exe que reciben los testers: un fallo del grafo de build
+  # (import oculto, plugin Qt, assets bajo _internal) llegaba al usuario sin que
+  # ningún test lo detectara — justo la clase de fallo que ya crashó una vez
+  # (stderr=None en el exe windowed). Este job construye el one-folder en Windows,
+  # afirma que Dendro.exe existe y lo sube como artefacto descargable.
+  # ───────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar proyecto + herramientas de build
+        # OJO: hace falta el extra 'desktop' (PySide6); '.[dev]' solo NO lo trae y
+        # produciría un exe que no arranca.
+        run: pip install -e ".[dev,desktop]"
+
+      - name: Construir el distribuible (PyInstaller one-folder)
+        run: python scripts/build_desktop.py
+
+      - name: Verificar que el exe se generó
+        run: |
+          if (-not (Test-Path "dist/Dendro/Dendro.exe")) {
+            throw "No se generó dist/Dendro/Dendro.exe"
+          }
+
+      - name: Subir el distribuible como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dendro-windows-beta
+          path: dist/Dendro

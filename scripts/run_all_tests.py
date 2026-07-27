@@ -108,10 +108,26 @@ SUITES: dict[str, list[str]] = {
     ],
     "infra": ["tests/infrastructure"],
     "sanity": ["tests/test_sanity.py"],
+    # BETA-CIERRE WS-H: ficheros de test a nivel raiz que la corrida por suites no
+    # recogia (test_version_sync es un invariante de release: la version del exe debe
+    # cuadrar con pyproject).
+    "root": [
+        "tests/test_version_sync.py",
+        "tests/test_prompt_budget.py",
+        "tests/test_neighborhood.py",
+        "tests/test_positioning_copy.py",
+        "tests/test_ws_m_window_fit.py",
+    ],
 }
 
-# Slow suites that get skipped with --fast
-FAST_SKIP = {"ui", "qa", "integ"}
+# Slow suites that get skipped with --fast (dev loop). El gate completo NO usa --fast.
+FAST_SKIP = {"ui", "qa", "integ", "desktop"}
+
+# Suites cuyo directorio se ejecuta POR-FICHERO en subprocesos separados
+# (BETA-CIERRE WS-H): correr tests/desktop entero en un solo pytest SEGFAULTEA
+# (fragilidad PySide6/Qt con muchos widgets en un interprete). El sharding aisla el
+# fallo y da una puerta verde REAL para la superficie viva del producto.
+SHARDED_SUITES = {"desktop"}
 
 
 def _clean_env() -> dict[str, str]:
@@ -178,6 +194,34 @@ def run_suite(label: str, paths: list[str], timeout: int = 600) -> tuple[bool, f
     return ok, elapsed, count
 
 
+def run_suite_sharded(label: str, dir_path: str, timeout: int = 300) -> tuple[bool, float, int]:
+    """Ejecuta cada ``test_*.py`` del directorio en su PROPIO subproceso y agrega.
+
+    BETA-CIERRE WS-H: correr ``tests/desktop`` entero en un solo pytest segfaultea
+    (Qt); por-fichero aisla el fallo y da una puerta verde fiable de la superficie viva.
+    """
+    files = sorted((WORKSPACE / dir_path).glob("test_*.py"))
+    if not files:
+        print(f"  [{label}] (sin ficheros en {dir_path})")
+        return True, 0.0, 0
+    all_ok = True
+    total_count = 0
+    failed_files: list[str] = []
+    t0 = time.perf_counter()
+    for f in files:
+        rel = f.relative_to(WORKSPACE).as_posix()
+        ok, _, count = run_suite(f"{label}:{f.name}", [rel], timeout=timeout)
+        if not ok:
+            all_ok = False
+            failed_files.append(f.name)
+        if count > 0:
+            total_count += count
+    elapsed = time.perf_counter() - t0
+    if failed_files:
+        print(f"  [{label}] {len(failed_files)} fichero(s) con fallos: {', '.join(failed_files)}")
+    return all_ok, elapsed, total_count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run narrative-architect test suites")
     parser.add_argument("--fast", action="store_true", help="Skip slow suites (ui, qa, integ)")
@@ -206,7 +250,10 @@ def main() -> int:
 
     for suite in selected:
         paths = SUITES[suite]
-        ok, elapsed, count = run_suite(suite, paths)
+        if suite in SHARDED_SUITES:
+            ok, elapsed, count = run_suite_sharded(suite, paths[0])
+        else:
+            ok, elapsed, count = run_suite(suite, paths)
         results.append((suite, ok, elapsed, count))
 
     total_elapsed = time.perf_counter() - total_t0
