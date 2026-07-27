@@ -39,6 +39,15 @@ APP_NAME = "Dendro"
 ENTRY_SCRIPT = os.path.join(REPO_ROOT, "hosts", "DesktopHostPySide", "main.py")
 ASSETS_DIR = os.path.join(REPO_ROOT, "hosts", "DesktopHostPySide", "assets")
 
+# BETA-CIERRE WS-I/B5: identidad del exe. Icono de Dendro + recurso de version de
+# Windows (Properties -> Detalles muestra ProductName/Version/Publisher, en vez de
+# quedar en blanco). version_info.txt lo (re)genera build_desktop.py desde
+# AppConfig().app_version; si falta, el build sigue (sin recurso de version).
+ICON_PATH = os.path.join(ASSETS_DIR, "dendro.ico")
+VERSION_FILE = os.path.join(REPO_ROOT, "packaging", "version_info.txt")
+_icon = ICON_PATH if os.path.exists(ICON_PATH) else None
+_version = VERSION_FILE if os.path.exists(VERSION_FILE) else None
+
 datas = [
     (ASSETS_DIR, os.path.join("hosts", "DesktopHostPySide", "assets")),
 ]
@@ -74,6 +83,8 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
+    icon=_icon,
+    version=_version,
 )
 
 coll = COLLECT(

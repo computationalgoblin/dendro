@@ -158,6 +158,15 @@ def main():
     # tooltips ilegibles (la causa raíz de la antigua supresión global de
     # tooltips de BETA1-F00, que se retira: ahora QToolTip va estilado).
     apply_light_theme(app)
+    # WS-I/B5: icono de la app (barra de tareas, alt-tab, título). Resuelve tanto en
+    # dev como en el exe congelado (los assets viajan bajo _internal/ conservando ruta).
+    from pathlib import Path as _Path
+
+    from PySide6.QtGui import QIcon
+
+    _icon = _Path(__file__).resolve().parent / "assets" / "dendro.ico"
+    if _icon.exists():
+        app.setWindowIcon(QIcon(str(_icon)))
     # WS-M/B3: maximizada de inicio → todo el shell (incluida la barra inferior y Guardar)
     # es siempre alcanzable, también en 1366×768 y 1080p@150%.
     w = MainWindow()
