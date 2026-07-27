@@ -274,7 +274,7 @@ class PlayView(QWidget):
         self.desc_label.setWordWrap(True)
         self.desc_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.desc_label.setStyleSheet(
-            f"color: {INK_SOFT}; font-size: {TYPE_BODY_PX + 1}px; line-height: 150%; "
+            f"color: {INK_SOFT}; font-size: {TYPE_BODY_PX + 1}px; "
             "background: transparent;"
         )
         self.desc_scroll = QScrollArea()

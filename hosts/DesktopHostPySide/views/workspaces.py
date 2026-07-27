@@ -178,7 +178,7 @@ class RingInfoPanel(_SimpleFormPanel):
             f"Estado: {state or 'normal'}"
         )
         details.setWordWrap(True)
-        details.setStyleSheet("color: #5F5A3D; background: transparent; line-height: 1.35;")
+        details.setStyleSheet("color: #5F5A3D; background: transparent;")
         self.layout.addWidget(details)
 
         row = QHBoxLayout()

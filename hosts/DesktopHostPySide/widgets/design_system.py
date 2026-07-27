@@ -421,8 +421,6 @@ QLabel#overline {{
     color: {GOLD_DEEP};
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: 1px;
-    text-transform: uppercase;
 }}
 QLabel#sectionTitle {{
     font-size: 19px;
@@ -1269,12 +1267,20 @@ def meta_chip_style() -> str:
 
 def overline_label(text: str, *, color: str = "", parent: QWidget | None = None) -> QLabel:
     """PULIDO-05: rol tipográfico «overline» — micro-título en MAYÚSCULAS con
-    tracking (11px/700/1px), única forma de encabezado menor del sistema."""
+    tracking (11px/700/1px), única forma de encabezado menor del sistema.
+
+    WS-J: Qt IGNORA ``letter-spacing`` en QSS; el tracking se aplica de verdad vía
+    ``QFont.setLetterSpacing`` (y las mayúsculas ya se hacen en Python, no con el
+    ``text-transform`` inerte). El QSS solo lleva color/fondo."""
     label = QLabel(str(text).upper(), parent)
     label.setStyleSheet(
-        f"color: {color or INK_MUTED}; font-size: {TYPE_OVERLINE_PX}px; font-weight: 700; "
-        "letter-spacing: 1px; background: transparent; border: none;"
+        f"color: {color or INK_MUTED}; background: transparent; border: none;"
     )
+    font = label.font()
+    font.setPixelSize(TYPE_OVERLINE_PX)
+    font.setWeight(QFont.Weight.Bold)
+    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
+    label.setFont(font)
     return label
 
 

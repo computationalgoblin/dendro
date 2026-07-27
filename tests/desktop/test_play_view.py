@@ -648,7 +648,8 @@ class TestWorkspaceWiring:
         assert "self.play.stopRequested.connect(self._stop_walk)" in source
         assert "self.play.set_busy(True)" in source
         assert "self.play.show_analysis(result)" in source
-        assert "self.play.show_error(str(error))" in source
+        # WS-K: el error del proveedor se humaniza antes de mostrarlo en Play.
+        assert "self.play.show_error(_human_ai_error(str(error)))" in source
         # La reanudación desde la cronología entra en Play (el runner ya no es la cara).
         assert source.count("self._open_play_view()") >= 2
 
