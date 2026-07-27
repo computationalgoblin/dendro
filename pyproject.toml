@@ -18,8 +18,8 @@ license = { text = "Proprietary — Beta Evaluation License" }
 # BETA1-CLEANUP-IMPORT. PySide6 (host de escritorio) vive en el extra `desktop`.
 dependencies = []
 
-[project.scripts]
-narrative-architect = "narrative_architect.__main__:main"
+# BETA-CIERRE WS-G: el host CLI se retiró de la beta (solo-desktop, decisión 3).
+# El único entry point es el GUI `dendro`; se conserva packages/ui/graph_physics.
 
 [project.gui-scripts]
 # `hosts` es un paquete namespace PEP 420 (sin __init__.py); se descubre vía
@@ -40,7 +40,7 @@ desktop = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["packages*", "narrative_architect*", "hosts*"]
+include = ["packages*", "hosts*"]
 exclude = ["tests*", "scripts*", "ai_outputs*", "manual_pre_b27*", "manual_test_b01_b18*"]
 namespaces = true
 

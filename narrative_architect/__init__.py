@@ -1,1 +1,0 @@
-# narrative-architect entrypoint package

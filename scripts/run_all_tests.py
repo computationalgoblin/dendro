@@ -47,7 +47,8 @@ SUITES: dict[str, list[str]] = {
     "arch": ["tests/architecture"],
     "ui": ["tests/ui"],
     "qa": ["tests/qa"],
-    "integ": ["tests/integration"],
+    # BETA-CIERRE WS-G: la suite `integ` (única = e2e del CLI retirado) se eliminó
+    # con el host CLI; la integración real la cubre el smoke e2e de `desktop`.
     "desktop": ["tests/desktop"],
     # (limpieza post-WIKI 2026-07-21: los tests de superficie IA retirada se
     # borraron; las suites b3x/b4x conservan solo los ficheros vigentes)
@@ -123,7 +124,7 @@ SUITES: dict[str, list[str]] = {
 }
 
 # Slow suites that get skipped with --fast (dev loop). El gate completo NO usa --fast.
-FAST_SKIP = {"ui", "qa", "integ", "desktop"}
+FAST_SKIP = {"ui", "qa", "desktop"}
 
 # Suites cuyo directorio se ejecuta POR-FICHERO en subprocesos separados
 # (BETA-CIERRE WS-H): correr tests/desktop entero en un solo pytest SEGFAULTEA
