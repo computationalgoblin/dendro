@@ -272,7 +272,7 @@ class CandidateReviewPanel(QWidget):
         # fila 33: badge de fuente (usuario/IA) + confianza, para no confundir lo
         # propuesto por la IA con lo introducido por el usuario.
         source_label = QLabel(source_badge_text(self._candidate))
-        source_label.setObjectName("muted")
+        source_label.setObjectName("mutedLabel")
         layout.addWidget(source_label)
 
         # UX5b: para candidatos de entidad el campo editable ES el nombre real
@@ -334,14 +334,14 @@ class CandidateReviewPanel(QWidget):
             self._field_edits = {}
             for key, value in fields.items():
                 field_label = QLabel(f"Campo: {key}")
-                field_label.setObjectName("muted")
+                field_label.setObjectName("mutedLabel")
                 layout.addWidget(field_label)
                 before = self._current_field_value(proposed, str(key))
                 if before:
                     layout.addWidget(QLabel("Antes (canon actual):"))
                     before_box = QTextEdit()
                     before_box.setReadOnly(True)
-                    before_box.setObjectName("muted")
+                    before_box.setObjectName("mutedLabel")
                     before_box.setPlainText(before)
                     before_box.setMaximumHeight(90)
                     layout.addWidget(before_box)
@@ -365,7 +365,7 @@ class CandidateReviewPanel(QWidget):
         else:
             field = str(proposed.get("edit_field") or "body")
             field_label = QLabel(f"Campo: {field}")
-            field_label.setObjectName("muted")
+            field_label.setObjectName("mutedLabel")
             layout.addWidget(field_label)
             # fila 33: diff antes/después — muestra el valor actual de canon (solo
             # lectura) para comparar con la propuesta antes de aplicar.
@@ -374,7 +374,7 @@ class CandidateReviewPanel(QWidget):
                 layout.addWidget(QLabel("Antes (canon actual):"))
                 before_box = QTextEdit()
                 before_box.setReadOnly(True)
-                before_box.setObjectName("muted")
+                before_box.setObjectName("mutedLabel")
                 before_box.setPlainText(before)
                 before_box.setMaximumHeight(140)
                 layout.addWidget(before_box)
@@ -473,7 +473,7 @@ class CandidateReviewPanel(QWidget):
         layout.addWidget(move)
         box = QTextEdit()
         box.setReadOnly(True)
-        box.setObjectName("muted")
+        box.setObjectName("mutedLabel")
         parts: list[str] = []
         reasons = [str(r) for r in (proposed.get("reasons") or [])]
         if reasons:

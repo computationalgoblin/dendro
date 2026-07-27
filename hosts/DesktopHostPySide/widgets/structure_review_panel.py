@@ -123,7 +123,7 @@ class StructureReviewPanel(QWidget):
 
         if self._status_text:
             status = QLabel(self._status_text)
-            status.setObjectName("muted")
+            status.setObjectName("mutedLabel")
             status.setWordWrap(True)
             body.addWidget(status)
 
@@ -133,7 +133,7 @@ class StructureReviewPanel(QWidget):
                 "Riega entidades para que la IA atribuya su potencial (aparecerán movimientos de "
                 "anillo), o pulsa «Proponer estructura» para que proponga crear/fusionar anillos."
             )
-            empty.setObjectName("muted")
+            empty.setObjectName("mutedLabel")
             empty.setWordWrap(True)
             body.addWidget(empty)
             body.addStretch(1)
@@ -177,7 +177,7 @@ class StructureReviewPanel(QWidget):
         title.setWordWrap(True)
         col.addWidget(title)
         justification = QLabel(self._service.baseline_justification(finding))
-        justification.setObjectName("muted")
+        justification.setObjectName("mutedLabel")
         justification.setWordWrap(True)
         col.addWidget(justification)
 
