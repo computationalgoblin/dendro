@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import platform
 from dataclasses import dataclass, field
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +20,50 @@ def _default_preferences_path() -> Path:
 
 
 PREFERENCES_PATH = _default_preferences_path()
+
+
+def _log_dir() -> Path:
+    """Carpeta de datos para logs y crash log (WS-O)."""
+    return Path.home() / ".narrative-architect"
+
+
+_FILE_LOGGER: logging.Logger | None = None
+
+
+def _file_logger() -> logging.Logger:
+    """Logger rotativo a ``~/.narrative-architect/dendro.log`` (lazy singleton, WS-O).
+
+    Antes ``ctx.log`` solo llenaba una lista en RAM + un widget oculto: los fallos
+    (incluidos los errores del proveedor de IA, la señal nº1 de la beta) no dejaban
+    rastro que un tester pudiera adjuntar. Ahora persisten en un fichero rotativo con
+    un sello de versión/OS al arrancar, para correlacionar reportes entre builds.
+    """
+    global _FILE_LOGGER
+    if _FILE_LOGGER is not None:
+        return _FILE_LOGGER
+    logger = logging.getLogger("dendro.app")
+    logger.handlers.clear()  # idempotente: sin handlers duplicados si se reinicializa
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        directory = _log_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            directory / "dendro.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        try:
+            from packages.domain.config import AppConfig
+
+            version = AppConfig().app_version
+        except Exception:
+            version = "?"
+        logger.info("=== Dendro %s | %s ===", version, platform.platform())
+    except Exception:
+        pass  # sin fichero de log la app sigue funcionando igual
+    _FILE_LOGGER = logger
+    return logger
 
 
 @dataclass
@@ -175,11 +222,20 @@ class AppContext:
         self.advanced_mode = bool(enabled)
         self.save_preferences()
 
+    def data_dir(self) -> Path:
+        """Carpeta de datos del usuario (log de app + crash log). WS-O."""
+        return _log_dir()
+
     def log(self, level: str, msg: str):
         entry = f"[{level.upper()}] {msg}"
         self.log_messages.append(entry)
         if len(self.log_messages) > 200:
             self.log_messages = self.log_messages[-100:]
+        # WS-O: persistir también en fichero rotativo para diagnosticar reportes de beta.
+        try:
+            _file_logger().log(logging.ERROR if level.lower() == "error" else logging.INFO, msg)
+        except Exception:
+            pass
         if self.log_sink is not None:
             self.log_sink(entry)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QRect
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -570,21 +570,40 @@ class MainWindow(QMainWindow):
         self.ctx.left_drawer.open()
 
     def _open_about_dialog(self):
-        """SHIP-04: identidad mínima — qué es Dendro y qué versión corre."""
+        """SHIP-04 / WS-O: identidad + acceso a los registros para reportar problemas."""
         _apptrace("UI open_about")
+        from hosts.DesktopHostPySide.app_context import _log_dir
         from packages.domain.config import AppConfig
 
         version = AppConfig().app_version
-        QMessageBox.about(
-            self,
-            "Acerca de Dendro",
+        data_dir = _log_dir()
+        box = QMessageBox(self)
+        box.setWindowTitle("Acerca de Dendro")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
             f"<b>Dendro</b> — arquitecto narrativo<br>"
             f"Versión {version} (beta)<br><br>"
             "Un escritorio tranquilo para crear mundos y relatos. "
             "La IA sugiere y cultiva; tu canon solo cambia cuando tú aceptas.<br><br>"
-            "Tus proyectos se guardan donde tú eliges; preferencias y registros, "
-            "en <code>~/.narrative-architect</code>.",
+            "Tus proyectos se guardan donde tú eliges; preferencias y registros, en:<br>"
+            f"<code>{data_dir}</code><br><br>"
+            "¿Algo falla? Pulsa «Abrir carpeta de registros» y adjunta "
+            "<code>dendro.log</code> / <code>dendro_crash.log</code> al reportarlo."
         )
+        open_logs = box.addButton(
+            "Abrir carpeta de registros", QMessageBox.ButtonRole.ActionRole
+        )
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() is open_logs:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            try:
+                data_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
 
     def _handle_ai_status(self, msg: str):
         """Log AI status and refresh contextual AI consumers after settings changes."""

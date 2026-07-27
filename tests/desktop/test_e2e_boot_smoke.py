@@ -37,6 +37,8 @@ def _isolated_and_nonmodal(tmp_path, monkeypatch):
     yes = QMessageBox.StandardButton.Yes
     for name in ("question", "warning", "information", "critical", "about"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(lambda *a, **k: yes))
+    # exec() de una instancia de QMessageBox (p.ej. el diálogo Acerca de) bloquearía.
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
 
 
 def _fixture_project(path) -> None:
@@ -69,6 +71,9 @@ def test_e2e_boot_open_navigate(app, tmp_path):
         # 3) Con proyecto cargado, la navegación a Creación entra (sin proyecto se bloquea).
         w._go_space(_IDX_CREATION)
         assert w.stack.currentIndex() == _IDX_CREATION
+
+        # 4) El diálogo "Acerca de" (con acceso a registros, WS-O) se abre sin romper.
+        w._open_about_dialog()
     finally:
         w.controller.close()  # sin proyecto activo → closeEvent no abre modal
         w.close()

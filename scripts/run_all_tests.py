@@ -118,6 +118,7 @@ SUITES: dict[str, list[str]] = {
         "tests/test_positioning_copy.py",
         "tests/test_ws_m_window_fit.py",
         "tests/test_ws_i_packaging.py",
+        "tests/test_ws_o_logging.py",
     ],
 }
 

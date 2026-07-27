@@ -139,7 +139,7 @@ jobs:
           pytest tests/test_version_sync.py tests/test_prompt_budget.py \
             tests/test_neighborhood.py tests/test_positioning_copy.py \
             tests/test_ws_m_window_fit.py tests/test_ws_i_packaging.py \
-            tests/test_sanity.py \
+            tests/test_ws_o_logging.py tests/test_sanity.py \
             -q -p no:cacheprovider
 
   # ───────────────────────────────────────────────────────────────────────

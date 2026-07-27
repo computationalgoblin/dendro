@@ -1,13 +1,24 @@
 """DesktopHost entry point — PySide6 MVP (B27.1)."""
 from __future__ import annotations
 
+import datetime
 import faulthandler
 import os
+import platform
 import sys
 import traceback
 from pathlib import Path
 
 _crash_notifier = None
+
+
+def _app_version() -> str:
+    try:
+        from packages.domain.config import AppConfig
+
+        return AppConfig().app_version
+    except Exception:  # noqa: BLE001 — el sello nunca debe romper el guard
+        return "?"
 
 # SHIP-06: en el exe empaquetado sin consola (PyInstaller ``console=False``) los
 # streams estándar son ``None`` y algún import del árbol revienta ANTES de crear
@@ -101,9 +112,15 @@ def _install_crash_guard() -> None:
             sys.stderr.write(text)
             sys.stderr.flush()
         try:
+            # WS-O: sello versión + OS + timestamp UTC → reportes correlacionables b1→bN.
+            stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
             with log_path.open("a", encoding="utf-8") as fh:
-                fh.write("=== excepción ===\n")
+                fh.write(
+                    f"=== excepción {stamp} | Dendro {_app_version()} "
+                    f"| {platform.platform()} ===\n"
+                )
                 fh.write(text)
+                fh.write("\n")
         except Exception:  # noqa: BLE001 — el log nunca debe romper el guard
             pass
         if _crash_notifier is not None:
