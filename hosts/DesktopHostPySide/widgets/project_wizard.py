@@ -459,7 +459,7 @@ class ProjectWizard(QFrame):
             "Subgéneros", self.subgenres, "Escribe y pulsa Enter para añadir.", help_key="subgeneros"))
         self.format_combo = _make_combo_editable(FORMATO_SUGERENCIAS)
         box.addWidget(_field_block(
-            "Formato", self.format_combo, "Novela, campaña de rol, videojuego…", help_key="formato"))
+            "Formato", self.format_combo, "Novela, mundo de fantasía, videojuego…", help_key="formato"))
         self.audience_combo = _make_combo_editable(PUBLICO_SUGERENCIAS)
         box.addWidget(_field_block("Público", self.audience_combo, help_key="publico"))
         self.language_edit = QLineEdit("es")

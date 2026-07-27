@@ -158,7 +158,10 @@ def main():
     # tooltips ilegibles (la causa raíz de la antigua supresión global de
     # tooltips de BETA1-F00, que se retira: ahora QToolTip va estilado).
     apply_light_theme(app)
-    w = MainWindow(); w.show()
+    # WS-M/B3: maximizada de inicio → todo el shell (incluida la barra inferior y Guardar)
+    # es siempre alcanzable, también en 1366×768 y 1080p@150%.
+    w = MainWindow()
+    w.showMaximized()
     # SHIP-03: con la ventana viva, una recuperación de error se comunica (toast).
     set_crash_notifier(
         lambda log_path: w.ctx.notify(

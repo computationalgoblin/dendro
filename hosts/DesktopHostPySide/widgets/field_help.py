@@ -44,7 +44,7 @@ FIELD_HELP: dict[str, str] = {
     ),
     "subgeneros": "Subgéneros e influencias. Añade varios; no hace falta separarlos mucho.",
     "formato": (
-        "Formato de la obra: campaña de rol, novela, videojuego, mundo abierto, antología…"
+        "Formato de la obra: novela, videojuego, mundo abierto, antología, cómic…"
     ),
     "publico": "Para quién es: adulto, juvenil, jugadores de rol, lectores de fantasía oscura…",
     "idioma": "Idioma principal. Define consistencia de nombres, tono y salida de la IA.",

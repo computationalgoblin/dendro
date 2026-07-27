@@ -59,7 +59,7 @@ GENERO_SUGERENCIAS = [
 ]
 
 FORMATO_SUGERENCIAS = [
-    "novela", "campaña de rol", "videojuego", "mundo abierto", "antología",
+    "novela", "videojuego", "mundo abierto", "antología",
     "serie", "relato", "cómic",
 ]
 

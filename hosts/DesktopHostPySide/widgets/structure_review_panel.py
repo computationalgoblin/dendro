@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from packages.domain.result import Ok
 
 _STRUCTURE_KINDS = frozenset({"ring_create", "ring_merge"})
@@ -214,8 +215,12 @@ class StructureReviewPanel(QWidget):
         worker.done.connect(self._on_propose_done)
         worker.finished.connect(worker.deleteLater)
         self._propose_worker = worker
+        # WS-F: registrar para el apagado ordenado; sin esto, cerrar la app (o el panel)
+        # con la llamada HTTP en vuelo destruía un QThread corriendo → aborto del proceso.
+        track_worker(worker)
         worker.start()
 
+    @_qt_safe_slot
     def _on_propose_done(self, res: Any) -> None:
         self._proposing = False
         if isinstance(res, Ok):

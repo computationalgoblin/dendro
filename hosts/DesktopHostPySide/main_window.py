@@ -98,7 +98,11 @@ class MainWindow(QMainWindow):
         self.ctx.request_save = self._save
 
         self.setWindowTitle("Dendro")
-        self.setMinimumSize(1180, 760)
+        # BETA-CIERRE WS-M/B3: mínimo que CABE en portátiles comunes. El anterior
+        # (1180×760) desbordaba 1366×768 y 1080p@150% (1280×720 lógico): la ventana no
+        # cabía ni encogía y Guardar/toasts quedaban bajo la barra de tareas. La entrada
+        # real (main.py) abre maximizada; este mínimo permite además reducir a mano.
+        self.setMinimumSize(1100, 640)
         self.setStyleSheet(APP_STYLESHEET)
 
         self._build_controllers()
@@ -576,7 +580,7 @@ class MainWindow(QMainWindow):
             "Acerca de Dendro",
             f"<b>Dendro</b> — arquitecto narrativo<br>"
             f"Versión {version} (beta)<br><br>"
-            "Un escritorio tranquilo para crear mundos, relatos y sesiones. "
+            "Un escritorio tranquilo para crear mundos y relatos. "
             "La IA sugiere y cultiva; tu canon solo cambia cuando tú aceptas.<br><br>"
             "Tus proyectos se guardan donde tú eliges; preferencias y registros, "
             "en <code>~/.narrative-architect</code>.",

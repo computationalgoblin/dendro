@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -32,8 +32,9 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     LINE_SOFT,
     overline_label,
 )
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
-from packages.domain.result import Ok
+from packages.domain.result import Error, Ok
 
 _FRESHNESS_LABEL = {
     MemoryFreshness.REGADA.value: "vigente",
@@ -41,6 +42,43 @@ _FRESHNESS_LABEL = {
     MemoryFreshness.SECADA.value: "secada",
     MemoryFreshness.SIN_MEMORIA.value: "sin memoria",
 }
+
+
+def _humanize_regen_error(result) -> str:
+    raw = str(getattr(result, "error", "") or "Error desconocido")
+    try:
+        from hosts.DesktopHostPySide.widgets.settings_panels import _human_error
+
+        return _human_error(raw)
+    except Exception:  # noqa: BLE001 — si el helper no está, el error crudo sirve
+        return raw
+
+
+class _RegenWorker(QThread):
+    """Corre ``update_memory`` FUERA del hilo de UI (BETA-CIERRE WS-F / B2).
+
+    Antes se llamaba síncronamente desde el slot del botón: una llamada bloqueante al
+    proveedor (hasta el timeout, 300 s) congelaba la app entera («No responde»). Ahora
+    va en su propio QThread, registrado para el apagado ordenado (``track_worker``).
+    """
+
+    done = Signal(object)  # emite el Result (Ok/Error)
+
+    def __init__(self, service: Any, kind: MemoryTargetKind, target_id: str, context: str) -> None:
+        super().__init__()
+        self._service = service
+        self._kind = kind
+        self._target_id = target_id
+        self._context = context
+
+    def run(self) -> None:
+        try:
+            result = self._service.update_memory(
+                self._kind, self._target_id, self._context, mode="regen"
+            )
+        except Exception as exc:  # noqa: BLE001 — el hilo nunca debe romper el flujo
+            result = Error(str(exc))
+        self.done.emit(result)
 
 
 class MemoryViewerPanel(QWidget):
@@ -51,6 +89,7 @@ class MemoryViewerPanel(QWidget):
         self.memory_service = memory_service
         self.memory_ai_service = memory_ai_service
         self._current_key: tuple[str, str, str] | None = None
+        self._regen_worker: _RegenWorker | None = None
 
         root = QHBoxLayout(self)
 
@@ -218,14 +257,32 @@ class MemoryViewerPanel(QWidget):
         self._load()
 
     def _regenerate(self) -> None:
+        # WS-F/B2: el trabajo de IA va FUERA del hilo de UI para no congelar la app.
         if self._current_key is None or self.memory_ai_service is None:
             return
+        if self._regen_worker is not None:
+            return  # ya hay una regeneración en curso
         kind, tid, ctx = self._current_key
-        result = self.memory_ai_service.update_memory(
-            MemoryTargetKind(kind), tid, ctx, mode="regen"
-        )
+        self._set_regen_busy(True)
+        worker = _RegenWorker(self.memory_ai_service, MemoryTargetKind(kind), tid, ctx)
+        worker.done.connect(self._on_regen_done)
+        worker.finished.connect(worker.deleteLater)
+        self._regen_worker = worker
+        track_worker(worker)
+        worker.start()
+
+    def _set_regen_busy(self, busy: bool) -> None:
+        self.regen_btn.setText("Regenerando…" if busy else "Regenerar con IA")
+        self.regen_btn.setEnabled(not busy and self._ai_available)
+        self.save_btn.setEnabled(not busy)
+        self.delete_btn.setEnabled(not busy)
+
+    @_qt_safe_slot
+    def _on_regen_done(self, result) -> None:
+        self._regen_worker = None
+        self._set_regen_busy(False)
         if not isinstance(result, Ok):
-            QMessageBox.warning(self, "Regenerar Memoria", str(getattr(result, "error", "Error")))
+            QMessageBox.warning(self, "Regenerar Memoria", _humanize_regen_error(result))
             return
         self.refresh()
         self._reselect()

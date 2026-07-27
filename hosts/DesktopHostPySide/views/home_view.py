@@ -637,7 +637,7 @@ class HomeView(QWidget):
             f"font-family: Georgia, 'Iowan Old Style', serif; background: transparent; border: none;"
         )
         title_box.addWidget(self._project_label)
-        self._subtitle_label = QLabel("Un escritorio tranquilo para crear mundos, relatos y sesiones.")
+        self._subtitle_label = QLabel("Un escritorio tranquilo para crear mundos y relatos.")
         self._subtitle_label.setStyleSheet(f"font-size: 14px; color: {INK_SOFT}; background: transparent; border: none;")
         title_box.addWidget(self._subtitle_label)
         self._status_label = QLabel("")
@@ -914,7 +914,7 @@ class HomeView(QWidget):
         if p is None:
             self._project_loaded = False
             self._project_label.setText("Dendro")
-            self._subtitle_label.setText("Un escritorio tranquilo para crear mundos, relatos y sesiones.")
+            self._subtitle_label.setText("Un escritorio tranquilo para crear mundos y relatos.")
             self._status_label.setText("Abre o crea un proyecto para comenzar.")
             self.update_project_visibility(None, False)
             return
