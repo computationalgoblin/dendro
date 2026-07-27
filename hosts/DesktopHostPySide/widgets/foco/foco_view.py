@@ -205,6 +205,7 @@ class FocoView(QWidget):
     ringCreateRequested = Signal()  # noqa: N815 — convención Qt de señales
     createFirstRequested = Signal()  # noqa: N815 — SHIP-02: CTA del estado vacío
     deleteRequested = Signal(str)  # noqa: N815 — WS-E: borrar la entidad en foco
+    relationDeleteRequested = Signal(str)  # noqa: N815 — WS-E: borrar una relación
 
     def __init__(
         self,
@@ -1516,6 +1517,9 @@ class FocoView(QWidget):
             on_create_relation=lambda: self._on_tool("create_relation"),
             # BETA2-FOCO-27: crear una entidad NUEVA ya relacionada (flujo del rail).
             on_create_related=lambda: self._on_tool("create_related"),
+            # WS-E: eliminar una relación desde el Foco (confirmación + controller
+            # los pone el workspace; el Foco solo pide el borrado por señal).
+            on_delete_relation=lambda rid: self.relationDeleteRequested.emit(str(rid)),
         )
         self._relations_scroll.setWidget(self._relations_panel)
         # UI2-06: pestaña Cultivo — el Cuaderno completo (métricas, informe,

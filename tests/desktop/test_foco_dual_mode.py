@@ -247,11 +247,18 @@ class TestDualFromRelationsList:
         _relate(project_service, center, friend)
         view.center_entity(center.id)
 
-        rows = [
+        # WS-E: cada fila es ahora un contenedor (cápsula clicable + «×» de
+        # borrado); descendemos para hallar el botón de la relación.
+        containers = [
             view._relations_panel._relations_rows.itemAt(i).widget()
             for i in range(view._relations_panel._relations_rows.count())
         ]
-        rows = [r for r in rows if isinstance(r, QPushButton)]
+        rows: list[QPushButton] = []
+        for container in containers:
+            if isinstance(container, QPushButton):
+                rows.append(container)
+            elif container is not None:
+                rows.extend(container.findChildren(QPushButton))
         assert rows, "la pestaña Relaciones debe listar la relación"
         rows[0].click()
 

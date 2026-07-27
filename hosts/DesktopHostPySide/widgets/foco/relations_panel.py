@@ -73,6 +73,7 @@ class FocoRelationsPanel(QWidget):
         on_open_relation=None,
         on_create_relation=None,
         on_create_related=None,
+        on_delete_relation=None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -81,6 +82,9 @@ class FocoRelationsPanel(QWidget):
         self.on_open_relation = on_open_relation
         self.on_create_relation = on_create_relation
         self.on_create_related = on_create_related
+        # WS-E: eliminar una relación desde el Foco (vía callback → controller en
+        # el workspace; el panel NO escribe persistencia). None = sin botón ×.
+        self.on_delete_relation = on_delete_relation
 
         box = QVBoxLayout(self)
         box.setContentsMargins(0, SPACE_MD, 0, 0)
@@ -155,6 +159,7 @@ class FocoRelationsPanel(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self.relations_empty_label.setVisible(not entries)
+        can_delete = callable(self.on_delete_relation)
         for relation_id, text in entries:
             row = QPushButton(text)
             row.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -169,12 +174,41 @@ class FocoRelationsPanel(QWidget):
             )
             if relation_id:
                 row.clicked.connect(lambda _=False, rid=relation_id: self._on_relation_link(rid))
-            rows.addWidget(row)
+            if not (can_delete and relation_id):
+                rows.addWidget(row)  # sin borrado → cápsula suelta (compat FOCO-20)
+                continue
+            # WS-E: con callback de borrado, la fila lleva la cápsula + un «×».
+            line = QWidget()
+            line_box = QHBoxLayout(line)
+            line_box.setContentsMargins(0, 0, 0, 0)
+            line_box.setSpacing(4)
+            line_box.addWidget(row, 1)
+            del_btn = QToolButton()
+            del_btn.setText("×")
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            del_btn.setFixedHeight(28)
+            del_btn.setToolTip("Eliminar esta relación")
+            del_btn.setStyleSheet(
+                f"QToolButton {{ border: 1px solid {LINE_SOFT}; border-radius: 14px; "
+                f"background: transparent; color: {INK_MUTED}; font-size: 15px; "
+                f"padding: 0 8px; }} "
+                f"QToolButton:hover {{ border-color: {GOLD}; color: {INK_STRONG}; }}"
+            )
+            del_btn.clicked.connect(
+                lambda _=False, rid=relation_id: self._on_relation_delete(rid)
+            )
+            line_box.addWidget(del_btn, 0)
+            rows.addWidget(line)
 
     def _on_relation_link(self, relation_id: str) -> None:
         """Una relación de la lista se abre en su panel adyacente/dual."""
         if callable(self.on_open_relation) and relation_id:
             self.on_open_relation(relation_id)
+
+    def _on_relation_delete(self, relation_id: str) -> None:
+        """WS-E: delega el borrado (confirmación + controller) al workspace."""
+        if callable(self.on_delete_relation) and relation_id:
+            self.on_delete_relation(relation_id)
 
 
 __all__ = ["FocoRelationsPanel", "relation_entries_for"]

@@ -1549,6 +1549,7 @@ class CreationWorkspace(QWidget):
         # SHIP-02: el CTA del estado vacío de Foco usa el mismo flujo que el del Mapa.
         self.foco.createFirstRequested.connect(self._create_entity_on_graph)
         self.foco.deleteRequested.connect(self._delete_entity_from_foco)
+        self.foco.relationDeleteRequested.connect(self._delete_relation_from_foco)
         layout.addWidget(self.foco, 1)
 
         # BETA2-PLAY: modo Play — la creación cronológica como experiencia
@@ -5097,6 +5098,27 @@ class CreationWorkspace(QWidget):
             self.ctx.notify(f"No se pudo eliminar: {result.error}", "error")
             return
         self.ctx.log("info", f"Entidad eliminada desde Foco: {name}")
+        self.refresh()
+
+    def _delete_relation_from_foco(self, relation_id: str) -> None:
+        """WS-E: eliminar una relación desde la pestaña Relaciones del Foco, con
+        confirmación y por el controller (la UI nunca escribe persistencia)."""
+        if not relation_id or self.relation_controller is None:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Eliminar relación",
+            "¿Eliminar esta relación?\nEsta acción no se puede deshacer.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        result = self.relation_controller.delete(relation_id)
+        if isinstance(result, Error):
+            self.ctx.notify(f"No se pudo eliminar la relación: {result.error}", "error")
+            return
+        self.ctx.log("info", f"Relación eliminada desde Foco: {relation_id}")
         self.refresh()
 
     def _delete_selected(self):
