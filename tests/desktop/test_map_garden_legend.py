@@ -63,6 +63,22 @@ class TestGardenLegend:
         assert legend._card.isHidden()
         widget.deleteLater()
 
+    def test_expand_explains_rings_and_seeds(self, qapp):
+        # WS-D: además del riego, la leyenda enseña las metáforas del Mapa que un
+        # usuario nuevo no puede deducir de un lienzo vacío: anillos y semillas.
+        widget = _widget(qapp)
+        legend = widget.garden_legend
+        legend.set_expanded(True)
+        texts = " ".join(label.text() for label in legend._card.findChildren(QLabel))
+        assert "Anillos" in texts and "potencia causal" in texts
+        assert "Semillas" in texts
+        assert "Regar" in texts
+        # Sigue siendo de solo lectura: no añadimos botones, solo etiquetas.
+        from PySide6.QtWidgets import QPushButton
+
+        assert legend.findChildren(QPushButton) == [legend._toggle]
+        widget.deleteLater()
+
     def test_anchored_bottom_right_after_resize(self, qapp):
         # UI2-02: la leyenda vive abajo-DERECHA (el cluster izquierdo la solapaba).
         widget = _widget(qapp)

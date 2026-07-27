@@ -39,6 +39,14 @@ _LEGEND_ROWS = (
     (GOLD_SOFT, "Raíz dorada · arraigo (al enfocar)"),
 )
 
+# WS-D: las otras dos metáforas del Mapa que un usuario nuevo no puede deducir
+# de un lienzo vacío — los anillos y las semillas. (glifo, texto).
+_CONCEPT_ROWS = (
+    ("◎", "Anillos · orden por potencia causal: dentro la causa, fuera la consecuencia"),
+    ("🌱", "Semillas · ideas de la IA; tú las aceptas (florecen) o rechazas (marchitan)"),
+    ("💧", "Regar · pides a la IA que enriquezca una entidad; nunca escribe canon sola"),
+)
+
 
 class GardenLegend(QWidget):
     """Punto plegable ⇄ tarjeta con la leyenda del estado de riego."""
@@ -77,6 +85,31 @@ class GardenLegend(QWidget):
             )
             row.addWidget(label, 1)
             card_layout.addLayout(row)
+
+        # WS-D: segundo bloque — anillos y semillas (las metáforas del Mapa).
+        card_layout.addSpacing(SPACE_XS)
+        card_layout.addWidget(overline_label("Mapa y semillas", color=GOLD_DEEP))
+        for glyph, text in _CONCEPT_ROWS:
+            row = QHBoxLayout()
+            row.setSpacing(SPACE_SM)
+            mark = QLabel(glyph, self._card)
+            mark.setFixedWidth(14)
+            mark.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            mark.setStyleSheet(
+                f"color: {GOLD_DEEP}; font-size: {TYPE_CAPTION_PX}px; "
+                "background: transparent; border: none;"
+            )
+            row.addWidget(mark)
+            label = QLabel(text, self._card)
+            label.setWordWrap(True)
+            label.setStyleSheet(
+                f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; "
+                "background: transparent; border: none;"
+            )
+            row.addWidget(label, 1)
+            card_layout.addLayout(row)
+
+        self._card.setMaximumWidth(280)  # el texto de conceptos envuelve, no se estira
         self._card.hide()
         root.addWidget(self._card)
 
@@ -84,7 +117,7 @@ class GardenLegend(QWidget):
         self._toggle = QPushButton("❀", self)
         self._toggle.setFixedSize(24, 24)
         self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._toggle.setToolTip("Leyenda del jardín: qué significa cada color del riego")
+        self._toggle.setToolTip("Leyenda: colores del riego, anillos causales y semillas")
         self._toggle.setStyleSheet(
             f"QPushButton {{ background: {SURFACE_HI}; color: {GOLD_DEEP}; "
             f"border: 1px solid {LINE_SOFT}; border-radius: 12px; font-size: 12px; }} "
