@@ -732,13 +732,42 @@ class MainWindow(QMainWindow):
         samples = sorted(base.glob("**/*.json"))
         return samples[0] if samples else None
 
+    def _sample_workspace_dir(self) -> Path:
+        """WS-D: carpeta ESCRIBIBLE donde se copia el ejemplo (overridable en tests)."""
+        return Path.home() / "Dendro"
+
     def _open_sample_project(self) -> None:
-        """WS-D: abre el proyecto de muestra para explorar Dendro sin partir de cero."""
+        """WS-D: abre el proyecto de muestra para explorar Dendro sin partir de cero.
+
+        Se COPIA a una ubicación escribible antes de abrir: el ejemplo viaja junto
+        al exe (a menudo en Archivos de programa, solo-lectura), así que abrirlo en
+        sitio rompería Guardar y ensuciaría la muestra compartida. Si ya se copió
+        antes, se abre esa copia (conserva las ediciones del usuario)."""
         sample = self._bundled_sample_path()
         if sample is None:
             self.ctx.notify("No hay proyecto de ejemplo disponible.", "info")
             return
-        self._open_project_path(str(sample))
+        import shutil
+
+        dest_dir = self._sample_workspace_dir()
+        dest = dest_dir / sample.name
+        try:
+            if not dest.exists():
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(sample), str(dest))
+                # El sidecar de assets (<stem>.assets/) viaja con el proyecto.
+                src_assets = sample.parent / f"{sample.stem}.assets"
+                if src_assets.is_dir():
+                    shutil.copytree(
+                        str(src_assets),
+                        str(dest_dir / f"{dest.stem}.assets"),
+                        dirs_exist_ok=True,
+                    )
+        except Exception as exc:  # noqa: BLE001 — si no se puede copiar, abrir en sitio
+            self.ctx.log("error", f"No se pudo copiar el ejemplo: {exc}")
+            self._open_project_path(str(sample))
+            return
+        self._open_project_path(str(dest))
 
     def _open_project(self):
         _apptrace("UI open_project")

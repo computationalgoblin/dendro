@@ -18,7 +18,7 @@ import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import hosts.DesktopHostPySide.app_context as ac  # noqa: E402
-from hosts.DesktopHostPySide.main_window import _IDX_CREATION, _IDX_HOME, MainWindow  # noqa: E402
+from hosts.DesktopHostPySide.main_window import _IDX_CREATION, MainWindow  # noqa: E402
 from packages.application.project_service import ProjectService  # noqa: E402
 from packages.domain.entity import NarrativeEntity  # noqa: E402
 from packages.domain.result import Ok  # noqa: E402
@@ -78,9 +78,14 @@ def test_e2e_boot_open_navigate(app, tmp_path):
         # 5) WS-D: el proyecto de ejemplo tiene puerta en Home y se abre.
         assert w._bundled_sample_path() is not None
         assert not w.home_view._btn_sample.isHidden()
+        # WS-D: la copia-al-abrir va a una carpeta escribible; en el test la
+        # aislamos a tmp_path (no ensuciar ~/Dendro del dev).
+        w._sample_workspace_dir = lambda: tmp_path / "sample_ws"
         w._open_sample_project()
         sample_proj = w.controller.ps.active_project
         assert sample_proj is not None and "Almendros" in (sample_proj.name or "")
+        # Se abrió la COPIA escribible, no el original de solo-lectura.
+        assert str(tmp_path / "sample_ws") in (w.controller.current_path or "")
     finally:
         w.controller.close()  # sin proyecto activo → closeEvent no abre modal
         w.close()
