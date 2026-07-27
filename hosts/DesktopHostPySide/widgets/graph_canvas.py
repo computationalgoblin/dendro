@@ -222,6 +222,11 @@ _EDGE_COLORS = RELATION_KIND_PALETTE
 # secada (gris-tierra). El umbral débil es el mismo 60 del drawer de riego.
 _WATERING_TINT_FILL = {"sedienta": EARTH_TINT, "secada": EARTH_GREY_TINT}
 _WATERING_TINT_BORDER = {"sedienta": EARTH, "secada": EARTH_GREY}
+# WS-M: canal NO-color para el jardín — sedienta (marrón) y secada (gris) son el
+# par que confunde el daltonismo rojo-verde/pardo y llevan acciones opuestas.
+# Glifos geométricos (renderizan sin fuente de emoji): «!» = urge regar, «×» =
+# secada a propósito (latente). La distinción va por FORMA, no por tono.
+_WATERING_GLYPH = {"sedienta": "!", "secada": "×"}
 _GARDEN_WEAK_THRESHOLD = 60.0
 
 _VISIBILITY_COLORS = {
@@ -256,6 +261,31 @@ def _add_secret_lock(parent_item, center_x: float, center_y: float):
     lock.setPos(center_x - rect.width() / 2.0, center_y - rect.height() / 2.0)
     lock.setToolTip("Entidad reservada: oculta a la IA")
     return lock
+
+
+def _set_node_watering_glyph(node, kind: str) -> None:
+    """WS-M: muestra/oculta el glifo de riego (canal daltónico) del nodo. Reusa
+    un único item hijo; lo posiciona por la esquina de su boundingRect, así el
+    mismo helper sirve a hojas (círculo) y ramas (rectángulo)."""
+    glyph = _WATERING_GLYPH.get(kind, "")
+    item = getattr(node, "_watering_glyph_item", None)
+    if not glyph:
+        if item is not None:
+            item.setVisible(False)
+        return
+    if item is None:
+        item = QGraphicsSimpleTextItem(glyph, node)
+        font = item.font()
+        font.setPixelSize(13)
+        font.setBold(True)
+        item.setFont(font)
+        item.setBrush(QBrush(QColor("#5A4632")))
+        node._watering_glyph_item = item
+    else:
+        item.setText(glyph)
+    rect = node.boundingRect()
+    item.setPos(rect.left() + 5, rect.top() + 3)
+    item.setVisible(True)
 
 
 _CONTAINER_COLOR = "#E8E2D2"
@@ -767,6 +797,7 @@ class GraphNodeItem(QGraphicsEllipseItem):
             self.setBrush(QBrush(QColor(_WATERING_TINT_FILL[kind])))
         else:
             self.setBrush(QBrush(QColor(255, 255, 253, 250)))
+        _set_node_watering_glyph(self, kind)  # WS-M: canal daltónico
         self.update()
 
     def set_watering_pulse(self, active: bool) -> None:
@@ -1177,6 +1208,7 @@ class GraphTreeItem(QGraphicsRectItem):
         else:
             self.setPen(self._normal_pen)
             self.setBrush(QBrush(QColor(255, 255, 255, 80)))
+        _set_node_watering_glyph(self, kind)  # WS-M: canal daltónico
         self.update()
 
     def _update_count(self):

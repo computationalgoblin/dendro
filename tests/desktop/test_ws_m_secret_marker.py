@@ -63,3 +63,26 @@ def test_marker_keys_match_ai_withheld_policy():
     assert {"secreto", "privado", "oculto", "no_exportable", "preparado_no_revelado"} <= set(
         _SECRET_VISIBILITY_KEYS
     )
+
+
+# ── WS-M: canal daltónico del jardín (glifo además del color) ────────────────
+
+
+def test_watering_glyph_distinguishes_thirsty_from_dried(app):
+    item = _item("publico")
+    item.set_watering_tint("sedienta")
+    glyph = item._watering_glyph_item
+    assert glyph is not None and glyph.isVisible()
+    assert glyph.text() == "!"  # urge regar
+    item.set_watering_tint("secada")
+    assert item._watering_glyph_item.text() == "×"  # secada a propósito (distinto glifo)
+    # Glifos DISTINTOS → distinción por forma, no solo por color (daltonismo).
+    assert _item("publico") is not None
+
+
+def test_watering_glyph_hidden_when_no_tint(app):
+    item = _item("publico")
+    item.set_watering_tint("sedienta")
+    assert item._watering_glyph_item.isVisible()
+    item.set_watering_tint("")  # vuelta a normal → sin glifo
+    assert not item._watering_glyph_item.isVisible()

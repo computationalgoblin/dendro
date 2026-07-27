@@ -32,8 +32,8 @@ from hosts.DesktopHostPySide.widgets.design_system import (
 
 # (color de la muestra, texto) — el lenguaje REAL del jardín (BETA2-JARDIN).
 _LEGEND_ROWS = (
-    (EARTH, "Marrón · por regar (congelada)"),
-    (EARTH_GREY, "Gris-tierra · secada a propósito"),
+    (EARTH, "Marrón «!» · por regar (congelada)"),
+    (EARTH_GREY, "Gris-tierra «×» · secada a propósito"),
     (GOLD, "Halo dorado · iluminada"),
     (GOLD_TINT, "Caída al borde · contenido débil"),
     (GOLD_SOFT, "Raíz dorada · arraigo (al enfocar)"),
