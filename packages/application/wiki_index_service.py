@@ -25,6 +25,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from packages.application.ai_privacy import (
+    REDACTED_LINE,
+    REDACTED_NAME,
+    is_withheld_from_ai,
+    relation_withheld,
+)
 from packages.application.world_layer_causal import get_causal_rank
 from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
 from packages.domain.result import Ok, Result
@@ -51,6 +57,10 @@ class WikiIndexEntry:
     one_line: str = ""
     page_freshness: str = MemoryFreshness.SIN_MEMORIA.value
     has_page: bool = False
+    # WS-B: elemento reservado — su nombre/contenido no viaja a la IA (índice compacto
+    # y navegación lo redactan). La UI usa el índice completo, así que este flag no la
+    # afecta: solo marca el borde de egreso hacia el proveedor.
+    secret: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,6 +102,7 @@ class WikiIndexService:
                     ring=getattr(layer, "name", ""),
                     rank=rank,
                     fallback=f"{getattr(layer, 'name', '')}: {getattr(layer, 'description', '')}",
+                    secret=is_withheld_from_ai(layer),
                 )
             )
 
@@ -108,6 +119,7 @@ class WikiIndexService:
                     ring=ring_name,
                     rank=rank,
                     fallback=fallback,
+                    secret=is_withheld_from_ai(ent),
                 )
             )
 
@@ -124,6 +136,7 @@ class WikiIndexService:
                     ring=ring_name,
                     rank=rank,
                     fallback=fallback,
+                    secret=is_withheld_from_ai(hito),
                 )
             )
 
@@ -136,6 +149,7 @@ class WikiIndexService:
                     self._relation_name(project, rel),
                     pages,
                     fallback=self._relation_fallback(project, rel),
+                    secret=relation_withheld(project, rel),
                 )
             )
 
@@ -150,21 +164,43 @@ class WikiIndexService:
         return Ok(WikiIndex(entries=tuple(entries), counts=counts, signature=signature))
 
     def compact_for_prompt(
-        self, index: WikiIndex, *, max_entries: int | None = None
+        self,
+        index: WikiIndex,
+        *,
+        max_entries: int | None = None,
+        priority_ids: Any = None,
     ) -> dict[str, Any]:
-        """Vista compacta y podada del índice para viajar en el prompt de navegación."""
+        """Vista compacta y podada del índice para viajar en el prompt de navegación.
+
+        ``max_entries`` acota el tamaño (BETA-CIERRE WS-L / B4): sin tope, el índice
+        completo viajaba en CADA ronda de navegación — un coste de entrada ilimitado que
+        crece con el proyecto y puede desbordar la ventana de contexto del modelo. Lo
+        omitido NO se pierde: la IA puede ``search`` sobre el índice completo. Los
+        ``priority_ids`` (p. ej. el foco) se colocan primero para que el recorte nunca los
+        deje fuera.
+        """
         entries = list(index.entries)
+        if priority_ids:
+            prioritized = {str(pid) for pid in priority_ids}
+            # sort estable: los prioritarios primero, el resto en su orden original.
+            entries.sort(key=lambda e: 0 if e.id in prioritized else 1)
         omitidas = 0
         if max_entries is not None and len(entries) > max_entries:
             omitidas = len(entries) - max_entries
             entries = entries[:max_entries]
 
         lineas = [self._compact_line(e) for e in entries]
+        nota = (
+            "Índice de la wiki (mapa del proyecto). Abre solo las páginas o el canon de "
+            "los elementos relevantes para la petición; no lo traigas todo."
+        )
+        if omitidas:
+            nota += (
+                f" Se muestran {len(entries)} de {len(index.entries)} elementos; usa "
+                "search para encontrar cualquiera que no aparezca aquí."
+            )
         section: dict[str, Any] = {
-            "nota": (
-                "Índice de la wiki (mapa del proyecto). Abre solo las páginas o el canon de "
-                "los elementos relevantes para la petición; no lo traigas todo."
-            ),
+            "nota": nota,
             "conteos": dict(index.counts),
             "entradas": lineas,
         }
@@ -195,6 +231,7 @@ class WikiIndexService:
         ring: str = "",
         rank: int | None = None,
         fallback: str = "",
+        secret: bool = False,
     ) -> WikiIndexEntry:
         page = pages.get((kind.value, target_id))
         has_page = bool(page and (page.resumen_editorial.strip() or page.cuerpo.strip()))
@@ -212,6 +249,7 @@ class WikiIndexService:
             one_line=one_line,
             page_freshness=freshness,
             has_page=has_page,
+            secret=secret,
         )
 
     @staticmethod
@@ -264,6 +302,10 @@ class WikiIndexService:
     @staticmethod
     def _compact_line(e: WikiIndexEntry) -> str:
         ring = f" ·{e.ring}" if e.ring else ""
+        if e.secret:
+            # WS-B: sin nombre ni contenido. Solo kind+id+anillo (estructura), para que
+            # la IA sepa que el elemento existe pero no pueda leer nada reservado.
+            return f"{e.kind} {e.id}{ring} · {REDACTED_NAME} — {REDACTED_LINE}"
         rank = f"#{e.rank}" if e.rank is not None else ""
         return (
             f"{e.kind} {e.id} · {e.name}{ring}{(' ' + rank) if rank else ''} "

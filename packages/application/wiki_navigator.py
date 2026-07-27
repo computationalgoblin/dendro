@@ -66,6 +66,11 @@ class NavigationRequest:
     max_rounds: int = 3
     max_reads_per_round: int = 6
     token_budget: int = 4000
+    # BETA-CIERRE WS-L / B4: tope de entradas del índice que viajan en el prompt CADA
+    # ronda. Sin esto el índice completo (uno por entidad/relación/hito/anillo) se
+    # re-enviaba entero por ronda, coste de entrada ilimitado en proyectos grandes. Lo
+    # omitido sigue siendo alcanzable por ``search``.
+    max_index_entries: int = 400
 
 
 @dataclass
@@ -126,7 +131,11 @@ class WikiNavigator:
         if not isinstance(index_res, Ok):
             return Error("No se pudo construir el índice de la wiki")
         index = index_res.value
-        compact = self.index_service.compact_for_prompt(index)
+        compact = self.index_service.compact_for_prompt(
+            index,
+            max_entries=request.max_index_entries,
+            priority_ids=request.focus_ids,
+        )
 
         bundle = NavigationBundle(index_signature=index.signature)
         served: set[tuple] = set()
@@ -261,6 +270,10 @@ class WikiNavigator:
         target_id = str(read.get("id", "")).strip()
         if kind not in _VALID_KINDS or not target_id:
             return None
+        # WS-B: no servir página ni canon de un elemento reservado (el índice lo marca).
+        entry = index.entry_for(kind, target_id)
+        if entry is not None and entry.secret:
+            return None
         if op == "open_page":
             return self._do_open_page(index, kind, target_id)
         if op == "read_canon":
@@ -304,6 +317,8 @@ class WikiNavigator:
             return None
         scored: list[tuple[int, Any]] = []
         for entry in index.entries:
+            if entry.secret:
+                continue  # WS-B: los elementos reservados no aparecen en la búsqueda de la IA
             hay = self._tokenize(f"{entry.name} {entry.one_line}")
             score = sum(1 for t in tokens if t in hay)
             if score:

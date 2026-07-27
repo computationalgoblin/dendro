@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application.ai_privacy import REDACTED_NAME, is_withheld_from_ai
 from packages.application.foco_zones import (
     classify_containers,
     classify_milestones,
@@ -497,6 +498,13 @@ class WateringService:
             return Error(f"Entidad no encontrada: {entity_id}")
         if entity.canon_state == CanonState.FANTASMA:
             return Error("Un nodo fantasma no participa del ciclo de riego")
+        # WS-B: los secretos no se comparten con la IA. Si el foco es reservado, se rehúsa
+        # (su contenido nunca sale al proveedor) en vez de enviarlo redactado e inútil.
+        if is_withheld_from_ai(entity):
+            return Error(
+                "Esta entidad es reservada (visibilidad secreta): su contenido no se comparte "
+                "con la IA. Cambia su visibilidad para regarla o pedir sugerencias."
+            )
 
         layers_by_id = {layer.id: layer for layer in project.world_layers}
         layer_names = [
@@ -531,7 +539,7 @@ class WateringService:
                 other = project.entity_by_id(container.entity_id)
                 if other is not None:
                     neighbor_entity_ids.append(other.id)
-                    names.append(other.name)
+                    names.append(REDACTED_NAME if is_withheld_from_ai(other) else other.name)
             if names:
                 lines.append(f"RAMA CONTENEDORA: {' › '.join(names[:3])}")
         for zone_key, header in _ZONE_HEADERS:
@@ -545,6 +553,10 @@ class WateringService:
                 if other is None:
                     continue
                 neighbor_entity_ids.append(other.id)
+                if is_withheld_from_ai(other):
+                    # WS-B: vecina reservada — no se filtra su nombre ni su contenido a la IA.
+                    lines.append("- [entidad reservada]")
+                    continue
                 ghost_mark = (
                     " [fantasma/no-canon: intención, no sostén]" if neighbor.is_ghost else ""
                 )
