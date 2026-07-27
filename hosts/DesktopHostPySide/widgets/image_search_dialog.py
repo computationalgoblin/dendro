@@ -46,6 +46,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
     WHITE,
 )
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import track_worker
 from packages.domain.result import Error
 from packages.infrastructure.ddg_image_client import default_image_search_client
 
@@ -264,6 +265,7 @@ class ImageSearchDialog(QDialog):
         self.status_label.setText("Buscando…")
         self._search_worker = _SearchWorker(self._client, self._token, query, parent=self)
         self._search_worker.finished.connect(self._on_search_finished)
+        track_worker(self._search_worker)  # WS-F: apagado ordenado al cerrar la app
         self._search_worker.start()
 
     def _on_search_finished(self, token: int, results: list, error: str):
@@ -285,6 +287,7 @@ class ImageSearchDialog(QDialog):
             self.results_list.addItem(item)
         self._thumbs_worker = _ThumbsWorker(self._client, token, self._results, parent=self)
         self._thumbs_worker.thumbReady.connect(self._on_thumb_ready)
+        track_worker(self._thumbs_worker)  # WS-F
         self._thumbs_worker.start()
 
     def _on_thumb_ready(self, token: int, index: int, data: bytes):
@@ -337,6 +340,7 @@ class ImageSearchDialog(QDialog):
             self._client, self._sel_token, image.image_url, parent=self
         )
         self._download_worker.done.connect(self._on_preview_done)
+        track_worker(self._download_worker)  # WS-F
         self._download_worker.start()
 
     def _on_preview_done(self, token: int, data: bytes, error: str):
@@ -406,7 +410,15 @@ class ImageSearchDialog(QDialog):
         self._token += 1
         self._sel_token += 1
         self._interrupt_thumbs()
+        # WS-F: un worker bloqueado en una petición HTTP (Openverse ~15s) no cabe
+        # en un wait de 2s; sin esto el diálogo moría con el hilo aún corriendo y
+        # Qt abortaba ("QThread: Destroyed while thread is still running"). Se
+        # interrumpe cooperativamente y, si sigue bloqueado, se termina.
         for worker in (self._search_worker, self._thumbs_worker, self._download_worker):
             if worker is not None and worker.isRunning():
-                worker.wait(2000)
+                worker.requestInterruption()
+                worker.quit()
+                if not worker.wait(2000):
+                    worker.terminate()
+                    worker.wait(1000)
         super().done(result)

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.design_system import Card, PanelScaffold, SectionHeader
+from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive, track_worker
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────
@@ -750,6 +751,10 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
         ia_status_label.setText("Conectando...")
 
         def _on_test_result(result):
+            # WS-F: si el panel se destruyó mientras corría la petición HTTP, no
+            # tocar widgets muertos (RuntimeError: C++ object already deleted).
+            if not _qt_alive(ia_status_label):
+                return
             test_btn.setEnabled(True)
             save_ia_btn.setEnabled(True)
             if isinstance(result, Exception):
@@ -779,6 +784,7 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
 
         worker = _AIWorker(ai_controller)
         worker.finished.connect(_on_test_result)
+        track_worker(worker)  # WS-F: apagado ordenado al cerrar la app
         worker.start()
         # Keep reference to prevent GC
         _test_connection._worker = worker
@@ -829,6 +835,8 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
             return
 
         def _on_chat_result(text, error):
+            if not _qt_alive(chat_history):  # WS-F: panel destruido a mitad del chat
+                return
             send_btn.setEnabled(True)
             chat_input.setEnabled(True)
             # Remove "thinking" line
@@ -853,6 +861,7 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
 
         worker = _AIChatWorker(ai_controller, sys_prompt, user_msg)
         worker.finished.connect(_on_chat_result)
+        track_worker(worker)  # WS-F: apagado ordenado al cerrar la app
         worker.start()
         _send_chat_message._worker = worker
 
