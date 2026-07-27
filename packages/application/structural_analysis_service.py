@@ -47,6 +47,7 @@ from packages.application.foco_rings import (
 from packages.application.narrative_impact_service import CAUSAL_RELATION_TYPES
 from packages.application.world_layer_causal import get_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateType
+from packages.domain.entity_taxonomy import is_branch
 from packages.domain.result import Error, Ok, Result
 
 _MIN_GAP = 1  # bandas de anillo de diferencia para proponer un movimiento (potencia semántica:
@@ -461,13 +462,19 @@ class StructuralAnalysisService:
                 continue
             if not self._eligible(source) or not self._eligible(target):
                 continue
-            potency = get_annotated_potency(source)
+            # WS-N: SIMÉTRICO respecto a la orientación source/target (como el motor de
+            # impacto que consume la marca). Se juzga por el extremo de MENOR anillo
+            # (mayor _pos) con potencia atribuida alta, no solo cuando ese extremo es el
+            # source (antes se subdetectaba ~la mitad de las relaciones elegibles).
+            pos_source, pos_target = _pos(source.id), _pos(target.id)
+            if pos_source == pos_target:
+                continue  # mismo anillo → no hay ascenso
+            low, high = (source, target) if pos_source > pos_target else (target, source)
+            potency = get_annotated_potency(low)
             if potency is None or potency < _ASC_MIN_POTENCY:
-                continue  # silencio honesto: sin potencia alta atribuida, no se juzga
-            if _pos(source.id) <= _pos(target.id):
-                continue  # solo bajo→alto (source más abajo que target)
-            finding = self._build_ascending_finding(rel, source, target, potency)
-            if self._is_suppressed(source, finding.fingerprint, current_rev):
+                continue  # silencio honesto: sin potencia alta atribuida en el extremo inferior
+            finding = self._build_ascending_finding(rel, low, high, potency)
+            if self._is_suppressed(low, finding.fingerprint, current_rev):
                 continue
             findings.append(finding)
         return findings
@@ -509,8 +516,13 @@ class StructuralAnalysisService:
 
     @staticmethod
     def _is_branch_with_content(proj, entity) -> bool:
-        etype = getattr(getattr(entity, "entity_type", None), "value", "")
-        return etype == "contenedor" and bool(contained_descendant_ids(proj, entity.id))
+        # WS-N: la ramitud se DERIVA del tipo (FACCION/CULTURA/RELIGION/INSTITUCION/
+        # SISTEMA_MAGICO/LOCALIZACION + legacy CONTENEDOR), no del literal "contenedor".
+        # Antes, una rama real con miembros (p.ej. una facción) no se reconocía y se le
+        # proponía un ring_move SUELTO que, al aceptar, movía el contenedor solo y
+        # huérfanaba a sus miembros en el anillo viejo — rompiendo la contención (el
+        # invariante que STRUCT-06 existía para garantizar).
+        return is_branch(entity) and bool(contained_descendant_ids(proj, entity.id))
 
     def _build_branch_finding(self, proj, container, n: int) -> StructuralFinding | None:
         """Hallazgo ``branch_move``: la potencia AGREGADA de la rama no cuadra con su anillo.
