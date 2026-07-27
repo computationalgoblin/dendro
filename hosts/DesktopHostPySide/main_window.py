@@ -37,6 +37,7 @@ from hosts.DesktopHostPySide.controllers.layer_controller import LayerController
 from hosts.DesktopHostPySide.controllers.project_controller import ProjectController
 from hosts.DesktopHostPySide.controllers.relation_controller import RelationController
 from hosts.DesktopHostPySide.controllers.source_controller import SourceController
+from hosts.DesktopHostPySide.undo_history import UndoHistory
 
 from packages.domain.result import Error, Ok
 from hosts.DesktopHostPySide.views.home_view import HomeView
@@ -121,6 +122,11 @@ class MainWindow(QMainWindow):
         self.ctx.recovery_sink = lambda msg: self._toast_layer.show_recovery(
             msg, on_open_log=self._open_logs_folder
         )
+        # WS-C: deshacer/rehacer por instantánea de documento (Ctrl+Z / Ctrl+Y).
+        # Debe existir antes de _open_last_project (que reinicia el historial).
+        self._undo_history = UndoHistory()
+        self._restoring = False
+        self._undo_project_id = None
         self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
         # PA02: auto-carga el último proyecto al arrancar (queda cargado pero el
@@ -857,10 +863,85 @@ class MainWindow(QMainWindow):
                 )
                 return False
             self.ctx.remember_project(self.controller.current_path)
+            self._record_undo_snapshot()  # WS-C: captura el estado asentado
             return True
         except Exception as exc:  # noqa: BLE001 — el autoguardado nunca rompe la app
             self.log_msg(f"Error en autoguardado: {exc}")
             return False
+
+    # ── WS-C: deshacer/rehacer por instantánea de documento ──────────────────
+
+    def _project_snapshot(self):
+        """Serialización canónica del proyecto activo (la misma que persiste), o None."""
+        project = self.controller.ps.active_project
+        return project.to_dict() if project is not None else None
+
+    def reset_undo_history(self) -> None:
+        """Fija el estado base del historial (al cargar/crear un proyecto)."""
+        self._undo_history.reset(self._project_snapshot())
+
+    def _sync_undo_base_if_project_changed(self) -> None:
+        """Reinicia el historial cuando cambia la IDENTIDAD del proyecto activo
+        (cargar/crear/cerrar). Una restauración de undo mantiene el mismo id (el
+        snapshot lo preserva) → no dispara reinicio; un refresco normal tampoco."""
+        if getattr(self, "_restoring", False):
+            return
+        project = self.controller.ps.active_project
+        pid = getattr(project, "id", None) if project is not None else None
+        if pid != self._undo_project_id:
+            self._undo_project_id = pid
+            self.reset_undo_history()
+
+    def _record_undo_snapshot(self) -> None:
+        """Registra el estado tras una mutación asentada (no durante una restauración)."""
+        if getattr(self, "_restoring", False):
+            return
+        self._undo_history.record(self._project_snapshot())
+
+    def _restore_undo_snapshot(self, snapshot: dict) -> None:
+        """Reemplaza el proyecto activo por el snapshot y refresca + persiste."""
+        from packages.domain.project import Project
+
+        self._restoring = True
+        try:
+            self.controller.ps.active_project = Project.from_dict(snapshot)
+            self._refresh_all_views()
+            self._save_active_project_silent()  # el fichero refleja lo restaurado
+        finally:
+            self._restoring = False
+
+    def _undo(self) -> None:
+        snapshot = self._undo_history.undo()
+        if snapshot is None:
+            self.log_msg("Nada que deshacer")
+            return
+        self._restore_undo_snapshot(snapshot)
+        self.log_msg("Deshecho")
+
+    def _redo(self) -> None:
+        snapshot = self._undo_history.redo()
+        if snapshot is None:
+            self.log_msg("Nada que rehacer")
+            return
+        self._restore_undo_snapshot(snapshot)
+        self.log_msg("Rehecho")
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt API)
+        # Ctrl+Z / Ctrl+Y (y Ctrl+Shift+Z) para deshacer/rehacer canon. Solo llega
+        # aquí si el widget con foco NO consumió la tecla: los campos de texto
+        # (QLineEdit/QTextEdit) conservan su deshacer nativo de edición.
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            key = event.key()
+            if key == Qt.Key.Key_Z and not shift:
+                self._undo()
+                event.accept()
+                return
+            if key == Qt.Key.Key_Y or (key == Qt.Key.Key_Z and shift):
+                self._redo()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         if self._get_active_project() is None:
@@ -935,6 +1016,7 @@ class MainWindow(QMainWindow):
         _apptrace("UI refresh cascade")
 
     def _refresh_all_views(self):
+        self._sync_undo_base_if_project_changed()  # WS-C: rebase del historial al cambiar de proyecto
         self._refresh()
         self.home_view.refresh()
         if not hasattr(self, "stack"):
