@@ -660,6 +660,14 @@ class HomeView(QWidget):
         layout.addLayout(title_box)
         self.refresh_recents()
 
+        # WS-D: banner NO bloqueante «configura la IA» — antes el único aviso de
+        # proveedor sin configurar aparecía por-clic al regar/sugerir (invisible
+        # hasta que ya intentabas usar la IA). Aquí es descubrible de entrada y
+        # enlaza a Ajustes→IA. Se oculta en cuanto hay proveedor real.
+        self._ai_banner_dismissed = False
+        self._ai_banner = self._build_ai_banner()
+        layout.addWidget(self._ai_banner)
+
         # Advanced indicator (kept from original, hidden by default)
         self._advanced_indicator = Badge("Avanzado", "warning")
         self._advanced_indicator.setVisible(False)
@@ -760,6 +768,68 @@ class HomeView(QWidget):
         self._fade = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self._fade)
         self._fade.setOpacity(1.0)
+
+        self._refresh_ai_banner()  # estado inicial del banner de IA
+
+    # ------------------------------------------------------------------
+    # WS-D: banner de IA sin configurar
+    # ------------------------------------------------------------------
+
+    def _build_ai_banner(self) -> QFrame:
+        banner = QFrame()
+        banner.setObjectName("aiBanner")
+        banner.setStyleSheet(
+            f"QFrame#aiBanner {{ background: {GOLD_SOFT}; border: 1px solid {GOLD}; "
+            f"border-radius: 12px; }}"
+        )
+        banner.setVisible(False)
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(14, 8, 10, 8)
+        row.setSpacing(10)
+        text = QLabel(
+            "La IA está en modo simulado. Configura un proveedor para regar, "
+            "pedir sugerencias y mantener la Memoria."
+        )
+        text.setWordWrap(True)
+        text.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: 12px; background: transparent; border: none;"
+        )
+        row.addWidget(text, 1)
+        btn = QuietIconButton(label="Configurar IA", icon_name="settings")
+        btn.setToolTip("Abrir Ajustes → IA para conectar tu proveedor")
+        btn.clicked.connect(lambda: self._action("ai_settings"))
+        row.addWidget(btn, 0)
+        dismiss = QPushButton("✕")
+        dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss.setFixedSize(QSize(24, 24))
+        dismiss.setToolTip("Ocultar hasta el próximo arranque")
+        dismiss.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; color: {INK_MUTED}; "
+            f"font-size: 14px; }} QPushButton:hover {{ color: {INK_STRONG}; }}"
+        )
+        dismiss.clicked.connect(self._dismiss_ai_banner)
+        row.addWidget(dismiss, 0)
+        return banner
+
+    def _ai_configured(self) -> bool:
+        """True cuando hay un proveedor real (openai_compatible con URL + clave)."""
+        ctx = self.ctx
+        provider = (getattr(ctx, "ai_provider", "") or "").strip()
+        if provider != "openai_compatible":
+            return False
+        return bool((getattr(ctx, "ai_base_url", "") or "").strip()) and bool(
+            (getattr(ctx, "ai_api_key", "") or "").strip()
+        )
+
+    def _refresh_ai_banner(self) -> None:
+        if not hasattr(self, "_ai_banner"):
+            return
+        show = (not self._ai_configured()) and not self._ai_banner_dismissed
+        self._ai_banner.setVisible(show)
+
+    def _dismiss_ai_banner(self) -> None:
+        self._ai_banner_dismissed = True
+        self._refresh_ai_banner()
 
     def _branch_line(self) -> QFrame:
         """Return a thin vertical connector line between cards."""
@@ -931,6 +1001,7 @@ class HomeView(QWidget):
             self._subtitle_label.setText("Un escritorio tranquilo para crear mundos y relatos.")
             self._status_label.setText("Abre o crea un proyecto para comenzar.")
             self.update_project_visibility(None, False)
+            self._refresh_ai_banner()
             return
 
         self._project_loaded = True
@@ -942,3 +1013,4 @@ class HomeView(QWidget):
         self._subtitle_label.setText(name)
         self._status_label.setText("Proyecto activo")
         self.update_project_visibility(project_type, worldbuilding_active)
+        self._refresh_ai_banner()

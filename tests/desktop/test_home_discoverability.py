@@ -123,7 +123,8 @@ def test_workspace_wires_foco_cta_to_creation_flow():
 def test_main_window_wires_open_recent():
     src = _MAIN_WINDOW.read_text(encoding="utf-8")
     assert 'register_callback("open_recent", self._open_project_path)' in src
-    assert "def _open_project_path(self, path: str)" in src
+    # WS-C añadió el kwarg offer_restore; la firma sigue empezando igual.
+    assert "def _open_project_path(self, path: str" in src
     # El refresco de recientes repuebla el Home tras abrir/guardar.
     body = src.split("def _refresh_recent_project_option(self)")[1].split("\n    def ")[0]
     assert "self.home_view.refresh_recents()" in body
