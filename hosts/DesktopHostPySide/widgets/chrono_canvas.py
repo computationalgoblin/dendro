@@ -1840,6 +1840,12 @@ if HAS_QT:
             # BETA2-FOCO-33: embudo de filtros + badge (junto al scrubber temporal).
             self._filter_btn = self._build_filter_button()
             self._filter_btn.hide()
+            # WS-E: barra de creación SIEMPRE visible (arriba-izquierda). Antes solo
+            # se podía crear hito/era por clic derecho — invisible para un usuario
+            # nuevo; y en un proyecto vacío el scrubber+embudo están ocultos, justo
+            # cuando más falta hace el primer hito/era.
+            self._create_toolbar = self._build_create_toolbar()
+            self._create_toolbar.hide()  # se muestra al cargar un proyecto
             # BETA2-HOVER-03: previsualización flotante al hover (retrato + brief).
             from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverPreviewController
 
@@ -2343,6 +2349,54 @@ if HAS_QT:
             self._filter_badge.hide()
             return btn
 
+        # ── WS-E: barra de creación (＋ Hito / ＋ Era), siempre visible ────────
+        def _build_create_toolbar(self):
+            bar = QWidget(self)
+            bar.setObjectName("chronoCreateBar")
+            bar.setStyleSheet(
+                f"QWidget#chronoCreateBar {{ background: {SURFACE_HI}; "
+                f"border: 1px solid {CHRONO_LINE}; border-radius: 13px; }}"
+            )
+            row = QHBoxLayout(bar)
+            row.setContentsMargins(4, 3, 4, 3)
+            row.setSpacing(4)
+            btn_style = (
+                f"QPushButton {{ background: transparent; border: none; color: {CHRONO_INK}; "
+                f"font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 10px; }} "
+                f"QPushButton:hover {{ background: {SURFACE_PALE}; color: {CHRONO_GOLD}; }}"
+            )
+            hito_btn = QPushButton("＋ Hito", bar)
+            hito_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            hito_btn.setToolTip("Crear un hito en la cronología")
+            hito_btn.setStyleSheet(btn_style)
+            hito_btn.clicked.connect(self._emit_create_milestone)
+            row.addWidget(hito_btn)
+            era_btn = QPushButton("＋ Era", bar)
+            era_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            era_btn.setToolTip("Crear una era (tramo de tiempo) en la cronología")
+            era_btn.setStyleSheet(btn_style)
+            era_btn.clicked.connect(self.eraCreateRequested.emit)
+            row.addWidget(era_btn)
+            bar.adjustSize()
+            return bar
+
+        def _emit_create_milestone(self):
+            """El botón no trae año de clic: sugiere el presente (editable en el panel)."""
+            year = 0
+            layout = getattr(self, "_layout", None)
+            if layout is not None:
+                year = int(getattr(layout, "present_year", 0) or 0)
+            self.milestoneCreateRequested.emit(year, "")
+
+        def _position_create_toolbar(self):
+            bar = getattr(self, "_create_toolbar", None)
+            if bar is None:
+                return
+            bar.adjustSize()
+            bar.move(10, 10)  # arriba-izquierda; el scrubber+embudo van centrados
+            bar.raise_()
+            bar.setVisible(getattr(self, "_project", None) is not None)
+
         def filter_anchor(self):
             """Ancla del popover de filtros (el embudo)."""
             return self._filter_btn
@@ -2703,6 +2757,7 @@ if HAS_QT:
                 # BETA1-UX38: ajusta y reposiciona el control de ventana temporal.
                 self._sync_time_window_bounds()
                 self._position_time_window_bar()
+                self._position_create_toolbar()  # WS-E: ＋Hito/＋Era
             except Exception:  # noqa: BLE001 — robustez de UI por encima de todo
                 import traceback
                 traceback.print_exc()
@@ -2720,6 +2775,7 @@ if HAS_QT:
         def resizeEvent(self, event):  # noqa: N802 (Qt API)
             super().resizeEvent(event)
             self._position_time_window_bar()
+            self._position_create_toolbar()  # WS-E: ＋Hito/＋Era
 
         def _rebuild_scene(self, project: Any) -> None:
             scene = self.scene()
