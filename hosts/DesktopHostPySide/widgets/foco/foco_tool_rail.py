@@ -45,6 +45,9 @@ TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("ghost_link", "tool_ghost_link", "Vincular el fantasma con una entidad existente"),
     ("view_map", "tool_view_map", "Ver esta entidad en el Mapa global"),
     ("view_chrono", "tool_view_chrono", "Ver esta entidad en la Cronología global"),
+    # WS-E: borrar la entidad en foco SIN salir a la Mapa (antes solo se podía borrar
+    # desde la Mapa; en la vista principal de Creación no había forma de eliminar).
+    ("delete_focus", "delete", "Eliminar la entidad en foco"),
 )
 
 # BETA2-UX-05: (group_id, icono, tooltip, (tool_ids…)). Los clústeres casi-
@@ -74,6 +77,7 @@ _COLUMN: tuple[object, ...] = (
     "create_ring",
     "view_map",
     "view_chrono",
+    "delete_focus",
 )
 
 _BUTTON_STYLE = (
@@ -215,6 +219,7 @@ class FocoToolRail(QFrame):
             "ghost_link": ghost_in_scope,
             "view_map": bool(center),
             "view_chrono": bool(center),
+            "delete_focus": bool(center),
         }
         for tool_id, button in self._buttons.items():
             button.setEnabled(bool(enabled.get(tool_id, False)))

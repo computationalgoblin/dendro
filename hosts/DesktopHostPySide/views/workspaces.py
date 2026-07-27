@@ -1548,6 +1548,7 @@ class CreationWorkspace(QWidget):
         self.foco.ringCreateRequested.connect(self._open_ring_create_panel)
         # SHIP-02: el CTA del estado vacío de Foco usa el mismo flujo que el del Mapa.
         self.foco.createFirstRequested.connect(self._create_entity_on_graph)
+        self.foco.deleteRequested.connect(self._delete_entity_from_foco)
         layout.addWidget(self.foco, 1)
 
         # BETA2-PLAY: modo Play — la creación cronológica como experiencia
@@ -5069,6 +5070,34 @@ class CreationWorkspace(QWidget):
                 del_btn.setToolTip(f"Eliminar: {', '.join(parts)}")
             else:
                 del_btn.setToolTip("Selecciona algo para eliminar")
+
+    def _delete_entity_from_foco(self, entity_id: str) -> None:
+        """WS-E: borrar la entidad en foco con confirmación (misma ruta que la Mapa).
+
+        Antes solo se podía borrar desde el Mapa; en la vista principal de Creación
+        (Foco) no había forma de eliminar una entidad mal creada.
+        """
+        if not entity_id or self.entity_controller is None:
+            return
+        project = self._get_active_project()
+        entity = project.entity_by_id(entity_id) if project is not None else None
+        name = str(getattr(entity, "name", "") or "") or entity_id
+        confirm = QMessageBox.question(
+            self,
+            "Eliminar entidad",
+            f"¿Eliminar «{name}»? Se quitarán también sus relaciones.\n"
+            "Esta acción no se puede deshacer.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        result = self.entity_controller.delete(entity_id)
+        if isinstance(result, Error):
+            self.ctx.notify(f"No se pudo eliminar: {result.error}", "error")
+            return
+        self.ctx.log("info", f"Entidad eliminada desde Foco: {name}")
+        self.refresh()
 
     def _delete_selected(self):
         """Delete selected entities and/or relations."""

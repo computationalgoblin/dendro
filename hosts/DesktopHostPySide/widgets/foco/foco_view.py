@@ -204,6 +204,7 @@ class FocoView(QWidget):
     ringEditRequested = Signal(str)  # noqa: N815 — convención Qt de señales
     ringCreateRequested = Signal()  # noqa: N815 — convención Qt de señales
     createFirstRequested = Signal()  # noqa: N815 — SHIP-02: CTA del estado vacío
+    deleteRequested = Signal(str)  # noqa: N815 — WS-E: borrar la entidad en foco
 
     def __init__(
         self,
@@ -2077,6 +2078,9 @@ class FocoView(QWidget):
         if tool_id == "create_entity":
             self._popover = QuickCreatePopover(title="Nueva entidad", on_submit=self._create_entity)
             self._popover.open_next_to(anchor)
+        elif tool_id == "delete_focus" and center_id:
+            # WS-E: el workspace confirma y borra (misma ruta EntityController que la Mapa).
+            self.deleteRequested.emit(center_id)
         elif tool_id == "create_ring":
             # BETA2-CLEANUP-PANELES: crear anillo desde el Foco. El panel de anillo
             # unificado se abre en el cajón del workspace (flota sobre el Foco).
