@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -32,6 +33,23 @@ from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
 from packages.domain.result import Ok
 
 _STRUCTURE_KINDS = frozenset({"ring_create", "ring_merge"})
+
+
+class _ProposeWorker(QThread):
+    """SHIP-07: «Proponer estructura» llama al proveedor (HTTP bloqueante, hasta
+    300 s). Correrlo aquí evita congelar toda la ventana."""
+
+    done = Signal(object)  # Result | Exception
+
+    def __init__(self, service: Any) -> None:
+        super().__init__()
+        self._service = service
+
+    def run(self) -> None:  # pragma: no cover - hilo
+        try:
+            self.done.emit(self._service.propose_ring_structure())
+        except Exception as exc:  # noqa: BLE001 — el hilo nunca revienta la UI
+            self.done.emit(exc)
 
 
 class StructureReviewPanel(QWidget):
@@ -52,6 +70,8 @@ class StructureReviewPanel(QWidget):
         self._on_close = on_close
         self._log = log
         self._status_text = ""
+        self._proposing = False  # SHIP-07: propuesta IA en vuelo (botón deshabilitado)
+        self._propose_worker: _ProposeWorker | None = None
         self.setMinimumWidth(480)
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(0, 0, 0, 0)
@@ -86,8 +106,11 @@ class StructureReviewPanel(QWidget):
         body = scaffold.body
 
         top = QHBoxLayout()
-        propose = QPushButton("✨ Proponer estructura (IA)")
+        propose = QPushButton(
+            "Proponiendo…" if self._proposing else "✨ Proponer estructura (IA)"
+        )
         propose.setToolTip("La IA propone crear/fusionar anillos (necesita proveedor)")
+        propose.setEnabled(not self._proposing)  # SHIP-07: sin doble disparo mientras corre
         propose.clicked.connect(self._propose_structure)
         top.addWidget(propose)
         top.addStretch(1)
@@ -180,7 +203,21 @@ class StructureReviewPanel(QWidget):
     # ── acciones ─────────────────────────────────────────────────────────
 
     def _propose_structure(self) -> None:
-        res = self._service.propose_ring_structure()
+        # SHIP-07: la llamada al proveedor va en un hilo — antes era síncrona y
+        # congelaba toda la ventana (hasta 300 s) sin ningún indicador.
+        if self._proposing:
+            return
+        self._proposing = True
+        self._status_text = "Proponiendo estructura… la IA está pensando (puede tardar)."
+        self._build()
+        worker = _ProposeWorker(self._service)
+        worker.done.connect(self._on_propose_done)
+        worker.finished.connect(worker.deleteLater)
+        self._propose_worker = worker
+        worker.start()
+
+    def _on_propose_done(self, res: Any) -> None:
+        self._proposing = False
         if isinstance(res, Ok):
             n = len(res.value)
             self._status_text = (
@@ -188,6 +225,8 @@ class StructureReviewPanel(QWidget):
                 if n
                 else "La IA no ve cambios de estructura necesarios ahora mismo."
             )
+        elif isinstance(res, Exception):
+            self._status_text = f"No se pudo proponer estructura: {res}"
         else:
             self._status_text = getattr(res, "error", "No se pudo proponer estructura.")
         self._build()

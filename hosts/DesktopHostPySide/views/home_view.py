@@ -720,6 +720,13 @@ class HomeView(QWidget):
         self._btn_about.clicked.connect(lambda: self._action("about"))
         bottom_row.addWidget(self._btn_about)
 
+        # SHIP-07: el visor de Memoria/wiki del proyecto no tenía ninguna puerta
+        # (callback registrado sin disparador). Ahora es alcanzable.
+        self._btn_memory = QuietIconButton("❀", "Memoria")
+        self._btn_memory.setToolTip("Ver y gestionar la wiki de Memoria del proyecto")
+        self._btn_memory.clicked.connect(lambda: self._action("memory_menu"))
+        bottom_row.addWidget(self._btn_memory)
+
         # BETA1-F01: música ambiental — opcional, APAGADA por defecto,
         # control visible y discreto. Si QtMultimedia no está, no aparece.
         self._music = _AmbientMusic() if _HAS_AUDIO else None

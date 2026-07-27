@@ -71,7 +71,10 @@ class AIPromptDebugTraceStore:
 
     @classmethod
     def default(cls) -> "AIPromptDebugTraceStore":
-        return cls(DEFAULT_PROMPT_TRACE_PATH)
+        # SHIP-07: deshabilitado por defecto — es una herramienta de depuración de
+        # la beta RAG y no debe abrir una pestaña de navegador en el flujo del
+        # usuario final. Un dev construye el store con enabled=True para activarlo.
+        return cls(DEFAULT_PROMPT_TRACE_PATH, enabled=False)
 
     @property
     def entries(self) -> list[AIPromptDebugEntry]:

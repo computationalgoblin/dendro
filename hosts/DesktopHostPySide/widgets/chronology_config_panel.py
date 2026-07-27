@@ -87,7 +87,7 @@ class ChronologyConfigPanel(QGroupBox):
 
     def refresh(self) -> None:
         if self.controller is None or not hasattr(self.controller, "calendar_view"):
-            self.status.setText("Cronologia no disponible")
+            self.status.setText("Cronología no disponible")
             return
         result = self.controller.calendar_view()
         if isinstance(result, Error):
@@ -97,7 +97,7 @@ class ChronologyConfigPanel(QGroupBox):
 
     def save(self) -> None:
         if self.controller is None or not hasattr(self.controller, "configure_calendar"):
-            self.status.setText("Cronologia no disponible")
+            self.status.setText("Cronología no disponible")
             return
         result = self.controller.configure_calendar(self.editor.value())
         if isinstance(result, Error):

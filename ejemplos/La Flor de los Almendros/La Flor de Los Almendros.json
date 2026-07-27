@@ -25,9 +25,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-09T09:11:02.300329+00:00",
       "updated_at": "2026-07-12T16:45:23.436022+00:00",
       "private_notes": "",
@@ -101,9 +99,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-09T09:22:32.044320+00:00",
       "updated_at": "2026-07-09T15:41:43.728565+00:00",
       "private_notes": "",
@@ -214,9 +210,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-10T07:17:33.391632+00:00",
       "updated_at": "2026-07-10T07:17:33.391632+00:00",
       "private_notes": "",
@@ -268,9 +262,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-10T07:17:38.390339+00:00",
       "updated_at": "2026-07-10T07:18:48.503973+00:00",
       "private_notes": "",
@@ -308,113 +300,6 @@
       }
     },
     {
-      "id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-      "name": "ASdasda",
-      "aliases": [],
-      "entity_type": "personaje",
-      "brief_description": "",
-      "extended_description": "",
-      "canon_state": "canonico",
-      "visibility_state": "visible_usuario",
-      "certainty_level": "probable",
-      "tags": [],
-      "domain": "",
-      "layers": [],
-      "origin": "",
-      "domain_ids": [],
-      "layer_ids": [],
-      "created_at": "2026-07-10T07:19:25.721913+00:00",
-      "updated_at": "2026-07-10T07:19:30.123105+00:00",
-      "private_notes": "",
-      "exportable_notes": "",
-      "narrative_importance": "medio",
-      "development_level": "semilla",
-      "custom_metadata": {
-        "_node_color": "#9A8E72",
-        "_causal_potency_basal": 30
-      },
-      "custom_type_id": null,
-      "custom_fields": [],
-      "birth_year": null,
-      "death_year": null,
-      "life_span": {
-        "start": {
-          "year": null,
-          "absolute_date": null,
-          "world_date": null,
-          "relative_date": null,
-          "period": null,
-          "era": null,
-          "partial_order": [],
-          "temporal_relation": null,
-          "precision": "unknown",
-          "is_duration": false,
-          "duration_value": null,
-          "duration_unit": null,
-          "anchor_event_id": null,
-          "contradictory_sources": [],
-          "notes": ""
-        },
-        "end": null,
-        "ongoing": true,
-        "nature": "mortal"
-      }
-    },
-    {
-      "id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-      "name": "asdasdasd",
-      "aliases": [],
-      "entity_type": "nota",
-      "brief_description": "",
-      "extended_description": "",
-      "canon_state": "canonico",
-      "visibility_state": "visible_usuario",
-      "certainty_level": "probable",
-      "tags": [],
-      "domain": "",
-      "layers": [],
-      "origin": "",
-      "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
-      "created_at": "2026-07-10T07:19:40.042476+00:00",
-      "updated_at": "2026-07-12T16:45:34.879919+00:00",
-      "private_notes": "",
-      "exportable_notes": "",
-      "narrative_importance": "medio",
-      "development_level": "semilla",
-      "custom_metadata": {
-        "_causal_potency_basal": 0
-      },
-      "custom_type_id": null,
-      "custom_fields": [],
-      "birth_year": null,
-      "death_year": null,
-      "life_span": {
-        "start": {
-          "year": null,
-          "absolute_date": null,
-          "world_date": null,
-          "relative_date": null,
-          "period": null,
-          "era": null,
-          "partial_order": [],
-          "temporal_relation": null,
-          "precision": "unknown",
-          "is_duration": false,
-          "duration_value": null,
-          "duration_unit": null,
-          "anchor_event_id": null,
-          "contradictory_sources": [],
-          "notes": "sin datar (pendiente)"
-        },
-        "end": null,
-        "ongoing": true,
-        "nature": "mortal"
-      }
-    },
-    {
       "id": "bfd710ea-49fd-41cd-b226-b485d93b06a0",
       "name": "Nueva rama",
       "aliases": [],
@@ -429,9 +314,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-10T07:22:57.291633+00:00",
       "updated_at": "2026-07-10T07:22:57.291633+00:00",
       "private_notes": "",
@@ -535,9 +418,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-10T09:05:15.580832+00:00",
       "updated_at": "2026-07-10T09:05:15.580832+00:00",
       "private_notes": "",
@@ -641,9 +522,7 @@
       "layers": [],
       "origin": "",
       "domain_ids": [],
-      "layer_ids": [
-        "layer_user_27776748"
-      ],
+      "layer_ids": [],
       "created_at": "2026-07-10T13:32:33.922954+00:00",
       "updated_at": "2026-07-10T13:32:33.922954+00:00",
       "private_notes": "",
@@ -819,100 +698,6 @@
       "source": "",
       "created_at": "2026-07-10T07:18:45.222845+00:00",
       "updated_at": "2026-07-10T07:18:45.222845+00:00",
-      "validity_conditions": [],
-      "tags": [],
-      "custom_metadata": {},
-      "custom_relation_type_id": null,
-      "custom_fields": [],
-      "layer_ids": []
-    },
-    {
-      "id": "07908494-d632-4f6a-8f4b-e8d9abcc5ac2",
-      "source_id": "8b59d298-f5e4-4643-b367-7b0434125ccd",
-      "target_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-      "relation_type": "esta_relacionado_con",
-      "direction": "unidireccional",
-      "description": "",
-      "intensity": "media",
-      "temporality": "",
-      "causality": "",
-      "birth_year": null,
-      "death_year": null,
-      "life_span": {
-        "start": {
-          "year": null,
-          "absolute_date": null,
-          "world_date": null,
-          "relative_date": null,
-          "period": null,
-          "era": null,
-          "partial_order": [],
-          "temporal_relation": null,
-          "precision": "unknown",
-          "is_duration": false,
-          "duration_value": null,
-          "duration_unit": null,
-          "anchor_event_id": null,
-          "contradictory_sources": [],
-          "notes": "sin datar (pendiente)"
-        },
-        "end": null,
-        "ongoing": true,
-        "nature": "mortal"
-      },
-      "canon_state": "canonico",
-      "visibility_state": "visible_usuario",
-      "certainty_level": "probable",
-      "source": "",
-      "created_at": "2026-07-10T07:19:25.721913+00:00",
-      "updated_at": "2026-07-10T07:19:25.721913+00:00",
-      "validity_conditions": [],
-      "tags": [],
-      "custom_metadata": {},
-      "custom_relation_type_id": null,
-      "custom_fields": [],
-      "layer_ids": []
-    },
-    {
-      "id": "6d0d9d51-3af0-4b42-8be7-8c348ab0b684",
-      "source_id": "8b59d298-f5e4-4643-b367-7b0434125ccd",
-      "target_id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-      "relation_type": "esta_relacionado_con",
-      "direction": "unidireccional",
-      "description": "",
-      "intensity": "media",
-      "temporality": "",
-      "causality": "",
-      "birth_year": null,
-      "death_year": null,
-      "life_span": {
-        "start": {
-          "year": null,
-          "absolute_date": null,
-          "world_date": null,
-          "relative_date": null,
-          "period": null,
-          "era": null,
-          "partial_order": [],
-          "temporal_relation": null,
-          "precision": "unknown",
-          "is_duration": false,
-          "duration_value": null,
-          "duration_unit": null,
-          "anchor_event_id": null,
-          "contradictory_sources": [],
-          "notes": "sin datar (pendiente)"
-        },
-        "end": null,
-        "ongoing": true,
-        "nature": "mortal"
-      },
-      "canon_state": "canonico",
-      "visibility_state": "visible_usuario",
-      "certainty_level": "probable",
-      "source": "",
-      "created_at": "2026-07-10T07:19:40.042476+00:00",
-      "updated_at": "2026-07-10T07:19:40.042476+00:00",
       "validity_conditions": [],
       "tags": [],
       "custom_metadata": {},
@@ -2779,17 +2564,7 @@
     "compartido",
     "sin_asignar"
   ],
-  "world_layers": [
-    {
-      "id": "layer_user_27776748",
-      "name": "asdasdasda",
-      "description": "asdasdasd",
-      "order": 1,
-      "is_visible": true,
-      "is_default": false,
-      "metadata": {}
-    }
-  ],
+  "world_layers": [],
   "writing_units": [],
   "campaigns": [],
   "player_character_profiles": [],
@@ -3027,9 +2802,7 @@
         "notes": ""
       },
       "layer_ids": [],
-      "affected_entity_ids": [
-        "0665e379-9a0e-40b8-9c1a-6c3729fe1fac"
-      ],
+      "affected_entity_ids": [],
       "affected_branch_ids": [],
       "affected_layer_ids": [],
       "caused_relation_ids": [],
@@ -3239,169 +3012,6 @@
   "chronology_walk_sessions": [],
   "chronology_walk_reports": [],
   "narrative_memories": [
-    {
-      "id": "mem_818925889a",
-      "target_kind": "entity",
-      "target_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-      "context": "",
-      "resumen_editorial": "Personaje identificado como ASdasda, actualmente sin desarrollo narrativo y vinculado funcionalmente a Nasr.",
-      "estado_actual": "Sin desarrollar / Placeholder funcional",
-      "cuerpo": "La entidad registrada bajo el nombre 'ASdasda' se define en este momento como un nodo funcional vacío, carente de desarrollo narrativo, historia o características físicas propias. Su relevancia en el mundo se limita estrictamente a una conexión operativa con el elemento Nasr, aunque la naturaleza exacta de este lazo (jerarquía, alianza, dependencia) permanece sin especificar. Se tiene constancia de su participación en un hito ambiental o contextual fechado en el 'año 5', aunque la referencia temporal exacta de este periodo respecto a la era actual (Era de la Flor del Almendro, año 1) es ambigua. Dada su falta de definición, ASdasda funciona como un placeholder o un eslabón narrativo pendiente de concreción dentro de la estructura de Nasr.",
-      "issues": [
-        {
-          "id": "memiss_5989cd118d",
-          "kind": "hueco",
-          "texto": "El nombre 'ASdasda' parece ser un texto provisional o un error de entrada no canonizado definitivamente.",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:47:23.787934+00:00",
-          "metadata": {}
-        },
-        {
-          "id": "memiss_4b499ab73e",
-          "kind": "hueco",
-          "texto": "Desconocimiento total de la apariencia, personalidad y trasfondo del personaje.",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:47:23.787934+00:00",
-          "metadata": {}
-        },
-        {
-          "id": "memiss_2c75c37e50",
-          "kind": "pregunta_abierta",
-          "texto": "¿Cuál es la naturaleza específica del vínculo funcional con Nasr?",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:47:23.787934+00:00",
-          "metadata": {}
-        },
-        {
-          "id": "memiss_61655b9ae4",
-          "kind": "pregunta_abierta",
-          "texto": "¿A qué calendario o era corresponde el 'año 5' del hito mencionado?",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:47:23.787934+00:00",
-          "metadata": {}
-        }
-      ],
-      "notas_causales": [
-        "La relación con Nasr es el único vector que otorga existencia o propósito funcional a este personaje en el mundo actual."
-      ],
-      "dependencias": [],
-      "citations": [
-        {
-          "ref_kind": "entity",
-          "ref_id": "0665e379-9a0e-40b8-9c1a-6c3729fe1fac",
-          "nota": "Canon base: nombre=ASdasda, breve y desarrollo vacíos; relación funcional con Nasr."
-        }
-      ],
-      "wikilinks": [],
-      "tags": [
-        "placeholder",
-        "personaje",
-        "nasr",
-        "hueco_narrativo"
-      ],
-      "freshness": "falta_regar",
-      "origin": "riego",
-      "pending_revision": null,
-      "created_at": "2026-07-11T08:27:37.847434+00:00",
-      "updated_at": "2026-07-13T08:47:23.787934+00:00",
-      "metadata": {}
-    },
-    {
-      "id": "mem_9d08a8f112",
-      "target_kind": "entity",
-      "target_id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-      "context": "",
-      "resumen_editorial": "Entidad vacía y sin definir, funcionalmente un placeholder asociado a Nasr.",
-      "estado_actual": "Placeholder / Esqueleto técnico",
-      "cuerpo": "El elemento 38a1d091-b97d-49c6-8363-a58ec014db32 se encuentra actualmente en estado de desarrollo técnico nulo. Actúa como un espacio reservado dentro de la base de datos del proyecto, careciendo de nombre canónico definitivo (presenta el valor temporal 'asdasdasd'), así como de descripción narrativa o trasfondo histórico. Su única relevancia en la estructura actual deriva de una relación técnica preexistente que lo vincula con la entidad Nasr. No se ha establecido su participación en eventos de la cronología conocida, ni su rol dentro de la Era de la Flor del Almendro.",
-      "issues": [
-        {
-          "id": "memiss_4a384f4f73",
-          "kind": "hueco",
-          "texto": "El elemento carece de nombre, descripción breve y desarrollo narrativo.",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:50:52.640997+00:00",
-          "metadata": {}
-        },
-        {
-          "id": "memiss_2ac672507f",
-          "kind": "pregunta_abierta",
-          "texto": "¿Cuál es la naturaleza específica de la relación con Nasr?",
-          "anclado_a": [
-            {
-              "ref_kind": "entity",
-              "ref_id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-              "nota": ""
-            }
-          ],
-          "estado": "abierta",
-          "origin": "ia",
-          "created_at": "2026-07-13T08:50:52.640997+00:00",
-          "metadata": {}
-        }
-      ],
-      "notas_causales": [],
-      "dependencias": [],
-      "citations": [
-        {
-          "ref_kind": "entity",
-          "ref_id": "38a1d091-b97d-49c6-8363-a58ec014db32",
-          "nota": "Canon básico: nombre=asdasdasd; breve=; desarrollo=; relación con Nasr."
-        }
-      ],
-      "wikilinks": [],
-      "tags": [
-        "placeholder",
-        "sin_desarrollar",
-        "asociado_a_nasr"
-      ],
-      "freshness": "falta_regar",
-      "origin": "riego",
-      "pending_revision": null,
-      "created_at": "2026-07-11T08:29:07.016997+00:00",
-      "updated_at": "2026-07-13T08:50:52.640997+00:00",
-      "metadata": {}
-    },
     {
       "id": "mem_7cf3212dee",
       "target_kind": "entity",

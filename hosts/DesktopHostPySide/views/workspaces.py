@@ -2258,9 +2258,17 @@ class CreationWorkspace(QWidget):
             return
         from PySide6.QtWidgets import QInputDialog
 
+        # SHIP-07: el título mostraba la clave interna ("nutrida"/"iluminada"); usa
+        # la etiqueta legible que coincide con el botón ("Sugerir nutrición").
+        metric_label = {
+            "arraigo": "arraigo",
+            "nutrida": "nutrición",
+            "iluminada": "iluminación",
+            "calidad": "calidad narrativa",
+        }.get(metric, metric)
         peticion, ok = QInputDialog.getMultiLineText(
             self,
-            f"Sugerir {metric}",
+            f"Sugerir {metric_label}",
             "Petición o matiz (opcional). Déjalo vacío para una sugerencia guiada solo "
             "por las métricas del jardín:",
         )
@@ -2449,7 +2457,8 @@ class CreationWorkspace(QWidget):
             badge.setVisible(False)
             return
         if count > 0:
-            badge.setText(f"⚙ {count} ajuste(s) estructural(es)")
+            texto = "1 ajuste estructural" if count == 1 else f"{count} ajustes estructurales"
+            badge.setText(f"⚙ {texto}")
             badge.setProperty("hasItems", True)
         else:
             badge.setText("⚙ Estructura")
@@ -4140,7 +4149,11 @@ class CreationWorkspace(QWidget):
 
     def _open_prompt_trace_page(self):
         store = getattr(self, "prompt_trace_store", None)
-        if store is None:
+        # SHIP-07: el visor de prompts RAG es una herramienta de DEPURACIÓN. En la
+        # beta el store está deshabilitado por defecto, así que no salta al
+        # navegador una pestaña técnica «Dendro RAG Prompt Debug» en cada
+        # Sugerencia. Un dev lo reactiva con un store enabled=True.
+        if store is None or not getattr(store, "enabled", False):
             return
         try:
             path = store.write_page().resolve()
