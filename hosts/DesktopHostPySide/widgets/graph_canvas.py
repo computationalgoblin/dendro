@@ -228,9 +228,34 @@ _VISIBILITY_COLORS = {
     "oculto": "#D46A6A",
     "secreto": "#D46A6A",
     "privado": "#D46A6A",
+    # WS-M: los otros estados reservados que se ocultan a la IA (ver ai_privacy)
+    # también merecen marcador — antes no tenían ninguno.
+    "no_exportable": "#D46A6A",
+    "preparado_no_revelado": "#D46A6A",
     "publico": "#6CCB8E",
     "publico_mundo": "#6CCB8E",
 }
+
+# WS-M: estados de visibilidad "reservados" — llevan candado en el Mapa (no
+# solo color: presencia/ausencia de marcador + glifo, seguro para daltonismo).
+_SECRET_VISIBILITY_KEYS = frozenset(
+    {"oculto", "secreto", "privado", "no_exportable", "preparado_no_revelado"}
+)
+
+
+def _add_secret_lock(parent_item, center_x: float, center_y: float):
+    """Añade un pequeño candado sobre el punto de visibilidad de una entidad
+    reservada. QGraphicsSimpleTextItem hijo del nodo; si el glifo no renderiza
+    en la plataforma, el punto de color sigue distinguiendo (WS-M)."""
+    lock = QGraphicsSimpleTextItem("🔒", parent_item)
+    font = lock.font()
+    font.setPointSize(7)
+    lock.setFont(font)
+    lock.setBrush(QBrush(QColor("#7A2E2E")))
+    rect = lock.boundingRect()
+    lock.setPos(center_x - rect.width() / 2.0, center_y - rect.height() / 2.0)
+    lock.setToolTip("Entidad reservada: oculta a la IA")
+    return lock
 
 
 _CONTAINER_COLOR = "#E8E2D2"
@@ -697,10 +722,20 @@ class GraphNodeItem(QGraphicsEllipseItem):
             "publico",
             "publico_mundo",
         }:
-            self._visibility_dot = QGraphicsEllipseItem(radius - 18, -radius + 8, 10, 10, self)
+            dot_x, dot_y = radius - 18, -radius + 8
+            self._visibility_dot = QGraphicsEllipseItem(dot_x, dot_y, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
-            self._visibility_dot.setVisible(False)
+            # WS-M: las entidades reservadas (secretas) DEBEN distinguirse en el
+            # Mapa — antes el punto se creaba y nunca se mostraba. Se revela con
+            # un candado para no depender solo del color (daltonismo).
+            secret = visibility_key in _SECRET_VISIBILITY_KEYS
+            self._visibility_dot.setVisible(secret)
+            self._visibility_dot.setToolTip(
+                "Entidad reservada: oculta a la IA" if secret else ""
+            )
+            if secret:
+                self._secret_lock = _add_secret_lock(self, dot_x + 5, dot_y + 5)
 
         self.setToolTip("")
 
@@ -1079,10 +1114,18 @@ class GraphTreeItem(QGraphicsRectItem):
             "publico",
             "publico_mundo",
         }:
-            self._visibility_dot = QGraphicsEllipseItem(width - 36, 8, 10, 10, self)
+            dot_x, dot_y = width - 36, 8
+            self._visibility_dot = QGraphicsEllipseItem(dot_x, dot_y, 10, 10, self)
             self._visibility_dot.setBrush(QBrush(QColor(_VISIBILITY_COLORS[visibility_key])))
             self._visibility_dot.setPen(QPen(QColor("#F7F1E8"), 1.0))
-            self._visibility_dot.setVisible(False)
+            # WS-M: revela el marcador de entidad reservada (antes nunca visible).
+            secret = visibility_key in _SECRET_VISIBILITY_KEYS
+            self._visibility_dot.setVisible(secret)
+            self._visibility_dot.setToolTip(
+                "Entidad reservada: oculta a la IA" if secret else ""
+            )
+            if secret:
+                self._secret_lock = _add_secret_lock(self, dot_x + 5, dot_y + 5)
 
         # Track children and internal edges
         self._child_nodes: list[GraphNodeItem | GraphTreeItem] = []
@@ -1111,6 +1154,11 @@ class GraphTreeItem(QGraphicsRectItem):
     def _reposition_status_dots(self):
         if hasattr(self, "_visibility_dot"):
             self._visibility_dot.setRect(self._width - 36, 8, 10, 10)
+            if hasattr(self, "_secret_lock"):  # WS-M: el candado sigue al punto
+                rect = self._secret_lock.boundingRect()
+                self._secret_lock.setPos(
+                    self._width - 36 + 5 - rect.width() / 2.0, 8 + 5 - rect.height() / 2.0
+                )
 
     def set_watering_tint(self, kind: str) -> None:
         """BETA2-JARDIN-01: tinte del ciclo de riego en la rama (contorno y
@@ -1421,6 +1469,12 @@ class GraphTreeItem(QGraphicsRectItem):
         )
         if hasattr(self, "_visibility_dot"):
             self._visibility_dot.setRect(min_x + w - 36, min_y + 8, 10, 10)
+            if hasattr(self, "_secret_lock"):  # WS-M: el candado sigue al punto
+                rect = self._secret_lock.boundingRect()
+                self._secret_lock.setPos(
+                    min_x + w - 36 + 5 - rect.width() / 2.0,
+                    min_y + 8 + 5 - rect.height() / 2.0,
+                )
         self._count_item.setPos(
             min_x + 10 + self._title_item.boundingRect().width() + 6,
             min_y + (_CONTAINER_HEADER_HEIGHT - self._count_item.boundingRect().height()) / 2,
