@@ -30,3 +30,5 @@ graphify-out/cost.json
 *.bak
 dendro_crash.log
 graphify-out/.graphify_uncached.txt
+
+beta-testing/**/fuzzing-ui/salidas/
