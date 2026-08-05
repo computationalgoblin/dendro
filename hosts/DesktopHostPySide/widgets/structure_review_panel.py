@@ -29,11 +29,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
+from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold, clear_layout
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
 from packages.domain.result import Ok
 
 _STRUCTURE_KINDS = frozenset({"ring_create", "ring_merge"})
+
+#: BETA-MULTIAGENT2-FIX-05 (G2-07): filas máximas por sección determinista. Ver
+#: `_add_capped`. Las propuestas de estructura de la IA (pocas y bajo demanda) no
+#: se acotan.
+_MAX_ROWS_PER_SECTION = 12
 
 
 class _ProposeWorker(QThread):
@@ -63,6 +68,8 @@ class StructureReviewPanel(QWidget):
         on_accept: Callable[[Any], None],
         on_close: Callable[[], None] | None = None,
         log: Callable[[str, str], None] | None = None,
+        notify: Callable[..., None] | None = None,
+        status: Callable[[str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -70,6 +77,13 @@ class StructureReviewPanel(QWidget):
         self._on_accept = on_accept
         self._on_close = on_close
         self._log = log
+        # BETA-MULTIAGENT2-FIX-06 (G2-08): «Proponer estructura» SÍ decía lo que pasaba,
+        # pero solo en un QLabel de este panel — cero `ctx.notify`, cero estado global.
+        # Un tester midió 5 min 9 s, timeout de lectura, 0 propuestas y CERO toasts en
+        # todo el log de la sesión: «pagas una llamada y no te enteras de que la has
+        # pagado». `notify` = toast; `status` = indicador global compartido.
+        self._notify = notify
+        self._status_sink = status
         self._status_text = ""
         self._proposing = False  # SHIP-07: propuesta IA en vuelo (botón deshabilitado)
         self._propose_worker: _ProposeWorker | None = None
@@ -94,11 +108,12 @@ class StructureReviewPanel(QWidget):
     # ── construcción ─────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        while self._outer.count():
-            item = self._outer.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        # BETA-MULTIAGENT2-FIX-14 (G2-21): `deleteLater()` a secas solo ENCOLA el
+        # borrado — el widget seguía siendo hijo del panel y seguía pintándose, así
+        # que el mensaje nuevo salía ENTRELAZADO con el anterior (fotografiado por
+        # una tester al pulsar «Proponer estructura» sin proveedor). `clear_layout`
+        # añade el `setParent(None)` que faltaba.
+        clear_layout(self._outer)
         findings = self._findings()
         structures = self._structures()
         total = len(findings) + len(structures)
@@ -152,15 +167,35 @@ class StructureReviewPanel(QWidget):
                 rows.addWidget(self._row(finding, structure=True))
         if moves:
             rows.addWidget(self._section_label("Reubicaciones por potencial"))
-            for finding in moves:
-                rows.addWidget(self._row(finding, structure=False))
+            self._add_capped(rows, moves)
         if ascents:
             rows.addWidget(self._section_label("Excepciones ascendentes"))
-            for finding in ascents:
-                rows.addWidget(self._row(finding, structure=False))
+            self._add_capped(rows, ascents)
         rows.addStretch(1)
         scroll.setWidget(holder)
         body.addWidget(scroll, 1)
+
+    def _add_capped(self, rows: QVBoxLayout, findings: list[Any]) -> None:
+        """BETA-MULTIAGENT2-FIX-05 (G2-07): tope por sección, con el resto declarado.
+
+        El panel pintaba una fila por hallazgo, sin tope ni paginación: sobre la
+        campaña larga del beta eran 203 tarjetas de golpe (ahora 126 tras calibrar el
+        detector), y una lista que no se puede terminar no es trabajo, es culpa. Se
+        muestran las de MAYOR confianza (``analyze`` ya las devuelve ordenadas) y se
+        dice sin disimulo cuántas quedan: al resolver las de arriba, entran las
+        siguientes.
+        """
+        for finding in findings[:_MAX_ROWS_PER_SECTION]:
+            rows.addWidget(self._row(finding, structure=False))
+        resto = len(findings) - _MAX_ROWS_PER_SECTION
+        if resto > 0:
+            nota = QLabel(
+                f"…y {resto} más en esta sección. Se muestran las {_MAX_ROWS_PER_SECTION} "
+                "de mayor confianza; al resolver estas aparecerán las siguientes."
+            )
+            nota.setObjectName("mutedLabel")
+            nota.setWordWrap(True)
+            rows.addWidget(nota)
 
     @staticmethod
     def _section_label(text: str) -> QLabel:
@@ -203,13 +238,43 @@ class StructureReviewPanel(QWidget):
 
     # ── acciones ─────────────────────────────────────────────────────────
 
+    def _announce(self, text: str, *, kind: str = "") -> None:
+        """FIX-06: el desenlace sale del panel — indicador global + toast + log.
+
+        Fail-soft en los tres canales: un panel sin host cableado (tests, montaje en
+        `main_window`) sigue pintando su QLabel interno como antes.
+        """
+        self._status_text = text
+        if callable(self._status_sink):
+            try:
+                self._status_sink(text)
+            except Exception:  # noqa: BLE001 — el feedback nunca rompe el panel
+                pass
+        if callable(self._notify):
+            try:
+                self._notify(text, kind or "info")
+            except Exception:  # noqa: BLE001
+                pass
+        if self._log:
+            try:
+                self._log("error" if kind == "error" else "info", text)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _propose_structure(self) -> None:
         # SHIP-07: la llamada al proveedor va en un hilo — antes era síncrona y
         # congelaba toda la ventana (hasta 300 s) sin ningún indicador.
         if self._proposing:
             return
         self._proposing = True
+        # FIX-06: al ARRANCAR ya se escribe en el canal compartido (sin toast: el
+        # arranque no es un desenlace y no debe robar la atención).
         self._status_text = "Proponiendo estructura… la IA está pensando (puede tardar)."
+        if callable(self._status_sink):
+            try:
+                self._status_sink(self._status_text)
+            except Exception:  # noqa: BLE001
+                pass
         self._build()
         worker = _ProposeWorker(self._service)
         worker.done.connect(self._on_propose_done)
@@ -223,17 +288,23 @@ class StructureReviewPanel(QWidget):
     @_qt_safe_slot
     def _on_propose_done(self, res: Any) -> None:
         self._proposing = False
+        # FIX-06: TODO desenlace sale al canal compartido, incluidos los dos que antes
+        # se quedaban mudos dentro del panel: «0 propuestas» y el timeout de lectura.
         if isinstance(res, Ok):
             n = len(res.value)
-            self._status_text = (
+            self._announce(
                 f"La IA propuso {n} cambio(s) de estructura."
                 if n
-                else "La IA no ve cambios de estructura necesarios ahora mismo."
+                else "La IA no ve cambios de estructura necesarios ahora mismo.",
+                kind="info",
             )
         elif isinstance(res, Exception):
-            self._status_text = f"No se pudo proponer estructura: {res}"
+            self._announce(f"No se pudo proponer estructura: {res}", kind="error")
         else:
-            self._status_text = getattr(res, "error", "No se pudo proponer estructura.")
+            self._announce(
+                str(getattr(res, "error", "") or "No se pudo proponer estructura."),
+                kind="error",
+            )
         self._build()
 
     def _refine(self, finding: Any, label: QLabel) -> None:

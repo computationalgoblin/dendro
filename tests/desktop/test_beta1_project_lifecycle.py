@@ -20,6 +20,27 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _preferencias_aisladas(tmp_path, monkeypatch):
+    """Aisla `settings.json` del usuario REAL.
+
+    Cierre de la oleada BETA-MULTIAGENT2: sin esto, `MainWindow()` autoabre el
+    ultimo proyecto de las preferencias de la maquina, la premisa del fichero
+    ("no hay proyecto activo") se vuelve falsa y el `window.close()` del
+    `finally` levanta un `QMessageBox.question` MODAL que, bajo
+    `QT_QPA_PLATFORM=offscreen`, CUELGA el proceso para siempre — y con el, el
+    barrido entero de `tests/desktop`. Es un fallo de aislamiento del test, no
+    del producto.
+    """
+    if not HAS_QT:
+        yield
+        return
+    from hosts.DesktopHostPySide import app_context
+
+    monkeypatch.setattr(app_context, "PREFERENCES_PATH", tmp_path / "settings.json")
+    yield
+
+
 class _FakeCloseEvent:
     def __init__(self):
         self.accepted = False

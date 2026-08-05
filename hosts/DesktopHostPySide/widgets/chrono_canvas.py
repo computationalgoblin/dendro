@@ -27,6 +27,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_order_key
+from packages.domain.calendar_math import CalendarConfig
 from packages.ui.graph_physics.rings import (
     UNCLASSIFIED_RING_ID,
     resolve_effective_ring_id,
@@ -86,6 +88,18 @@ _RING_ID_ROLE = 4
 # BETA1-HITO-MULTI: holgura (px) para atribuir un clic sobre la franja al carril
 # de entidad más cercano. < media de LANE_WIDTH (92) → zonas de carril sin solape.
 BAND_LANE_TOL = 40.0
+# BETA-MULTIAGENT2-FIX-15 (G2-25): presupuesto de marcadores FANTASMA sembrados en
+# la reconstrucción de la escena. El sembrado era ciego —un `_GhostNode` por CADA
+# cruce hito × línea de vida viva—, así que el censo crecía con el PRODUCTO: a 800
+# fichas eran 137.311 de 143.116 ítems (96 % de la escena) y cambiar de vista
+# costaba 24,9 s. Por debajo del presupuesto se siembra igual que siempre (mundos
+# pequeños: comportamiento idéntico); por encima no se siembra ninguno y los del
+# hito bajo el cursor se materializan BAJO DEMANDA (_update_hover_ghosts). Vincular
+# NUNCA dependió del fantasma: lo resuelve `_resolve_band_click` sobre la franja.
+CHRONO_GHOST_SEED_BUDGET = 2000
+# Tope de fantasmas materializados de golpe para UN hito (hover). A 800 fichas un
+# hito cruza ~430 carriles vivos; el tope acota el peor caso sin quitar la pista.
+CHRONO_GHOST_HOVER_MAX = 400
 # BETA1-UX2D: px (viewport) que el cursor debe recorrer desde la pulsación para
 # que un gesto sobre un mango cuente como ARRASTRE y no como clic. Es CRÍTICO que
 # sea generoso: en la cronología, con la vista alejada, unos pocos píxeles = muchos
@@ -114,10 +128,40 @@ def _enum_value(value: Any, default: str = "") -> str:
     return str(getattr(value, "value", value) or default)
 
 
+def _motion_enabled() -> bool:
+    """¿Está activo el movimiento de la app? (BETA-MULTIAGENT2-FIX-01 · ART-29)
+
+    El interruptor canónico vive en `graph_canvas.MOTION_ENABLED` y es el que
+    apagan los tests y el arnés de capturas. Se lee de forma diferida porque
+    graph_canvas importa ESTE módulo: hacerlo arriba sería un ciclo."""
+    try:
+        from hosts.DesktopHostPySide.widgets.graph_canvas import MOTION_ENABLED
+
+        return bool(MOTION_ENABLED)
+    except Exception:  # noqa: BLE001 — sin Qt/host, se asume movimiento
+        return True
+
+
 # BETA1-UX2D: paso de zoom de la rueda (puro, testeable sin Qt).
 ZOOM_MIN_SCALE = 0.02
 ZOOM_MAX_SCALE = 8.0
 ZOOM_FACTOR = 1.15
+
+# BETA-MULTIAGENT2-FIX-01 (criterio 4): suelo de escala del encuadre inicial de
+# la cronología. Por debajo de esto una marca de hito (radio ~6 px) mide menos
+# de un píxel y la vista deja de existir: en vez de meter el eje entero en el
+# viewport se encuadra el TRAMO más poblado. Es el mismo criterio que el suelo
+# del Mapa; se deja ajustable por entorno para depurar mundos extremos.
+CHRONO_MIN_READABLE_SCALE = 0.12
+# Piso de altura de glifo EN PANTALLA para el título de un hito. Las etiquetas
+# in-scene son Georgia 9 pt y escalan con la vista: al encuadre de apertura
+# (0,0711) medían 1 px. Por debajo del piso se dejan de pintar in-scene y se
+# pintan como overlay pegajoso en coordenadas de viewport (patrón UX39).
+CHRONO_LABEL_MIN_PX = 11.0
+# Separación mínima en pantalla entre dos etiquetas pegajosas (anti-mancha).
+CHRONO_STICKY_GAP_PX = 18.0
+# Tope de etiquetas pegajosas por frame: con 320 hitos no se pintan 320 rótulos.
+CHRONO_STICKY_MAX = 24
 
 
 def zoom_step(
@@ -393,8 +437,12 @@ class MilestoneMark:
     # Desplazamiento vertical dentro de la "caja" del año cuando varios hitos lo
     # comparten, para que ambas franjas se lean.
     y_offset: float = 0.0
-    # Desambiguación dentro de la caja (mes/día u "Orden N").
+    # Desambiguación dentro de la caja (mes/día, o la posición "N.º" si la trae).
+    # Es solo la ETIQUETA que se pinta: NO se ordena por ella (BETA-MULTIAGENT2-FIX-15).
     sub_label: str = ""
+    # BETA-MULTIAGENT2-FIX-15 (G2-28): clave NUMÉRICA de orden dentro del año
+    # (mes del calendario, día, sort_index, título, id) — ver `milestone_order_key`.
+    order_key: tuple = (0, 0, 0.0, "", "")
     # FOCO-25: fin opcional del hito (lapso derivado de su duración) → el hito
     # se pinta además como franja de tiempo inicio→fin.
     end_year: int | None = None
@@ -488,10 +536,17 @@ def _milestone_sub_label(hito: Any) -> str:
         parts = [p for p in (month, day) if p]
         if parts:
             return " ".join(parts)
-    sort_index = meta.get("sort_index") if isinstance(meta, dict) else None
-    if sort_index not in (None, ""):
-        return f"Orden {sort_index}"
-    return ""
+    # BETA-MULTIAGENT2-FIX-03 (G2-03): «Orden 0» era un nombre de campo interno
+    # asomando por la etiqueta, y salía en TODO hito de IA porque `ai_jobs`
+    # fabricaba `sort_index = 0` por defecto (los escritos a mano no lo traen).
+    # El desambiguador solo tiene sentido con una posición REAL (1.º, 2.º…): un
+    # 0 —o cualquier valor no entero— no desambigua nada, así que no se pinta.
+    raw_index = meta.get("sort_index") if isinstance(meta, dict) else None
+    if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+        return ""
+    if raw_index < 1:
+        return ""
+    return f"{raw_index}.º"
 
 
 def _effective_rings(project: Any) -> tuple[dict[str, str], set[str], dict[str, str]]:
@@ -624,6 +679,46 @@ def _entity_in_window(entity: Any, scope: "ChronoScope", present_year: int) -> b
     return True
 
 
+def _milestone_in_window(year: int, end_year: int | None, scope: "ChronoScope") -> bool:
+    """BETA-MULTIAGENT2-FIX-15 (G2-27): ¿el intervalo del hito solapa la ventana?
+
+    Misma regla de solape que :func:`_entity_in_window` (que ya la aplica a las
+    líneas de vida, y el bucle de eras a los estratos): el hito entra si
+    ``[year, end_year]`` corta ``[year_min, year_max]``. Antes el bucle de marcas
+    no miraba el scope ni una vez, así que acotar la ventana —o enfocar una era,
+    que acota por debajo— dejaba TODOS los hitos en el lienzo.
+
+    Una diferencia DELIBERADA con las entidades: una entidad viva (sin muerte) se
+    extiende hasta el infinito, pero un hito sin fin es PUNTUAL — ocurre y termina
+    en su año. Y un hito sin año se resuelve al presente antes de llegar aquí
+    (``milestone_years``), así que con una ventana que no contenga el presente
+    desaparece: es coherente con el sitio donde se dibuja.
+    """
+    if scope.year_min is None and scope.year_max is None:
+        return True
+    start = int(year)
+    end = int(end_year) if end_year is not None else start
+    if scope.year_min is not None and end < scope.year_min:
+        return False
+    if scope.year_max is not None and start > scope.year_max:
+        return False
+    return True
+
+
+def _calendar_month_names(project: Any) -> tuple[str, ...]:
+    """Meses del calendario del proyecto, en su orden REAL (no alfabético).
+
+    BETA-MULTIAGENT2-FIX-15 (G2-28): los necesita `milestone_order_key` para
+    ordenar los hitos con `metadata.exact_date` por índice de mes.
+    """
+    chronology = getattr(project, "project_chronology", None)
+    meta = getattr(chronology, "metadata", {}) or {}
+    try:
+        return tuple(CalendarConfig.from_metadata(meta).month_names())
+    except (TypeError, ValueError, AttributeError):
+        return ()
+
+
 def _entity_passes(entity: Any, scope: "ChronoScope", present_year: int) -> bool:
     """BETA1-UX37/38: filtro por tipo, canon, secreto y ventana temporal. Los
     conjuntos del scope se comparan en minúsculas; vacío = sin filtro."""
@@ -708,6 +803,11 @@ def build_chrono_layout(
         t for t in trees if scope.collapse_default and t not in scope.expanded_ids
     }
     ring_ids_used = {effective.get(str(getattr(e, "id", "")), UNCLASSIFIED_RING_ID) for e in entities}
+    # BETA-MULTIAGENT2-FIX-15 (G2-27, punto 7): entidades que SUPERAN los filtros
+    # explícitos (tipo/canon/secreto/ventana + foco de anillo). Se acumula aquí —y
+    # no del colapso ni de la agregación de sueltas, que ocultan sin filtrar— para
+    # decidir si una franja de hito se queda sin ningún participante visible.
+    passing_entity_ids: set[str] = set()
     columns: list[RingColumn] = []
     lanes_by_ring: dict[str, list[Any]] = {}
     loose_counts: dict[str, int] = {}  # BETA1-UX39: sueltas agregadas por anillo
@@ -727,6 +827,7 @@ def build_chrono_layout(
             if effective.get(str(getattr(entity, "id", "")), UNCLASSIFIED_RING_ID) == ring_id
             and _entity_passes(entity, scope, present_year)  # BETA1-UX37/38
         ]
+        passing_entity_ids.update(str(getattr(entity, "id", "")) for entity in members)
         if not members:
             continue
         if ring_id == UNCLASSIFIED_RING_ID and ring_id not in ring_ids_used:
@@ -839,13 +940,28 @@ def build_chrono_layout(
     # 5. Hitos: FRANJA horizontal a la altura del año, con un punto en el carril
     #    de cada entidad participante (BETA1-HITO-MULTI). Ya no hay "entidad
     #    principal": todas las afectadas participan en pie de igualdad.
+    # BETA-MULTIAGENT2-FIX-15 (G2-27/G2-28): el bucle respeta la ventana temporal
+    # (como eras y líneas de vida) y lleva una clave de orden NUMÉRICA.
+    month_names = _calendar_month_names(project)
+    all_entity_ids = {str(getattr(entity, "id", "")) for entity in entities}
     marks: list[MilestoneMark] = []
     for hito in milestones:
         hid = str(getattr(hito, "id", ""))
         year = milestone_years.get(hid, present_year)
-        affected = [str(v) for v in (getattr(hito, "affected_entity_ids", []) or []) if str(v) in x_by_entity]
-        pairs = sorted((x_by_entity[eid], eid) for eid in affected)
         end_year = milestone_ends.get(hid)
+        if not _milestone_in_window(year, end_year, scope):
+            continue
+        raw_affected = [str(v) for v in (getattr(hito, "affected_entity_ids", []) or [])]
+        # Un hito que TENÍA participantes y a los que los filtros han quitado del
+        # lienzo ENTERO no deja una franja hueca cruzando el mundo (G2-27 punto 7).
+        # Un hito SIN participantes es legal y se dibuja siempre: solo se oculta lo
+        # que un filtro ha vaciado. Los ids colgados (de entidades borradas) no
+        # cuentan como participantes.
+        known = [eid for eid in raw_affected if eid in all_entity_ids]
+        if known and not any(eid in passing_entity_ids for eid in known):
+            continue
+        affected = [eid for eid in raw_affected if eid in x_by_entity]
+        pairs = sorted((x_by_entity[eid], eid) for eid in affected)
         marks.append(MilestoneMark(
             milestone_id=hid,
             title=str(getattr(hito, "title", "") or "Hito"),
@@ -854,6 +970,7 @@ def build_chrono_layout(
             entity_xs=[x for x, _ in pairs],
             entity_ids=[eid for _, eid in pairs],
             sub_label=_milestone_sub_label(hito),
+            order_key=milestone_order_key(hito, month_names),
             end_year=end_year,
             y_end=scale.y(end_year) if end_year is not None else None,
         ))
@@ -865,7 +982,10 @@ def build_chrono_layout(
     for group in by_year.values():
         if len(group) < 2:
             continue
-        group.sort(key=lambda m: (m.sub_label, m.title, m.milestone_id))
+        # BETA-MULTIAGENT2-FIX-15 (G2-28): se ordena por la clave NUMÉRICA, no por
+        # el texto de `sub_label` (que ponía «10.º» antes que «2.º» y los meses en
+        # orden alfabético). `order_key` ya termina en (título, id): es total.
+        group.sort(key=lambda m: m.order_key)
         span = (len(group) - 1) * MILESTONE_BOX_GAP_PX
         for index, mark in enumerate(group):
             mark.y_offset = index * MILESTONE_BOX_GAP_PX - span / 2.0
@@ -911,12 +1031,18 @@ def build_chrono_layout(
     # 6.b Cajas de hito-marco (BETA2-SUB-01): un hito que contiene subhitos se
     #     dibuja como recuadro que los encierra en el eje TIEMPO. La extensión en
     #     tiempo abarca el intervalo del marco y de todos sus subhitos.
+    #     BETA-MULTIAGENT2-FIX-15 (G2-27): esta sección recorría `milestones`
+    #     ENTERA, así que filtrar el bucle de marcas habría dejado marcos de hitos
+    #     que ya no se pintan. Solo se enmarca lo EMITIDO (marco y subhitos).
     milestone_boxes: list[MilestoneBox] = []
+    emitted_ids = {mark.milestone_id for mark in marks}
     hito_by_id = {str(getattr(h, "id", "")): h for h in milestones}
     children_by_parent: dict[str, list] = {}
     for hito in milestones:
+        if str(getattr(hito, "id", "")) not in emitted_ids:
+            continue
         pid = str(getattr(hito, "parent_milestone_id", "") or "")
-        if pid:
+        if pid and pid in emitted_ids:
             children_by_parent.setdefault(pid, []).append(hito)
     _box_pad = 16.0
     for pid, children in children_by_parent.items():
@@ -988,6 +1114,7 @@ try:  # la parte pura debe poder importarse sin PySide6
         QColor,
         QFont,
         QFontMetrics,
+        QFontMetricsF,
         QLinearGradient,
         QPainter,
         QPainterPath,
@@ -1086,7 +1213,7 @@ if HAS_QT:
 
     def _add_pill_label(
         scene, text, x, y, *, font, fg, z=31.0, max_w=None, align_right=False,
-        center=False, tag=None,
+        center=False, tag=None, registry=None,
     ):
         """BETA1-UX feedback: etiqueta sobre una píldora de pergamino para que
         sea legible y NO se solape de forma ilegible (elide si excede max_w).
@@ -1121,6 +1248,14 @@ if HAS_QT:
             item.setData(tag[0], tag[1])
         scene.addItem(pill)
         scene.addItem(item)
+        if registry is not None:
+            # FIX-01: la vista necesita el par (píldora, texto) para poder
+            # apagarlos y repintarlos en coords de VIEWPORT cuando a la escala
+            # actual el rótulo in-scene mediría 1-2 px.
+            registry.append({
+                "pill": pill, "text": item, "shown": shown, "font": font,
+                "tag": tag,
+            })
         return item
 
     class _LifelineHead(QGraphicsEllipseItem):
@@ -1753,6 +1888,15 @@ if HAS_QT:
             self._handle_moved = False
             self._project = None  # BETA1-UX2D: último proyecto (para reconstruir bajo demanda)
             self._rebuild_pending = False  # evita reconstrucciones diferidas duplicadas
+            # BETA-MULTIAGENT2-FIX-01: encuadre inicial DIFERIDO. `set_active_view`
+            # llamaba a `fit_all()` ANTES del `setVisible(True)`, así que el encuadre
+            # se calculaba contra un viewport de 100x30 que aún no existía (Elvira:
+            # 0,0711 al abrir frente a 0,125 con un fit_all posterior, un 76 % de
+            # error) y nadie lo rehacía al mostrar ni al redimensionar.
+            self._pending_fit = False
+            # Etiquetas de hito pintadas en coords de VIEWPORT (siempre legibles).
+            self._milestone_label_items: list = []
+            self._sticky_labels_active = False
             # BETA1-UX36: scope de la cronología. A escala (1000+), los contenedores
             # arrancan COLAPSADOS; ``_expanded_ids`` recuerda lo que el usuario abrió.
             self._ctx = None
@@ -1820,6 +1964,13 @@ if HAS_QT:
             # SEM03: germinación de hitos (mismo patrón que la concéntrica).
             self._milestone_items: dict[str, list] = {}
             self._bloom_items: dict[str, float] = {}
+            # BETA-MULTIAGENT2-FIX-15 (G2-25): registro propio de los marcadores
+            # fantasma (jamás en `_milestone_items`: no germinan ni centran).
+            # `_ghosts_seeded` = la escena los sembró en el rebuild (mundo pequeño);
+            # si es False se materializan al hover, hito a hito.
+            self._ghost_items: list = []
+            self._ghost_milestone_id: str = ""
+            self._ghosts_seeded: bool = False
             # CRON: hito actualmente enfocado por el recorrido cronológico.
             self._walk_highlight_id: str | None = None
             # CRON: pulso sostenido del hito mientras la IA analiza el paso.
@@ -2269,6 +2420,10 @@ if HAS_QT:
         def leaveEvent(self, event):  # noqa: N802 (Qt API)
             self._edge_pan = (0.0, 0.0)
             self._edge_pan_timer.stop()
+            # BETA-MULTIAGENT2-FIX-15: al salir del lienzo se retiran los fantasmas
+            # materializados bajo demanda (los sembrados en el rebuild se quedan).
+            if not self._ghosts_seeded:
+                self._clear_hover_ghosts()
             super().leaveEvent(event)
 
         # ── BETA1-UX38: control de ventana temporal (scrubber de intervalo) ───
@@ -2527,6 +2682,13 @@ if HAS_QT:
 
         # UX31: revelado de transición DENTRO del viewport (como en la concéntrica).
         def play_reveal(self, *, duration_ms: int = 220) -> None:
+            # BETA-MULTIAGENT2-FIX-01 (ART-29): sin movimiento, sin velo. Se lee el
+            # MISMO interruptor que usan tests y capturas (`graph_canvas.
+            # MOTION_ENABLED`); import diferido porque graph_canvas importa este
+            # módulo y en carga sería circular.
+            if not _motion_enabled():
+                self._reveal_alpha = 0.0
+                return
             try:
                 self._reveal_alpha = 1.0
                 self._reveal_step = 40.0 / max(1, int(duration_ms))
@@ -2623,12 +2785,61 @@ if HAS_QT:
                 self._paint_sticky_pill(
                     painter, label, 4.0, y - 9.0, tint=_ring_tint(idx, col.ring_id),
                 )
+            self._draw_sticky_milestone_labels(painter)  # FIX-01 (criterio 2)
             self._draw_legend(painter, vp, layout)
             painter.restore()
 
+        # ── BETA-MULTIAGENT2-FIX-14 (G2-26d): la leyenda dejó de tapar la línea ──
+        #
+        # `_draw_legend` dibujaba un panel OPACO (alpha 244) anclado al borde
+        # derecho y centrado en vertical, ENCIMA de la escena y sin que nadie
+        # reservase ese margen al encuadrar: tapaba el final de la línea temporal.
+        # El comentario del método («zona libre») describía una suposición que dejó
+        # de ser cierta. Como el encuadre es de otro ticket (FIX-01), la leyenda es
+        # la que cede: busca hueco y, si no lo hay, se pliega.
+
+        def milestone_viewport_rects(self) -> list:
+            """Rects (px de viewport) de las marcas de hito VISIBLES ahora mismo.
+
+            Es el censo contra el que la leyenda busca hueco. No incluye las bandas
+            de era ni el fondo: solo lo que el usuario lee como una marca."""
+            rects: list = []
+            for entry in getattr(self, "_milestone_label_items", None) or []:
+                for clave in ("pill", "text"):
+                    item = entry.get(clave) if isinstance(entry, dict) else None
+                    if item is None:
+                        continue
+                    try:
+                        if not item.isVisible():
+                            continue
+                        poly = self.mapFromScene(item.sceneBoundingRect())
+                    except RuntimeError:  # ítem ya destruido entre repintados
+                        continue
+                    rects.append(QRectF(poly.boundingRect()))
+            for label in self.sticky_milestone_labels():
+                rects.append(QRectF(label["rect"]))
+            return rects
+
+        def legend_panel_rect(self, vp, w: float, h: float):
+            """Primer anclaje del borde derecho SIN marcas debajo, o `None`.
+
+            `None` significa que no hay hueco: la leyenda se pliega (no se pinta),
+            que es preferible a un panel opaco encima de la obra."""
+            marcas = self.milestone_viewport_rects()
+            x0 = vp.width() - w - 10.0
+            candidatos = (
+                max(10.0, (vp.height() - h) / 2.0),  # el sitio histórico (centrado)
+                10.0,                                 # arriba
+                max(10.0, vp.height() - h - 10.0),    # abajo
+            )
+            for y0 in candidatos:
+                panel = QRectF(x0, y0, w, h)
+                if not any(panel.intersects(marca) for marca in marcas):
+                    return panel
+            return None
+
         def _draw_legend(self, painter, vp, layout):
-            """Leyenda anclada al borde DERECHO, centrada verticalmente (zona libre:
-            no la tapan los botones de la izquierda ni el guardar de abajo-derecha).
+            """Leyenda anclada al borde DERECHO, en el primer hueco libre.
             Filas de ANILLO (swatch + nombre, clic = foco) y, debajo, las ERAS."""
             self._legend_hit_rects = []
             # BETA1-UX41 (fix): listas COMPLETAS (no las filtradas) → siempre se pueden
@@ -2651,9 +2862,12 @@ if HAS_QT:
             w = pad + 10 + 6 + tw + pad
             n_rows = len(rings) + ((1 + len(eras)) if eras else 0)
             h = pad + row_h * n_rows + pad
-            x0 = vp.width() - w - 10.0
-            y0 = max(10.0, (vp.height() - h) / 2.0)
-            panel = QRectF(x0, y0, w, h)
+            # FIX-14 (G2-26d): hueco libre o nada. Si se pliega, `_legend_hit_rects`
+            # se queda vacío y no hay zonas clicables fantasma.
+            panel = self.legend_panel_rect(vp, w, h)
+            if panel is None:
+                return
+            x0, y0 = panel.x(), panel.y()
             ppath = QPainterPath(); ppath.addRoundedRect(panel, 8, 8)
             painter.setPen(QPen(_PILL_LINE, 1.0))
             bg = QColor(_PILL_FILL); bg.setAlpha(244)
@@ -2700,6 +2914,103 @@ if HAS_QT:
                                 clickable=("era", str(era_id)))
                     yc += row_h
 
+        # ── FIX-01: etiquetas de hito con piso de tamaño en PANTALLA ─────────
+
+        def _sticky_label_font(self) -> "QFont":
+            font = QFont("Georgia")
+            font.setPointSize(9)
+            font.setBold(True)
+            return font
+
+        def _refresh_sticky_labels(self) -> None:
+            """Decide si los títulos de hito se pintan in-scene o como overlay.
+
+            Los títulos in-scene son `QGraphicsSimpleTextItem` normales: escalan
+            con la vista, así que al encuadre de apertura (0,0711) medían 1 px.
+            Por debajo del piso se APAGAN y se repintan en coords de viewport —
+            el mismo patrón que las píldoras de anillo de BETA1-UX39, que son
+            «SIEMPRE legibles porque se pintan en coords de viewport»."""
+            scale = float(self.transform().m11() or 0.0)
+            sticky = False
+            for entry in self._milestone_label_items:
+                natural_h = float(entry["text"].boundingRect().height())
+                sticky = natural_h * scale < CHRONO_LABEL_MIN_PX
+                break
+            if sticky == self._sticky_labels_active:
+                return
+            self._sticky_labels_active = sticky
+            for entry in self._milestone_label_items:
+                entry["pill"].setVisible(not sticky)
+                entry["text"].setVisible(not sticky)
+
+        def sticky_milestone_labels(self) -> list:
+            """Etiquetas de hito que se pintan en coordenadas de VIEWPORT.
+
+            Devuelve dicts con ``rect`` (en px de viewport), ``glyph_height`` y
+            ``milestone_id``. Es también el punto de medida del criterio 2: la
+            altura de glifo nunca baja de `CHRONO_LABEL_MIN_PX`."""
+            if not self._sticky_labels_active or not self._milestone_label_items:
+                return []
+            vp = self.viewport().rect()
+            font = self._sticky_label_font()
+            fm = QFontMetricsF(font)
+            glyph_h = float(fm.height())
+            row_h = glyph_h + 6.0
+            out: list = []
+            placed: list = []
+            for entry in self._milestone_label_items:
+                point = self.mapFromScene(entry["text"].scenePos())
+                x, y = float(point.x()), float(point.y())
+                if x < 0.0 or y < 0.0 or x > vp.width() - 40.0 or y > vp.height() - row_h:
+                    continue
+                width = fm.horizontalAdvance(entry["shown"]) + 16.0
+                rect = QRectF(x, y, min(width, 260.0), row_h)
+                # Anti-solape: primero se INTENTA apilar en filas (como hace la
+                # de-colisión in-scene); solo si no cabe se descarta. Descartar a
+                # la primera dejaba un mundo de 6 hitos con un solo rótulo.
+                for _ in range(6):
+                    probe = rect.adjusted(
+                        -CHRONO_STICKY_GAP_PX, -2.0, CHRONO_STICKY_GAP_PX, 2.0
+                    )
+                    if not any(probe.intersects(other) for other in placed):
+                        break
+                    rect = rect.translated(0.0, row_h + 4.0)
+                else:
+                    continue
+                if rect.bottom() > vp.height():
+                    continue
+                placed.append(rect)
+                tag = entry.get("tag") or (None, "")
+                out.append({
+                    "milestone_id": str(tag[1]),
+                    "text": entry["shown"],
+                    "rect": rect,
+                    "glyph_height": glyph_h,
+                })
+                if len(out) >= CHRONO_STICKY_MAX:
+                    break
+            return out
+
+        def _draw_sticky_milestone_labels(self, painter) -> None:
+            labels = self.sticky_milestone_labels()
+            if not labels:
+                return
+            painter.setFont(self._sticky_label_font())
+            for label in labels:
+                rect = label["rect"]
+                path = QPainterPath()
+                radius = rect.height() / 2.0
+                path.addRoundedRect(rect, radius, radius)
+                painter.setPen(QPen(_PILL_LINE, 1.0))
+                painter.setBrush(QBrush(_PILL_FILL))
+                painter.drawPath(path)
+                painter.setPen(QPen(_INK))
+                painter.drawText(
+                    rect.adjusted(8.0, 0.0, -4.0, 0.0),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    label["text"],
+                )
+
         def _draw_nav_highlight(self, painter):
             """BETA1-UX41: aro dorado sobre la cabeza de la entidad navegada (↑/↓),
             en coords de viewport (siempre visible, sin escalar)."""
@@ -2725,6 +3036,22 @@ if HAS_QT:
             super().showEvent(event)
             self._atmosphere.start()
             self.setFocus(Qt.FocusReason.OtherFocusReason)  # BETA1-UX41: teclado activo
+            self._run_pending_fit()
+
+        def _run_pending_fit(self) -> None:
+            """FIX-01 (criterio 3): rehace el encuadre mientras siga pendiente.
+
+            No se consume en el primer `showEvent`: al mostrarse, el viewport
+            todavía puede ser el falso (86x16) y solo alcanza su tamaño real en el
+            `resizeEvent` siguiente — consumirlo antes reproducía el bug original
+            con otro disfraz. Lo cancela el `resizeEvent` (ya con la vista
+            visible) y cualquier zoom del usuario."""
+            if not self._pending_fit:
+                return
+            vp = self.viewport()
+            if vp is None or vp.width() < 8 or vp.height() < 8:
+                return
+            self._apply_fit()
 
         def hideEvent(self, event):  # noqa: N802 (Qt API)
             self._atmosphere.stop()
@@ -2769,6 +3096,9 @@ if HAS_QT:
                 self._lifeline_views = {}
                 self._milestone_items = {}
                 self._bloom_items = {}
+                self._ghost_items = []
+                self._ghost_milestone_id = ""
+                self._ghosts_seeded = False
                 self._handle_drag = None
                 self._press_handle = None
 
@@ -2776,6 +3106,11 @@ if HAS_QT:
             super().resizeEvent(event)
             self._position_time_window_bar()
             self._position_create_toolbar()  # WS-E: ＋Hito/＋Era
+            # FIX-01 (criterio 3): al mostrarse, la vista pasa del viewport falso
+            # (100x30) al real; el encuadre inicial pendiente se rehace aquí y,
+            # ya con geometría definitiva, se da por consumido.
+            self._run_pending_fit()
+            self._refresh_sticky_labels()
 
         def _rebuild_scene(self, project: Any) -> None:
             scene = self.scene()
@@ -2783,9 +3118,19 @@ if HAS_QT:
             # SEM03: la escena se reconstruye; reinicia el lookup y el glow.
             self._milestone_items = {}
             self._bloom_items = {}
+            # BETA-MULTIAGENT2-FIX-15: los fantasmas viven en su PROPIO registro
+            # (nunca en `_milestone_items`, que alimenta bloom/centrado) y el
+            # `scene.clear()` de arriba ya los ha destruido: sin fugas entre
+            # reconstrucciones.
+            self._ghost_items = []
+            self._ghost_milestone_id = ""
+            self._ghosts_seeded = False
             self._lifeline_views = {}  # BETA1-UX2C: mangos de vida por entidad
             self._handle_drag = None
             self._press_handle = None
+            # FIX-01: los rótulos registrados pertenecen a la escena que se borra.
+            self._milestone_label_items = []
+            self._sticky_labels_active = False
             self._bloom_timer.stop()
             if project is None:
                 self._layout = None
@@ -3238,6 +3583,13 @@ if HAS_QT:
             # desambiguan dentro de la caja. Los rótulos viven dentro del área del
             # grafo (a la derecha del margen de eras) para no chocar con ellas.
             self._milestone_items = {}
+            # BETA-MULTIAGENT2-FIX-15 (G2-25): el sembrado de fantasmas solo cabe
+            # si el censo (hitos × líneas de vida) entra en el presupuesto. Por
+            # encima, el rebuild NO siembra ninguno y se materializan al pasar el
+            # ratón por la franja del hito (_update_hover_ghosts).
+            self._ghosts_seeded = (
+                len(layout.milestones) * len(layout.lifelines) <= CHRONO_GHOST_SEED_BUDGET
+            )
             year_font = QFont("Georgia"); year_font.setPointSize(8)
             title_font = QFont("Georgia"); title_font.setPointSize(9); title_font.setItalic(True)
             band_x1 = max(layout.width, LEFT_MARGIN + COLUMN_GAP)
@@ -3316,6 +3668,9 @@ if HAS_QT:
                         scene, title_text, title_at.x(), title_at.y(),
                         font=title_font, fg=_INK, z=34, max_w=300,
                         tag=(_MILESTONE_ID_ROLE, mark.milestone_id),
+                        # FIX-01 (criterio 2): registrado para poder pintarlo en
+                        # coords de viewport cuando la escala lo haría ilegible.
+                        registry=self._milestone_label_items,
                     )
                     # Un punto SÓLIDO por entidad ya vinculada (intersección
                     # franja↔carril); clicarlo abre el hito.
@@ -3326,21 +3681,80 @@ if HAS_QT:
                         items.append(node)
                     # Fantasmas TENUES en los cruces de entidades NO vinculadas
                     # (dentro de su lapso de vida): clicarlos vincula la entidad.
-                    linked = set(mark.entity_ids)
-                    for lifeline in layout.lifelines:
-                        if lifeline.entity_id in linked:
-                            continue
-                        if not (lifeline.birth_year <= mark.year and (
-                            lifeline.death_year is None or mark.year <= lifeline.death_year
-                        )):
-                            continue
-                        ghost = _GhostNode(mark.milestone_id, lifeline.entity_id)
-                        ghost.setPos(self._pt(lifeline.x, y))
-                        scene.addItem(ghost)  # fuera de la lista de bloom (no germina)
+                    if self._ghosts_seeded:
+                        self._ghost_items.extend(
+                            self._spawn_ghosts(mark, limit=CHRONO_GHOST_SEED_BUDGET)
+                        )
                     self._milestone_items[mark.milestone_id] = items
 
             rect = self._logical_rect(0, 0, layout.width, layout.height)
             scene.setSceneRect(rect.adjusted(-60, -60, 60, 60))
+
+        # ── Fantasmas de vinculación (BETA-MULTIAGENT2-FIX-15, G2-25) ────────
+        def _spawn_ghosts(self, mark: MilestoneMark, *, limit: int) -> list:
+            """Marcadores FANTASMA de un hito: uno en el cruce de su franja con el
+            carril de cada entidad NO vinculada y viva ese año.
+
+            Es una PISTA VISUAL y una segunda diana, no el mecanismo de vincular:
+            ese es `_resolve_band_click` sobre la franja, que funciona igual haya
+            fantasma o no. Se devuelven ya añadidos a la escena y FUERA de
+            `_milestone_items` (esa lista alimenta bloom/centrado: un fantasma no
+            germina)."""
+            layout = self._layout
+            scene = self.scene()
+            if layout is None or scene is None:
+                return []
+            linked = set(mark.entity_ids)
+            created: list = []
+            for lifeline in layout.lifelines:
+                if len(created) >= limit:
+                    break
+                if lifeline.entity_id in linked:
+                    continue
+                if not (lifeline.birth_year <= mark.year and (
+                    lifeline.death_year is None or mark.year <= lifeline.death_year
+                )):
+                    continue
+                ghost = _GhostNode(mark.milestone_id, lifeline.entity_id)
+                ghost.setPos(self._pt(lifeline.x, mark.y_band))
+                scene.addItem(ghost)
+                created.append(ghost)
+            return created
+
+        def _clear_hover_ghosts(self) -> None:
+            """Retira de la escena los fantasmas materializados bajo demanda."""
+            scene = self.scene()
+            for ghost in self._ghost_items:
+                try:
+                    if scene is not None and ghost.scene() is scene:
+                        scene.removeItem(ghost)
+                except RuntimeError:  # el item ya murió con un scene.clear()
+                    pass
+            self._ghost_items = []
+            self._ghost_milestone_id = ""
+
+        def _update_hover_ghosts(self, view_pos) -> None:
+            """Materializa los fantasmas del hito al que apunta el ratón cuando la
+            escena no los sembró (mundo grande), y los retira al salir.
+
+            Así el coste es el de UN hito (acotado por CHRONO_GHOST_HOVER_MAX) en
+            vez del producto hito × entidad, y la pista visual sigue apareciendo
+            justo donde el usuario está mirando."""
+            if self._ghosts_seeded or self._layout is None:
+                return
+            milestone_id = self._milestone_id_at(view_pos)
+            if milestone_id == self._ghost_milestone_id:
+                return
+            self._clear_hover_ghosts()
+            if not milestone_id:
+                return
+            mark = next(
+                (m for m in self._layout.milestones if m.milestone_id == milestone_id), None
+            )
+            if mark is None:
+                return
+            self._ghost_items = self._spawn_ghosts(mark, limit=CHRONO_GHOST_HOVER_MAX)
+            self._ghost_milestone_id = milestone_id
 
         def bloom_milestone(self, milestone_id: str) -> bool:
             # SEM03: germina la marca del hito recién creado. No-op si la vista
@@ -3363,6 +3777,14 @@ if HAS_QT:
             items = self._milestone_items.get(key) or []
             if not items:
                 return False
+            # FIX-01: clicar un hito hacía `centerOn` y nada más — desde una vista
+            # ilegible te dejaba en la misma vista ilegible, solo que centrada.
+            # Si la escala está por debajo del suelo legible, se acerca hasta él.
+            current = float(self.transform().m11() or 0.0)
+            if 0.0 < current < CHRONO_MIN_READABLE_SCALE:
+                factor = CHRONO_MIN_READABLE_SCALE / current
+                self.scale(factor, factor)
+                self._refresh_sticky_labels()
             self.centerOn(items[0])
             if highlight:
                 self._walk_highlight_id = key
@@ -3448,6 +3870,9 @@ if HAS_QT:
             factor = zoom_step(self.transform().m11(), event.angleDelta().y() > 0)
             if factor is not None:
                 self.scale(factor, factor)
+            # FIX-01 (criterio 8): el usuario ha movido la cámara → se cancela
+            # cualquier reencuadre inicial pendiente.
+            self._pending_fit = False
             # BETA1-UX39: al cruzar un umbral de zoom (con histéresis), cambia el
             # nivel de detalle y reconstruye una vez, suavizado por un breve crossfade
             # (velo que se desvanece) para que el salto no sea brusco.
@@ -3455,7 +3880,22 @@ if HAS_QT:
             if new_lod != self._lod_level and self._project is not None:
                 self._lod_level = new_lod
                 self.set_project(self._project)
-                self.play_reveal(duration_ms=220)
+                # FIX-01 (ART-29): este camino llamaba a play_reveal SIN consultar
+                # el gate de animación (el de cambio de vista sí lo consulta). Sin
+                # bucle de eventos real el velo se queda opaco: es la causa de que
+                # la ronda 1 de beta testing perdiera TODAS las capturas de Mapa y
+                # Cronología y no pudiera ver este mismo bug.
+                reveal_ms = 220
+                ctx = getattr(self, "_ctx", None)
+                duration_fn = getattr(ctx, "animation_duration", None)
+                if callable(duration_fn):
+                    try:
+                        reveal_ms = int(duration_fn(220))
+                    except Exception:  # noqa: BLE001 — el pulido nunca rompe el zoom
+                        reveal_ms = 220
+                if reveal_ms > 0:
+                    self.play_reveal(duration_ms=reveal_ms)
+            self._refresh_sticky_labels()
             event.accept()
 
         def keyPressEvent(self, event):  # noqa: N802
@@ -3602,6 +4042,8 @@ if HAS_QT:
 
         def mousePressEvent(self, event):  # noqa: N802
             self.setFocus(Qt.FocusReason.MouseFocusReason)  # BETA1-UX41: captar teclado
+            # FIX-01 (criterio 8): tocar el lienzo cuenta como cámara de usuario.
+            self._pending_fit = False
             if event.button() == Qt.MouseButton.LeftButton and not self._space_panning:
                 # BETA1-UX39/41: clic en una fila de la leyenda → foco de anillo o
                 # acotar a la era (según el tipo de fila).
@@ -3739,6 +4181,11 @@ if HAS_QT:
                 self._handle_moved = True
                 event.accept()
                 return
+            # BETA-MULTIAGENT2-FIX-15 (G2-25): hover PASIVO (sin botón pulsado) →
+            # materializa los fantasmas del hito apuntado si el rebuild no los
+            # sembró. Con botón pulsado (paneo/arrastre) no se toca la escena.
+            if event.buttons() == Qt.MouseButton.NoButton:
+                self._update_hover_ghosts(event.position().toPoint())
             super().mouseMoveEvent(event)
 
         def mouseReleaseEvent(self, event):  # noqa: N802
@@ -3816,10 +4263,13 @@ if HAS_QT:
             super().mouseDoubleClickEvent(event)
 
         def _milestone_id_at(self, view_pos) -> str:
-            """CRON: id del hito bajo el cursor (marca, franja o título), o ''."""
-            item = self.itemAt(view_pos)
+            """CRON: id del hito bajo el cursor (marca, franja, fantasma o título),
+            o ''. BETA-MULTIAGENT2-FIX-15: incluye el fantasma —si no, mover el
+            ratón sobre uno materializado al hover se leía como "fuera del hito" y
+            los retiraba en bucle— y tolera ``None`` (sin posición = sin hito)."""
+            item = self.itemAt(view_pos) if view_pos is not None else None
             while item is not None:
-                if isinstance(item, (_MilestoneNode, _MilestoneBand)):
+                if isinstance(item, (_MilestoneNode, _MilestoneBand, _GhostNode)):
                     return str(item.milestone_id)
                 mid = item.data(_MILESTONE_ID_ROLE)
                 if mid:
@@ -3866,11 +4316,121 @@ if HAS_QT:
             self.milestoneCreateRequested.emit(year, era.name if era is not None else "")
             event.accept()
 
+        def populated_rect(self) -> "QRectF | None":
+            """BETA-MULTIAGENT2-FIX-01 (criterio 5): rect del contenido POBLADO —
+            líneas de vida + marcas de hito — en coordenadas de escena.
+
+            El `sceneRect` (y también el `itemsBoundingRect`) abarcan el EJE ENTERO
+            de eras, y una banda de era vacía es un item como cualquier otro: la
+            «Alta Edad Media» de Elvira, sin un solo hito, se llevaba 4.653 de
+            8.288 unidades (el 56 % del lienzo). Encuadrar por contenido dibujado
+            no basta; hay que encuadrar por contenido POBLADO."""
+            layout = self._layout
+            if layout is None:
+                return None
+            # Se acumulan PUNTOS, no rects: un lapso de vida o una marca de hito
+            # son segmentos degenerados (grosor cero en un eje) y `QRectF.united`
+            # los descarta por vacíos — con lo que el rect poblado salía nulo.
+            points: list = []
+            for line in layout.lifelines:
+                points.append(self._pt(line.x, line.y_birth))
+                points.append(self._pt(line.x, line.y_end))
+            for mark in layout.milestones:
+                y0 = mark.y_band
+                y1 = mark.y_end if mark.y_end is not None else y0
+                xs = list(mark.entity_xs) or [0.0, float(layout.width)]
+                for x in (min(xs), max(xs)):
+                    points.append(self._pt(x, y0))
+                    points.append(self._pt(x, y1))
+            if not points:
+                return None
+            x0 = min(p.x() for p in points)
+            x1 = max(p.x() for p in points)
+            y0 = min(p.y() for p in points)
+            y1 = max(p.y() for p in points)
+            rect = QRectF(x0, y0, max(1.0, x1 - x0), max(1.0, y1 - y0))
+            # Aire proporcional para que las cabezas y las píldoras no queden al filo.
+            pad_x = max(40.0, rect.width() * 0.06)
+            pad_y = max(40.0, rect.height() * 0.12)
+            return rect.adjusted(-pad_x, -pad_y, pad_x, pad_y)
+
+        def _fit_target_rect(self) -> "QRectF | None":
+            """Rect a encuadrar: lo poblado mientras se distinga; si no cabe al
+            suelo legible, una ventana centrada en la zona con más hitos."""
+            rect = self.populated_rect()
+            if rect is None:
+                scene_rect = self.scene().sceneRect()
+                return scene_rect if not scene_rect.isEmpty() else None
+            vp = self.viewport()
+            if vp is None or vp.width() < 8 or vp.height() < 8:
+                return rect
+            scale = min(vp.width() / rect.width(), vp.height() / rect.height())
+            if scale >= CHRONO_MIN_READABLE_SCALE:
+                return rect
+            dense = self._dense_milestone_rect(CHRONO_MIN_READABLE_SCALE)
+            return dense if dense is not None else rect
+
+        def _dense_milestone_rect(self, scale: float) -> "QRectF | None":
+            """FIX-01 (criterio 4): ventana centrada en el TRAMO TEMPORAL con más
+            hitos y anclada al INICIO del eje de anillos.
+
+            Con 320 hitos sobre una escena de 287.480 px, «ver todo» es ver nada.
+            El tramo se elige por densidad de hitos (eso es lo que el usuario
+            busca) y el eje perpendicular se ancla arriba, donde viven las
+            cabeceras de anillo y los rótulos: así la apertura SIEMPRE cae sobre
+            contenido identificable y nunca sobre pergamino vacío."""
+            layout = self._layout
+            vp = self.viewport()
+            populated = self.populated_rect()
+            if layout is None or vp is None or scale <= 0.0 or populated is None:
+                return None
+            times = [float(m.y_band) for m in layout.milestones]
+            if not times:
+                times = [float(line.y_birth) for line in layout.lifelines]
+            if not times:
+                return None
+            # Extensión de la ventana en unidades LÓGICAS (tiempo × anillo).
+            span_time = (vp.width() if self._horizontal else vp.height()) / scale
+            span_cross = (vp.height() if self._horizontal else vp.width()) / scale
+            cell = max(1.0, span_time / 2.0)
+            buckets: dict[int, list] = {}
+            for t in times:
+                buckets.setdefault(int(math.floor(t / cell)), []).append(t)
+            best = max(buckets, key=lambda k: len(buckets[k]) + len(buckets.get(k + 1, ())))
+            block = list(buckets.get(best, ())) + list(buckets.get(best + 1, ()))
+            center_time = sum(block) / len(block)
+            if self._horizontal:
+                return QRectF(
+                    center_time - span_time / 2.0, populated.top(), span_time, span_cross
+                )
+            return QRectF(
+                populated.left(), center_time - span_time / 2.0, span_cross, span_time
+            )
+
+        def _apply_fit(self) -> bool:
+            """Encuadre real, sin tocar el estado de «pendiente»."""
+            rect = self._fit_target_rect()
+            if rect is None or rect.isEmpty():
+                return False
+            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            if self.transform().m11() > 1.0:
+                self.resetTransform()
+            self._refresh_sticky_labels()
+            return True
+
         def fit_all(self) -> None:
-            if self.scene().items():
-                self.fitInView(self.scene().sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-                if self.transform().m11() > 1.0:
-                    self.resetTransform()
+            if not self.scene().items():
+                return
+            vp = self.viewport()
+            if vp is None or vp.width() < 8 or vp.height() < 8:
+                # FIX-01 (criterio 3): sin viewport de verdad no se encuadra a
+                # ciegas — se anota y se rehace en el primer show/resize útil.
+                self._pending_fit = True
+                return
+            self._apply_fit()
+            # Si la vista aún no se ha mostrado, el viewport todavía puede no ser
+            # el definitivo: queda anotado para rehacerlo (criterio 3).
+            self._pending_fit = not self.isVisible()
 
 
 __all__ = [

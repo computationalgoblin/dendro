@@ -17,6 +17,7 @@ from typing import Any
 
 from packages.application.ai_jobs import AIJobType
 from packages.application.candidate_service import CandidateService
+from packages.application.causal_links import causal_chain, children_ids, milestone_sort_key
 from packages.application.causal_milestone_service import CausalMilestoneService
 from packages.domain.chronology_walk import (
     ChronologyWalkReport,
@@ -27,6 +28,7 @@ from packages.domain.chronology_walk import (
     WalkMode,
     WalkStatus,
 )
+from packages.domain.project_chronology import format_year_with_era
 from packages.domain.result import Error, Ok, Result
 
 # Tipos de problema que DETIENEN el recorrido (problema duro del hito).
@@ -78,20 +80,12 @@ def _num_suggestions_for_depth(depth: WalkDepth) -> int:
 def _sort_key(hito: Any) -> tuple[int, float, float, str]:
     """Clave de orden cronológico (año primero), espejo de milestone_sort_value.
 
-    No se importa el widget desktop (límite de capas); se reimplementa la
-    semántica: hitos con año entero van antes y ordenados por año, con
-    ``metadata.sort_index`` como desempate; los no datados van después.
+    BETA-MULTIAGENT2-FIX-09: la implementación vive ahora en
+    ``causal_links.milestone_sort_key`` —una sola definición, compartida con la
+    cadena causal, que antes ordenaba en anchura por no tener ninguna—. Se
+    conserva el nombre porque ya es API de facto (lo importan tests del repo).
     """
-    meta = getattr(hito, "metadata", None) or {}
-    try:
-        tiebreak = float(meta.get("sort_index", 0) or 0)
-    except (TypeError, ValueError):
-        tiebreak = 0.0
-    title = str(getattr(hito, "title", ""))
-    year = getattr(hito, "year", None)
-    if isinstance(year, int) and not isinstance(year, bool):
-        return (0, float(year), tiebreak, title)
-    return (1, 0.0, tiebreak, title)
+    return milestone_sort_key(hito)
 
 
 @dataclass
@@ -141,44 +135,67 @@ class ChronologyWalkService:
         return -1
 
     # ── contexto estratificado ────────────────────────────────────────────
-    def _neighbors(self, ordered: list[Any], idx: int, window: int = 1) -> list[dict[str, Any]]:
+    def _neighbors(
+        self, ordered: list[Any], idx: int, window: int = 1, chrono: Any = None
+    ) -> list[dict[str, Any]]:
         lo = max(0, idx - window)
         hi = min(len(ordered), idx + window + 1)
-        return [self._hito_brief(h) for i, h in enumerate(ordered[lo:hi], start=lo) if i != idx]
+        return [
+            self._hito_brief(h, chrono) for i, h in enumerate(ordered[lo:hi], start=lo) if i != idx
+        ]
 
     def _arc(
-        self, ordered: list[Any], start_idx: int, current_idx: int, direction: WalkDirection
+        self,
+        ordered: list[Any],
+        start_idx: int,
+        current_idx: int,
+        direction: WalkDirection,
+        chrono: Any = None,
     ) -> list[dict[str, Any]]:
         if start_idx < 0 or current_idx < 0:
             return []
         lo, hi = sorted((start_idx, current_idx))
-        arc = [self._hito_brief(h) for h in ordered[lo : hi + 1]]
+        arc = [self._hito_brief(h, chrono) for h in ordered[lo : hi + 1]]
         if direction is WalkDirection.PAST:
             arc.reverse()
         return arc
 
     def _rings_context(self, proj: Any, hito: Any) -> dict[str, Any]:
+        chrono = getattr(proj, "project_chronology", None)
         ctx: dict[str, Any] = {
             "layer_ids": list(getattr(hito, "layer_ids", []) or []),
             "affected_layer_ids": list(getattr(hito, "affected_layer_ids", []) or []),
             "causal_parent_hito_ids": list(getattr(hito, "causal_parent_hito_ids", []) or []),
-            "causal_child_hito_ids": list(getattr(hito, "causal_child_hito_ids", []) or []),
+            # FIX-09: las consecuencias se DERIVAN de los padres. El campo espejo lo
+            # llenaba nadie, así que el prompt afirmaba que el hito no tenía
+            # consecuencias aunque tuviera quince episodios colgando — y el usuario
+            # pagaba esa llamada igual.
+            "causal_child_hito_ids": children_ids(proj, getattr(hito, "id", "")),
         }
-        if self.milestone_service is not None:
-            chain = self.milestone_service.list_causal_chain(hito.id)
-            if isinstance(chain, Ok):
-                ctx["causal_chain"] = [self._hito_brief(h) for h in chain.value]
+        # FIX-09: la cadena se calcula con la MISMA función que el servicio y la UI
+        # (`causal_links.causal_chain`), y ya no depende de que el walk tenga
+        # cableado un `milestone_service`: el contexto del paso llevaba un solo
+        # hito y la IA analizaba a ciegas.
+        chain = causal_chain(proj, getattr(hito, "id", ""))
+        if chain:
+            ctx["causal_chain"] = [self._hito_brief(h, chrono) for h in chain]
         return ctx
 
     @staticmethod
-    def _hito_brief(hito: Any) -> dict[str, Any]:
-        return {
+    def _hito_brief(hito: Any, chrono: Any = None) -> dict[str, Any]:
+        brief: dict[str, Any] = {
             "id": hito.id,
             "title": getattr(hito, "title", ""),
             "year": getattr(hito, "year", None),
             "description": getattr(hito, "description", ""),
             "affected_entity_ids": list(getattr(hito, "affected_entity_ids", []) or []),
         }
+        # BETA-MULTIAGENT-FIX-03 (G-03): puente absoluto↔era también en el walk —
+        # el análisis de paso comparaba años absolutos contra un presente regnal y
+        # bloqueaba el avance con falsos positivos de coherencia.
+        if brief["year"] is not None and chrono is not None:
+            brief["year_label"] = format_year_with_era(chrono, brief["year"])
+        return brief
 
     def _build_step_context(
         self,
@@ -205,9 +222,17 @@ class ChronologyWalkService:
                 "depth": session.depth.value,
                 "aggressiveness": session.aggressiveness.value,
                 "direction": session.direction.value,
-                "current": self._hito_brief(hito),
-                "neighbors": self._neighbors(ordered, idx),
-                "arc": self._arc(ordered, start_idx, idx, session.direction),
+                "current": self._hito_brief(hito, getattr(proj, "project_chronology", None)),
+                "neighbors": self._neighbors(
+                    ordered, idx, chrono=getattr(proj, "project_chronology", None)
+                ),
+                "arc": self._arc(
+                    ordered,
+                    start_idx,
+                    idx,
+                    session.direction,
+                    chrono=getattr(proj, "project_chronology", None),
+                ),
                 "rings": self._rings_context(proj, hito),
                 "session_state": {
                     "accumulated_summary": session.accumulated_summary,
@@ -373,8 +398,10 @@ class ChronologyWalkService:
                 "causes": self._briefs_for_ids(
                     proj.value, getattr(hito, "causal_parent_hito_ids", []) or []
                 ),
+                # FIX-09: la escena de Play enseñaba las consecuencias leyendo el
+                # campo espejo (vacío en todo proyecto no reconciliado). Se derivan.
                 "consequences": self._briefs_for_ids(
-                    proj.value, getattr(hito, "causal_child_hito_ids", []) or []
+                    proj.value, children_ids(proj.value, mid)
                 ),
                 "open_problems": [
                     dict(p) for p in session.open_problems if p.get("milestone_id") == mid
@@ -385,11 +412,12 @@ class ChronologyWalkService:
         )
 
     def _briefs_for_ids(self, proj: Any, ids: list[str]) -> list[dict[str, Any]]:
+        chrono = getattr(proj, "project_chronology", None)
         briefs: list[dict[str, Any]] = []
         for mid in ids:
             hito = self._milestone_by_id(proj, str(mid))
             if hito is not None:
-                briefs.append(self._hito_brief(hito))
+                briefs.append(self._hito_brief(hito, chrono))
         return briefs
 
     def _run_step_analysis(

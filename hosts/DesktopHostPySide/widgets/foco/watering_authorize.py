@@ -23,6 +23,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     LINE_SOFT,
     SAGE,
     SURFACE_HI,
+    TYPE_H2_PX,
 )
 
 _COST_COLORS = {"bajo": SAGE, "medio": GOLD, "alto": GOLD_DEEP}
@@ -57,7 +58,7 @@ class WateringAuthorizePanel(QFrame):
         title_label = QLabel(title, self)
         title_label.setStyleSheet(
             f"color: {INK_STRONG}; font-family: Georgia, serif; "
-            "font-size: 16px; font-weight: 700; background: transparent; border: none;"
+            f"font-size: {TYPE_H2_PX}px; font-weight: 700; background: transparent; border: none;"
         )
         title_label.setWordWrap(True)
         layout.addWidget(title_label)

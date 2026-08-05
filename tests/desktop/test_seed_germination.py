@@ -62,6 +62,8 @@ def _rehydrate_stub(layer, pending):
         # espacial de Foco es un no-op aquí.
         _foco_visible_candidate_ids=lambda: set(),
         _sync_foco_seeds=lambda: None,
+        # JARDIN-03: la rehidratación refresca el badge «💧 N»; no-op en el stub.
+        _request_thirsty_refresh=lambda: None,
     )
 
 
@@ -436,7 +438,12 @@ def test_seed_layer_anchors_above_right_cluster(qapp):
     right.move(900 - 120 - 18, 600 - 66)  # cluster abajo-derecha
     layer = SeedNotificationLayer(host)
     layer.add("c1", "Aldea")
-    stub = SimpleNamespace(_seed_notifications=layer, _float_right=right)
+    stub = SimpleNamespace(
+        _seed_notifications=layer,
+        _float_right=right,
+        # El posicionado también recoloca la leyenda del jardín; no-op en el stub.
+        _update_garden_legend_inset=lambda: None,
+    )
 
     CreationWorkspace._position_seed_layer(stub)
 

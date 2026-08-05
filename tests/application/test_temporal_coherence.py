@@ -7,11 +7,15 @@ Una clase por regla, con caso positivo (incoherente → aviso) y negativo
 from __future__ import annotations
 
 from packages.application.temporal_coherence import (
+    evaluate_bilocation,
+    evaluate_dating_sync,
     evaluate_entity,
+    evaluate_knowledge,
     evaluate_milestone,
+    evaluate_milestone_participants,
     evaluate_relation,
 )
-from packages.domain.causal_milestone import CausalMilestone
+from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneType
 from packages.domain.entity import EntityType, NarrativeEntity
 from packages.domain.era import Era
 from packages.domain.project_chronology import ProjectChronology
@@ -271,3 +275,215 @@ class TestNoFalsePositives:
         issue = evaluate_entity(e)[0].to_issue()
         assert issue.affected_entity_id == e.id
         assert issue.metadata["code"] == "T01_END_BEFORE_START"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Reglas de CONTINUIDAD — BETA-MULTIAGENT2-FIX-10 (G2-15)
+#
+# Las tres roturas de sala de guion que el modelo ya podía computar y que nadie
+# miraba, más el aviso que explica el ruido de calendario.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _hito(title, year, participantes=(), mtype=CausalMilestoneType.OTRO):
+    return CausalMilestone(
+        title=title,
+        year=year,
+        milestone_type=mtype,
+        affected_entity_ids=[e.id for e in participantes],
+    )
+
+
+def _indice(*entidades):
+    return {e.id: e for e in entidades}
+
+
+# ── Regla 10: bilocación ──────────────────────────────────────────────────
+
+
+class TestT10Bilocacion:
+    def _reparto(self):
+        nadia = _entity("Nadia Kerr", 1)
+        enfermeria = _entity("Enfermería", 0, etype=EntityType.LOCALIZACION)
+        cubierta = _entity("Cubierta 9", 0, etype=EntityType.LOCALIZACION)
+        return nadia, enfermeria, cubierta
+
+    def test_beta_m2fix10_dos_lugares_disjuntos_el_mismo_ano(self):
+        nadia, enfermeria, cubierta = self._reparto()
+        hitos = [
+            _hito("1x06 — Trigo", 44, (nadia, enfermeria)),
+            _hito("1x06b — Cubierta 9", 44, (nadia, cubierta)),
+        ]
+        issues = evaluate_bilocation(hitos, _indice(nadia, enfermeria, cubierta))
+        assert _codes(issues) == {"T10_BILOCATION"}
+        assert "Nadia Kerr" in issues[0].message and "44" in issues[0].message
+
+    def test_beta_m2fix10_mismo_lugar_no_es_bilocacion(self):
+        nadia, enfermeria, _ = self._reparto()
+        hitos = [
+            _hito("1x06 — Trigo", 44, (nadia, enfermeria)),
+            _hito("1x06b — Otra escena", 44, (nadia, enfermeria)),
+        ]
+        assert evaluate_bilocation(hitos, _indice(nadia, enfermeria)) == []
+
+    def test_beta_m2fix10_sin_lugar_declarado_se_calla(self):
+        """Silencio honesto: si el hito no dice dónde pasa, no se inventa."""
+        nadia, _, cubierta = self._reparto()
+        hitos = [
+            _hito("1x06 — Trigo", 44, (nadia,)),  # sin localización
+            _hito("1x06b — Cubierta 9", 44, (nadia, cubierta)),
+        ]
+        assert evaluate_bilocation(hitos, _indice(nadia, cubierta)) == []
+
+    def test_beta_m2fix10_anos_distintos_no_es_bilocacion(self):
+        nadia, enfermeria, cubierta = self._reparto()
+        hitos = [
+            _hito("1x06 — Trigo", 44, (nadia, enfermeria)),
+            _hito("1x07 — Cubierta 9", 45, (nadia, cubierta)),
+        ]
+        assert evaluate_bilocation(hitos, _indice(nadia, enfermeria, cubierta)) == []
+
+    def test_beta_m2fix10_una_faccion_puede_estar_en_dos_sitios(self):
+        """Una facción o una institución están repartidas por definición."""
+        gremio = _entity("Gremio de la Ceniza", 1, etype=EntityType.FACCION)
+        enfermeria = _entity("Enfermería", 0, etype=EntityType.LOCALIZACION)
+        cubierta = _entity("Cubierta 9", 0, etype=EntityType.LOCALIZACION)
+        hitos = [
+            _hito("Reunión", 44, (gremio, enfermeria)),
+            _hito("Asalto", 44, (gremio, cubierta)),
+        ]
+        assert evaluate_bilocation(hitos, _indice(gremio, enfermeria, cubierta)) == []
+
+
+# ── Regla 11: participante de un HITO fuera de su lapso ───────────────────
+
+
+class TestT11ParticipanteFueraDeVida:
+    def test_beta_m2fix10_muerto_que_reaparece(self):
+        teo = _entity("Teodor «Teo» Kerr", 1, 1)
+        hito = _hito("2x08 — Habitable", 16, (teo,))
+        issues = evaluate_milestone_participants(hito, [teo])
+        assert _codes(issues) == {"T11_PARTICIPANT_OUTSIDE_LIFE"}
+        assert issues[0].severity == "alta"
+        assert issues[0].related_ids == [teo.id]
+
+    def test_beta_m2fix10_participante_vivo_no_avisa(self):
+        nadia = _entity("Nadia Kerr", 1)
+        hito = _hito("2x08 — Habitable", 16, (nadia,))
+        assert evaluate_milestone_participants(hito, [nadia]) == []
+
+    def test_beta_m2fix10_inmortal_exento(self):
+        """BETA1-J07: un inmortal no deja de existir, así que no hay «después»."""
+        dios = _entity("El Vigía", 1, 1)
+        dios.life_span.nature = TemporalNature.INMORTAL
+        hito = _hito("Dentro de mil años", 1000, (dios,))
+        assert evaluate_milestone_participants(hito, [dios]) == []
+
+    def test_beta_m2fix10_hito_sin_ano_no_se_juzga(self):
+        teo = _entity("Teo", 1, 1)
+        assert evaluate_milestone_participants(_hito("Sin datar", None, (teo,)), [teo]) == []
+
+    def test_beta_m2fix10_manda_el_espejo_entero_no_el_lapso_rancio(self):
+        """Datación desincronizada: la Ficha dice muerte en 1, el lapso dice 0.
+
+        Con el lapso rancio saltaba un aviso que contradecía a la propia Ficha
+        (mundo de Aitor, remapeado fuera de los servicios).
+        """
+        teo = _entity("Teo", 1, 1)
+        teo.life_span.end.year = 0  # el lapso se queda atrás; el espejo manda
+        assert evaluate_milestone_participants(_hito("1x01", 1, (teo,)), [teo]) == []
+        assert _codes(evaluate_milestone_participants(_hito("2x08", 16, (teo,)), [teo])) == {
+            "T11_PARTICIPANT_OUTSIDE_LIFE"
+        }
+
+
+# ── Reglas 12 y 13: conocimiento ──────────────────────────────────────────
+
+
+def _saber(source, target, rtype, birth=None):
+    rel = NarrativeRelation(
+        source_id=source.id, target_id=target.id, relation_type=rtype
+    )
+    if birth is not None:
+        rel.set_life_span(TemporalSpan.from_years(birth, None))
+    return rel
+
+
+class TestT12T13Conocimiento:
+    def _pareja(self):
+        nadia = _entity("Nadia Kerr", 1)
+        mentira = _entity("La Tierra es habitable", -1, etype=EntityType.REGLA_DEL_MUNDO)
+        return nadia, mentira
+
+    def test_beta_m2fix10_sabe_e_ignora_a_la_vez(self):
+        nadia, mentira = self._pareja()
+        rels = [
+            _saber(nadia, mentira, RelationType.SABE),
+            _saber(nadia, mentira, RelationType.IGNORA),
+        ]
+        issues = evaluate_knowledge(rels, entities=_indice(nadia, mentira))
+        assert _codes(issues) == {"T12_KNOWS_AND_IGNORES"}
+        assert "Nadia Kerr" in issues[0].message
+
+    def test_beta_m2fix10_arco_de_personaje_no_es_contradiccion(self):
+        """Ignoraba hasta el 10 y lo sabe desde el 11: eso es la serie, no un fallo."""
+        nadia, mentira = self._pareja()
+        ignora = _saber(nadia, mentira, RelationType.IGNORA)
+        ignora.set_life_span(TemporalSpan.from_years(1, 10))
+        rels = [ignora, _saber(nadia, mentira, RelationType.SABE, birth=11)]
+        assert evaluate_knowledge(rels, entities=_indice(nadia, mentira)) == []
+
+    def test_beta_m2fix10_sospechar_no_contradice_ignorar(self):
+        nadia, mentira = self._pareja()
+        rels = [
+            _saber(nadia, mentira, RelationType.SOSPECHA),
+            _saber(nadia, mentira, RelationType.IGNORA),
+        ]
+        assert evaluate_knowledge(rels, entities=_indice(nadia, mentira)) == []
+
+    def test_beta_m2fix10_sin_datar_no_hay_t13(self):
+        """Las siete relaciones de conocimiento del mundo entregado tienen
+        `birth_year` a None: la regla se calla en vez de adivinar."""
+        nadia, mentira = self._pareja()
+        rels = [_saber(nadia, mentira, RelationType.SABE)]
+        hitos = [_hito("2x03", 11, (mentira,), mtype=CausalMilestoneType.REVELACION)]
+        assert "T13_KNOWS_BEFORE_REVELATION" not in _codes(
+            evaluate_knowledge(rels, entities=_indice(nadia, mentira), milestones=hitos)
+        )
+
+    def test_beta_m2fix10_sabe_antes_de_que_se_revele(self):
+        nadia, mentira = self._pareja()
+        rels = [_saber(nadia, mentira, RelationType.SABE, birth=5)]
+        hitos = [
+            _hito("2x03 — Lo que dijo el Meridiano", 11, (mentira,),
+                  mtype=CausalMilestoneType.REVELACION)
+        ]
+        issues = evaluate_knowledge(rels, entities=_indice(nadia, mentira), milestones=hitos)
+        assert _codes(issues) == {"T13_KNOWS_BEFORE_REVELATION"}
+        assert "2x03" in issues[0].message
+
+    def test_beta_m2fix10_saber_despues_de_la_revelacion_es_normal(self):
+        nadia, mentira = self._pareja()
+        rels = [_saber(nadia, mentira, RelationType.SABE, birth=12)]
+        hitos = [_hito("2x03", 11, (mentira,), mtype=CausalMilestoneType.REVELACION)]
+        assert evaluate_knowledge(rels, entities=_indice(nadia, mentira), milestones=hitos) == []
+
+
+# ── Regla 14: datación desincronizada ─────────────────────────────────────
+
+
+class TestT14DatacionDesincronizada:
+    def test_beta_m2fix10_espejo_y_lapso_discrepan(self):
+        nadia = _entity("Nadia Kerr", 1)
+        nadia.life_span.start.year = -9855  # escala vieja: el mundo de Aitor
+        issues = evaluate_dating_sync(nadia)
+        assert _codes(issues) == {"T14_DATING_DESYNC"}
+        assert "-9855" in issues[0].message
+
+    def test_beta_m2fix10_sincronizada_no_avisa(self):
+        assert evaluate_dating_sync(_entity("Nadia", 1, 8)) == []
+
+    def test_beta_m2fix10_sin_lapso_no_puede_discrepar(self):
+        e = NarrativeEntity(name="Sin lapso")
+        e.birth_year = 3
+        assert evaluate_dating_sync(e) == []

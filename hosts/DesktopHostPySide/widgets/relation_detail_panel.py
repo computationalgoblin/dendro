@@ -55,6 +55,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     human_ref,
 )
 from hosts.DesktopHostPySide.widgets.related_milestones_panel import RelatedMilestonesPanel
+from hosts.DesktopHostPySide.widgets.rigor_section import RigorSection
 from packages.domain.entity_taxonomy import OFFERED_RELATION_TYPES
 from packages.domain.relation import RelationType
 from packages.domain.result import Error
@@ -565,6 +566,18 @@ class RelationDetailPanel(QWidget):
             self.more_section.body_layout.addWidget(self.related_milestones_panel)
         root.addWidget(self.more_section)
 
+        # BETA-MULTIAGENT2-FIX-11 (fase B1): certeza de la relación. El campo
+        # existía en el dominio y el SERVICIO lo tiraba en silencio (ya no). Aquí
+        # solo la certeza: el intervalo temporal de la relación se sigue editando
+        # arriba en años enteros, que son su espejo autoritativo.
+        self.rigor = RigorSection(
+            con_datacion=False,
+            titulo="Rigor: certeza",
+            expandida=bool(getattr(self.ctx, "advanced_mode", False)),
+        )
+        self.rigor.changed.connect(self._schedule_autosave)
+        root.addWidget(self.rigor)
+
         # BETA2-UX-03: caja «Datos técnicos» (sin montar, dato-no-UI) eliminada.
         # BETA1-F05: datos técnicos FUERA del producto (widget sin montar;
         # _refresh los sigue escribiendo sin coste visual).
@@ -945,6 +958,8 @@ class RelationDetailPanel(QWidget):
             dy = getattr(relation, "death_year", None)
             self.birth_year_edit.setText("" if by is None else str(by))
             self.death_year_edit.setText("" if dy is None else str(dy))
+            # FIX-11 (B1): certeza de la relación.
+            self.rigor.load(certeza=getattr(relation, "certainty_level", None))
             canon_val = _enum_value(getattr(relation, "canon_state", None), "")
             # BETA2-FOCO: una relación fantasma no se des-fantasma por autosave.
             # BETA2-FOCO-16 (canon total): el canon ya no se edita en el panel.
@@ -1085,6 +1100,8 @@ class RelationDetailPanel(QWidget):
             "visibility_state": _enum_value(getattr(self._relation, "visibility_state", None), "visible_usuario"),
             "custom_metadata": meta,
             "custom_relation_type_id": custom_relation_type_id,
+            # FIX-11 (B1): el servicio ya no lo tira en silencio.
+            "certainty_level": self.rigor.certeza(),
         }
         if getattr(self, "_is_ghost_relation", False):
             # BETA2-FOCO: el canon fantasma solo cambia en la conversión explícita.

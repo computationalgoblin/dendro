@@ -30,6 +30,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QFontMetricsF,
     QIntValidator,
     QLinearGradient,
     QPainter,
@@ -71,7 +72,9 @@ from hosts.DesktopHostPySide.widgets.chrono_canvas import effective_eras, explic
 from hosts.DesktopHostPySide.widgets.gpu_viewport import install_gpu_viewport
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_alive
 from hosts.DesktopHostPySide.widgets import icons, portrait_cache
+from hosts.DesktopHostPySide.widgets.field_help import glossary
 from hosts.DesktopHostPySide.widgets.design_system import (
+    AVISO_DESHACER_BORRADO,
     ENTITY_KIND_PALETTE,
     RELATION_KIND_PALETTE,
     TICK_INTERVAL,
@@ -81,8 +84,11 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     EARTH,
     EARTH_GREY,
     EARTH_GREY_TINT,
+    EARTH_INK,
+    EARTH_INK_SOFT,
     EARTH_TINT,
     GOLD,
+    LEAF_EDGE,
     GOLD_DEEP,
     GOLD_SOFT,
     GOLD_TINT,
@@ -96,6 +102,15 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SURFACE_HI,
 )
 from packages.application.portrait_crop import parse_crop
+from packages.application.text_normalization import (
+    PUNTUACION_ALIAS,
+    PUNTUACION_CUERPO,
+    PUNTUACION_SUBTITULO,
+    coincide_con_terminos,
+    normalizar_para_busqueda,
+    puntuar_coincidencia,
+    terminos_de_busqueda,
+)
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.world_layer import default_world_layers
 from packages.ui.graph_physics import (
@@ -150,7 +165,36 @@ _NODE_FULL_LOD = float(os.environ.get("NARRATIVE_NODE_FULL_LOD", "") or 0.55)
 # (se ve bien de lejos a una fracción del coste). El texto aparece con el detalle
 # completo. Todos los valores son ajustables por entorno.
 _NODE_MIN_LOD = float(os.environ.get("NARRATIVE_NODE_MIN_LOD", "") or 0.12)
-_LABEL_MIN_LOD = _NODE_FULL_LOD
+# BETA-MULTIAGENT2-FIX-01: la etiqueta YA NO se ata al LOD del nodo. Atarla a
+# _NODE_FULL_LOD (0.55) significaba que al abrir el Mapa (escala de encuadre
+# 0,07–0,18) NINGÚN nombre se pintaba: "un campo de puntos anónimos". El umbral
+# es ahora independiente y muy bajo, porque la legibilidad no la garantiza el
+# umbral sino el PISO DE TAMAÑO EN PANTALLA (_LABEL_MIN_PX): el título compensa
+# la escala de la vista, así que su LOD efectivo ya incorpora ese piso.
+_LABEL_MIN_LOD = float(os.environ.get("NARRATIVE_LABEL_MIN_LOD", "") or 0.14)
+
+# BETA-MULTIAGENT2-FIX-01: piso de altura de glifo EN PANTALLA (px de
+# dispositivo) para el nombre de una entidad. Es el piso que declara el propio
+# design system. Bajar el umbral de LOD a secas NO bastaba: el título es un item
+# de escena con fuente de 9 pt que a escala 0,127 se rasteriza a 1–2 px. El
+# título se ESCALA en sentido inverso a la vista hasta cubrir este piso.
+_LABEL_MIN_PX = 11.0
+# Tope de esa compensación: sin él, a escala 0,003 (mundos de 800 entidades) el
+# nombre mediría 300 veces el nodo. Se elige para que el piso se cumpla ENTERO
+# hasta el suelo de escala del encuadre (_MIN_READABLE_SCALE): 11 px con una
+# fuente natural de ~12 px pide un factor de 7,7 a escala 0,12.
+_LABEL_MAX_UPSCALE = 10.0
+# Celda de DENSIDAD en píxeles de PANTALLA: un nombre por celda. No es cuadrada
+# porque un nombre es ancho y bajo; con una celda cuadrada 800 nombres a tamaño
+# legible seguían siendo una mancha. No es un umbral global de zoom: los nombres
+# se pintan SIEMPRE, y solo se descarta el vecino que se pisaría.
+_LABEL_DENSITY_W_PX = 104.0
+_LABEL_DENSITY_H_PX = 26.0
+# Ancho máximo del nombre de una HOJA. La hoja mide 116 px de diámetro y el
+# nombre siempre ha desbordado un poco el disco (así se lee); este tope conserva
+# ese comportamiento (equivale al viejo corte de 20 caracteres) mientras que las
+# RAMAS, que sí son anchas, pasan a elidirse por su ancho real (ART-04).
+_LEAF_LABEL_MAX_PX = 210.0
 
 # BETA1-L02: navegación / zoom. Paso por gesto de rueda y techo de acercamiento.
 # El SUELO de alejamiento es dinámico (ver _min_zoom): para grafos pequeños es
@@ -160,16 +204,51 @@ _ZOOM_STEP = 1.08
 _ZOOM_MAX = 3.0
 _ZOOM_OUT_FLOOR = 0.22
 
+# BETA-MULTIAGENT2-FIX-01 (criterio 4): SUELO de escala del encuadre inicial.
+# `fitInView` metía la escena entera en el viewport cayera lo que cayera (0,0029
+# con 800 entidades): un amonites fósil vacío. Por debajo de esta escala el nodo
+# ya no es un nodo sino un punto liso (es justo _NODE_MIN_LOD), así que en vez de
+# encuadrarlo todo se encuadra una PORCIÓN centrada en el contenido más denso.
+_MIN_READABLE_SCALE = _NODE_MIN_LOD
+
 
 class _LodTextItem(QGraphicsSimpleTextItem):
     """BETA1-L01: etiqueta que NO se pinta con zoom bajo. Rasterizar cientos de
     etiquetas ilegibles domina el coste al ver el grafo entero; de cerca (pocos
-    nodos visibles) se pinta con normalidad."""
+    nodos visibles) se pinta con normalidad.
+
+    BETA-MULTIAGENT2-FIX-01: el umbral ya no es el LOD del nodo. Como el título
+    de entidad COMPENSA la escala de la vista (`setScale`), su nivel de detalle
+    efectivo incluye ese factor >= 1 — de modo que el nombre sobrevive a escalas
+    en las que una etiqueta sin compensar (arista, anillo) ya no se pinta. Esa es
+    exactamente la prioridad de tinta que pide el criterio 7: si no se lee el
+    nombre de la cosa, tampoco se leen los nombres de sus relaciones."""
 
     def paint(self, painter, option, widget=None):  # noqa: N802 (Qt signature)
         if option.levelOfDetailFromTransform(painter.worldTransform()) < _LABEL_MIN_LOD:
             return
         super().paint(painter, option, widget)
+
+
+def label_paints_at(view_scale: float, item_scale: float = 1.0) -> bool:
+    """BETA-MULTIAGENT2-FIX-01: ¿se pinta una `_LodTextItem` a esta escala?
+
+    Pura y sin Qt para poder fijar en un test la PRIORIDAD DE TINTA (criterio 7)
+    sin montar una escena: el LOD que ve `paint` es escala_de_vista × escala_del
+    _item, así que una etiqueta sin compensar (factor <= 1) nunca sobrevive a una
+    compensada (factor >= 1)."""
+    return float(view_scale) * float(item_scale) >= _LABEL_MIN_LOD
+
+
+def _screen_floor_scale(natural_px: float, view_scale: float) -> float:
+    """Factor de escala del item para que `natural_px` mida al menos
+    `_LABEL_MIN_PX` en PANTALLA, acotado por `_LABEL_MAX_UPSCALE`."""
+    natural_px = float(natural_px)
+    view_scale = float(view_scale)
+    if natural_px <= 0.0 or view_scale <= 0.0:
+        return 1.0
+    needed = _LABEL_MIN_PX / (natural_px * view_scale)
+    return max(1.0, min(_LABEL_MAX_UPSCALE, needed))
 
 
 def _paint_inner_halo(painter: QPainter, path: QPainterPath):
@@ -403,11 +482,48 @@ class GraphSearchResult:
     parent_tree_name: str = ""
     parent_tree_id: str = ""
     is_inside_collapsed_tree: bool = False
+    # BETA-MULTIAGENT2-FIX-04: POR QUÉ ha coincidido este resultado. Antes se
+    # calculaba al construir el pajar y se tiraba, así que quien ordenaba
+    # (`CreationWorkspace._rank`) solo tenía el texto del título y acababa
+    # desempatando por `len(titulo)`: las relaciones de título corto expulsaban
+    # a la entidad de su propia búsqueda. La escala está en
+    # `packages/application/text_normalization.py`.
+    match_score: int = 0
+    match_field: str = ""
 
     def display_lines(self) -> tuple[str, str, str]:
         where = f"Dentro de {self.parent_tree_name}" if self.parent_tree_name else self.category
         details = " · ".join(part for part in [self.type_label, where] if part)
         return (self.title, details, self.summary)
+
+
+#: BETA-MULTIAGENT2-FIX-04 — orden ENTRE CLASES de resultado, decidido y escrito
+#: aquí para que no se redescubra en el siguiente beta: **entidades y ramas >
+#: hitos > relaciones**. Una relación nunca puede desplazar a una ficha. Es la
+#: opción predecible: el usuario que teclea «cuervo» busca la posada, no las
+#: ocho aristas que salen de ella. La alternativa (ordenar solo por puntuación y
+#: usar la clase como desempate) dejaría a un hito muy relevante por delante de
+#: una entidad que solo coincide en el cuerpo, y se descartó por impredecible.
+SEARCH_CLASS_ORDER: dict[str, int] = {"entity": 0, "tree": 0, "milestone": 1, "relation": 2}
+
+#: Cuántos resultados MATERIALIZA `GraphCanvasView.search` como máximo. El total
+#: real de coincidencias viaja aparte en `GraphSearchResults.total`: el recorte
+#: acota el coste, no la verdad.
+SEARCH_MAX_RESULTS = 40
+
+
+class GraphSearchResults(list):
+    """Resultados del lienzo + el **total real** de coincidencias antes del recorte.
+
+    BETA-MULTIAGENT2-FIX-04: `search` devolvía `results[:40]` y nadie sabía si
+    había 40 o 538 — la tabla de acentos del beta llegó a leer ese tope como si
+    fuera un recuento. Sigue siendo una lista (todos los consumidores previos
+    funcionan igual) que además sabe cuántas coincidencias hubo de verdad.
+    """
+
+    def __init__(self, items=(), total: int | None = None):
+        super().__init__(items)
+        self.total: int = len(self) if total is None else int(total)
 
 
 def _enum_value(value: Any, default: str = "") -> str:
@@ -585,6 +701,17 @@ def _fit_text(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
 
 
+def _fit_text_px(text: str, font: QFont, max_px: float) -> str:
+    """BETA-MULTIAGENT2-FIX-01 (ART-04): elisión por ANCHO REAL, no por número de
+    caracteres. `_fit_text` cortaba a 20 caracteres con `len()`, así que en un
+    contenedor ancho el título seguía siendo «Ilva Cinabrio, la A…» aunque
+    sobrase sitio, y en uno estrecho se salía igual."""
+    text = (text or "").replace("\n", " ").strip()
+    if not text or max_px <= 0:
+        return text
+    return QFontMetricsF(font).elidedText(text, Qt.TextElideMode.ElideRight, float(max_px))
+
+
 # Semillas (SEM02): margen extra del boundingRect para que el glow de germinación
 # se repinte sin dejar artefactos, y duración de la animación de bloom.
 _BLOOM_MARGIN = 30.0
@@ -718,23 +845,34 @@ class GraphNodeItem(QGraphicsEllipseItem):
         self.setPen(self._normal_pen)
 
         # Name — centred, fitted to node width
-        title = _LodTextItem(_fit_text(node.name, 20), self)
-        title.setBrush(QBrush(QColor("#111827")))
+        # FIX-01: elisión por ANCHO disponible dentro de la hoja (antes 20 chars).
+        self._label_max_px = max(_LEAF_LABEL_MAX_PX, radius * 2.0 - 14.0)
         font = QFont()
         font.setBold(True)
         font.setPointSize(9)
+        title = _LodTextItem(_fit_text_px(node.name, font, self._label_max_px), self)
+        title.setBrush(QBrush(QColor("#111827")))
         title.setFont(font)
         title_rect = title.boundingRect()
         title.setPos(-title_rect.width() / 2, -title_rect.height() / 2 - 6)
         self._title_item = title  # BETA1-L01: ref para update-in-place
 
         # Type — small label below name
-        type_label = _LodTextItem(_fit_text(enum_human(node.kind), 18), self)
+        type_font = QFont("", 7)
+        type_label = _LodTextItem(
+            _fit_text_px(enum_human(node.kind), type_font, self._label_max_px), self
+        )
         type_label.setBrush(QBrush(QColor("#4B5563")))
-        type_label.setFont(QFont("", 7))
+        type_label.setFont(type_font)
         type_rect = type_label.boundingRect()
         type_label.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
         self._type_item = type_label  # BETA1-L01: ref para update-in-place
+        # FIX-01: alturas NATURALES (a escala 1) del texto — base del piso de
+        # tamaño en pantalla. Se guardan porque el item se reescala y su
+        # boundingRect deja de servir como referencia estable.
+        self._title_natural_h = float(title_rect.height())
+        self._type_natural_h = float(type_rect.height())
+        self._label_scale = 1.0
 
         # BETA2-JARDIN-01: tinte del ciclo de riego ("" = normal). El punto de
         # estado de canon (UX28, siempre invisible) se retiró definitivamente.
@@ -788,17 +926,61 @@ class GraphNodeItem(QGraphicsEllipseItem):
 
     def set_watering_tint(self, kind: str) -> None:
         """BETA2-JARDIN-01: tinte del ciclo de riego. "" restaura el aspecto
-        normal; "sedienta" = marrón tierra; "secada" = gris-tierra."""
+        normal; "sedienta" = marrón tierra; "secada" = carbón-tierra.
+
+        FIX-01: los tintes son ahora rellenos OSCUROS (única forma de alcanzar
+        3:1 sobre pergamino), así que la tinta del nombre y del tipo se INVIERTE
+        a clara — si no, el arreglo de contraste del jardín se comería el
+        arreglo de legibilidad del nombre."""
         kind = str(kind or "")
         if kind == self._watering_tint:
             return
         self._watering_tint = kind
         if kind:
             self.setBrush(QBrush(QColor(_WATERING_TINT_FILL[kind])))
+            self._title_item.setBrush(QBrush(QColor(EARTH_INK)))
+            self._type_item.setBrush(QBrush(QColor(EARTH_INK_SOFT)))
         else:
             self.setBrush(QBrush(QColor(255, 255, 253, 250)))
+            self._title_item.setBrush(QBrush(QColor("#111827")))
+            self._type_item.setBrush(QBrush(QColor("#4B5563")))
         _set_node_watering_glyph(self, kind)  # WS-M: canal daltónico
         self.update()
+
+    def apply_label_screen_floor(self, view_scale: float) -> float:
+        """FIX-01 (criterio 1): reescala el nombre (y el tipo) en sentido inverso
+        a la vista para que NUNCA baje de `_LABEL_MIN_PX` en pantalla.
+
+        Devuelve el factor aplicado. Reposiciona el texto para que siga centrado
+        en la hoja (el escalado de Qt es respecto al origen del item)."""
+        node_scale = float(self.scale() or 1.0)
+        factor = _screen_floor_scale(self._title_natural_h, view_scale * node_scale)
+        if abs(factor - self._label_scale) > 1e-4:
+            self._label_scale = factor
+            self._title_item.setScale(factor)
+            self._type_item.setScale(factor)
+        title_w = self._title_item.boundingRect().width() * factor
+        title_h = self._title_natural_h * factor
+        self._title_item.setPos(-title_w / 2.0, -title_h / 2.0 - 6.0 * factor)
+        type_w = self._type_item.boundingRect().width() * factor
+        self._type_item.setPos(-type_w / 2.0, title_h / 2.0 - 4.0 * factor)
+        return factor
+
+    def set_label_visible(self, visible: bool) -> None:
+        """FIX-01: descarte por DENSIDAD — a escalas bajas dos nombres a tamaño
+        legible se pisan; el canvas apaga el vecino en vez de subir un umbral
+        global de zoom (que era lo que dejaba el Mapa anónimo)."""
+        visible = bool(visible)
+        if self._title_item.isVisible() != visible:
+            self._title_item.setVisible(visible)
+        if self._type_item.isVisible() != visible:
+            self._type_item.setVisible(visible)
+
+    def label_screen_height(self, view_scale: float) -> float:
+        """Altura EN PANTALLA (px) del nombre a la escala de vista dada."""
+        return self._title_natural_h * self._label_scale * float(self.scale() or 1.0) * float(
+            view_scale
+        )
 
     def set_watering_pulse(self, active: bool) -> None:
         """UI2-05: anillo savia mientras ESTA entidad se riega (lote en curso).
@@ -829,14 +1011,22 @@ class GraphNodeItem(QGraphicsEllipseItem):
         tipo (etiqueta + halo) y estado 'propuesto'. NO toca posición ni física.
         El llamante garantiza que sigue siendo una hoja (no contenedor)."""
         self.node = node
-        # Nombre (recentrado)
-        self._title_item.setText(_fit_text(node.name, 20))
+        # Nombre (recentrado). FIX-01: elisión por ancho real de la hoja.
+        self._title_item.setText(
+            _fit_text_px(node.name, self._title_item.font(), self._label_max_px)
+        )
         title_rect = self._title_item.boundingRect()
+        self._title_natural_h = float(title_rect.height())
         self._title_item.setPos(-title_rect.width() / 2, -title_rect.height() / 2 - 6)
         # Tipo (recentrado bajo el nombre)
-        self._type_item.setText(_fit_text(enum_human(node.kind), 18))
+        self._type_item.setText(
+            _fit_text_px(enum_human(node.kind), self._type_item.font(), self._label_max_px)
+        )
         type_rect = self._type_item.boundingRect()
+        self._type_natural_h = float(type_rect.height())
         self._type_item.setPos(-type_rect.width() / 2, title_rect.height() / 2 - 4)
+        # FIX-01: el texto cambió de tamaño natural → recolocar con el piso vivo.
+        self._label_scale = 1.0
         # Halo del tipo
         self._halo_color = QColor((node.color or _NODE_COLORS.get(node.kind.lower(), "#9A8E72")))
         # Trazo 'propuesto' (rastro discontinuo ámbar) vs canónico
@@ -901,7 +1091,10 @@ class GraphNodeItem(QGraphicsEllipseItem):
             if halo is not None and lod < _NODE_MIN_LOD:
                 painter.setPen(QPen(halo, 1.0))  # borde fino para definir el punto
             else:
-                painter.setPen(QPen(Qt.PenStyle.NoPen))
+                # FIX-01 (criterio 6): la hoja SANA es un disco casi blanco y su
+                # relleno no puede llegar a 3:1 sobre pergamino (techo 1,73:1);
+                # quien porta el contraste del componente es su PERÍMETRO.
+                painter.setPen(QPen(QColor(LEAF_EDGE), 1.4) if not tint else QPen(Qt.PenStyle.NoPen))
             painter.drawEllipse(self.rect())
             return
         # BETA1-F05: pintura propia — SIN marquee negro de Qt (causa de las
@@ -930,8 +1123,13 @@ class GraphNodeItem(QGraphicsEllipseItem):
         painter.setBrush(self.brush())
         if self.node.proposed:
             painter.setPen(self._normal_pen)  # propuesto: rastro discontinuo
+        elif tint:
+            painter.setPen(QPen(Qt.PenStyle.NoPen))  # el aro de tierra llega abajo
         else:
-            painter.setPen(QPen(Qt.PenStyle.NoPen))
+            # FIX-01 (criterio 6): perímetro de la hoja sana con 3,42:1 contra la
+            # parada más oscura de la viñeta. Antes el disco blanco se disolvía
+            # en el pergamino («un campo de puntos anónimos»).
+            painter.setPen(QPen(QColor(LEAF_EDGE), 1.4))
         painter.drawPath(ellipse)
         # BETA2-IMG: retrato de la entidad recortado por la hoja, con un
         # perímetro blanco sutil. Solo en el tier de LOD completo (arriba se
@@ -1103,11 +1301,17 @@ class GraphTreeItem(QGraphicsRectItem):
         self._header_item.setPen(QPen(Qt.PenStyle.NoPen))
 
         # Title in header
-        self._title_item = QGraphicsSimpleTextItem(_fit_text(node.name, 26), self)
-        self._title_item.setBrush(QBrush(QColor("#2D2A1E")))
+        # FIX-01 (ART-04): la RAMA es ancha (hasta 800 px) y su nombre se cortaba
+        # igualmente a 26 caracteres con `len()`, así que sobraba sitio y seguía
+        # apareciendo «Ilva Cinabrio, la A…». Se elide por el ancho REAL de la caja.
         title_font = QFont()
         title_font.setBold(True)
         title_font.setPointSize(10)
+        self._title_max_px = max(80.0, float(width) - 56.0)
+        self._title_item = QGraphicsSimpleTextItem(
+            _fit_text_px(node.name, title_font, self._title_max_px), self
+        )
+        self._title_item.setBrush(QBrush(QColor("#2D2A1E")))
         self._title_item.setFont(title_font)
         self._reposition_title()
 
@@ -1169,12 +1373,30 @@ class GraphTreeItem(QGraphicsRectItem):
     def _reposition_title(self):
         # BETA1-F05: el nombre vive DENTRO de la cápsula, centrado en su
         # franja superior (no en una barra de cabecera).
+        # FIX-01: el título puede llevar un factor de escala (piso de tamaño en
+        # pantalla), así que se centra por su tamaño VISUAL, no por el natural.
+        factor = float(self._title_item.scale() or 1.0)
         tr = self._title_item.boundingRect()
         rect = self.rect()
         self._title_item.setPos(
-            rect.left() + (rect.width() - tr.width()) / 2,
-            rect.top() + max(8.0, (_CONTAINER_HEADER_HEIGHT - tr.height()) / 2),
+            rect.left() + (rect.width() - tr.width() * factor) / 2,
+            rect.top() + max(8.0, (_CONTAINER_HEADER_HEIGHT - tr.height() * factor) / 2),
         )
+
+    def apply_label_screen_floor(self, view_scale: float) -> float:
+        """FIX-01 (criterio 1): mismo piso de tamaño en pantalla que la hoja. Una
+        rama sin nombre legible es tan anónima como una entidad sin nombre."""
+        natural_h = float(self._title_item.boundingRect().height()) or 1.0
+        factor = _screen_floor_scale(natural_h, float(view_scale) * float(self.scale() or 1.0))
+        if abs(factor - float(self._title_item.scale() or 1.0)) > 1e-4:
+            self._title_item.setScale(factor)
+        self._reposition_title()
+        return factor
+
+    def set_label_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        if self._title_item.isVisible() != visible:
+            self._title_item.setVisible(visible)
 
     def _reposition_type_badge(self):
         br = self._type_badge.boundingRect()
@@ -1712,7 +1934,12 @@ class GraphEdgeItem(QGraphicsPathItem):
         self._color = color
 
         # Label
-        self.label_item = QGraphicsSimpleTextItem(_fit_text(edge.label, 28), self)
+        # FIX-01 (criterio 7 · ART-03): la etiqueta de ARISTA era un texto pelado
+        # SIN gate de LOD, así que se pintaba siempre — mientras el NOMBRE de la
+        # entidad estaba gateado. Se conservaban los nombres de las relaciones
+        # entre cosas sin nombre. Ahora es `_LodTextItem` y, al no compensar la
+        # escala (0.86 < 1), muere ANTES que el nombre.
+        self.label_item = _LodTextItem(_fit_text(edge.label, 28), self)
         self.label_item.setBrush(QBrush(QColor("#6B7280")))
         self.label_item.setScale(0.86)
 
@@ -2229,6 +2456,24 @@ class GraphCanvasView(QGraphicsView):
         from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverPreviewController
 
         self._hover_preview = HoverPreviewController(self, self._hover_content_at)
+        # BETA-MULTIAGENT2-FIX-01: encuadre inicial DIFERIDO. El primer encuadre
+        # se calculaba durante la construcción, con la vista aún oculta (la
+        # Creación arranca siempre en Foco) y un viewport sin dimensionar, y
+        # nadie lo recalculaba al mostrarla ni al redimensionar. Cuando hay
+        # encuadre pendiente, el primer show/resize con viewport útil lo rehace
+        # UNA sola vez; cualquier cámara del usuario lo cancela.
+        self._pending_initial_fit: float | None = None
+        # Margen del último encuadre construido. «Ver todo» reutiliza EXACTAMENTE
+        # el mismo, para que la escala con la que la vista aparece y la de un
+        # `fit_all()` explícito coincidan (criterio 3): antes el layout
+        # concéntrico encuadraba con 160 px de aire y `fit_all` con 140.
+        self._fit_margin = 140.0
+        # Última escala con la que se aplicó el piso de tamaño de las etiquetas.
+        self._label_scale_applied: float | None = None
+        self._label_layout_key: tuple | None = None
+        # True cuando el encuadre no cupo al suelo legible y se acotó a una
+        # porción del contenido (lo lee el widget para avisar al usuario).
+        self._fit_clamped = False
         self._nodes: dict[str, GraphNodeItem] = {}
         # BETA2-JARDIN-01: estado de riego SIEMPRE visible (pintado a mano).
         self._garden_status_provider = None
@@ -2383,6 +2628,14 @@ class GraphCanvasView(QGraphicsView):
     # viewport GPU pinta por encima de cualquier overlay hermano. Un velo de pergamino
     # se desvanece sobre el lienzo al revelar la vista. Fail-soft.
     def play_reveal(self, *, duration_ms: int = 220) -> None:
+        # BETA-MULTIAGENT2-FIX-01 (ART-29): SIN movimiento no hay velo, punto.
+        # `_reveal_alpha` arranca en 1.0 (opaco) y solo baja por QTimer; sin bucle
+        # de eventos real la vista se queda bajo una sábana opaca. Es la causa de
+        # que la ronda 1 de beta testing perdiera TODAS las capturas de Mapa y
+        # Cronología — y de que este bug tardara una ronda entera en verse.
+        if not MOTION_ENABLED:
+            self._reveal_alpha = 0.0
+            return
         try:
             self._reveal_alpha = 1.0
             self._reveal_step = TICK_INTERVAL / max(1, int(duration_ms))
@@ -2702,10 +2955,44 @@ class GraphCanvasView(QGraphicsView):
     def showEvent(self, event):  # noqa: N802 (Qt API)
         super().showEvent(event)
         self._apply_atmosphere_budget()
+        self._run_pending_initial_fit()
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        # FIX-01 (criterio 3): al mostrarse, la vista pasa de 100x30 a su tamaño
+        # real. Si el encuadre inicial se calculó con el viewport falso, este es
+        # el momento de rehacerlo (una sola vez, y solo si el usuario no ha
+        # movido la cámara).
+        self._run_pending_initial_fit()
+        self._refresh_label_legibility(force=True)
 
     def hideEvent(self, event):  # noqa: N802 (Qt API)
         self._atmosphere.stop()
         super().hideEvent(event)
+
+    def _viewport_is_usable(self) -> bool:
+        vp = self.viewport()
+        return vp is not None and vp.width() >= 8 and vp.height() >= 8
+
+    def _run_pending_initial_fit(self) -> None:
+        """FIX-01 (criterio 3): reencuadra MIENTRAS no haya cámara de usuario.
+
+        No basta con hacerlo una única vez en el primer `showEvent`: al mostrarse,
+        el viewport todavía puede ser el falso (100x30) y solo alcanza su tamaño
+        real en el `resizeEvent` siguiente — consumir el pendiente en el primer
+        show reproducía el bug original con otro disfraz. El pendiente se cancela
+        en cuanto el usuario toca la cámara (rueda, zoom, clic, «ver todo»), así
+        que el criterio 8 queda intacto."""
+        if self._pending_initial_fit is None or not self._viewport_is_usable():
+            return
+        rect = self._fit_target_rect(self._pending_initial_fit)
+        if rect is not None:
+            self._animate_camera_fit(rect)
+
+    def cancel_pending_initial_fit(self) -> None:
+        """La cámara del usuario manda (criterio 8): en cuanto toca el zoom o el
+        encuadre, el reencuadre diferido se descarta."""
+        self._pending_initial_fit = None
 
     def _apply_atmosphere_budget(self) -> None:
         """BETA1-L01: pausa la brisa de fondo en grafos grandes. Su timer fuerza
@@ -2766,7 +3053,8 @@ class GraphCanvasView(QGraphicsView):
     def _fit_scale(self) -> float:
         """Escala que enmarca TODO el contenido en el viewport (con un poco de
         aire). Base del suelo de zoom-out adaptativo y de 'ver todo'."""
-        rect = self.scene_obj.itemsBoundingRect()
+        # FIX-01: contenido, no `itemsBoundingRect` — las etiquetas se reescalan.
+        rect = self._content_bounding_rect()
         vp = self.viewport()
         if rect.isEmpty() or vp.width() < 8 or vp.height() < 8:
             return _ZOOM_OUT_FLOOR
@@ -2778,6 +3066,174 @@ class GraphCanvasView(QGraphicsView):
         """Suelo de alejamiento: nunca más restrictivo que el histórico (0.22),
         pero en grafos enormes baja hasta poder enmarcar el conjunto."""
         return min(_ZOOM_OUT_FLOOR, self._fit_scale() * 0.9)
+
+    # ── FIX-01: encuadre con SUELO legible y caída a contenido denso ─────────
+
+    def _node_items(self) -> list:
+        """Items que representan CONTENIDO real (hojas y ramas), sin anillos ni
+        adornos: el encuadre debe centrarse en ellos, nunca en un hueco."""
+        return list(self._nodes.values()) + list(self._trees.values())
+
+    def _nodes_bounding_rect(self) -> QRectF:
+        rect = QRectF()
+        for item in self._node_items():
+            rect = item.sceneBoundingRect() if rect.isNull() else rect.united(
+                item.sceneBoundingRect()
+            )
+        return rect
+
+    def _content_bounding_rect(self) -> QRectF:
+        """Caja del CONTENIDO (hojas, ramas y anillos), sin las etiquetas.
+
+        No puede usarse `scene.itemsBoundingRect()`: incluye los items de texto,
+        y desde FIX-01 el nombre se REESCALA para cumplir su piso en pantalla —
+        con lo que el encuadre alimentaría al piso y el piso al encuadre (medido:
+        6 % de deriva entre el encuadre de apertura y un `fit_all` posterior).
+        `sceneBoundingRect` de cada item excluye a sus hijos, así que esta unión
+        es geometría de contenido puro."""
+        rect = self._nodes_bounding_rect()
+        for ring_item in self._ring_items.values():
+            ring_rect = ring_item.sceneBoundingRect()
+            rect = ring_rect if rect.isNull() else rect.united(ring_rect)
+        if rect.isNull() or rect.isEmpty():
+            return self.scene_obj.itemsBoundingRect()
+        return rect
+
+    def _fit_viewport_size(self) -> tuple[float, float]:
+        """Tamaño ÚTIL del viewport para encuadrar. `QGraphicsView.fitInView`
+        reserva un margen fijo de 2 px por lado; ignorarlo dejaba la escala
+        resultante un pelo por debajo del suelo pedido."""
+        vp = self.viewport()
+        return max(1.0, vp.width() - 4.0), max(1.0, vp.height() - 4.0)
+
+    def _scale_for_rect(self, rect: QRectF) -> float:
+        """Escala a la que `fitInView(rect)` dejaría la vista."""
+        vp = self.viewport()
+        if rect.isEmpty() or vp.width() < 8 or vp.height() < 8:
+            return 0.0
+        usable_w, usable_h = self._fit_viewport_size()
+        return min(usable_w / rect.width(), usable_h / rect.height())
+
+    def _dense_content_rect(self, scale: float) -> QRectF | None:
+        """Ventana (a `scale`) centrada en la ZONA MÁS POBLADA de nodos.
+
+        Cuando el mundo no cabe al suelo legible, «encuadrar bien» no es
+        encuadrar más: es encuadrar OTRA COSA. Se rejilla el contenido y se elige
+        el bloque con más nodos; el centro es su centroide, así que la cámara
+        cae siempre sobre nodos reales y no sobre pergamino vacío."""
+        items = self._node_items()
+        vp = self.viewport()
+        if not items or scale <= 0.0 or vp.width() < 8 or vp.height() < 8:
+            return None
+        usable_w, usable_h = self._fit_viewport_size()
+        win_w = usable_w / scale
+        win_h = usable_h / scale
+        cell_w = max(1.0, win_w / 2.0)
+        cell_h = max(1.0, win_h / 2.0)
+        buckets: dict[tuple[int, int], list] = {}
+        for item in items:
+            center = item.sceneBoundingRect().center()
+            key = (int(math.floor(center.x() / cell_w)), int(math.floor(center.y() / cell_h)))
+            buckets.setdefault(key, []).append(center)
+        best_key: tuple[int, int] | None = None
+        best_score = -1
+        for cx, cy in buckets:
+            score = sum(
+                len(buckets.get((cx + dx, cy + dy), ())) for dx in (0, 1) for dy in (0, 1)
+            )
+            if score > best_score:
+                best_score, best_key = score, (cx, cy)
+        if best_key is None:
+            return None
+        cx, cy = best_key
+        block = [
+            point
+            for dx in (0, 1)
+            for dy in (0, 1)
+            for point in buckets.get((cx + dx, cy + dy), ())
+        ]
+        if not block:
+            return None
+        mx = sum(p.x() for p in block) / len(block)
+        my = sum(p.y() for p in block) / len(block)
+        return QRectF(mx - win_w / 2.0, my - win_h / 2.0, win_w, win_h)
+
+    def _fit_target_rect(self, margin: float = 140.0) -> QRectF | None:
+        """FIX-01 (criterio 4): rect que debe encuadrarse al «ver todo».
+
+        Devuelve el contenido entero mientras quepa a una escala en la que se
+        distinga algo; por debajo de ese suelo devuelve una porción acotada y
+        CENTRADA en el contenido más denso — nunca la escena entera a 0,0029."""
+        rect = self._content_bounding_rect()
+        if not rect.isValid() or rect.isEmpty():
+            self._fit_clamped = False
+            return None
+        rect = rect.adjusted(-margin, -margin, margin, margin)
+        if not self._viewport_is_usable():
+            self._fit_clamped = False
+            return rect
+        if self._scale_for_rect(rect) >= _MIN_READABLE_SCALE:
+            self._fit_clamped = False
+            return rect
+        dense = self._dense_content_rect(_MIN_READABLE_SCALE)
+        if dense is None:
+            self._fit_clamped = False
+            return rect
+        self._fit_clamped = True
+        return dense
+
+    def fit_was_clamped(self) -> bool:
+        """True si el último encuadre no cupo al suelo legible y se acotó."""
+        return bool(self._fit_clamped)
+
+    # ── FIX-01: piso de tamaño en pantalla + descarte por densidad ───────────
+
+    def _refresh_label_legibility(self, *, force: bool = False) -> None:
+        """Reescala los nombres de entidad para que no bajen de `_LABEL_MIN_PX`
+        en pantalla y apaga los que se pisarían entre sí.
+
+        Se llama en cada cambio de ESCALA (no de paneo: la densidad se mide en
+        distancias de escena × escala, así que arrastrar no la altera)."""
+        scale = float(self.transform().m11() or 0.0)
+        if scale <= 0.0:
+            return
+        key = (len(self._nodes), len(self._trees))
+        if (
+            not force
+            and self._label_scale_applied is not None
+            and abs(scale - self._label_scale_applied) < 1e-6
+            and key == self._label_layout_key
+        ):
+            return
+        self._label_scale_applied = scale
+        self._label_layout_key = key
+        cell_w = max(1.0, _LABEL_DENSITY_W_PX / scale)  # celda en unidades de escena
+        cell_h = max(1.0, _LABEL_DENSITY_H_PX / scale)
+        taken: set[tuple[int, int]] = set()
+        # Las RAMAS nunca se descartan (son el marco del mapa), pero sí reciben el
+        # piso de tamaño; solo las hojas compiten por sitio.
+        for item in self._trees.values():
+            floor_fn = getattr(item, "apply_label_screen_floor", None)
+            if callable(floor_fn):
+                floor_fn(scale)
+        for item in self._nodes.values():
+            floor_fn = getattr(item, "apply_label_screen_floor", None)
+            if callable(floor_fn):
+                floor_fn(scale)
+            hide_fn = getattr(item, "set_label_visible", None)
+            if not callable(hide_fn) or not isinstance(item, GraphNodeItem):
+                continue
+            center = item.scenePos()
+            key_xy = (int(math.floor(center.x() / cell_w)), int(math.floor(center.y() / cell_h)))
+            if key_xy in taken:
+                hide_fn(False)
+                continue
+            taken.add(key_xy)
+            hide_fn(True)
+
+    def refresh_label_legibility(self) -> None:
+        """Punto de entrada público (tests y llamantes externos)."""
+        self._refresh_label_legibility(force=True)
 
     def wheelEvent(self, event):
         """Smooth bounded zoom under mouse. BETA1-L02: el suelo de alejamiento es
@@ -2794,6 +3250,8 @@ class GraphCanvasView(QGraphicsView):
                 return
             factor = 1 / _ZOOM_STEP
         self.scale(factor, factor)
+        self.cancel_pending_initial_fit()  # FIX-01: la cámara del usuario manda
+        self._refresh_label_legibility()
         event.accept()
 
     def _zoom_by(self, factor: float) -> None:
@@ -2806,6 +3264,8 @@ class GraphCanvasView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.scale(target / current, target / current)
         self.setTransformationAnchor(anchor)
+        self.cancel_pending_initial_fit()  # FIX-01: la cámara del usuario manda
+        self._refresh_label_legibility()
 
     def zoom_in(self) -> None:
         self._zoom_by(_ZOOM_STEP)
@@ -3456,7 +3916,7 @@ class GraphCanvasView(QGraphicsView):
             parts.append(f"{len(entity_ids)} elemento(s)")
         if relation_ids:
             parts.append(f"{len(relation_ids)} relación(es)")
-        message = f"¿Eliminar {' y '.join(parts)}?\nEsta acción no se puede deshacer."
+        message = f"¿Eliminar {' y '.join(parts)}?\n{AVISO_DESHACER_BORRADO}"
         result = QMessageBox.question(
             self,
             "Confirmar eliminación",
@@ -3583,23 +4043,31 @@ class GraphCanvasView(QGraphicsView):
     def _tree_context_menu(self, item: GraphTreeItem) -> QMenu:
         tree_id = item.node.entity_id
         menu = QMenu(self)
+        # BETA-AUDIT-06: sin esto los tooltips de acción no se pintan en un QMenu,
+        # y «hoja», «subrama» y «anillo» quedaban sin explicar en el único sitio
+        # donde el usuario los encuentra por primera vez.
+        menu.setToolTipsVisible(True)
         # BETA2-CLEANUP-PANELES: "Editar" abre el Modo Foco (cajón retirado).
         menu.addAction("Editar", lambda: self.entityFocusRequested.emit(tree_id))
         menu.addAction(
             "Crear relación desde aquí",
             lambda: self._begin_context_relation(item),
         )
-        menu.addAction(
+        crear_hoja = menu.addAction(
             "Crear hoja dentro",
             lambda: self.contextCreateEntityInTreeRequested.emit(tree_id),
         )
-        menu.addAction(
+        crear_hoja.setToolTip(glossary("hoja"))
+        crear_subrama = menu.addAction(
             "Crear subrama",
             lambda: self.contextCreateSubtreeRequested.emit(tree_id),
         )
+        crear_subrama.setToolTip(glossary("rama"))
         ring_targets = self._context_target_rings(exclude_entity=tree_id)
         if ring_targets:
             ring_menu = QMenu("Mover a anillo", menu)
+            ring_menu.setToolTipsVisible(True)
+            ring_menu.menuAction().setToolTip(glossary("anillo"))
             menu.addMenu(ring_menu)
             for ring_id, ring_name in ring_targets:
                 ring_menu.addAction(
@@ -3693,6 +4161,9 @@ class GraphCanvasView(QGraphicsView):
         # que los atajos (1…0, F, [ ], d) funcionen también desde la panorámica sin
         # tener que enfocar un anillo antes.
         self.setFocus(Qt.FocusReason.MouseFocusReason)
+        # FIX-01 (criterio 8): tocar el lienzo (arrastrar, seleccionar, panear)
+        # cuenta como cámara de usuario → se cancela el reencuadre pendiente.
+        self.cancel_pending_initial_fit()
         # BETA1-B02: in space-pan mode the view is non-interactive and the
         # native ScrollHandDrag must receive the press untouched (no
         # selection, no relation logic).
@@ -4168,11 +4639,24 @@ class GraphCanvasView(QGraphicsView):
             current = self._membership.get(current)
         return ancestors
 
-    def _parent_tree_info(self, entity_id: str) -> tuple[str, str, bool]:
+    def _parent_tree_info(
+        self, entity_id: str, *, nodos_por_id: dict[str, _NodeView] | None = None
+    ) -> tuple[str, str, bool]:
+        """Árbol contenedor de una entidad.
+
+        ``nodos_por_id`` (BETA-MULTIAGENT2-FIX-04) es un índice opcional que
+        evita el escaneo lineal de ``_all_nodes``: la búsqueda lo llama una vez
+        por coincidencia y ya lo tiene construido.
+        """
         parent_id = self._membership.get(entity_id) or ""
         if not parent_id:
             return "", "", False
-        parent_node = next((node for node in self._all_nodes if node.entity_id == parent_id), None)
+        if nodos_por_id is not None:
+            parent_node = nodos_por_id.get(parent_id)
+        else:
+            parent_node = next(
+                (node for node in self._all_nodes if node.entity_id == parent_id), None
+            )
         parent_name = parent_node.name if parent_node is not None else "Árbol"
         parent_item = self._trees.get(parent_id)
         collapsed = (
@@ -5021,7 +5505,10 @@ class GraphCanvasView(QGraphicsView):
         # La instrucción "doble click" pasa al tooltip; la etiqueta solo nombra.
         item.setToolTip(f"{ring.display_name} — doble click para entrar")
         label_text = f"{ring.display_name} · {ring.count_label}"
-        label = QGraphicsSimpleTextItem(_fit_text(label_text, 48), item)
+        # FIX-01 (criterio 7): la etiqueta de ANILLO tampoco tenía gate de LOD.
+        # Con él, a la escala en la que no se lee el nombre de una entidad
+        # tampoco se pinta el rótulo del anillo que la contiene.
+        label = _LodTextItem(_fit_text(label_text, 48), item)
         label.setBrush(QBrush(QColor("#5F5A3D")))
         label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         font = QFont()
@@ -5776,6 +6263,9 @@ class GraphCanvasView(QGraphicsView):
         self.resetTransform()
         self.scale(scale, scale)
         self.centerOn(center)
+        # FIX-01: cualquier movimiento de cámara cambia la escala → recalcular el
+        # piso de tamaño de los nombres y el descarte por densidad.
+        self._refresh_label_legibility()
 
     def _animate_camera_fit(
         self, rect: QRectF, *, duration_ms: int | None = None, easing=None
@@ -5829,16 +6319,27 @@ class GraphCanvasView(QGraphicsView):
         camera captured by set_graph (same-layout rebuild → keep the user's
         zoom/pan) or fits the whole graph (first build / layout change)."""
         self._expand_scene_rect_to_content()
+        self._fit_margin = float(margin)
         state = self._view_state_to_restore
         if state is not None:
             self._view_state_to_restore = None
             transform, center = state
             self.setTransform(transform)
             self.centerOn(center)
+            # FIX-01 (criterio 8): había cámara de usuario → nada que reencuadrar.
+            self._pending_initial_fit = None
+            self._refresh_label_legibility(force=True)
         else:
-            rect = self.scene_obj.itemsBoundingRect()
-            if rect.isValid() and not rect.isEmpty():
-                self._animate_camera_fit(rect.adjusted(-margin, -margin, margin, margin))
+            rect = self._fit_target_rect(margin)
+            if rect is not None:
+                self._animate_camera_fit(rect)
+            # FIX-01 (criterio 3): si el encuadre se ha calculado contra un
+            # viewport que aún no existe (la Creación arranca en Foco, así que el
+            # Mapa se construye OCULTO), se deja anotado para rehacerlo al
+            # mostrarse. Antes esa cámara mala se heredaba para siempre, porque
+            # el siguiente set_graph la capturaba como "cámara del usuario".
+            fit_was_real = self.isVisible() and self._viewport_is_usable()
+            self._pending_initial_fit = None if fit_was_real else margin
         # BETA1-C02/C05: any (re)build changes bodies/rings → re-pack the
         # engine and wake it. CRITICAL: this must run in BOTH camera paths —
         # the early-return of the restore branch silently skipped reheat on
@@ -6016,67 +6517,164 @@ class GraphCanvasView(QGraphicsView):
     def clear_search_focus(self):
         self.clear_selection()
 
-    def search(self, query: str, *, worldbuilding_active: bool = False) -> list[GraphSearchResult]:
-        terms = [term for term in str(query or "").lower().split() if term]
+    def search(self, query: str, *, worldbuilding_active: bool = False) -> GraphSearchResults:
+        """Busca en el grafo entero y devuelve las mejores coincidencias + el total.
+
+        BETA-MULTIAGENT2-FIX-04. Tres cambios sobre la versión anterior:
+
+        1. **Plegado de acentos** (`terminos_de_busqueda`): `cronica` encuentra
+           `Crónica` y al revés. Antes solo se hacía `.lower()`, que no toca los
+           diacríticos, y buscar en castellano exigía teclear las tildes.
+        2. **Se conserva POR QUÉ ha coincidido cada resultado** (`match_score` /
+           `match_field`) y se ordena con ello (clase, calidad, alfabético). La
+           longitud del título ya no interviene en nada.
+        3. **Coste lineal**: un índice `entity_id → _NodeView` construido en la
+           misma pasada de nodos sustituye los dos escaneos de `_all_nodes` que
+           se hacían POR ARISTA (2 × 1.760 × 800 ≈ 2,8 M de comparaciones por
+           tecla en el mundo del beta).
+
+        Se materializan como mucho `SEARCH_MAX_RESULTS`, pero el total viaja en
+        `GraphSearchResults.total`: el recorte acota el coste, no la verdad.
+        """
+        terms = terminos_de_busqueda(query)
         if not terms:
-            return []
+            return GraphSearchResults([], total=0)
         layer_names = {
             str(getattr(layer, "id", "")): str(getattr(layer, "name", ""))
             for layer in self._all_layers
         }
-        results: list[GraphSearchResult] = []
+        # Coincidencias como (clave_de_orden, "node"|"edge", objeto, puntuación, campo).
+        # Se puntúan todas y solo se CONSTRUYE el resultado de las mejores: armar el
+        # `GraphSearchResult` implica mirar el árbol contenedor y recortar textos.
+        coincidencias: list[tuple[tuple[int, int, str, int], str, Any, int, str]] = []
+        nodos_por_id: dict[str, _NodeView] = {}
+        orden_entrada = 0
+        # BETA-AUDIT-10: el heno era name+kind+subtitle+anillo, así que sólo servía
+        # para «ir a» un nombre que ya recuerdas. La pregunta real de quien tiene un
+        # mundo grande no es «dónde está Nasr» sino «dónde dije que el pacto se firmó
+        # en invierno» o «el enano del ojo de vidrio». Se añaden ALIAS y CUERPO, que
+        # `_NodeView` ya transporta en `entity` (sin consultar al proyecto).
         for node in self._all_nodes:
+            nodos_por_id[node.entity_id] = node  # índice para las aristas (una sola pasada)
             layer_name = layer_names.get(node.layer_id, "") if worldbuilding_active else ""
-            haystack = " ".join([node.name, node.kind, node.subtitle, layer_name]).lower()
-            if all(term in haystack for term in terms):
-                parent_id, parent_name, collapsed = self._parent_tree_info(node.entity_id)
-                item_kind = "tree" if node.kind.lower() == "contenedor" else "entity"
-                results.append(
-                    GraphSearchResult(
-                        item_id=node.entity_id,
-                        item_kind=item_kind,
-                        title=node.name,
-                        type_label=enum_human(node.kind),
-                        category="Rama" if item_kind == "tree" else "Entidad",
-                        summary=_fit_text(node.subtitle, 90),
-                        parent_tree_name=parent_name,
-                        parent_tree_id=parent_id,
-                        is_inside_collapsed_tree=collapsed,
-                    )
+            entidad = getattr(node, "entity", None)
+            alias_norm = ""
+            cuerpo_norm = ""
+            if entidad is not None:
+                alias_norm = normalizar_para_busqueda(
+                    " ".join(getattr(entidad, "aliases", None) or [])
                 )
+                cuerpo_norm = normalizar_para_busqueda(
+                    getattr(entidad, "extended_description", "") or ""
+                )
+            nombre_norm = normalizar_para_busqueda(node.name)
+            subtitulo_norm = normalizar_para_busqueda(node.subtitle)
+            haystack = " ".join(
+                [
+                    nombre_norm,
+                    normalizar_para_busqueda(node.kind),
+                    subtitulo_norm,
+                    normalizar_para_busqueda(layer_name),
+                    alias_norm,
+                    cuerpo_norm,
+                ]
+            )
+            if not coincide_con_terminos(haystack, terms):
+                continue
+            puntuacion, campo = puntuar_coincidencia(
+                terms,
+                nombre_norm,
+                (
+                    ("alias", alias_norm, PUNTUACION_ALIAS),
+                    ("subtitulo", subtitulo_norm, PUNTUACION_SUBTITULO),
+                    ("cuerpo", cuerpo_norm, PUNTUACION_CUERPO),
+                ),
+            )
+            item_kind = "tree" if node.kind.lower() == "contenedor" else "entity"
+            coincidencias.append(
+                (
+                    (SEARCH_CLASS_ORDER[item_kind], -puntuacion, nombre_norm, orden_entrada),
+                    "node",
+                    node,
+                    puntuacion,
+                    campo,
+                )
+            )
+            orden_entrada += 1
         for edge in self._all_edges:
             if edge.kind.lower() == "contiene":
                 continue
-            source = next(
-                (node for node in self._all_nodes if node.entity_id == edge.source_id), None
-            )
-            target = next(
-                (node for node in self._all_nodes if node.entity_id == edge.target_id), None
-            )
+            source = nodos_por_id.get(edge.source_id)
+            target = nodos_por_id.get(edge.target_id)
             title = edge.label or enum_human(edge.kind)
-            haystack = " ".join(
-                [title, edge.kind, source.name if source else "", target.name if target else ""]
-            ).lower()
-            if all(term in haystack for term in terms):
-                summary = " → ".join(
-                    part
-                    for part in [
-                        source.name if source else "Origen",
-                        target.name if target else "Destino",
-                    ]
-                    if part
+            titulo_norm = normalizar_para_busqueda(title)
+            extremos_norm = normalizar_para_busqueda(
+                " ".join([source.name if source else "", target.name if target else ""])
+            )
+            haystack = " ".join([titulo_norm, normalizar_para_busqueda(edge.kind), extremos_norm])
+            if not coincide_con_terminos(haystack, terms):
+                continue
+            puntuacion, campo = puntuar_coincidencia(
+                terms, titulo_norm, (("extremos", extremos_norm, PUNTUACION_ALIAS),)
+            )
+            coincidencias.append(
+                (
+                    (SEARCH_CLASS_ORDER["relation"], -puntuacion, titulo_norm, orden_entrada),
+                    "edge",
+                    edge,
+                    puntuacion,
+                    campo,
                 )
+            )
+            orden_entrada += 1
+        total = len(coincidencias)
+        coincidencias.sort(key=lambda item: item[0])
+        results: list[GraphSearchResult] = []
+        for _clave, tipo, objeto, puntuacion, campo in coincidencias[:SEARCH_MAX_RESULTS]:
+            if tipo == "node":
+                parent_id, parent_name, collapsed = self._parent_tree_info(
+                    objeto.entity_id, nodos_por_id=nodos_por_id
+                )
+                item_kind = "tree" if objeto.kind.lower() == "contenedor" else "entity"
                 results.append(
                     GraphSearchResult(
-                        item_id=edge.relation_id,
-                        item_kind="relation",
-                        title=title,
-                        type_label=enum_human(edge.kind),
-                        category="Relación",
-                        summary=summary,
+                        item_id=objeto.entity_id,
+                        item_kind=item_kind,
+                        title=objeto.name,
+                        type_label=enum_human(objeto.kind),
+                        category="Rama" if item_kind == "tree" else "Entidad",
+                        summary=_fit_text(objeto.subtitle, 90),
+                        parent_tree_name=parent_name,
+                        parent_tree_id=parent_id,
+                        is_inside_collapsed_tree=collapsed,
+                        match_score=puntuacion,
+                        match_field=campo,
                     )
                 )
-        return results[:40]
+                continue
+            source = nodos_por_id.get(objeto.source_id)
+            target = nodos_por_id.get(objeto.target_id)
+            summary = " → ".join(
+                part
+                for part in [
+                    source.name if source else "Origen",
+                    target.name if target else "Destino",
+                ]
+                if part
+            )
+            results.append(
+                GraphSearchResult(
+                    item_id=objeto.relation_id,
+                    item_kind="relation",
+                    title=objeto.label or enum_human(objeto.kind),
+                    type_label=enum_human(objeto.kind),
+                    category="Relación",
+                    summary=summary,
+                    match_score=puntuacion,
+                    match_field=campo,
+                )
+            )
+        return GraphSearchResults(results, total=total)
 
     def _ring_display_name(self, ring_id: str) -> str:
         ring = next((ring for ring in self._ring_visuals if ring.ring_id == ring_id), None)
@@ -6309,9 +6907,13 @@ class GraphCanvasView(QGraphicsView):
         self.clear_visual_filters()
 
     def fit_all(self):
-        rect = self.scene_obj.itemsBoundingRect()
-        if rect.isValid() and not rect.isEmpty():
-            self._animate_camera_fit(rect.adjusted(-140, -140, 140, 140))
+        # FIX-01 (criterios 4 y 9): ÚNICO camino de «ver todo» del Mapa —
+        # `_GraphView._fit_all` (botón flotante) delega aquí, así que la tecla F,
+        # el botón y `reset_to_panorama` dan exactamente el mismo resultado.
+        self._pending_initial_fit = None
+        rect = self._fit_target_rect(self._fit_margin)
+        if rect is not None:
+            self._animate_camera_fit(rect)
 
     def reset_to_panorama(self) -> None:
         """BETA1-L02c: 'volver al todo' (tecla F). SIEMPRE restaura: quita el foco de
@@ -6324,6 +6926,8 @@ class GraphCanvasView(QGraphicsView):
     def reset_view(self):
         self.resetTransform()
         self.centerOn(0, 0)
+        self.cancel_pending_initial_fit()
+        self._refresh_label_legibility(force=True)
 
     def center_selection(self) -> bool:
         selected_items = []
@@ -7044,6 +7648,39 @@ class GraphCanvasWidget(QWidget):
             self._position_empty_overlay()
         self._position_time_bar()
         self._position_garden_legend()
+        self._sync_fit_hint()
+
+    def _sync_fit_hint(self) -> None:
+        """FIX-01 (criterio 4): cuando el mundo NO cabe a una escala en la que se
+        distinga algo, la vista encuadra una porción poblada — y lo DICE, en vez
+        de dejar al usuario delante de un pergamino vacío creyendo que ha perdido
+        su trabajo. Se crea perezosamente: con mundos que caben no existe."""
+        try:
+            clamped = bool(self.canvas.fit_was_clamped())
+        except Exception:  # noqa: BLE001 — el aviso nunca rompe el lienzo
+            return
+        hint = getattr(self, "_fit_hint", None)
+        if hint is None:
+            if not clamped:
+                return
+            hint = QLabel(
+                "Tu mundo no cabe entero a un tamaño legible: se muestra la zona "
+                "más poblada. Usa F para ver todo.",
+                self,
+            )
+            hint.setWordWrap(True)
+            hint.setStyleSheet(
+                f"QLabel{{background:{SURFACE_HI};color:{INK_SOFT};border:1px solid {LINE};"
+                f"border-radius:10px;padding:6px 10px;}}"
+            )
+            self._fit_hint = hint
+        hint.setVisible(clamped)
+        if not clamped:
+            return
+        hint.setFixedWidth(max(220, min(self.width() - 48, 420)))
+        hint.adjustSize()
+        hint.move(max(12, (self.width() - hint.width()) // 2), max(12, self.height() - 96))
+        hint.raise_()
 
     def set_garden_legend_bottom_inset(self, px: int) -> None:
         """UI2-02: hueco inferior reservado (píldoras 🌱/💧 + cluster derecho).
@@ -7087,7 +7724,7 @@ class GraphCanvasWidget(QWidget):
     def clear_selection(self):
         self.canvas.clear_selection()
 
-    def search(self, query: str) -> list[GraphSearchResult]:
+    def search(self, query: str) -> GraphSearchResults:
         project = self._project()
         return self.canvas.search(
             query,
@@ -7269,6 +7906,7 @@ class GraphCanvasWidget(QWidget):
 
     def fit_all(self):
         self.canvas.fit_all()
+        self._sync_fit_hint()
 
     def zoom_in(self):
         self.canvas.zoom_in()
@@ -7299,11 +7937,12 @@ class GraphCanvasWidget(QWidget):
             self.ctx.log("info", "Relación seleccionada")
 
     def _fit_all(self):
-        rect = self.canvas.scene_obj.itemsBoundingRect()
-        if rect.isValid() and not rect.isEmpty():
-            self.canvas.fitInView(
-                rect.adjusted(-140, -140, 140, 140), Qt.AspectRatioMode.KeepAspectRatio
-            )
+        # FIX-01 (criterio 9): ANTES esto era un `fitInView` duplicado que se
+        # saltaba el suelo de escala, el encuadre por contenido denso y el piso de
+        # tamaño de las etiquetas — el botón flotante hacía otra cosa que la
+        # tecla F. Ahora hay UN solo comportamiento de «ver todo».
+        self.canvas.fit_all()
+        self._sync_fit_hint()
 
     def _effective_world_layers(self, project) -> list[Any]:
         """Return visual-only layers for anillo layouts without mutating canon.
@@ -7459,6 +8098,7 @@ class GraphCanvasWidget(QWidget):
         self._sync_time_bar()
         self._time_bar.setVisible(True)
         self._position_time_bar()
+        self._sync_fit_hint()  # FIX-01: avisa si el mundo no cabe legible
         _b44trace(
             "widget_refresh_after_set_graph "
             f"canvas_layout={self.canvas._layout_mode_active!r} canvas_visible={self.canvas.isVisible()} empty_visible={self.empty.isVisible()} "

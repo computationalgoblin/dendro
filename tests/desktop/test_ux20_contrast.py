@@ -26,8 +26,28 @@ def test_texto_secundario_cumple_AA_en_surface() -> None:
     assert ds.contrast_ratio(ds.INK_SOFT, ds.SURFACE) >= _AA_NORMAL
 
 
-def test_ink_muted_es_sub_AA_solo_decorativo() -> None:
-    # INK_MUTED es deliberadamente tenue (deshabilitado/decorativo): NO es texto
-    # principal. Se guarda su rango para detectar si alguien lo asciende por error.
-    ratio = ds.contrast_ratio(ds.INK_MUTED, ds.SURFACE)
-    assert 2.5 <= ratio < _AA_NORMAL
+def test_ink_muted_dejo_de_ser_decorativo_y_cumple_AA() -> None:
+    """BETA-MULTIAGENT2-FIX-13 (G2-17): este test AFIRMABA lo contrario.
+
+    Decía `2.5 <= ratio(INK_MUTED, SURFACE) < 4.5` y lo justificaba con «INK_MUTED
+    es deliberadamente tenue: NO es texto principal». Esa decisión la desmintió la
+    realidad del producto: `QLabel#mutedLabel` acabó pintando la justificación
+    completa de por qué la IA quiere mover una entidad de anillo
+    (`structure_review_panel`), el origen del candidato en la ventana donde se
+    ejerce el invariante «la IA nunca escribe canon» (`candidate_review_panel`) y
+    las filas de riesgo del Cuaderno de Cultivo. Dendro pintaba la prosa humana a
+    10:1 y el razonamiento de la máquina a 2,58:1.
+
+    El rango se invierte a propósito: INK_MUTED es el TERCER nivel de énfasis,
+    no un nivel ilegible. Sigue siendo el más claro de los tres — lo que se guarda
+    aquí es que no vuelva a bajar del umbral de lectura.
+    """
+    for surface in (ds.SURFACE, ds.SURFACE_HI, ds.PAPER, ds.WELL):
+        assert ds.contrast_ratio(ds.INK_MUTED, surface) >= _AA_NORMAL, surface
+    # …y la jerarquía de tres peldaños se conserva (INK más oscuro que INK_SOFT,
+    # y este más oscuro que INK_MUTED).
+    assert (
+        ds.relative_luminance(ds.INK)
+        < ds.relative_luminance(ds.INK_SOFT)
+        < ds.relative_luminance(ds.INK_MUTED)
+    )

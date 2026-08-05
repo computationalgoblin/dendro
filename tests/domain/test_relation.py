@@ -18,13 +18,17 @@ from packages.domain.relation import (
 
 
 class TestRelationType:
-    def test_has_38_values(self):
-        assert len(RelationType) == 41
+    # El nombre del método arrastraba dos recuentos viejos (38, luego 41).
+    # BETA-MULTIAGENT2-FIX-12 (G2-16) suma la familia de parentesco: 41 + 9 = 50.
+    def test_has_50_values(self):
+        assert len(RelationType) == 50
 
     def test_known_values(self):
         assert RelationType.PERTENECE_A.value == "pertenece_a"
         assert RelationType.ES_ENEMIGO_DE.value == "es_enemigo_de"
         assert RelationType.ESTA_RELACIONADO_CON.value == "esta_relacionado_con"
+        assert RelationType.ES_MADRE_DE.value == "es_madre_de"
+        assert RelationType.ES_HIJO_DE.value == "es_hijo_de"
 
 
 class TestDirection:

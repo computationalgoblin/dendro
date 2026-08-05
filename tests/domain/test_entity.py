@@ -269,7 +269,8 @@ class TestValidateEntity:
         e = NarrativeEntity(name="")
         issues = validate_entity(e)
         assert len(issues) >= 1
-        assert any("name" in iss.lower() for iss in issues)
+        # BETA-MULTIAGENT-FIX-06: los issues de validación están en español.
+        assert any("nombre" in iss.lower() for iss in issues)
 
     def test_whitespace_name_detected(self):
         e = NarrativeEntity(name="   ")

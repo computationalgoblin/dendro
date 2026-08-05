@@ -11,10 +11,10 @@ from typing import Any
 
 # Current schema version for new projects
 # (v39: BETA2-WIKI-02 — página de wiki: NarrativeMemory gana cuerpo/wikilinks/tags)
-CURRENT_SCHEMA_VERSION: int = 39
+CURRENT_SCHEMA_VERSION: int = 40
 
 # The maximum schema version this code can handle
-MAX_SUPPORTED_VERSION: int = 39
+MAX_SUPPORTED_VERSION: int = 40
 
 
 # ---------------------------------------------------------------------------
@@ -1429,6 +1429,59 @@ def _apply_migration_v38_to_v39(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(migrated.get("narrative_memories"), list):
         migrated["narrative_memories"] = []
     migrated["schema_version"] = 39
+    return migrated
+
+
+#: BETA-AUDIT-11 — tope de diagnósticos por entidad que aplica la migración v39→v40.
+#: Se duplica aquí a propósito en vez de importar `packages.application`: `persistence`
+#: solo puede depender de `domain` (regla de capas, tests/architecture).
+_MAX_DIAGNOSTICS_PER_ENTITY_V40 = 5
+
+
+def _apply_migration_v39_to_v40(data: dict[str, Any]) -> dict[str, Any]:
+    """v39 → v40 (BETA-AUDIT-11): poda de ``watering_diagnostics``.
+
+    Los diagnósticos de riego crecían sin techo y nadie los limpiaba: en el proyecto de
+    ejemplo eran el **41 % del fichero** frente a un 16 % de canon real, y había 15
+    ``entity_id`` distintos con diagnóstico para 10 entidades vivas (borrar una entidad
+    no se llevaba los suyos).
+
+    La migración hace dos cosas, ambas sobre datos DERIVADOS —nunca sobre canon—:
+    retira los huérfanos y deja los N más recientes por entidad. El estado del jardín
+    solo mira el último éxito y el último fallo, así que la poda no cambia nada visible.
+    """
+    migrated = dict(data)
+    diagnosticos = migrated.get("watering_diagnostics")
+    if not isinstance(diagnosticos, list):
+        migrated["watering_diagnostics"] = []
+        migrated["schema_version"] = 40
+        return migrated
+
+    vivos = {
+        e.get("id")
+        for e in (migrated.get("entities") or [])
+        if isinstance(e, dict)
+    }
+    por_entidad: dict[str, list[dict]] = {}
+    for entrada in diagnosticos:
+        if not isinstance(entrada, dict):
+            continue
+        eid = entrada.get("entity_id")
+        if eid not in vivos:  # huérfano: su entidad ya no existe
+            continue
+        por_entidad.setdefault(eid, []).append(entrada)
+
+    conservados: list[dict] = []
+    for entradas in por_entidad.values():
+        entradas.sort(key=lambda d: str(d.get("created_at") or ""))
+        conservados.extend(entradas[-_MAX_DIAGNOSTICS_PER_ENTITY_V40:])
+
+    # Se respeta el orden original del fichero para que el diff sea legible.
+    guardados = {id(d) for d in conservados}
+    migrated["watering_diagnostics"] = [
+        d for d in diagnosticos if isinstance(d, dict) and id(d) in guardados
+    ]
+    migrated["schema_version"] = 40
     return migrated
 
 

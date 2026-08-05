@@ -1,10 +1,17 @@
-"""Visor editorial de Memoria en Configuración de proyecto (BETA2-MEM-10).
+"""Visor/EDITOR editorial de la wiki de Memoria (BETA2-MEM-10 + BETA-MULTIAGENT2-FIX-11).
 
-Función de PROYECTO (no del flujo de Creación): consultar, editar, borrar y
-regenerar la Memoria. Lee/edita/borra funcionan SIN IA (servicio determinista);
-regenerar requiere proveedor IA y muestra un diff revisable antes de sustituir
-(``MemoryRevisionProposal``). La UI nunca escribe persistencia: todo pasa por
-``NarrativeMemoryService`` / ``MemoryAIService``.
+Función de PROYECTO (no del flujo de Creación): consultar, **escribir**, crear,
+borrar y regenerar páginas de la wiki. Leer/escribir/crear/borrar funcionan SIN
+IA (servicio determinista); regenerar requiere proveedor IA y muestra un diff
+revisable antes de sustituir (``MemoryRevisionProposal``). La UI nunca escribe
+persistencia: todo pasa por ``NarrativeMemoryService`` / ``MemoryAIService``, y
+el guardado a disco se PIDE (``ctx.request_save_silent``), no se hace aquí.
+
+FIX-11 (fase C): antes el cuerpo era ``setReadOnly(True)`` («lo escribe Regar»),
+``_save`` ni siquiera mandaba ``cuerpo=`` y no había forma de crear una página:
+quien no usa IA no podía usar la wiki. Ahora el cuerpo se edita, hay «Nueva
+página» (elección del elemento POR NOMBRE) y las páginas se listan por el nombre
+del elemento, no por ``entity:<uuid>``.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -33,7 +41,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     overline_label,
 )
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
-from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
+from packages.domain.narrative_memory import MemoryFreshness, MemoryOrigin, MemoryTargetKind
 from packages.domain.result import Error, Ok
 
 _FRESHNESS_LABEL = {
@@ -42,6 +50,56 @@ _FRESHNESS_LABEL = {
     MemoryFreshness.SECADA.value: "secada",
     MemoryFreshness.SIN_MEMORIA.value: "sin memoria",
 }
+
+_KIND_LABEL = {
+    MemoryTargetKind.PROJECT.value: "Proyecto",
+    MemoryTargetKind.ENTITY.value: "Elemento",
+    MemoryTargetKind.BRANCH.value: "Rama",
+    MemoryTargetKind.RELATION.value: "Relación",
+    MemoryTargetKind.MILESTONE.value: "Hito",
+    MemoryTargetKind.RING.value: "Anillo",
+}
+
+
+def _entity_name(project, entity_id: str) -> str:
+    if project is None or not entity_id:
+        return ""
+    getter = getattr(project, "entity_by_id", None)
+    entity = getter(entity_id) if callable(getter) else None
+    return str(getattr(entity, "name", "") or "") if entity is not None else ""
+
+
+def element_label(project, kind: str, target_id: str) -> str:
+    """Nombre humano del elemento de una página (o un rastro corto si ya no existe).
+
+    FIX-11: función de módulo para que la comparta la pantalla «Salud del proyecto»
+    (el lint tampoco puede enseñar uuids en la cara del usuario).
+    """
+    kind = str(kind)
+    if kind == MemoryTargetKind.PROJECT.value or not target_id:
+        return str(getattr(project, "name", "") or "Proyecto")
+    if project is not None:
+        if kind in (MemoryTargetKind.ENTITY.value, MemoryTargetKind.BRANCH.value):
+            name = _entity_name(project, target_id)
+            if name:
+                return name
+        elif kind == MemoryTargetKind.RELATION.value:
+            getter = getattr(project, "relation_by_id", None)
+            relation = getter(target_id) if callable(getter) else None
+            if relation is not None:
+                src = _entity_name(project, getattr(relation, "source_id", "")) or "?"
+                tgt = _entity_name(project, getattr(relation, "target_id", "")) or "?"
+                return f"{src} → {tgt}"
+        elif kind == MemoryTargetKind.MILESTONE.value:
+            for hito in getattr(project, "causal_milestones", []) or []:
+                if getattr(hito, "id", "") == target_id:
+                    return str(getattr(hito, "title", "") or "Hito sin título")
+        elif kind == MemoryTargetKind.RING.value:
+            for layer in getattr(project, "world_layers", []) or []:
+                if getattr(layer, "id", "") == target_id:
+                    return str(getattr(layer, "name", "") or "Anillo")
+    # Página huérfana: el elemento ya no existe. Se dice, no se enseña el uuid.
+    return f"(elemento eliminado · {target_id[:8]})"
 
 
 def _humanize_regen_error(result) -> str:
@@ -82,28 +140,57 @@ class _RegenWorker(QThread):
 
 
 class MemoryViewerPanel(QWidget):
-    """Visor/editor de la Memoria del proyecto (Configuración)."""
+    """Visor/editor de la wiki de Memoria del proyecto (Configuración)."""
 
-    def __init__(self, memory_service: Any, memory_ai_service: Any = None, parent=None) -> None:
+    def __init__(
+        self,
+        memory_service: Any,
+        memory_ai_service: Any = None,
+        ctx: Any = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.memory_service = memory_service
         self.memory_ai_service = memory_ai_service
+        self.ctx = ctx
         self._current_key: tuple[str, str, str] | None = None
         self._regen_worker: _RegenWorker | None = None
+        # FIX-07 (criterio 4): recuento de enlaces de la última regeneración, para
+        # que lo descartado no se pierda en silencio. (clave de página, conteos).
+        self._last_refs: tuple[tuple[str, str, str], dict] | None = None
 
         root = QHBoxLayout(self)
 
-        # Izquierda: lista de Memorias (global + por elemento).
+        # Izquierda: lista de páginas (global + por elemento) + «Nueva página».
         left = QVBoxLayout()
-        left.addWidget(overline_label("MEMORIAS DEL PROYECTO"))
+        left.addWidget(overline_label("PÁGINAS DE LA WIKI"))
         self.list = QListWidget()
         self.list.currentRowChanged.connect(self._on_select)
         left.addWidget(self.list, 1)
+
+        self.new_page_btn = QPushButton("Nueva página")
+        self.new_page_btn.setToolTip(
+            "Crea a mano la página de un elemento del proyecto (no necesita IA)."
+        )
+        self.new_page_btn.clicked.connect(self._toggle_new_page)
+        left.addWidget(self.new_page_btn)
+
+        self.new_page_row = QWidget(self)
+        row_layout = QHBoxLayout(self.new_page_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        self.new_page_combo = QComboBox()
+        self.new_page_combo.setToolTip("Elige el elemento por su nombre")
+        row_layout.addWidget(self.new_page_combo, 1)
+        self.create_page_btn = QPushButton("Crear")
+        self.create_page_btn.clicked.connect(self._confirm_new_page)
+        row_layout.addWidget(self.create_page_btn)
+        self.new_page_row.setVisible(False)
+        left.addWidget(self.new_page_row)
         root.addLayout(left, 1)
 
-        # Derecha: visor editorial del bloque seleccionado.
+        # Derecha: visor editorial de la página seleccionada.
         right = QVBoxLayout()
-        self.header = QLabel("Selecciona una Memoria")
+        self.header = QLabel("Selecciona una página")
         self.header.setStyleSheet(f"color: {INK_STRONG}; font-weight: 700;")
         right.addWidget(self.header)
         self.freshness = QLabel("")
@@ -117,14 +204,16 @@ class MemoryViewerPanel(QWidget):
         )
         right.addWidget(self.resumen, 1)
 
-        # WS-K: el CUERPO de la página de wiki (lo que la IA mantiene y navega) también
-        # se muestra — antes solo se veía la línea de lead, ocultando lo que el usuario
-        # pagó por generar. Solo lectura: el cuerpo lo escribe Regar, no se edita a mano.
+        # FIX-11 (fase C): el CUERPO de la página de wiki se EDITA. La escribe la
+        # IA al Regar, pero también la mano del autor: sin proveedor de IA esta es
+        # la única forma de tener wiki, y el servicio ya la soportaba entera.
         right.addWidget(overline_label("CUERPO (PÁGINA WIKI)"))
         self.cuerpo = QTextEdit()
-        self.cuerpo.setReadOnly(True)
+        self.cuerpo.setPlaceholderText(
+            "Escribe aquí la página: qué es, qué hace, qué la contradice…"
+        )
         self.cuerpo.setStyleSheet(
-            f"QTextEdit {{ font-family: {FONT_SERIF}; font-size: 13px; color: {INK_MUTED}; "
+            f"QTextEdit {{ font-family: {FONT_SERIF}; font-size: 13px; color: {INK_STRONG}; "
             f"border: 1px solid {LINE_SOFT}; border-radius: 8px; padding: 8px; }}"
         )
         right.addWidget(self.cuerpo, 1)
@@ -169,6 +258,27 @@ class MemoryViewerPanel(QWidget):
             self.regen_btn.setToolTip("Configura un proveedor de IA para regenerar Memoria.")
         self.refresh()
 
+    # ── nombres legibles (nunca uuid en la cara del usuario) ─────────────
+
+    def _project(self):
+        ps = getattr(self.memory_service, "project_service", None)
+        return getattr(ps, "active_project", None)
+
+    def _entity_name(self, entity_id: str) -> str:
+        return _entity_name(self._project(), entity_id)
+
+    def element_label(self, kind: str, target_id: str) -> str:
+        """Nombre humano del elemento de una página (o un rastro corto si ya no existe)."""
+        return element_label(self._project(), kind, target_id)
+
+    def _page_title(self, block) -> str:
+        kind = block.target_kind.value
+        label = self.element_label(kind, block.target_id)
+        prefix = _KIND_LABEL.get(kind, "Página")
+        if kind == MemoryTargetKind.PROJECT.value or not block.target_id:
+            return f"{label} (visión global)"
+        return f"{label} · {prefix.lower()}"
+
     # ── datos ────────────────────────────────────────────────────────────
 
     def refresh(self) -> None:
@@ -178,15 +288,11 @@ class MemoryViewerPanel(QWidget):
         blocks = result.value if isinstance(result, Ok) else []
         for block in blocks:
             fresh = _FRESHNESS_LABEL.get(block.freshness.value, block.freshness.value)
-            name = (
-                "Proyecto"
-                if not block.target_id
-                else f"{block.target_kind.value}:{block.target_id}"
-            )
-            item = QListWidgetItem(f"{name}  ·  {fresh}")
+            item = QListWidgetItem(f"{self._page_title(block)}  ·  {fresh}")
             item.setData(Qt.ItemDataRole.UserRole, block.target_key())
             self.list.addItem(item)
         self.list.blockSignals(False)
+        self._refresh_new_page_combo()
 
     def _blocks(self):
         result = self.memory_service.list_memories()
@@ -205,24 +311,60 @@ class MemoryViewerPanel(QWidget):
         self._current_key = tuple(item.data(Qt.ItemDataRole.UserRole)) if item else None
         self._load()
 
+    def select_page(self, key) -> bool:
+        """Selecciona la página (kind, target_id, context). Usado por Salud del proyecto."""
+        if key is None:
+            return False
+        wanted = tuple(key)
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            if tuple(item.data(Qt.ItemDataRole.UserRole)) == wanted:
+                self.list.setCurrentRow(row)
+                return True
+        return False
+
+    def _refs_note(self) -> str:
+        """Qué pasó con los enlaces en la última regeneración de ESTA página.
+
+        FIX-07 (criterio 4): la app resuelve los enlaces contra el canon antes de
+        persistirlos y tira los que no existen. Ese descarte se DICE — la lección
+        de G2-03 es que lo que se cae en silencio se convierte en una mentira
+        silenciosa. Solo aparece cuando hubo algo que contar.
+        """
+        if self._last_refs is None or self._last_refs[0] != self._current_key:
+            return ""
+        conteos = self._last_refs[1] or {}
+        ambiguos = int(conteos.get("ambiguos", 0) or 0)
+        descartados = int(conteos.get("descartados", 0) or 0)
+        if not ambiguos and not descartados:
+            return ""
+        partes = []
+        if descartados:
+            partes.append(f"{descartados} sin elemento en el canon")
+        if ambiguos:
+            partes.append(f"{ambiguos} con nombre duplicado")
+        return f" · última regeneración: {', '.join(partes)} (enlaces descartados)"
+
     def _load(self) -> None:
         block = self._current_block()
         has_pending = bool(block and block.pending_revision is not None)
         if block is None:
-            self.header.setText("Selecciona una Memoria")
+            self.header.setText("Selecciona una página")
             self.freshness.setText("")
             self.resumen.setPlainText("")
             self.cuerpo.setPlainText("")
         else:
-            name = (
-                "Proyecto"
-                if not block.target_id
-                else f"{block.target_kind.value}:{block.target_id}"
+            self.header.setText(self._page_title(block))
+            origin = getattr(getattr(block, "origin", None), "value", "")
+            autoria = (
+                "escrita a mano"
+                if origin == MemoryOrigin.USUARIO.value
+                else f"origen: {origin}"
             )
-            self.header.setText(name)
             self.freshness.setText(
                 f"Estado: {_FRESHNESS_LABEL.get(block.freshness.value, block.freshness.value)}"
-                f" · Fuentes: {len(block.citations)}"
+                f" · {autoria} · Fuentes: {len(block.citations)}"
+                f" · Enlaces: {len(block.wikilinks)}{self._refs_note()}"
             )
             self.resumen.setPlainText(block.resumen_editorial)
             self.cuerpo.setPlainText(getattr(block, "cuerpo", "") or "")
@@ -237,28 +379,150 @@ class MemoryViewerPanel(QWidget):
                 f"\n\nDespués:\n{after}"
             )
 
+    # ── nueva página (sin IA) ────────────────────────────────────────────
+
+    def _existing_keys(self) -> set[tuple[str, str, str]]:
+        return {block.target_key() for block in self._blocks()}
+
+    def available_targets(self) -> list[tuple[str, str, str]]:
+        """Elementos del proyecto SIN página todavía: [(etiqueta, kind, target_id)]."""
+        proj = self._project()
+        existing = self._existing_keys()
+        targets: list[tuple[str, str, str]] = []
+
+        def _add(kind: str, target_id: str, label: str) -> None:
+            if (kind, target_id, "") in existing:
+                return
+            targets.append((label, kind, target_id))
+
+        if proj is None:
+            return targets
+        _add(
+            MemoryTargetKind.PROJECT.value,
+            "",
+            f"Proyecto · {getattr(proj, 'name', '') or 'visión global'}",
+        )
+        for entity in getattr(proj, "entities", []) or []:
+            name = str(getattr(entity, "name", "") or "sin nombre")
+            _add(MemoryTargetKind.ENTITY.value, getattr(entity, "id", ""), f"{name}")
+        for relation in getattr(proj, "relations", []) or []:
+            src = self._entity_name(getattr(relation, "source_id", "")) or "?"
+            tgt = self._entity_name(getattr(relation, "target_id", "")) or "?"
+            _add(
+                MemoryTargetKind.RELATION.value,
+                getattr(relation, "id", ""),
+                f"{src} → {tgt} · relación",
+            )
+        for hito in getattr(proj, "causal_milestones", []) or []:
+            title = str(getattr(hito, "title", "") or "hito sin título")
+            _add(MemoryTargetKind.MILESTONE.value, getattr(hito, "id", ""), f"{title} · hito")
+        for layer in getattr(proj, "world_layers", []) or []:
+            name = str(getattr(layer, "name", "") or "anillo")
+            _add(MemoryTargetKind.RING.value, getattr(layer, "id", ""), f"{name} · anillo")
+        return targets
+
+    def _refresh_new_page_combo(self) -> None:
+        combo = getattr(self, "new_page_combo", None)
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        combo.clear()
+        for label, kind, target_id in self.available_targets():
+            combo.addItem(label, (kind, target_id))
+        combo.blockSignals(False)
+        enabled = combo.count() > 0
+        self.create_page_btn.setEnabled(enabled)
+        if not enabled:
+            self.create_page_btn.setToolTip("Todos los elementos tienen ya su página.")
+
+    def _toggle_new_page(self) -> None:
+        self._refresh_new_page_combo()
+        # isHidden(), no isVisible(): el marcador explícito no depende de que la
+        # ventana esté mostrada (isVisible() es False mientras el panel no se pinta).
+        self.new_page_row.setVisible(self.new_page_row.isHidden())
+
+    def _confirm_new_page(self) -> None:
+        data = self.new_page_combo.currentData()
+        if not data:
+            return
+        kind, target_id = data
+        self.create_page(kind, target_id)
+
+    def create_page(self, kind: str, target_id: str, context: str = "") -> bool:
+        """Crea (a mano, sin IA) la página del elemento y la deja seleccionada."""
+        result = self.memory_service.upsert_memory(
+            MemoryTargetKind(kind),
+            target_id,
+            context,
+            resumen_editorial="",
+            cuerpo="",
+            origin=MemoryOrigin.USUARIO,
+            causa="página creada a mano desde la wiki",
+        )
+        if not isinstance(result, Ok):
+            QMessageBox.warning(
+                self, "Nueva página", str(getattr(result, "error", "No se pudo crear la página"))
+            )
+            return False
+        self._request_save()
+        self.new_page_row.setVisible(False)
+        self.refresh()
+        self._current_key = (str(kind), str(target_id), str(context))
+        self.select_page(self._current_key)
+        self._load()
+        return True
+
     # ── acciones (vía servicio) ──────────────────────────────────────────
+
+    def _request_save(self) -> None:
+        """Programa el guardado a disco (la UI nunca escribe persistencia)."""
+        ctx = getattr(self, "ctx", None)
+        if ctx is None:
+            return
+        save = getattr(ctx, "request_save_silent", None)
+        if callable(save):
+            save()
+            return
+        deferred = getattr(ctx, "request_save_debounced", None)
+        if callable(deferred):
+            deferred()
 
     def _save(self) -> None:
         if self._current_key is None:
             return
         kind, tid, ctx = self._current_key
-        self.memory_service.upsert_memory(
+        result = self.memory_service.upsert_memory(
             MemoryTargetKind(kind),
             tid,
             ctx,
             resumen_editorial=self.resumen.toPlainText(),
-            causa="edición manual desde Configuración",
+            cuerpo=self.cuerpo.toPlainText(),
+            origin=MemoryOrigin.USUARIO,
+            # FIX-11 (criterio 4): lo que acaba de escribir la mano del autor está
+            # VIGENTE. Además de ser honesto, es lo que impide que Regar la pise
+            # (``watering_service`` no regenera una página REGADA). La vía
+            # explícita para reescribirla sigue siendo «Regenerar con IA».
+            freshness=MemoryFreshness.REGADA,
+            causa="edición manual desde la wiki",
         )
+        if not isinstance(result, Ok):
+            QMessageBox.warning(
+                self, "Guardar página", str(getattr(result, "error", "No se pudo guardar"))
+            )
+            return
+        # FIX-11: la edición manual PROGRAMA guardado a disco. Antes vivía solo en
+        # memoria hasta que otra mutación cualquiera disparaba el autoguardado.
+        self._request_save()
         self.refresh()
+        self.select_page(self._current_key)
 
     def _delete(self) -> None:
         if self._current_key is None:
             return
         confirm = QMessageBox.question(
             self,
-            "Borrar Memoria",
-            "¿Borrar esta Memoria? (No afecta al canon.)",
+            "Borrar página",
+            "¿Borrar esta página de la wiki? (No afecta al canon.)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -266,6 +530,7 @@ class MemoryViewerPanel(QWidget):
             return
         kind, tid, ctx = self._current_key
         self.memory_service.delete_memory(MemoryTargetKind(kind), tid, ctx)
+        self._request_save()
         self._current_key = None
         self.refresh()
         self._load()
@@ -298,6 +563,10 @@ class MemoryViewerPanel(QWidget):
         if not isinstance(result, Ok):
             QMessageBox.warning(self, "Regenerar Memoria", _humanize_regen_error(result))
             return
+        # FIX-07: guarda el recuento de enlaces resueltos/ambiguos/descartados de
+        # esta regeneración para poder contarlo en la cabecera de la página.
+        conteos = result.value.get("refs") if isinstance(result.value, dict) else None
+        self._last_refs = (self._current_key, dict(conteos)) if conteos else None
         self.refresh()
         self._reselect()
         self._load()
@@ -307,6 +576,7 @@ class MemoryViewerPanel(QWidget):
             return
         kind, tid, ctx = self._current_key
         self.memory_service.apply_revision_proposal(MemoryTargetKind(kind), tid, ctx)
+        self._request_save()
         self.refresh()
         self._reselect()
         self._load()
@@ -328,4 +598,4 @@ class MemoryViewerPanel(QWidget):
                 return
 
 
-__all__ = ["MemoryViewerPanel"]
+__all__ = ["MemoryViewerPanel", "element_label"]

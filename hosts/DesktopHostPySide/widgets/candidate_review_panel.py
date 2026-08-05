@@ -12,6 +12,9 @@ El panel es consciente del tipo de candidato (UX5):
   completo de forma legible (solo lectura) y ofrece «Reparar canon», que (UX8) lanza
   un job IA de reparación y abre un panel de cambios CONCRETOS (antes→después) sobre
   el canon — ya no sugerencias literales.
+- **Hito** (`kind == "causal_milestone"`, FIX-02): el payload va ANIDADO en
+  `proposed_data["milestone"]`; el panel lo lee de ahí (año, tipo, resumen y razón)
+  y devuelve ahí lo editado — antes leía solo el primer nivel y salía en blanco.
 - **Normal** (entidad/relación/…): comportamiento clásico (cuerpo editable).
 
 No escribe en persistencia directamente: usa CandidateController (que envuelve el
@@ -33,6 +36,11 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
+# BETA-MULTIAGENT2-FIX-13 (G2-20): la etiqueta legible de cada campo vive en
+# `packages.application` junto al catálogo canónico de campos editables — un solo
+# mapa, no uno paralelo en el host (ui → application está autorizado).
+from packages.application.ai_jobs import has_non_latin_script
+from packages.application.candidate_service import field_label
 from packages.domain.result import Error
 
 # Campos de texto del candidato por orden de preferencia para el cuerpo legible.
@@ -103,17 +111,127 @@ def is_structural_candidate(proposed_data: Any) -> bool:
     return isinstance(proposed_data, dict) and proposed_data.get("kind") in _STRUCTURAL_KINDS
 
 
+# BETA-MULTIAGENT2-FIX-02 (G2-02): una semilla de HITO no lleva sus textos en el
+# primer nivel de `proposed_data`, sino ANIDADOS en `proposed_data["milestone"]`
+# (así lo montan las dos rutas que la crean: `ai_jobs.stage_results` y
+# `CandidateService.create_causal_milestone_candidate`). Como el panel solo miraba
+# el primer nivel, el 100 % de las semillas de hito se revisaban en blanco.
+def milestone_payload(proposed_data: Any) -> dict[str, Any] | None:
+    """Payload anidado del hito (`proposed_data["milestone"]`), o None."""
+    if not isinstance(proposed_data, dict):
+        return None
+    if proposed_data.get("kind") != "causal_milestone":
+        return None
+    milestone = proposed_data.get("milestone")
+    return milestone if isinstance(milestone, dict) else None
+
+
+def is_milestone_candidate(proposed_data: Any) -> bool:
+    """True si el candidato propone un HITO causal (payload anidado)."""
+    return milestone_payload(proposed_data) is not None
+
+
+def milestone_rationale_text(milestone: dict[str, Any]) -> str:
+    """Razón/desarrollo que la IA escribió para el hito.
+
+    `ai_jobs` duplica ese cuerpo en `metadata["body"]`; si `rationale` viene
+    vacío se cae a la copia antes de dar el texto por inexistente.
+    """
+    if not isinstance(milestone, dict):
+        return ""
+    rationale = str(milestone.get("rationale") or "").strip()
+    if rationale:
+        return rationale
+    meta = milestone.get("metadata")
+    if isinstance(meta, dict):
+        return str(meta.get("body") or "").strip()
+    return ""
+
+
+def milestone_body_text(milestone: dict[str, Any]) -> str:
+    """Cuerpo legible de un hito: resumen (`description`) + razón (`rationale`)."""
+    if not isinstance(milestone, dict):
+        return ""
+    parts: list[str] = []
+    description = str(milestone.get("description") or "").strip()
+    if description:
+        parts.append(description)
+    rationale = milestone_rationale_text(milestone)
+    if rationale and rationale != description:
+        parts.append(f"Razón de la IA:\n{rationale}")
+    return "\n\n".join(parts).strip()
+
+
+def milestone_year_text(milestone: dict[str, Any]) -> str:
+    """Año diegético del hito como texto, o «sin datar» si no lo trae.
+
+    Un hito sin año aterriza hoy en «Año 0» al aceptarlo (G2-03, arreglado en
+    BETA-MULTIAGENT2-FIX-03): aquí no se toca la aceptación, solo se deja de
+    CALLAR que la semilla viene sin fecha.
+    """
+    year = (milestone or {}).get("year")
+    if isinstance(year, bool) or year is None:
+        return "sin datar"
+    if isinstance(year, (int, float)):
+        return str(int(year))
+    text = str(year).strip()
+    return text or "sin datar"
+
+
+def milestone_has_year(milestone: dict[str, Any]) -> bool:
+    return milestone_year_text(milestone) != "sin datar"
+
+
+def milestone_facts_text(
+    milestone: dict[str, Any], entity_names: dict[str, str] | None = None
+) -> str:
+    """Los HECHOS que deciden la aceptación de un hito, en una línea legible.
+
+    Año (o «sin datar»), tipo y —si existen— padres causales y entidades
+    afectadas. El panel no pintaba ninguno: se aceptaban hitos sin ver su fecha
+    ni su tipo (G2-02/G2-03 del beta multi-agente).
+    """
+    if not isinstance(milestone, dict):
+        return ""
+    names = entity_names or {}
+    parts = [f"Año: {milestone_year_text(milestone)}"]
+    raw_type = str(milestone.get("milestone_type") or "").strip()
+    # Sin tipo declarado, el dominio cae a ORIGEN: decirlo evita la sorpresa.
+    parts.append(f"Tipo: {raw_type or 'origen (por defecto)'}")
+    parents = [str(x) for x in (milestone.get("causal_parent_hito_ids") or []) if str(x).strip()]
+    if parents:
+        parts.append(f"Padres causales: {len(parents)}")
+    affected = [str(x) for x in (milestone.get("affected_entity_ids") or []) if str(x).strip()]
+    if affected:
+        labels = [str(names.get(eid) or "").strip() for eid in affected]
+        shown = [label for label in labels if label][:4]
+        if shown:
+            resto = len(affected) - len(shown)
+            texto = ", ".join(shown) + (f" y {resto} más" if resto > 0 else "")
+            parts.append(f"Entidades afectadas: {texto}")
+        else:
+            parts.append(f"Entidades afectadas: {len(affected)}")
+    return "  ·  ".join(parts)
+
+
 def candidate_body_text(proposed_data: dict[str, Any]) -> str:
     """Extrae el texto editable principal del candidato.
 
-    Para ediciones devuelve el texto propuesto (`edit_proposed_value`); si no,
-    el primer campo de texto rico disponible.
+    Para ediciones devuelve el texto propuesto (`edit_proposed_value`); para una
+    semilla de HITO desciende al payload anidado (FIX-02); si no, el primer campo
+    de texto rico disponible de primer nivel.
     """
     if not isinstance(proposed_data, dict):
         return ""
     edit_value = proposed_data.get("edit_proposed_value")
     if isinstance(edit_value, str) and edit_value.strip():
         return edit_value.strip()
+    # FIX-02: para un hito MANDA el payload anidado. Los proyectos del beta traen
+    # candidatos de hito con un `extended_description: ''` muerto de primer nivel
+    # (lo escribía `_apply_edits`): si ganase el primer nivel, seguirían en blanco.
+    milestone = milestone_payload(proposed_data)
+    if milestone is not None:
+        return milestone_body_text(milestone)
     for key in _BODY_FIELDS:
         value = proposed_data.get(key)
         if isinstance(value, str) and value.strip():
@@ -204,9 +322,28 @@ def dating_badge_label(entity: Any) -> str:
     }.get(precision, "Datado")
 
 
+_BASE_MARK_LABELS: dict[str, str] = {
+    "canon": "📚 apoyada en el canon",
+    "inferido": "🧩 inferida del canon",
+    "inventado": "✨ invención (el canon no la sostiene)",
+    "no_declarada": "❔ la IA no declaró en qué se apoya",
+}
+
+
+def _candidate_metadata(candidate: Any) -> dict:
+    meta = getattr(candidate, "metadata", None)
+    return meta if isinstance(meta, dict) else {}
+
+
 def source_badge_text(candidate: Any) -> str:
     """fila 33: etiqueta legible del origen del candidato (usuario vs IA) y, si
-    aplica, su confianza. La revisión distingue de un vistazo qué propuso la IA."""
+    aplica, su confianza. La revisión distingue de un vistazo qué propuso la IA.
+
+    BETA-MULTIAGENT2-FIX-08 (G2-13): la confianza SOLO se pinta cuando la declaró
+    el modelo (`metadata["confianza_declarada"]`). El 0,60/0,62 que se enseñaba
+    antes era un literal del código —el mismo número para una boda documentada que
+    para una prisión inventada—: un número que no discrimina no se enseña.
+    """
     source = str(getattr(candidate, "source", "") or "").lower()
     if source.startswith("ai") or source == "ia":
         origin = "🤖 IA"
@@ -216,9 +353,53 @@ def source_badge_text(candidate: Any) -> str:
         origin = source or "origen desconocido"
     parts = [f"Origen: {origin}"]
     confidence = getattr(candidate, "confidence", None)
-    if isinstance(confidence, (int, float)) and 0 < float(confidence) <= 1:
-        parts.append(f"confianza {int(round(float(confidence) * 100))}%")
+    declared = bool(_candidate_metadata(candidate).get("confianza_declarada"))
+    if declared and isinstance(confidence, (int, float)) and 0 < float(confidence) <= 1:
+        parts.append(f"confianza {int(round(float(confidence) * 100))}% (declarada por la IA)")
     return " · ".join(parts)
+
+
+def base_mark_text(candidate: Any) -> str:
+    """fila de BASE: en qué dice la IA que se apoya la pieza (G2-13).
+
+    Cadena vacía cuando el candidato no viene de una familia que declare base
+    (p. ej. propuestas estructurales o candidatos del usuario): no se inventa la
+    marca ni se pinta una fila hueca.
+    """
+    meta = _candidate_metadata(candidate)
+    base = str(meta.get("base") or "").strip()
+    if not base:
+        return ""
+    label = _BASE_MARK_LABELS.get(base, f"❔ {base}")
+    nota = str(meta.get("base_nota") or "").strip()
+    return f"Base: {label}" + (f" — {nota}" if nota else "")
+
+
+def foreign_script_warning(candidate: Any) -> str:
+    """Aviso cuando la propuesta trae caracteres de otro alfabeto (FIX-13, G2-20).
+
+    Cadena vacía cuando todo el texto es latino, que es el caso normal. No
+    modifica nada: solo avisa antes de que el usuario acepte.
+    """
+    proposed = getattr(candidate, "proposed_data", None)
+    if not isinstance(proposed, dict):
+        return ""
+    sospechosos: list[str] = []
+    for clave, valor in proposed.items():
+        if clave == "prompt":
+            continue  # es el texto del PROPIO usuario, no la salida del modelo
+        if isinstance(valor, str) and has_non_latin_script(valor):
+            sospechosos.append(str(clave))
+        elif isinstance(valor, dict):
+            for sub_clave, sub_valor in valor.items():
+                if isinstance(sub_valor, str) and has_non_latin_script(sub_valor):
+                    sospechosos.append(f"{clave}.{sub_clave}")
+    if not sospechosos:
+        return ""
+    return (
+        "⚠ La IA ha mezclado caracteres de otro alfabeto en su respuesta. "
+        "Revísalo antes de aceptar: entraría tal cual en tu texto."
+    )
 
 
 class CandidateReviewPanel(QWidget):
@@ -233,6 +414,7 @@ class CandidateReviewPanel(QWidget):
         on_close: Callable[[], None] | None = None,
         on_repair: Callable[[str], None] | None = None,
         log: Callable[[str, str], None] | None = None,
+        notify: Callable[[str, str], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -242,15 +424,23 @@ class CandidateReviewPanel(QWidget):
         self._on_close = on_close
         self._on_repair = on_repair
         self._log = log
+        # BETA-MULTIAGENT-FIX-04 (G-04): un accept fallido moría en el QLabel del
+        # panel y en ctx.log (consola oculta) — sin toast, semilla en limbo.
+        self._notify = notify
         self._target_edit: QLineEdit | None = None
         # PLAY-15: editores por campo de un patch multi-campo {campo: (editor, original)}.
         self._field_edits: dict[str, tuple[QTextEdit, Any]] = {}
         self._rel_type_edit: QLineEdit | None = None  # UX5e: tipo en ediciones de relación
+        # FIX-02: razón de la IA de una semilla de hito (editable, campo aparte).
+        self._rationale_edit: QTextEdit | None = None
         proposed = dict(getattr(candidate, "proposed_data", {}) or {})
         if is_structural_candidate(proposed):
             self._mode = "structural"
         elif is_edit_candidate(proposed):
             self._mode = "edit"
+        elif is_milestone_candidate(proposed):
+            # FIX-02 (G2-02): antes caía en `default` y su caja salía vacía.
+            self._mode = "milestone"
         elif is_analysis_candidate(proposed):
             self._mode = "analysis"
         else:
@@ -275,17 +465,50 @@ class CandidateReviewPanel(QWidget):
         source_label.setObjectName("mutedLabel")
         layout.addWidget(source_label)
 
+        # FIX-08 (G2-13): marca de BASE declarada por la IA para ESTA pieza —
+        # apoyada en canon, inferida o inventada. Es lo que permite revisar antes
+        # lo que la IA se ha sacado de la manga (y detectar la invención disfrazada
+        # de prudencia erudita que denunció la historiadora del beta).
+        base_text = base_mark_text(self._candidate)
+        if base_text:
+            base_label = QLabel(base_text)
+            base_label.setObjectName("mutedLabel")
+            base_label.setWordWrap(True)
+            layout.addWidget(base_label)
+
+        # FIX-13 (G2-20): AVISO de alfabeto extranjero. El modelo devolvió alguna
+        # vez «Falta de年份 en entidades clave». No se borra el texto (quien
+        # escribe en chino tiene derecho a su canon): se avisa antes de aceptar.
+        aviso = foreign_script_warning(self._candidate)
+        if aviso:
+            aviso_label = QLabel(aviso)
+            aviso_label.setObjectName("mutedLabel")
+            aviso_label.setWordWrap(True)
+            layout.addWidget(aviso_label)
+
         # UX5b: para candidatos de entidad el campo editable ES el nombre real
         # (`proposed_data["name"]`), no la etiqueta "Hoja candidata: …" — así el
         # nombre se puede editar y nunca se canoniza con ese prefijo.
         default_name = str(proposed.get("name") or "").strip()
+        # FIX-02: mismo precedente para el HITO — el campo editable es su título
+        # real (`milestone["title"]`), no la etiqueta «Hito sugerido: …» del
+        # candidato (que además se editaba en balde: el hito creado no la lee).
+        milestone_title = str((milestone_payload(proposed) or {}).get("title") or "").strip()
         if self._mode == "default" and default_name:
             title_initial = default_name
             placeholder = "Nombre de la entidad"
+        elif self._mode == "milestone" and milestone_title:
+            title_initial = milestone_title
+            placeholder = "Título del hito"
         else:
             title_initial = str(getattr(self._candidate, "title", "") or "")
             placeholder = "Encabezado de la semilla"
         self._title_edit = QLineEdit(title_initial)
+        # BETA-MULTIAGENT2-FIX-14 (G2-26a): `QLineEdit` deja el cursor AL FINAL, así
+        # que con un título más largo que el campo se veía la COLA y se escondía el
+        # principio («el Ruiz Vargas: extended_description», «rio, la Aprendiza de…»).
+        # Un título se lee por donde empieza.
+        self._title_edit.setCursorPosition(0)
         self._title_edit.setPlaceholderText(placeholder)
         layout.addWidget(self._title_edit)
 
@@ -293,6 +516,8 @@ class CandidateReviewPanel(QWidget):
             self._build_structural(layout, proposed)
         elif self._mode == "edit":
             self._build_edit(layout, proposed)
+        elif self._mode == "milestone":
+            self._build_milestone(layout, proposed)
         elif self._mode == "analysis":
             self._build_analysis(layout, proposed)
         else:
@@ -333,9 +558,9 @@ class CandidateReviewPanel(QWidget):
         if isinstance(fields, dict) and fields:
             self._field_edits = {}
             for key, value in fields.items():
-                field_label = QLabel(f"Campo: {key}")
-                field_label.setObjectName("mutedLabel")
-                layout.addWidget(field_label)
+                etiqueta_campo = QLabel(f"Campo: {field_label(str(key))}")
+                etiqueta_campo.setObjectName("mutedLabel")
+                layout.addWidget(etiqueta_campo)
                 before = self._current_field_value(proposed, str(key))
                 if before:
                     layout.addWidget(QLabel("Antes (canon actual):"))
@@ -364,9 +589,9 @@ class CandidateReviewPanel(QWidget):
             layout.addWidget(QLabel("Descripción propuesta (vacío = sin cambio):"))
         else:
             field = str(proposed.get("edit_field") or "body")
-            field_label = QLabel(f"Campo: {field}")
-            field_label.setObjectName("mutedLabel")
-            layout.addWidget(field_label)
+            etiqueta_campo = QLabel(f"Campo: {field_label(field)}")
+            etiqueta_campo.setObjectName("mutedLabel")
+            layout.addWidget(etiqueta_campo)
             # fila 33: diff antes/después — muestra el valor actual de canon (solo
             # lectura) para comparar con la propuesta antes de aplicar.
             before = self._current_target_value(proposed)
@@ -488,6 +713,54 @@ class CandidateReviewPanel(QWidget):
         box.setMinimumHeight(200)
         layout.addWidget(box, 1)
 
+    def _entity_names(self) -> dict[str, str]:
+        """FIX-02: nombres de canon por id (solo LECTURA del proyecto, vía el
+        controller; el panel nunca escribe persistencia)."""
+        ps = getattr(self._controller, "ps", None)
+        project = getattr(ps, "active_project", None) if ps is not None else None
+        names: dict[str, str] = {}
+        for entity in getattr(project, "entities", []) or []:
+            eid = str(getattr(entity, "id", "") or "")
+            if eid:
+                names[eid] = str(getattr(entity, "name", "") or "")
+        return names
+
+    def _build_milestone(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
+        """Semilla de HITO (FIX-02, G2-02): hechos visibles + textos editables.
+
+        Antes caía en `_build_default`, que solo mira el primer nivel de
+        `proposed_data`: el cuadro salía vacío para el 100 % de los hitos («acepté
+        un recuadro gris») y lo que el usuario escribiera se guardaba en
+        `extended_description`, una clave que la aceptación de hitos jamás lee.
+        Aquí se lee y se escribe el MISMO sitio: `proposed_data["milestone"]`.
+        """
+        milestone = milestone_payload(proposed) or {}
+
+        facts = QLabel(milestone_facts_text(milestone, self._entity_names()))
+        facts.setWordWrap(True)
+        layout.addWidget(facts)
+        if not milestone_has_year(milestone):
+            # G2-03: sin año, el hito aterriza sin fecha en la cronología. Decirlo
+            # ANTES de aceptar es lo que faltaba (la aceptación es de FIX-03).
+            warn = QLabel("Sin año: al aceptar, este hito entrará sin datar en la cronología.")
+            warn.setObjectName("mutedLabel")
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+
+        layout.addWidget(QLabel("Resumen del hito (editable antes de aceptar):"))
+        self._body_edit = QTextEdit()
+        self._body_edit.setPlaceholderText("Resumen del hito que se creará al aceptar")
+        self._body_edit.setPlainText(str(milestone.get("description") or "").strip())
+        self._body_edit.setMinimumHeight(90)
+        layout.addWidget(self._body_edit)
+
+        layout.addWidget(QLabel("Razón de la IA (editable antes de aceptar):"))
+        self._rationale_edit = QTextEdit()
+        self._rationale_edit.setPlaceholderText("Por qué la IA propone este hito")
+        self._rationale_edit.setPlainText(milestone_rationale_text(milestone))
+        self._rationale_edit.setMinimumHeight(140)
+        layout.addWidget(self._rationale_edit, 1)
+
     def _build_default(self, layout: QVBoxLayout, proposed: dict[str, Any]) -> None:
         """Candidato normal: cuerpo de texto editable."""
         self._body_edit = QTextEdit()
@@ -517,6 +790,27 @@ class CandidateReviewPanel(QWidget):
         # BETA2-STRUCT: una propuesta estructural es SOLO LECTURA — su payload §17 se
         # acepta tal cual (jamás se reescribe con título/cuerpo del formulario).
         if self._mode == "structural":
+            return
+        # FIX-02 (G2-02): una semilla de HITO se escribe DENTRO de su payload
+        # anidado. La aceptación hace `CausalMilestone.from_dict(proposed["milestone"])`
+        # y NUNCA lee `extended_description` de primer nivel: escribir ahí (lo que
+        # se hacía) tiraba en silencio la corrección del usuario y dejaba una clave
+        # muerta persistida. Ahora se lee y se escribe el mismo sitio.
+        if self._mode == "milestone":
+            milestone = proposed.get("milestone")
+            if not isinstance(milestone, dict):
+                return
+            if new_title:
+                milestone["title"] = new_title
+            milestone["description"] = self._body_edit.toPlainText().strip()
+            if self._rationale_edit is not None:
+                rationale = self._rationale_edit.toPlainText().strip()
+                milestone["rationale"] = rationale
+                # `ai_jobs` duplica la razón en `metadata["body"]`: no dejar la
+                # copia desincronizada con lo que el usuario acaba de corregir.
+                meta = milestone.get("metadata")
+                if isinstance(meta, dict) and "body" in meta:
+                    meta["body"] = rationale
             return
         # PLAY-15: patch multi-campo — recoge cada editor conservando el tipo
         # original del valor (año int, listas por comas) y termina aquí.
@@ -562,6 +856,8 @@ class CandidateReviewPanel(QWidget):
             self._status.setText(result.error)
             if self._log:
                 self._log("error", result.error)
+            if self._notify:  # FIX-04: el fallo llega como toast, no solo al label
+                self._notify(result.error, "error")
             return
         # BETA1-J06: si la guardia temporal (J04) dejó avisos, hazlos visibles.
         warnings = temporal_warnings_text(self._candidate)
@@ -605,4 +901,10 @@ __all__ = [
     "analysis_report_text",
     "is_edit_candidate",
     "is_analysis_candidate",
+    "is_milestone_candidate",
+    "milestone_body_text",
+    "milestone_facts_text",
+    "milestone_payload",
+    "milestone_rationale_text",
+    "milestone_year_text",
 ]

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from packages.application.milestone_promotion import promote_milestone
 from packages.domain.causal_milestone import CausalMilestone
 from packages.domain.relation import RelationType
 from packages.domain.result import Error, Ok, Result
@@ -250,6 +251,11 @@ def apply_resolved_change(
         hito = CausalMilestone.from_dict({
             "title": ch["title"], "description": ch["summary"] or after,
         })
+        # BETA-MULTIAGENT2-FIX-03 (G2-03): el tercer sitio del mismo delito. Este
+        # hito nacía con los defaults del dominio (`status=candidate`, sin fechas)
+        # aunque el usuario acababa de pulsar «Aplicar al canon». Misma promoción
+        # que las otras dos rutas — sin duplicarla.
+        promote_milestone(hito)
         if hasattr(project, "causal_milestones"):
             project.causal_milestones.append(hito)
             if hasattr(project, "touch"):

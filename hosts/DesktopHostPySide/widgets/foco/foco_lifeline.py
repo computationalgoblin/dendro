@@ -101,6 +101,11 @@ class FocoLifelineBand(QWidget):
         self._marks: list[_MilestoneMark] = []
         # BETA2-CAL-08: eras (contexto) + presente + ventana de vista.
         self._eras: list[Any] = []
+        # BETA-MULTIAGENT2-FIX-14 (G2-26c): rects REALES de los rótulos de era del
+        # último repintado. El aviso «Arrastra el borde…» se pintaba centrado en el
+        # ancho ENTERO de la franja sin mirar dónde caían: «Arrastra el borde…»
+        # impreso sobre «Era de los Pigmentos», con ninguna de las dos legible.
+        self._era_label_rects: list[QRectF] = []
         self._present_year: int | None = None
         self._view_low: float | None = None  # None ⇒ encuadre por defecto (lapso)
         self._view_high: float | None = None
@@ -761,9 +766,36 @@ class FocoLifelineBand(QWidget):
     # Pintura (a mano; sin QGraphicsEffect)
     # ------------------------------------------------------------------
 
+    def hint_rect(self, width: float, band_top: float, band_bottom: float) -> QRectF | None:
+        """BETA-MULTIAGENT2-FIX-14 (G2-26c): hueco libre para el aviso de lapso.
+
+        Devuelve el rect donde pintar «Arrastra el borde para fijar el lapso» sin
+        pisar ningún rótulo de era (ni el año de muerte), o `None` si no hay hueco
+        —en cuyo caso el aviso NO se pinta: mejor sin pista que con dos textos
+        superpuestos e ilegibles—. Público porque es lo que comprueba el test.
+        """
+        ocupados = list(self._era_label_rects)
+        if self._death is not None:
+            dx, _ = self._handle_x("death")
+            if dx is not None:
+                ocupados.append(QRectF(dx - 30, band_bottom + 1, 60, 14))
+        candidatos = [
+            # 1º debajo de la franja: zona neutra, no compite con nada del fondo.
+            QRectF(0.0, band_bottom + 2.0, float(width), 13.0),
+            # 2º el sitio histórico (arriba), por si abajo no cupiera.
+            QRectF(0.0, band_top - 4.0, float(width), 12.0),
+        ]
+        for rect in candidatos:
+            if rect.bottom() > float(self.height()):
+                continue
+            if not any(rect.intersects(otro) for otro in ocupados):
+                return rect
+        return None
+
     def _paint_eras(self, painter: QPainter, axis_y: float) -> None:
         """BETA2-CAL-08: eras como fondo tintado sutil + nombre + divisoria, y la
         línea de presente. Solo con escala datable (lapso o hitos)."""
+        self._era_label_rects = []  # FIX-14: censo del repintado en curso
         if not self._eras:
             return
         if self._birth is None and self._death is None and not self._marks:
@@ -815,10 +847,17 @@ class FocoLifelineBand(QWidget):
                 painter.setPen(QPen(QColor(INK_MUTED)))
                 avail = max(8.0, (x1 - x0) - 8.0)
                 elided = metrics.elidedText(name, Qt.TextElideMode.ElideRight, int(avail))
+                rotulo = QRectF(x0 + 4, band_top, x1 - x0 - 6, 12)
                 painter.drawText(
-                    QRectF(x0 + 4, band_top, x1 - x0 - 6, 12),
+                    rotulo,
                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                     elided,
+                )
+                # FIX-14 (G2-26c): se anota el ancho REAL del texto (no el del
+                # tramo) para que el aviso de lapso sepa qué hueco queda libre.
+                ancho_texto = min(float(metrics.horizontalAdvance(elided)), rotulo.width())
+                self._era_label_rects.append(
+                    QRectF(rotulo.x(), rotulo.y(), max(1.0, ancho_texto), rotulo.height())
                 )
         # Línea de presente (contexto), discreta.
         if self._present_year is not None and low <= self._present_year <= high:
@@ -925,12 +964,15 @@ class FocoLifelineBand(QWidget):
                     str(self._death),
                 )
             if self._birth is None and not self._read_only:
-                painter.setPen(QPen(QColor(INK_MUTED)))
-                painter.drawText(
-                    QRectF(0, band_top - 4, width, 12),
-                    Qt.AlignmentFlag.AlignHCenter,
-                    "Arrastra el borde para fijar el lapso",
-                )
+                # FIX-14 (G2-26c): al hueco libre; si no hay, no se pinta.
+                hueco = self.hint_rect(width, band_top, band_bottom)
+                if hueco is not None:
+                    painter.setPen(QPen(QColor(INK_MUTED)))
+                    painter.drawText(
+                        hueco,
+                        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                        "Arrastra el borde para fijar el lapso",
+                    )
 
         # Vista previa del arrastre (lapso o hito).
         if (self._drag_edge or self._drag_milestone_moved) and self._drag_year is not None:

@@ -117,10 +117,16 @@ def test_unified_search_merges_entities_and_milestones_ranked():
     items = ws._unified_search("al")
     kinds = {it["kind"] for it in items}
     assert kinds == {"graph", "milestone"}  # aparecen ambos tipos
-    # Prefijo de título primero: 'Aldea' y 'Alianza…' por delante de los que solo
-    # contienen 'al' como subcadena (Portal, Gran Batalla).
-    assert items[0]["title"].lower().startswith("al")
-    assert items[1]["title"].lower().startswith("al")
+    # BETA-MULTIAGENT2-FIX-04: el orden se AGRUPA POR CLASE (entidades y ramas >
+    # hitos > relaciones), así que 'Alianza de Reinos' ya no se cuela entre las
+    # dos entidades por empezar por el prefijo. La intención original —prefijo
+    # primero— sobrevive DENTRO de cada clase.
+    assert [it["title"] for it in items] == ["Aldea", "Portal", "Alianza de Reinos", "Gran Batalla"]
+    graficos = [it for it in items if it["kind"] == "graph"]
+    hitos = [it for it in items if it["kind"] == "milestone"]
+    assert graficos[0]["title"].lower().startswith("al")  # prefijo primero entre entidades
+    assert hitos[0]["title"].lower().startswith("al")  # …y entre hitos
+    assert items.index(graficos[-1]) < items.index(hitos[0])  # ninguna clase se entremezcla
 
 
 @pytest.mark.skipif(not HAS_QT, reason="PySide6 no disponible")

@@ -13,6 +13,24 @@ text intents reuse the inline writing prompt (free text, no JSON).
 from __future__ import annotations
 
 from packages.application.prompt_registry import get_prompt
+from packages.domain.entity_taxonomy import OFFERED_RELATION_TYPES
+
+# BETA-MULTIAGENT2-FIX-12 (G2-16): el prompt pedía `"relation_type": "..."` sin
+# enumerar UN SOLO valor válido, así que el modelo se los inventaba (`valido`,
+# `es_padre_de` cuando el tipo no existía) y el servicio los tiraba. El
+# vocabulario se DERIVA de la taxonomía ofrecida: no hay lista copiada a mano
+# que se desincronice al añadir un tipo.
+_RELATION_TYPE_VOCABULARY_ES = (
+    "TIPOS DE RELACIÓN VÁLIDOS: `relation_type` debe ser EXACTAMENTE uno de estos "
+    "literales (cualquier otro se rechaza al guardar y la relación se pierde): "
+    + ", ".join(t.value for t in OFFERED_RELATION_TYPES)
+    + ". El PARENTESCO tiene familia propia (es_madre_de, es_padre_de, "
+    "es_progenitor_de, es_hijo_de, es_hermano_de, esta_casado_con, "
+    "es_antepasado_de, es_descendiente_de, es_familiar_de): úsala, no lo cuentes "
+    "en la descripción ni lo aplanes a `esta_relacionado_con`. Si de verdad "
+    "ninguno encaja, usa `esta_relacionado_con` y explica el matiz en "
+    "`description`.\n"
+)
 
 _BASE_ES = (
     "Eres el asistente central de creación de Dendro. Respeta el prompt exacto del usuario, el idioma, "
@@ -33,6 +51,17 @@ _BASE_ES = (
     "report/summary en texto natural). No inventes IDs; para relaciones usa source_name/target_name. "
     "Devuelve SOLO un objeto JSON válido con EXCLUSIVAMENTE las claves indicadas por tu tarea.\n"
     "\n"
+    # BETA-MULTIAGENT2-FIX-13 (G2-20): el prompt base no prohibía Markdown ni fijaba
+    # el idioma. Resultado: los `**asteriscos**` del modelo entraban literales en el
+    # canon («en mi novela no quiero asteriscos») y una respuesta trajo caracteres
+    # chinos («Falta de年份 en entidades clave»). Esta regla es la primera línea de
+    # defensa; la segunda, determinista, limpia lo que se estadía como candidato.
+    "IDIOMA Y FORMATO DEL TEXTO: escribe SIEMPRE en el idioma del proyecto (español salvo que "
+    "el canon esté en otro). No mezcles idiomas ni alfabetos dentro de una frase. Escribe en "
+    "PROSA LLANA: prohibido Markdown y cualquier marca de formato (**negrita**, *cursiva*, "
+    "`código`, ## títulos, viñetas con - o *). Lo que escribas se guarda tal cual en la novela "
+    "del usuario.\n"
+    "\n"
     "DATACIÓN (BETA1-J05): toda hoja, rama, relación o hito que CREES debe llevar `birth_year` (entero, "
     "AÑO DIEGÉTICO del mundo en que empieza; los hitos usan `year`) y, si ya terminó, `death_year`. "
     "Deduce años COHERENTES con `cronologia` (eras y año presente del proyecto) y con los lapsos de "
@@ -50,7 +79,15 @@ _BASE_ES = (
     "sólidas que muchas triviales o incidentales. El número pedido en `directivas` "
     "es un TOPE, no una cuota: si no hay tanto que merezca la pena, devuelve menos "
     "(o ninguno) y explícalo en `report`. Si hay MATERIAL DE REFERENCIA, úsalo como "
-    "inspiración OPCIONAL: tienes plena libertad para inventar más allá de él (NO es un límite)."
+    "inspiración OPCIONAL: tienes libertad para inventar FICCIÓN del mundo más allá de "
+    "él (no te encierra temáticamente).\n"
+    "\n"
+    "LÍMITE DE LA INVENCIÓN (BETA-MULTIAGENT2-FIX-08): inventar ficción NO es rellenar "
+    "datos. No presentes como hecho —ni disfrazado de duda erudita («en X o en Y»)— algo "
+    "que el canon, el contexto o la referencia no sostengan: dilo como lo que es. Y la "
+    "PETICIÓN DEL USUARIO MANDA sobre esta licencia: si pide abstenerse, no rellenar los "
+    "huecos o señalar explícitamente lo que no está documentado, ABSTENTE y decláralo en "
+    "`report` en vez de inventarlo."
 )
 
 # BETA2-WIKI-13: los jobs que NO crean nada (riego = diagnóstico; memoria = página derivada)
@@ -98,7 +135,8 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "NO crees hojas, ramas ni anillos.\n"
         "Rellena SIEMPRE AMBOS campos: `description` (resumen breve, una frase) Y `body` (cuerpo narrativo "
         "más extenso que explique la naturaleza, origen y matices de la relación).\n"
-        'FORMATO: {"summary": "...", "report": "...", "relations": [{"source_name": "...", "target_name": '
+        + _RELATION_TYPE_VOCABULARY_ES
+        + 'FORMATO: {"summary": "...", "report": "...", "relations": [{"source_name": "...", "target_name": '
         '"...", "relation_type": "...", "description": "...", "body": "...", '
         '"birth_year": <int|null>, "death_year": <int|null>}]}'
     ),
@@ -127,7 +165,8 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "TAREA — EDITAR RELACIÓN. Edita el tipo Y/O la descripción de la(s) relación(es) seleccionada(s). "
         "Devuelve UNA sola entrada por relación con AMBOS campos juntos (deja vacío el que no cambie); NO "
         "partas el tipo y la descripción en entradas separadas. NO crees nada nuevo.\n"
-        'FORMATO: {"summary": "...", "report": "...", "relation_edits": [{"target_name": "origen → destino", '
+        + _RELATION_TYPE_VOCABULARY_ES
+        + 'FORMATO: {"summary": "...", "report": "...", "relation_edits": [{"target_name": "origen → destino", '
         '"relation_type": "tipo nuevo o vacío", "description": "descripción nueva o vacía", "rationale": "..."}]}'
     ),
     "edit_ring": (
@@ -182,7 +221,8 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "hueco causal crítico, motivación incompatible, orden temporal imposible, anillo "
         "superior contradicho o elemento necesario ausente. Las oportunidades menores NO "
         "detienen el recorrido (severity 'baja').\n"
-        'FORMATO: {"summary": "...", "report": "lectura editorial", "diagnosis": '
+        + _RELATION_TYPE_VOCABULARY_ES
+        + 'FORMATO: {"summary": "...", "report": "lectura editorial", "diagnosis": '
         '"coherente|parcialmente_coherente|incoherente", "issues": [{"title": "...", '
         '"description": "...", "severity": "baja|media|alta", "kind": "contradiction|'
         "causal_gap|motivation_incompatibility|impossible_temporal_order|"
@@ -237,11 +277,25 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "La Memoria es DERIVADA, NO canon: interpretas y resumes; NO puedes declarar "
         "entidades, relaciones ni hitos nuevos, ni afirmar como cierto lo que el canon no "
         "sostiene. Ancla contradicciones/huecos a elementos existentes por su id.\n"
+        "Respeta el `tipo_narrativo` que viene en el CANON del contexto: una RAMA "
+        "(contenedor) AGRUPA a otros elementos —descríbela como agrupación, ciclo o "
+        "conjunto, nunca como «el ente u objeto denominado …»—; una HOJA es un elemento "
+        "individual de su tipo (personaje, objeto, localización…).\n"
         "Detecta contradicciones (kind=contradiccion), zonas sin desarrollar (kind=hueco), "
         "preguntas abiertas (kind=pregunta_abierta) y supuestos tuyos (kind=supuesto).\n"
         "Escribes una PÁGINA de wiki: 'resumen_editorial' es el lead de 1 línea (lo que se ve "
         "en el índice) y 'cuerpo' es la síntesis editorial larga y navegable de la página. "
         "'wikilinks' enlaza a los elementos relacionados por su id; 'tags' clasifica la página.\n"
+        "ENLACES (regla estricta): en 'ref_id' va SIEMPRE el ID EXACTO tal y como aparece en el "
+        "contexto con la forma `kind:id` (p. ej. `entity:a1b2`, `milestone:h7`, `relation:r3`); "
+        "NUNCA el nombre del elemento. Si no tienes el id de algo, NO lo enlaces: un enlace "
+        "inventado se descarta y la página se queda coja.\n"
+        "El 'cuerpo' va en PROSA LIMPIA: sin enlaces markdown `[texto](...)` ni `[[dobles "
+        "corchetes]]`. Los enlaces viajan SOLO en el array 'wikilinks'.\n"
+        "DIRECCIÓN DE LAS RELACIONES: respétala literalmente. En el contexto, `[sale]` significa "
+        "que ESTE elemento es el ORIGEN del vínculo y `[entra]` que es el DESTINO. No inviertas "
+        "quién hace qué a quién: si otro `sirve_a` a este elemento, este elemento NO es el "
+        "sirviente.\n"
         "Registra la PARTICIPACIÓN TEMPORAL de la entidad cuando exista: su LAPSO (nacimiento/"
         "muerte) y los HITOS en los que interviene, en el 'cuerpo', como 'wikilinks' "
         "(ref_kind=milestone) y, si aporta causalidad, en 'notas_causales'. Es parte de quién "
@@ -272,16 +326,40 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "entidades por nombre), hitos (eventos causales) y entity_edits (mejoras de un elemento "
         "existente por su nombre EXACTO). Respeta el anillo/rama de la entidad en foco y la "
         "causalidad superior; no inventes ids.\n"
-        'FORMATO: {"summary": "...", "report": "...", '
+        "MARCA DE BASE (OBLIGATORIA, POR PIEZA — BETA-MULTIAGENT2-FIX-08): cada objeto que "
+        "devuelvas lleva `base` con UNO de estos tres valores y `base_nota` con una línea que "
+        "diga en qué te apoyas:\n"
+        "- `canon`: lo sostiene el canon/contexto que has recibido (di cuál en `base_nota`).\n"
+        "- `inferido`: deducción razonable a partir de ese material (di de qué la deduces).\n"
+        "- `inventado`: añadido tuyo que el canon NO sostiene (dilo con todas las letras).\n"
+        "No maquilles una invención como inferencia ni la presentes con falsa duda erudita. Si "
+        "la petición del usuario pide abstenerse de rellenar lo no documentado, NO devuelvas "
+        "piezas `inventado`: explica el hueco en `report`.\n"
+        "Puedes añadir `confidence` (0-1, o alta|media|baja) POR PIEZA si de verdad discrimina "
+        "entre unas y otras; si no vas a diferenciarlas, OMÍTELA (no se mostrará un número que "
+        "no signifique nada).\n"
+        + _RELATION_TYPE_VOCABULARY_ES
+        + 'FORMATO: {"summary": "...", "report": "...", '
         '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto|tecnologia|idioma", '
-        '"brief_description": "...", "body": "..."}], '
+        '"brief_description": "...", "body": "...", "base": "canon|inferido|inventado", '
+        '"base_nota": "..."}], '
         '"ramas": [{"name": "...", "entity_type": '
         '"faccion|cultura|religion|institucion|sistema_magico|localizacion", "brief_description": "...", '
+        '"base": "canon|inferido|inventado", "base_nota": "...", '
         '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto", "brief_description": "..."}]}], '
-        '"relations": [{"source_name": "...", "target_name": "...", "relation_type": "...", "description": "..."}], '
-        '"hitos": [{"title": "...", "summary": "...", "body": "...", "rationale": "..."}], '
+        '"relations": [{"source_name": "...", "target_name": "...", "relation_type": "...", '
+        '"description": "...", "base": "canon|inferido|inventado", "base_nota": "..."}], '
+        # BETA-MULTIAGENT2-FIX-03 (G2-03): el formato NO pedía `year`, así que TODO
+        # hito nacido de Sugerencias llegaba con `year=None` por diseño del prompt y
+        # aterrizaba sin datar en la Cronología. El calendario (`cronologia`) ya viaja
+        # en el prompt (WIKI-13b): el modelo tiene el marco temporal para elegirlo.
+        '"hitos": [{"title": "...", "summary": "...", "body": "...", "rationale": "...", '
+        '"year": <int|null: año diegético del hito según el calendario; null solo si '
+        'de verdad no puedes situarlo>, '
+        '"base": "canon|inferido|inventado", "base_nota": "..."}], '
         '"entity_edits": [{"entity_name": "nombre exacto", "field": "body|brief_description", '
-        '"proposed_value": "...", "rationale": "..."}]}'
+        '"proposed_value": "...", "rationale": "...", "base": "canon|inferido|inventado", '
+        '"base_nota": "..."}]}'
     ),
 }
 

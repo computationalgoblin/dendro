@@ -85,6 +85,16 @@ def test_viewer_regenerate_shows_diff_and_accepts(qapp):
     panel = MemoryViewerPanel(mem, memory_ai_service=_StubMemoryAI(mem))
     panel.list.setCurrentRow(1)
     panel._regenerate()
+    # BETA-CIERRE WS-F: la regeneración corre en un QThread (antes congelaba la
+    # ventana). El test seguía asumiendo la llamada síncrona y llevaba rojo desde
+    # entonces: hay que esperar al worker y drenar la cola de eventos.
+    worker = panel._regen_worker
+    assert worker is not None
+    assert worker.wait(5000), "el worker de regeneración no terminó a tiempo"
+    for _ in range(20):
+        qapp.processEvents()
+        if panel._regen_worker is None:
+            break
     assert not panel.accept_btn.isHidden()  # propuesta pendiente → diff visible
     # el contenido NO se ha sustituido aún
     assert mem.get_memory(MemoryTargetKind.ENTITY, "e1").value.resumen_editorial == "Ana, reina."

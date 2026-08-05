@@ -61,7 +61,7 @@ class HistoryService:
             change_origin=change_origin or "",
             operation=operation or "",
             reason=description or "",
-            metadata=metadata or {},
+            metadata=self._with_declared_event(metadata, event_type, parsed_event),
         )
 
     def record(
@@ -85,8 +85,10 @@ class HistoryService:
             entry = self._entry_from_dict(event_type)
         else:
             entity_ids = affected_entity_ids or kwargs.get("affected_entity_ids") or []
+            declared = event_type or "creacion_entidad"
+            parsed = self._event_type(declared)
             entry = HistoryEntry(
-                event_type=self._event_type(event_type or "creacion_entidad"),
+                event_type=parsed,
                 affected_entity_id=entity_ids[0] if entity_ids else kwargs.get("affected_entity_id"),
                 affected_relation_id=kwargs.get("affected_relation_id"),
                 affected_source_id=kwargs.get("affected_source_id"),
@@ -95,13 +97,51 @@ class HistoryService:
                 change_origin=kwargs.get("change_origin", ""),
                 reason=description or kwargs.get("reason", ""),
                 operation=kwargs.get("operation", ""),
-                metadata=metadata or kwargs.get("metadata", {}) or {},
+                metadata=self._with_declared_event(
+                    metadata or kwargs.get("metadata", {}) or {}, declared, parsed
+                ),
             )
         self._ensure_history().append(entry)
         proj = self._proj()
         if hasattr(proj, "touch"):
             proj.touch()
         return entry
+
+    def add_entry(
+        self,
+        data: HistoryEntry | dict[str, Any] | HistoryEventType | str | None = None,
+        description: str | None = None,
+        **kwargs: Any,
+    ) -> HistoryEntry:
+        """Alias REAL de :meth:`record` (BETA-MULTIAGENT2-FIX-08, G2-14/B3).
+
+        ``add_entry`` tenía cuatro llamadores y CERO implementaciones
+        (``candidate_service``, ``causal_milestone_service``,
+        ``orchestrator_service`` ×2): el ``AttributeError`` se lo tragaban sus
+        ``except Exception`` / ``hasattr`` y el historial quedaba mudo sin que
+        nadie se enterase. Existe para que esas llamadas graben de verdad.
+        """
+        return self.record(data, description, **kwargs)
+
+    @staticmethod
+    def _with_declared_event(
+        metadata: dict[str, Any] | None,
+        declared: Any,
+        parsed: HistoryEventType,
+    ) -> dict[str, Any]:
+        """Deja CONSTANCIA del evento declarado cuando no existe en el enum.
+
+        ``_event_type`` degrada lo desconocido a ``CREACION_ENTIDAD``; sin esta
+        nota, una cadena mal escrita se convertía en una traza falsa y silenciosa
+        (BETA-MULTIAGENT2-FIX-08). Ahora el valor original viaja en metadata.
+        """
+        meta = dict(metadata or {})
+        if isinstance(declared, HistoryEventType) or declared is None:
+            return meta
+        raw = str(declared)
+        if raw and raw != parsed.value:
+            meta["event_type_declarado"] = raw
+        return meta
 
     def get_history(
         self,

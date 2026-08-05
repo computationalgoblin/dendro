@@ -36,11 +36,30 @@ from packages.domain.entity import CanonState, NarrativeEntity, NarrativeImporta
 from packages.domain.narrative_memory import MemoryFreshness, MemoryTargetKind
 from packages.domain.project import Project
 from packages.domain.relation import RelationType
+from packages.domain.project_chronology import format_year_with_era
 from packages.domain.result import Error, Ok, Result
 from packages.domain.watering import WateringCostClass, WateringDiagnostic, WateringStatus
 
-_HIGH_IMPORTANCE = frozenset({NarrativeImportance.CRITICO, NarrativeImportance.ALTO})
+#: BETA-AUDIT-11 — cuántos diagnósticos de riego se conservan POR ENTIDAD.
+#:
+#: Antes no había techo y los diagnósticos eran el 41 % del proyecto de ejemplo (el
+#: canon real ocupaba el 16 %). Cinco es un compromiso: la pestaña Cultivo enseña
+#: evolución —no solo el último riego— y el estado del jardín únicamente mira el
+#: último éxito y el último fallo, así que podar más atrás no cambia nada visible.
+MAX_DIAGNOSTICS_PER_ENTITY = 5
+
 _EXCLUDED_CANON = frozenset({CanonState.ARCHIVADO, CanonState.DESCARTADO})
+# BETA-MULTIAGENT2-FIX-05: `_HIGH_IMPORTANCE` se retiró con la caducidad de 2º grado
+# de `_is_stale` (ver su docstring). La relevancia narrativa sigue viva en
+# `_IMPORTANCE_SCORE` y ahora también ordena la cola de sed (watering_attention).
+
+# BETA-MULTIAGENT2-FIX-05 (G2-05): vías de dependencia por las que Regar propaga
+# «Falta regar». Regar NO cambia canon (reescribe una página de wiki), así que solo
+# se marca a quien depende de ella DE VERDAD: quien la @menciona y quien la cita en su
+# propia página. La vía `relacion` —una manta topológica sobre todo el vecindario— se
+# reserva a los cambios de CANON (update_entity/update_relation/accept_candidate…),
+# que son los emisores legítimos del motor de impacto.
+_ONLY_VIA_REGAR = frozenset({"mencion", "cita_memoria"})
 
 # Misma aproximación que prompt_budget (~3.5 chars/token).
 _CHARS_PER_TOKEN = 3.5
@@ -241,6 +260,28 @@ class WateringService:
     def _is_stale(
         self, project: Project, entity: NarrativeEntity, diagnostic: WateringDiagnostic
     ) -> bool:
+        """Caduca el diagnóstico cuando cambió el canon PROPIO de la entidad.
+
+        BETA-MULTIAGENT2-FIX-05 (G2-05, tercera vía de invalidación). Hasta aquí,
+        editar la ficha de CUALQUIER vecina —o de una de 2º grado de relevancia alta—
+        caducaba un diagnóstico recién pagado. Era el mecanismo que mantenía sediento
+        el mundo real del beta (las 4 entidades regadas de la directora de arte, incluida
+        la única cuya página seguía `Regada`) y el que hace que «el contador de trabajo
+        pendiente suba cuando trabajo» (TDA-07). Ya no invalida.
+
+        Lo que SÍ sigue caducando, porque es canon de esta entidad:
+        - su propia ficha se editó después del riego,
+        - una relación SUYA se editó después (la relación es canon compartido),
+        - su vecindario cambió de FORMA (altas/bajas respecto al manifiesto del riego,
+          o una vecina borrada): el contexto que se envió a la IA ya no existe.
+
+        Lo que ya NO caduca aquí: el CONTENIDO de una vecina. Esa señal no se pierde —
+        viaja por el camino honesto: un cambio de canon en la vecina dispara
+        ``NarrativeImpactService``, que marca `Falta regar` la PÁGINA de quien depende
+        de ella, y la unificación de frescura (WIKI-13, ``_memory_falta_regar``) lo
+        refleja en el jardín. La diferencia es que ahí se marca a quien depende de
+        verdad, no a todo el vecindario topológico.
+        """
         watered_at = diagnostic.created_at
         if _newer(entity.updated_at, watered_at):
             return True
@@ -255,26 +296,8 @@ class WateringService:
         if isinstance(manifest_ids, list) and {str(v) for v in manifest_ids} != direct:
             return True  # altas o bajas de vecinas desde el último riego
         for other_id in direct:
-            other = project.entity_by_id(other_id)
-            if other is None:
+            if project.entity_by_id(other_id) is None:
                 return True  # vecina borrada sin dejar rastro comparable
-            if _newer(other.updated_at, watered_at):
-                return True
-        # 2º grado: solo entidades de relevancia alta invalidan (decisión de producto).
-        for other_id in direct:
-            for relation in project.relations_for(other_id):
-                second_id = (
-                    relation.target_id if relation.source_id == other_id else relation.source_id
-                )
-                if second_id == entity.id or second_id in direct:
-                    continue
-                second = project.entity_by_id(second_id)
-                if second is None or second.canon_state in _EXCLUDED_CANON:
-                    continue
-                if second.narrative_importance in _HIGH_IMPORTANCE and _newer(
-                    second.updated_at, watered_at
-                ):
-                    return True
         return False
 
     def _compute_status(self, project: Project, entity: NarrativeEntity) -> WateringStatusReport:
@@ -365,6 +388,45 @@ class WateringService:
             report[entity_id] = cached
         return Ok(report)
 
+    @staticmethod
+    def prune_diagnostics(project, entity_id: str) -> int:
+        """BETA-AUDIT-11: deja solo los ``MAX_DIAGNOSTICS_PER_ENTITY`` más recientes.
+
+        No había ninguna poda: cada riego apilaba una entrada más y el fichero crecía
+        sin techo (41 % del proyecto de ejemplo, frente a un 16 % de canon real). Se
+        conserva un tramo corto porque la pestaña Cultivo enseña evolución, no solo el
+        último diagnóstico.
+
+        Es estático a propósito: la migración de esquema lo reutiliza sin instanciar el
+        servicio. Devuelve cuántas entradas se retiraron.
+        """
+        entradas = [d for d in project.watering_diagnostics if d.entity_id == entity_id]
+        if len(entradas) <= MAX_DIAGNOSTICS_PER_ENTITY:
+            return 0
+        # Ordena por fecha y no por posición: los diagnósticos de la IA pueden llegar
+        # fuera de orden si dos riegos en lote terminan cruzados.
+        entradas.sort(key=lambda d: str(d.created_at or ""))
+        sobran = {id(d) for d in entradas[:-MAX_DIAGNOSTICS_PER_ENTITY]}
+        project.watering_diagnostics = [
+            d for d in project.watering_diagnostics if id(d) not in sobran
+        ]
+        return len(sobran)
+
+    @staticmethod
+    def drop_orphan_diagnostics(project) -> int:
+        """Retira los diagnósticos de entidades que ya no existen.
+
+        Borrar una entidad no se los llevaba: el ejemplo tenía 15 ``entity_id``
+        distintos con diagnóstico para 10 entidades vivas. Nadie los ve y viajan en
+        cada guardado, cada copia `.bak` y cada instantánea de deshacer.
+        """
+        vivos = {e.id for e in project.entities}
+        antes = len(project.watering_diagnostics)
+        project.watering_diagnostics = [
+            d for d in project.watering_diagnostics if d.entity_id in vivos
+        ]
+        return antes - len(project.watering_diagnostics)
+
     def history_for(self, entity_id: str) -> Result[list[WateringDiagnostic], str]:
         """Historial de riegos (éxitos y fallos), el más reciente primero."""
         proj = self._active_project()
@@ -446,6 +508,7 @@ class WateringService:
             "neighbor_ids", sorted(self._direct_neighbor_ids(project, entity.id))
         )
         project.watering_diagnostics.append(diagnostic)
+        self.prune_diagnostics(project, diagnostic.entity_id)
         project.touch()
         if diagnostic.error:
             self._record_history(
@@ -512,6 +575,9 @@ class WateringService:
             for layer_id in entity.layer_ids or []
             if layer_id in layers_by_id
         ]
+        # BETA-MULTIAGENT-FIX-03 (G-03): los años viajan con su traducción a era
+        # («año 2140 (Segunda Era, año 940)») para que la IA no compare escalas.
+        chrono = getattr(project, "project_chronology", None)
         lines: list[str] = [
             f"ENTIDAD EN FOCO: {entity.name} (tipo: {entity.entity_type.value})",
             f"Relevancia narrativa (fijada por el usuario): {entity.narrative_importance.value}",
@@ -520,7 +586,17 @@ class WateringService:
         if layer_names:
             lines.append(f"Anillo(s): {', '.join(layer_names)}")
         if entity.birth_year is not None or entity.death_year is not None:
-            lines.append(f"Lapso: {entity.birth_year} → {entity.death_year}")
+            birth = (
+                format_year_with_era(chrono, entity.birth_year)
+                if entity.birth_year is not None
+                else "abierto"
+            )
+            death = (
+                format_year_with_era(chrono, entity.death_year)
+                if entity.death_year is not None
+                else "abierto"
+            )
+            lines.append(f"Lapso: {birth} → {death}")
         if entity.brief_description:
             lines.append(f"Descripción breve: {self._clip(entity.brief_description, 400)}")
         if entity.extended_description:
@@ -572,7 +648,7 @@ class WateringService:
                 milestone = milestones_by_id.get(milestone_id)
                 if milestone is None:
                     continue
-                year = f"año {milestone.year}" if milestone.year is not None else "sin fecha"
+                year = format_year_with_era(chrono, milestone.year)
                 milestone_lines.append(f"- [{header.lower()}] {milestone.title} ({year})")
         if milestone_lines:
             lines.append("HITOS VINCULADOS:")
@@ -636,6 +712,7 @@ class WateringService:
         *,
         origin: str = "single",
         progress_callback: Any = None,
+        batch_ids: list[str] | None = None,
     ) -> Result[WateringDiagnostic, str]:
         """Regar: diagnóstico IA persistente. JAMÁS genera Semillas ni toca canon.
 
@@ -721,10 +798,18 @@ class WateringService:
         # BETA2-MEM-07: Regar v2 — dentro de la MISMA autorización, actualiza la
         # Memoria editorial de la entidad (auto-aplica), solo si hace falta.
         if isinstance(registered, Ok):
-            self._update_memory_on_watering(entity_id, progress_callback=progress_callback)
+            self._update_memory_on_watering(
+                entity_id, progress_callback=progress_callback, batch_ids=batch_ids
+            )
         return registered
 
-    def _update_memory_on_watering(self, entity_id: str, *, progress_callback: Any = None) -> None:
+    def _update_memory_on_watering(
+        self,
+        entity_id: str,
+        *,
+        progress_callback: Any = None,
+        batch_ids: list[str] | None = None,
+    ) -> None:
         """Regar v2: genera/actualiza la Memoria del elemento regado (per-entidad).
 
         Solo corre donde hace falta (sin Memoria o Falta regar/Secada): no regenera
@@ -743,11 +828,25 @@ class WateringService:
             res = svc.update_memory(
                 MemoryTargetKind.ENTITY, entity_id, mode="regar", progress_callback=progress_callback
             )
-            # BETA2-WIKI-06: reescrita la página, marca Falta regar las RELACIONADAS
-            # (no la propia) propagando por potencialidad causal (motor de impacto).
+            # BETA2-WIKI-06: reescrita la página, marca Falta regar las que DEPENDEN
+            # de ella de verdad (no la propia).
             if isinstance(res, Ok) and self.impact_service is not None:
+                # BETA-MULTIAGENT-FIX-01 (G-01): los miembros del lote en curso se
+                # excluyen — sin esto se marcaban Falta regar entre sí y el lote
+                # nunca acababa verde (4/4 testers del beta multi-agente).
+                # BETA-MULTIAGENT2-FIX-05 (G2-05): además, la propagación desde Regar
+                # va SOLO por dependencia real (`_ONLY_VIA_REGAR`). Regar no cambia
+                # canon: reescribe una página de wiki. Marcar por `relacion` degradaba
+                # páginas vigentes de vecinas regadas en otra autorización, así que dos
+                # vecinas jamás podían estar verdes a la vez y el jardín no llegaba a su
+                # propio estado sano (beta ronda 2, ART-06: 4 riegos → 0 verdes).
                 self.impact_service.propagate_change(
-                    MemoryTargetKind.ENTITY, entity_id, cause_hint="regar", include_self=False
+                    MemoryTargetKind.ENTITY,
+                    entity_id,
+                    cause_hint="regar",
+                    include_self=False,
+                    exclude_ids=frozenset(str(x) for x in (batch_ids or []) if x),
+                    only_via=_ONLY_VIA_REGAR,
                 )
         except Exception:  # noqa: BLE001 — la Memoria nunca debe romper el riego
             pass
@@ -858,11 +957,22 @@ class WateringService:
         )
 
     def _attach_wiki_context(
-        self, context_scope: dict, job_type: str, peticion: str, entity_id: str
-    ) -> None:
-        """Navega la wiki y adjunta ``contexto_wiki`` al scope (best-effort, WIKI-08)."""
+        self,
+        context_scope: dict,
+        job_type: str,
+        peticion: str,
+        entity_id: str,
+        *,
+        notice: Any = None,
+    ) -> str:
+        """Navega la wiki y adjunta ``contexto_wiki`` al scope (best-effort, WIKI-08).
+
+        BETA-MULTIAGENT2-FIX-06 (G2-10): devuelve el motivo por el que NO se navegó
+        (hoy: wiki sin una sola página) y lo pasa a ``notice`` para que el host lo diga
+        en voz alta. Nada de degradación silenciosa (mismo principio que FIX-02).
+        """
         if self.navigator is None:
-            return
+            return ""
         try:
             from packages.application.wiki_navigator import NavigationRequest
 
@@ -870,13 +980,28 @@ class WateringService:
                 NavigationRequest(intent=str(job_type), user_text=peticion, focus_ids=[entity_id])
             )
             bundle = res.value if isinstance(res, Ok) else None
-            if bundle is not None and not bundle.is_empty():
+            if bundle is None:
+                return ""
+            motivo = str(getattr(bundle, "skipped_reason", "") or "")
+            if motivo and callable(notice):
+                try:
+                    notice(motivo)
+                except Exception:  # noqa: BLE001 — el aviso nunca rompe la sugerencia
+                    pass
+            if not bundle.is_empty():
                 context_scope["contexto_wiki"] = bundle.as_context_dict()
+            return motivo
         except Exception:  # noqa: BLE001 — la navegación nunca rompe la sugerencia
-            pass
+            return ""
 
     def compose_generation(
-        self, entity_id: str, metric: str, peticion: str = ""
+        self,
+        entity_id: str,
+        metric: str,
+        peticion: str = "",
+        *,
+        progress_callback: Any = None,
+        cancel_check: Any = None,
     ) -> Result[dict[str, Any], str]:
         """Prepara la generación de una Sugerencia: navega la wiki y, para arraigo/iluminada,
         corre el ANÁLISIS DE INTENCIÓN (plan) y compone el prompt del job compuesto.
@@ -885,23 +1010,59 @@ class WateringService:
         ``context_scope``) más ``plan_summary`` (feedback legible). Está pensado para correr
         FUERA del hilo de UI (encadena hasta 2 llamadas IA: navegación + intención). Para
         nutrida/calidad no analiza intención: mantiene el job por métrica. Consume IA (la
-        autorización visible es del host, antes de llamar aquí). NUNCA canoniza."""
+        autorización visible es del host, antes de llamar aquí). NUNCA canoniza.
+
+        BETA-MULTIAGENT-FIX-02 (G-02): ``progress_callback`` recibe el nombre de la
+        fase en curso y ``cancel_check`` permite el corte cooperativo ENTRE fases
+        (la llamada HTTP en vuelo no se aborta, como en el resto de cancelaciones).
+        """
+
+        def _phase(msg: str) -> None:
+            if callable(progress_callback):
+                try:
+                    progress_callback(str(msg))
+                except Exception:  # noqa: BLE001 — el feedback nunca rompe la prep
+                    pass
+
+        def _cancelled() -> bool:
+            try:
+                return bool(callable(cancel_check) and cancel_check())
+            except Exception:  # noqa: BLE001
+                return False
+
         base = self.build_suggestion_request(entity_id, metric, peticion)
         if isinstance(base, Error):
             return base
         payload = dict(base.value)
         scope = dict(payload["context_scope"])
-        # BETA2-WIKI-08: navega la wiki y adjunta contexto_wiki al scope (best-effort).
-        self._attach_wiki_context(
-            scope, payload["job_type"], payload.get("peticion", ""), entity_id
-        )
-
         metric_key = str(metric or "").strip().lower()
+        with_intent = metric_key in _INTENT_METRICS and self.intent_service is not None
+        total_phases = 2 if with_intent else 1
+        # BETA2-WIKI-08: navega la wiki y adjunta contexto_wiki al scope (best-effort).
+        _phase(f"Navegando la wiki (1/{total_phases})…")
+        wiki_skipped = self._attach_wiki_context(
+            scope,
+            payload["job_type"],
+            payload.get("peticion", ""),
+            entity_id,
+            # FIX-06 (G2-10): si la wiki está vacía no se navega — y se DICE.
+            notice=lambda _motivo: _phase(
+                "La wiki aún no tiene páginas: sin navegación (sin coste). "
+                "La Sugerencia sale con el contexto del canon."
+            ),
+        )
+        payload["wiki_skipped"] = wiki_skipped
+        if _cancelled():
+            return Error("Preparación de la Sugerencia cancelada por el usuario.")
+
         plan_summary = ""
-        if metric_key in _INTENT_METRICS and self.intent_service is not None:
+        if with_intent:
+            _phase(f"Analizando la petición (2/{total_phases})…")
             plan_res = self.intent_service.plan(
                 entity_id, metric_key, peticion, wiki_context=scope.get("contexto_wiki")
             )
+            if _cancelled():
+                return Error("Preparación de la Sugerencia cancelada por el usuario.")
             plan = plan_res.value if isinstance(plan_res, Ok) else None
             if plan is not None and not plan.is_empty():
                 # Un solo job COMPUESTO produce el mix del plan; stage_results lo estadía todo.
@@ -1002,14 +1163,31 @@ class WateringService:
         )
         return self.register_diagnostic(failure)
 
-    def water_batch_step(self, entity_id: str) -> Result[WateringDiagnostic, str]:
+    def water_batch_step(
+        self,
+        entity_id: str,
+        *,
+        batch_ids: list[str] | None = None,
+        progress_callback: Any = None,
+    ) -> Result[WateringDiagnostic, str]:
         """Un paso del lote: riega o deja fallo trazable y sigue.
 
         El host itera la lista de ``entities_in_scope`` y puede cancelar ENTRE
         pasos: cada paso persiste su diagnóstico (o su fallo) al completarse,
         así una cancelación nunca deja estado corrupto ni pierde parciales.
+        ``batch_ids`` (FIX-01): los miembros del lote no se invalidan entre sí.
+
+        ``progress_callback`` (BETA-MULTIAGENT2-FIX-06, G2-08): las fases del pipeline
+        de jobs (BUILDING_CONTEXT / PLANNING / WAITING_FOR_MODEL) que ``water_entity``
+        ya sabía reenviar. El cable estaba tendido y desconectado en los dos últimos
+        metros: el lote regaba 269 s en silencio absoluto.
         """
-        result = self.water_entity(entity_id, origin="batch")
+        result = self.water_entity(
+            entity_id,
+            origin="batch",
+            batch_ids=batch_ids,
+            progress_callback=progress_callback,
+        )
         if isinstance(result, Ok):
             return result
         # Best-effort: para fantasmas/desconocidas el registro también fallará

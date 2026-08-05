@@ -123,8 +123,13 @@ def build_demo_project(path: str | Path) -> DemoManifest:
     relate(valdor, mira, "contiene")
     relate(valdor, bosque, "contiene")
     relate(elen, diario, "contiene")
-    relate(aurelio, mira, "antepasado_de")
-    relate(mira, elen, "conoce_a")
+    # BETA-MULTIAGENT2-FIX-03/12 (cierre de oleada): estos dos usaban
+    # `antepasado_de` y `conoce_a`, que NO son valores de `RelationType`. Antes
+    # `create_relation` los aplanaba en silencio al default y devolvia Ok; desde
+    # FIX-03 devuelve Error, asi que el demo se quedaba en 5 relaciones de 7.
+    # Se corrigen a los tipos reales (`es_antepasado_de` lo aporta FIX-12).
+    relate(aurelio, mira, "es_antepasado_de")
+    relate(mira, elen, "conoce")
 
     # ── Hitos causales por año (pueblan la vista cronológica) ────────
     proj.causal_milestones.extend([

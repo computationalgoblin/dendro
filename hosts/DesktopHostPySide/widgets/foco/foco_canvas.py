@@ -759,6 +759,19 @@ class FocoSeedItem(QGraphicsObject):
 
     is_seed = True
 
+    # BETA-MULTIAGENT2-FIX-14 (G2-26f): geometría declarada UNA vez.
+    #
+    # `boundingRect` llegaba hasta +30 por debajo del origen pero `paint` escribía
+    # la etiqueta hasta +33: el texto se salía 3 px de la región que la escena
+    # garantiza repintar, y con el origen puesto en `height * 0.95` caía además en
+    # el último 5 % del lienzo. Resultado fotografiado: «sugerido: 2x02» /
+    # «sugerido: 2x0…», el brote partido por el borde inferior a 1440×900.
+    _LABEL_TOP = 17.0
+    _LABEL_H = 16.0
+    #: Cuánto baja el ítem por debajo de su origen (etiqueta + margen de dibujo).
+    ALTO_BAJO_ORIGEN = _LABEL_TOP + _LABEL_H + 3.0  # 36.0
+    _TOP = -22.0
+
     def __init__(self, candidate_id: str, title: str, zone: str) -> None:
         super().__init__()
         self.candidate_id = candidate_id
@@ -768,8 +781,14 @@ class FocoSeedItem(QGraphicsObject):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(f"Semilla IA: {title} — click para revisar")
 
+    def label_rect(self) -> QRectF:
+        """Rect donde `paint` escribe la etiqueta (en coordenadas del ítem)."""
+        return QRectF(-_LABEL_WIDTH / 2, self._LABEL_TOP, _LABEL_WIDTH, self._LABEL_H)
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (API Qt)
-        return QRectF(-_LABEL_WIDTH / 2, -22, _LABEL_WIDTH, 52)
+        return QRectF(
+            -_LABEL_WIDTH / 2, self._TOP, _LABEL_WIDTH, self.ALTO_BAJO_ORIGEN - self._TOP
+        )
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: N802
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -794,7 +813,7 @@ class FocoSeedItem(QGraphicsObject):
         painter.setFont(font)
         label = self.title if len(self.title) <= 20 else self.title[:19] + "…"
         painter.drawText(
-            QRectF(-_LABEL_WIDTH / 2, 17, _LABEL_WIDTH, 16),
+            self.label_rect(),
             Qt.AlignmentFlag.AlignHCenter,
             label,
         )
@@ -1162,7 +1181,13 @@ class FocoCanvas(QGraphicsView):
                 for seed, y in zip(seeds, _spread(len(seeds), height * 0.14, height * 0.04)):
                     _add_seed_item(seed, QPointF(width - _BAND_CHIP_W / 2 - 16, y))
             else:
-                y = height * 0.05 if zone == "raices" else height * 0.95
+                if zone == "raices":
+                    y = max(height * 0.05, -FocoSeedItem._TOP + 4.0)
+                else:
+                    # FIX-14 (G2-26f): el 0,95 dejaba la etiqueta (36 px por debajo
+                    # del origen) fuera del lienzo. Se topa para que el brote entero
+                    # caiga dentro del viewport, sin tocar las constantes de banda.
+                    y = min(height * 0.95, height - FocoSeedItem.ALTO_BAJO_ORIGEN - 6.0)
                 for seed, x in zip(seeds, _spread(len(seeds), width * 0.30, width * 0.05)):
                     _add_seed_item(seed, QPointF(x, y))
 

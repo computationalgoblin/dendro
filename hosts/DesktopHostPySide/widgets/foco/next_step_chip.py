@@ -35,6 +35,10 @@ class NextStepChip(QPushButton):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._step: NextStep | None = None
+        # BETA-MULTIAGENT2-FIX-06 (G2-08): riego en vuelo. Campo del widget (no un
+        # `setEnabled` suelto) porque `set_step` se re-aplica a cada refresco y
+        # resucitaría el disparador en mitad del lote.
+        self._busy = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMaximumWidth(self.MAX_WIDTH)
         # Fuente por código (no QSS) para que la elipsis mida EXACTAMENTE la
@@ -65,6 +69,21 @@ class NextStepChip(QPushButton):
     def step(self) -> NextStep | None:
         return self._step
 
+    def set_busy(self, busy: bool) -> None:
+        """BETA-MULTIAGENT2-FIX-06: hay un riego en vuelo → el chip no dispara otro."""
+        self._busy = bool(busy)
+        self._apply_busy()
+
+    def busy(self) -> bool:
+        return bool(self._busy)
+
+    def _apply_busy(self) -> None:
+        if self._busy:
+            self.setEnabled(False)
+            self.setToolTip("Hay un riego en curso; espera a que termine.")
+        else:
+            self.setEnabled(True)
+
     def set_step(self, step: NextStep | None) -> None:
         """Solo ``water`` y ``suggest`` son urgentes; el resto oculta el chip
         (secada se gestiona desde el Cuaderno; sano no necesita regañina)."""
@@ -86,10 +105,12 @@ class NextStepChip(QPushButton):
         else:
             self._step = None
             self.hide()
+        # FIX-06: el estado «ocupado» manda sobre el paso recién pintado.
+        self._apply_busy()
 
     def _on_clicked(self) -> None:
         step = self._step
-        if step is None:
+        if step is None or self._busy:
             return
         if step.kind == "water":
             self.waterClicked.emit()

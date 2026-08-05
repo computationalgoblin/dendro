@@ -8,7 +8,8 @@ revisables; nada se convierte en canon (contrato ``wiki_memoria.md`` §5.2).
 
 Categorías deterministas:
 - **huérfanas**: páginas cuyo elemento (target) ya no existe en el canon,
-- **enlaces rotos**: wikilinks/citas/dependencias que apuntan a ids ausentes,
+- **enlaces rotos**: wikilinks/citas/dependencias **y anclajes de incidencia**
+  (``issues[].anclado_a``) que apuntan a ids ausentes,
 - **stale**: páginas ``FALTA_REGAR``/``SECADA`` (afirmaciones potencialmente obsoletas),
 - **contradicciones**: incidencias ``CONTRADICCION`` ya ancladas en las páginas.
 """
@@ -94,6 +95,16 @@ class WikiLintService:
                 )
             # Contradicciones ya ancladas en la página.
             for issue in block.issues:
+                # BETA-MULTIAGENT2-FIX-07: el ANCLAJE de una incidencia también es un
+                # enlace, y también se rompe (2 de 4 anclajes rotos en el mundo del
+                # beta, invisibles porque el lint solo miraba wikilinks/citas/deps).
+                for ref in issue.anclado_a or []:
+                    if not self._exists(proj, ref.ref_kind.value, ref.ref_id):
+                        report.broken_links.append(
+                            WikiLintIssue("broken_link", tk, block.target_id, block.context,
+                                          "enlace roto en incidencia → "
+                                          f"{ref.ref_kind.value}:{ref.ref_id}")
+                        )
                 if issue.kind == MemoryIssueKind.CONTRADICCION and issue.texto:
                     report.contradictions.append(
                         WikiLintIssue("contradiction", tk, block.target_id, block.context,

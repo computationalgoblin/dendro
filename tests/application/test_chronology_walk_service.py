@@ -400,6 +400,11 @@ def test_step_scene_is_deterministic_and_causal():
     """PLAY-01: escena sin IA — posición, era, causas/consecuencias, visita."""
     project = _project_with_three_milestones()
     project.causal_milestones[1].causal_parent_hito_ids = ["h1"]
+    # BETA-MULTIAGENT2-FIX-09: la consecuencia se declara por el lado PADRE (fuente
+    # de verdad); antes este test se escribía a mano el espejo
+    # (`causal_child_hito_ids`), que en la app real no llenaba nadie. El espejo
+    # sucio se deja puesto a propósito: la escena lo ignora y no cuela ids rotos.
+    project.causal_milestones[2].causal_parent_hito_ids = ["h2"]
     project.causal_milestones[1].causal_child_hito_ids = ["h3", "desconocido"]
     project.project_chronology.eras.append(
         Era(name="Edad de Plata", start_year=0, end_year=None, order=0)

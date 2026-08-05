@@ -1,7 +1,7 @@
 # Dendro (narrative-architect)
 
-**Dendro** es una aplicación de escritorio para creación narrativa, worldbuilding,
-escritura y dirección de partidas de rol asistida por IA.
+**Dendro** es una aplicación de escritorio para creación narrativa, worldbuilding
+y escritura asistida por IA.
 
 El núcleo conceptual es una **base de conocimiento narrativa estructurada**:
 no un chatbot, no una wiki pasiva, no un VTT y no un grafo decorativo.

@@ -38,7 +38,10 @@ CREATIVE_PRESETS: dict[str, dict] = {
         },
     },
     "weird_mystery": {
-        "label": "Weird mystery",
+        # BETA-AUDIT-13: la etiqueta estaba en inglés entre diez presets en español
+        # («Tragedia íntima», «Fábula oscura»…). La CLAVE no se toca: es dato que ya
+        # está guardado en proyectos existentes.
+        "label": "Misterio extraño",
         "description": "Misterio que se resiste a explicaciones convencionales.",
         "config": {
             "identidad": {"genero_principal": "weird_fiction", "publico": "adulto"},

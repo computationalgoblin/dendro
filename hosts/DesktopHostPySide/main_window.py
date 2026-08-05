@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -66,6 +67,10 @@ from hosts.DesktopHostPySide.widgets.toast_layer import ToastLayer
 # Index constants for the stack widget (BETA1-A01: only Home + Creation in runtime)
 _IDX_HOME = 0
 _IDX_CREATION = 1
+# BETA-AUDIT-01: ventana de coalescencia del guardado a disco, en ms. Por encima del
+# antirrebote de 800 ms de los formularios, para que la validación del payload se
+# asiente antes de escribir y para que un lote de riego no escriba por entidad.
+_AUTOSAVE_DEBOUNCE_MS = 1500
 
 
 def _qt_widget_alive(widget) -> bool:
@@ -109,6 +114,8 @@ class MainWindow(QMainWindow):
         self._build_controllers()
         self._build_views()
         self._build_shell()
+        # FIX-13 (G2-19): Deshacer/Rehacer/Guardar existían solo como teclas.
+        self._build_menus()
         # UX13: capa de toasts app-wide; ctx.notify(msg, kind) la alimenta.
         self._toast_layer = ToastLayer(self)
         # UX33: levanta los toasts sobre la command bar para que queden junto al
@@ -127,6 +134,17 @@ class MainWindow(QMainWindow):
         self._undo_history = UndoHistory()
         self._restoring = False
         self._undo_project_id = None
+        # BETA-AUDIT-01: antirrebote del guardado a DISCO. Es independiente del
+        # antirrebote de 800 ms de los formularios (que gobierna cuándo se valida y
+        # aplica el payload en memoria): este coalesce las escrituras para que una
+        # ráfaga de teclas —o un lote de riego— no produzca una escritura por
+        # elemento. Cada save crea además una copia `.bak`, así que guardar de más
+        # quema el historial de copias (ver BETA-AUDIT-15).
+        self._dirty = False
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(_AUTOSAVE_DEBOUNCE_MS)
+        self._autosave_timer.timeout.connect(self._flush_autosave)
         self._apply_live_preferences()
         self._apply_advanced_mode(self.ctx.advanced_mode)
         # PA02: auto-carga el último proyecto al arrancar (queda cargado pero el
@@ -145,6 +163,18 @@ class MainWindow(QMainWindow):
         self.lc = LayerController(project_service=ps)
         # Autoguardado silencioso (sin toast/refresh/diálogo). Lo consume quien lo necesite.
         self.ctx.request_save_silent = self._save_active_project_silent
+        # BETA-AUDIT-01: toda mutación por controlador programa un guardado DIFERIDO
+        # a disco. Antes solo mutaba memoria y una caída perdía la sesión entera.
+        # Va en los controladores (no en cada panel) para cubrir también las
+        # superficies que mutan sin formulario: arrastrar un lapso de vida, crear
+        # una relación en el Mapa, convertir un fantasma.
+        self.ctx.request_save_debounced = self._schedule_silent_save
+        # BETA-MULTIAGENT2-FIX-14 (G2-22): `self.cc` faltaba en esta lista. Aceptar
+        # una semilla no ensuciaba el proyecto → no había autoguardado → no había
+        # instantánea → Ctrl+Z no llegaba. Y los candidatos que estadía un job de IA
+        # (`_auto_stage_and_notify` → `controller.create`) vivían solo en RAM.
+        for ctrl in (self.ec, self.rc, self.cc):
+            ctrl.on_mutated = self._schedule_silent_save
         # SHIP-01: cualquier vista puede llevar al usuario a los Ajustes de IA.
         self.ctx.open_ai_settings = self._open_ai_settings
 
@@ -166,8 +196,12 @@ class MainWindow(QMainWindow):
         self.home_view.register_callback("open_recent", self._open_project_path)
         # SHIP-04: Acerca de Dendro (versión + identidad).
         self.home_view.register_callback("about", self._open_about_dialog)
+        # BETA-AUDIT-05: canal de feedback de la beta cerrada.
+        self.home_view.register_callback("report_problem", self._report_problem)
         # BETA2-MEM-10: visor editorial de Memoria (función de proyecto).
         self.home_view.register_callback("memory_menu", self._open_memory_panel)
+        # FIX-11 (fase A): «Salud del proyecto» — una sola puerta a «qué va mal».
+        self.home_view.register_callback("health_menu", self._open_health_panel)
         self.home_view.register_callback("new_project", self._new_project)
         self.home_view.register_callback("open_project", self._open_project)
         self.home_view.register_callback("save_project", self._save)
@@ -191,6 +225,93 @@ class MainWindow(QMainWindow):
         # removed from views/workspaces.py.
 
     # ── Shell ────────────────────────────────────────────────────────────────
+
+    def _build_menus(self):
+        """Barra de menús con acciones NOMBRADAS (BETA-MULTIAGENT2-FIX-13, G2-19).
+
+        Hasta aquí la ventana no tenía ni una sola `QAction`: Deshacer, Rehacer y
+        Guardar existían y funcionaban, pero SOLO como teclas dentro de
+        `keyPressEvent`. Una escritora los descubrió por casualidad («por probar,
+        pulso Ctrl+Z. Y funciona»); nadie más tenía forma de enterarse.
+
+        Esto es PEGAMENTO, no función nueva: cada acción llama al handler que ya
+        existía. `keyPressEvent` se conserva TAL CUAL —incluida la razón por la
+        que vive ahí— porque es lo que deja que los campos de texto conserven su
+        deshacer nativo. Comprobado en este repo: con una `QAction` de ámbito de
+        ventana y `QKeySequence.Undo`, un `QLineEdit` con el foco SIGUE deshaciendo
+        su propia edición (Qt manda `ShortcutOverride` al widget con foco primero)
+        y la acción no se dispara. El atajo se ENSEÑA sin robarlo.
+        """
+        barra = self.menuBar()
+        barra.clear()
+        # Referencias fuertes desde Python: sin ellas el recolector se lleva los
+        # QAction y el menú se queda con punteros muertos («Internal C++ object
+        # already deleted» al leer su texto).
+        self._menu_actions: list[QAction] = []
+        self._menus = []
+
+        def _accion(menu, texto, handler_name, atajo=None, *, tip=""):
+            action = QAction(texto, self)
+            if atajo is not None:
+                action.setShortcut(atajo)
+            action.setStatusTip(tip or texto)
+            # Enlace TARDÍO por nombre: la acción llama al handler que exista en
+            # ese momento — el mismo que usa `keyPressEvent`, sin copiarlo.
+            action.triggered.connect(lambda _checked=False, n=handler_name: getattr(self, n)())
+            menu.addAction(action)
+            self._menu_actions.append(action)
+            return action
+
+        def _menu(titulo):
+            menu = barra.addMenu(titulo)
+            self._menus.append(menu)
+            return menu
+
+        archivo = _menu("&Archivo")
+        _accion(archivo, "Guardar", "_save", QKeySequence.StandardKey.Save,
+                tip="Guarda el proyecto en su fichero")
+        _accion(archivo, "Exportar…", "_export_project",
+                tip="Exporta el proyecto a un fichero aparte")
+        # El QAction que devuelve `addSeparator()` también necesita una referencia
+        # fuerte en Python, o el menú acaba con un puntero muerto.
+        self._menu_actions.append(archivo.addSeparator())
+        _accion(archivo, "Ajustes", "_open_config_panel",
+                tip="Apariencia, tamaño de letra e IA")
+        # El QAction que devuelve `addSeparator()` también necesita una referencia
+        # fuerte en Python, o el menú acaba con un puntero muerto.
+        self._menu_actions.append(archivo.addSeparator())
+        # Sin atajo: en Windows `StandardKey.Quit` no resuelve a nada útil y el
+        # menú acababa enseñando un «Exit» fantasma.
+        _accion(archivo, "Salir", "close", tip="Cierra Dendro (ofrece guardar)")
+
+        edicion = _menu("&Edición")
+        self.action_undo = _accion(
+            edicion, "Deshacer", "_undo", QKeySequence.StandardKey.Undo,
+            tip="Deshace el último cambio del canon",
+        )
+        self.action_redo = _accion(
+            edicion, "Rehacer", "_redo", QKeySequence.StandardKey.Redo,
+            tip="Rehace el cambio deshecho",
+        )
+
+        ayuda = _menu("A&yuda")
+        _accion(ayuda, "Glosario", "_open_glossary",
+                tip="Qué significan anillo, regar, semilla, foco…")
+        _accion(ayuda, "Acerca de Dendro", "_open_about_dialog")
+        _accion(ayuda, "Reportar un problema", "_report_problem")
+        return barra
+
+    def _open_glossary(self) -> None:
+        """FIX-13 (G2-20): el glosario, en una superficie que se LEE sin hover."""
+        _apptrace("UI open_glossary")
+        from hosts.DesktopHostPySide.widgets.field_help import GlossaryPanel
+
+        if self.ctx.drawer is None:
+            return
+        if getattr(self.ctx, "left_drawer", None) and self.ctx.left_drawer.isVisible():
+            self.ctx.left_drawer.close()
+        self.ctx.drawer.set_content(GlossaryPanel(), title="Glosario")
+        self.ctx.drawer.open()
 
     def _build_shell(self):
         cw = QWidget()
@@ -422,9 +543,18 @@ class MainWindow(QMainWindow):
         """Apply appearance preferences immediately."""
         _apptrace("UI apply_preferences")
         ctx = self.ctx
-        # Font size
-        size_map = {"small": "12px", "medium": "13px", "large": "16px"}
-        base_size = size_map.get(ctx.font_size, "13px")
+        # BETA-MULTIAGENT2-FIX-13 (G2-18): el override de abajo SÍ emitía el
+        # tamaño correcto, pero perdía la batalla de precedencia contra los ~190
+        # `font-size:` literales que los widgets se ponen a sí mismos (en Qt la
+        # hoja del PROPIO widget gana a la del ancestro). Resultado medido por la
+        # tester: 11 px en «Mediano» y 11 px en «Grande».
+        # La escala del design system reescribe ESOS literales — el único punto
+        # donde el arreglo funciona de verdad — y `apply_font_scale` la reaplica
+        # al árbol ya construido.
+        from hosts.DesktopHostPySide.widgets import design_system as _ds
+
+        _ds.set_font_scale(ctx.font_size)
+        base_size = f"{_ds.TYPE_BODY_PX}px"
 
         # Font family
         family = ctx.font_family or "Georgia"
@@ -444,7 +574,17 @@ class MainWindow(QMainWindow):
             f"font-size: {base_size}; font-family: {family}, 'Courier New', serif; }}"
         )
         # Apply as a secondary stylesheet on top of APP_STYLESHEET
-        self.setStyleSheet(APP_STYLESHEET + override)
+        self.setStyleSheet(_ds.scale_stylesheet(APP_STYLESHEET) + override)
+        # …y el árbol ya construido (lo que Carmen tenía delante al cambiar el
+        # ajuste): cada widget conserva su hoja original y se reescala desde ella,
+        # así que llamar N veces no compone tamaños.
+        _ds.apply_font_scale(self)
+        # Las superficies que nazcan DESPUÉS (cajones, paneles, diálogos) traen sus
+        # propios píxeles literales: el vigía las reescala al mostrarse. Solo se
+        # engancha si la escala no es «Mediano».
+        app = QApplication.instance()
+        if app is not None:
+            _ds.sync_font_scale_watcher(app)
 
         self.log_msg(f"Preferencias aplicadas: fuente {family} {base_size}")
 
@@ -558,20 +698,32 @@ class MainWindow(QMainWindow):
                 "open_project": self._open_project,
                 "save_project": self._save,
                 "close_project": self._close_project,
+                # BETA-AUDIT-04 / BETA-AUDIT-15
+                "export_project": self._export_project,
+                "restore_backup": self._restore_backup_dialog,
             },
             on_preview=self._preview_project_change,
         )
         self.ctx.drawer.set_content(panel, title="Proyecto")
         self.ctx.drawer.open()
 
-    def _open_memory_panel(self):
-        """BETA2-MEM-10: visor editorial de Memoria (función de proyecto)."""
+    def _open_memory_panel(self, select_key=None):
+        """BETA2-MEM-10: visor/EDITOR de la wiki de Memoria (función de proyecto).
+
+        FIX-11 (fase C): el panel recibe el ``ctx`` para poder PEDIR el guardado a
+        disco (``request_save_silent``) — antes una página escrita a mano vivía solo
+        en memoria hasta que otra mutación cualquiera disparaba el autoguardado.
+        ``select_key`` deja abrirlo ya posado sobre una página (lo usa «Salud del
+        proyecto» para saltar a la página con el enlace roto).
+        """
         _apptrace("UI open_memory_panel")
         if self.ctx.drawer is None:
             return
         if self.ctx.drawer.isVisible():
-            self.ctx.drawer.close()
-            return
+            if select_key is None:
+                self.ctx.drawer.close()
+                return
+            # Con destino explícito no se cierra: se reutiliza el cajón.
         if getattr(self.ctx, "left_drawer", None) and self.ctx.left_drawer.isVisible():
             self.ctx.left_drawer.close()
         ws = getattr(self, "creation_workspace", None)
@@ -580,9 +732,96 @@ class MainWindow(QMainWindow):
             return
         from hosts.DesktopHostPySide.widgets.memory_viewer_panel import MemoryViewerPanel
 
-        panel = MemoryViewerPanel(mem_svc, getattr(ws, "memory_ai_service", None))
+        panel = MemoryViewerPanel(mem_svc, getattr(ws, "memory_ai_service", None), ctx=self.ctx)
         self.ctx.drawer.set_content(panel, title="Memoria")
         self.ctx.drawer.open()
+        if select_key is not None:
+            panel.select_page(select_key)
+
+    def _open_health_panel(self):
+        """FIX-11 (fase A): panel único «Salud del proyecto» (pestañas).
+
+        El lint de la wiki ya existía y funcionaba —determinista, sin IA— pero no
+        tenía ninguna puerta desde `hosts/`. Vive aquí, bajo demanda, sin contador
+        permanente en la esquina (G2-07). Una sola puerta a «qué va mal»:
+        Continuidad + Wiki + Estructura (el panel que ya existía, aquí como
+        pestaña; su píldora de Creación sigue siendo la puerta en contexto). La
+        pestaña *Continuidad* (FIX-10) entra la primera: es lo que el usuario
+        viene a mirar.
+        """
+        _apptrace("UI open_health_panel")
+        if self.ctx.drawer is None:
+            return
+        if self.ctx.drawer.isVisible():
+            self.ctx.drawer.close()
+            return
+        if getattr(self.ctx, "left_drawer", None) and self.ctx.left_drawer.isVisible():
+            self.ctx.left_drawer.close()
+        ps = getattr(self.controller, "ps", None)
+        if ps is None or getattr(ps, "active_project", None) is None:
+            self.ctx.notify("Abre un proyecto para revisar su salud", "info")
+            return
+        from hosts.DesktopHostPySide.widgets.memory_viewer_panel import element_label
+        from hosts.DesktopHostPySide.widgets.project_health_panel import ProjectHealthPanel
+        from packages.application.wiki_lint_service import WikiLintService
+
+        ws = getattr(self, "creation_workspace", None)
+        lint = WikiLintService(ps, ai_job_service=getattr(ws, "ai_job_service", None))
+        panel = ProjectHealthPanel(
+            lint,
+            on_open_page=self._open_memory_panel,
+            element_label=lambda kind, tid: element_label(ps.active_project, kind, tid),
+        )
+        self._add_structure_tab(panel, ws)
+        self._add_continuity_tab(panel, ps)
+        self.ctx.drawer.set_content(panel, title="Salud del proyecto")
+        self.ctx.drawer.open()
+
+    def _add_continuity_tab(self, panel, ps) -> None:
+        """FIX-10 (G2-15): la Continuidad, PRIMERA pestaña y por delante de la wiki.
+
+        Es lo que el usuario viene a buscar cuando abre «qué va mal»: que su
+        propia historia no se contradiga. Coste IA cero, sin red y sin proveedor.
+        El descarte lo aplica el servicio; aquí solo se pide guardar a disco.
+        """
+        try:
+            from hosts.DesktopHostPySide.widgets.continuity_panel import ContinuityTab
+            from packages.application.continuity_service import ContinuityService
+
+            panel.add_section(
+                "Continuidad",
+                ContinuityTab(
+                    ContinuityService(ps),
+                    on_dismissed=getattr(self.ctx, "request_save_silent", None),
+                ),
+                index=0,
+            )
+            panel.show_section("Continuidad")
+        except Exception as exc:  # noqa: BLE001 — una pestaña no puede tumbar el panel
+            self.ctx.log("error", f"No se pudo montar la pestaña de Continuidad: {exc}")
+
+    def _add_structure_tab(self, panel, ws) -> None:
+        """Cuelga el panel de Estructura como pestaña (misma clase, misma lógica)."""
+        svc = getattr(ws, "structural_service", None)
+        accept = getattr(ws, "_accept_structural_finding", None)
+        if svc is None or not callable(accept):
+            return
+        try:
+            from hosts.DesktopHostPySide.widgets.structure_review_panel import (
+                StructureReviewPanel,
+            )
+
+            panel.add_section(
+                "Estructura",
+                StructureReviewPanel(
+                    svc,
+                    on_accept=accept,
+                    on_close=lambda: self.ctx.drawer.close(),
+                    log=self.ctx.log,
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — una pestaña no puede tumbar el panel
+            self.ctx.log("error", f"No se pudo montar la pestaña de Estructura: {exc}")
 
     def _preview_project_change(self, project_type: str, worldbuilding_active: bool):
         """Apply project type/worldbuilding as a live preview without saving."""
@@ -674,6 +913,141 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
+
+    def _export_project(self) -> None:
+        """BETA-AUDIT-04: saca el mundo a una carpeta de Markdown legible sin Dendro.
+
+        `ExportService` existía, estaba testado y ningún fichero del host lo importaba:
+        no había forma de exportar salvo copiar el JSON a mano. Los cuatro perfiles de
+        la auditoría lo pidieron; es la respuesta a «¿y si mañana abandonáis esto?».
+        """
+        from packages.application.export_service import ExportService
+
+        if self.controller.ps.active_project is None:
+            self.ctx.notify("Abre un proyecto antes de exportar", "info")
+            return
+        carpeta = QFileDialog.getExistingDirectory(self, "Exportar el mundo a una carpeta")
+        if not carpeta:
+            return
+        # Se exporta con audiencia «gm» (todo menos fantasmas): es TU copia de
+        # seguridad legible, no una versión para enseñar. Los filtros por audiencia
+        # del servicio quedan para cuando exista una superficie que los ofrezca.
+        resultado = ExportService(project_service=self.controller.ps).export_markdown_bundle(
+            carpeta, audience="gm"
+        )
+        if isinstance(resultado, Error):
+            self.ctx.notify(f"No se pudo exportar: {resultado.error}", "error")
+            return
+        datos = resultado.value
+        self.ctx.notify(
+            f"Exportadas {datos['entidades']} entidades a {datos['carpeta']}", "success"
+        )
+        self.log_msg(f"Exportado a {datos['carpeta']} ({datos['entidades']} entidades)")
+
+    def _restore_backup_dialog(self) -> None:
+        """BETA-AUDIT-15: restaurar ELIGIENDO la copia, no la más reciente a ciegas.
+
+        Hasta ahora restaurar sólo existía como reacción a un fallo de apertura, y
+        tomaba `backups[0]` sin enseñar fechas. PRUEBA-GUIADA.md §13 pedía probarlo
+        desde el panel de Proyecto, donde no estaba.
+        """
+        from datetime import datetime
+
+        from PySide6.QtWidgets import QInputDialog
+
+        ruta = self.controller.current_path
+        if not ruta:
+            self.ctx.notify("Guarda el proyecto una vez antes de restaurar copias", "info")
+            return
+        origen = Path(ruta)
+        copias = sorted(
+            origen.parent.glob(f"{origen.stem}*.bak*"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not copias:
+            self.ctx.notify("Todavía no hay copias de seguridad de este proyecto", "info")
+            return
+        etiquetas = [
+            f"{datetime.fromtimestamp(p.stat().st_mtime):%d/%m/%Y %H:%M:%S}"
+            f"  ·  {p.stat().st_size // 1024} KB  ·  {p.name}"
+            for p in copias
+        ]
+        elegida, ok = QInputDialog.getItem(
+            self,
+            "Restaurar copia de seguridad",
+            "Se guardará una copia del estado actual antes de restaurar.\n"
+            "Elige a qué momento quieres volver:",
+            etiquetas,
+            0,
+            False,
+        )
+        if not ok or not elegida:
+            return
+        destino = copias[etiquetas.index(elegida)]
+        confirmar = QMessageBox.question(
+            self,
+            "Restaurar copia",
+            f"Vas a sustituir el proyecto por la copia de {elegida.split('  ·  ')[0]}.\n"
+            "El estado actual se guardará como copia antes de hacerlo. ¿Continuar?",
+        )
+        if confirmar != QMessageBox.StandardButton.Yes:
+            return
+        resultado = self.controller.ps.store.restore_backup(origen, destino)
+        if isinstance(resultado, Error):
+            self.ctx.notify(f"No se pudo restaurar: {resultado.error}", "error")
+            return
+        self._open_project_path(str(origen))
+        self.ctx.notify(f"Restaurada la copia de {elegida.split('  ·  ')[0]}", "success")
+
+    def _report_problem(self) -> None:
+        """BETA-AUDIT-05: prepara un informe de incidencia para la beta cerrada.
+
+        Copia al portapapeles un bloque con versión, sistema y las últimas líneas del
+        registro, abre el correo con ese mismo texto y deja la carpeta de registros a
+        mano. Nada se envía solo: el usuario revisa y decide.
+        """
+        import platform
+        from urllib.parse import quote
+
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from hosts.DesktopHostPySide.app_context import _log_dir
+        from packages.domain.config import AppConfig
+
+        version = AppConfig().app_version
+        lineas: list[str] = []
+        try:
+            registro = _log_dir() / "dendro.log"
+            if registro.exists():
+                cola = registro.read_text(encoding="utf-8", errors="replace").splitlines()
+                lineas = cola[-40:]
+        except Exception as exc:  # noqa: BLE001 — reportar nunca debe romper
+            lineas = [f"(no se pudo leer el registro: {exc})"]
+
+        cuerpo = (
+            "Cuéntame qué hacías y qué esperabas que pasara:\n\n\n"
+            "----- datos técnicos (no los borres) -----\n"
+            f"Dendro {APP_VERSION}\n"
+            f"{platform.platform()} · Python {platform.python_version()}\n"
+            f"Registro: {_log_dir() / 'dendro.log'}\n\n"
+            "Últimas líneas del registro:\n" + ("\n".join(lineas) or "(vacío)")
+        )
+
+        app = QApplication.instance()
+        if app is not None:
+            app.clipboard().setText(cuerpo)
+
+        asunto = f"Dendro {version} — informe de la beta"
+        QDesktopServices.openUrl(
+            QUrl(f"mailto:?subject={quote(asunto)}&body={quote(cuerpo)}")
+        )
+        self.ctx.notify(
+            "Informe copiado al portapapeles. Si no se ha abierto tu correo, pégalo "
+            "donde quieras contármelo.",
+            "info",
+        )
 
     def _handle_ai_status(self, msg: str):
         """Log AI status and refresh contextual AI consumers after settings changes."""
@@ -835,6 +1209,7 @@ class MainWindow(QMainWindow):
                 self.ctx.remember_project(self.controller.current_path)
                 self._refresh_recent_project_option()
             self.ctx.notify("Proyecto guardado", "success")
+            self._mark_saved()  # BETA-AUDIT-01: el disco ya refleja la memoria
             self._refresh_all_views()
             if self.ctx.drawer:
                 self.ctx.drawer.close()
@@ -855,6 +1230,11 @@ class MainWindow(QMainWindow):
                 return True
             if not self.controller.current_path:
                 self.log_msg("Autoguardado: sin ruta de proyecto; cambios en memoria")
+                # BETA-MULTIAGENT2-FIX-14 (G2-22): sin ruta no hay disco, pero SÍ hay
+                # deshacer. Los diálogos de borrado prometen ahora Ctrl+Z «mientras la
+                # ventana siga abierta»; esa promesa tiene que cumplirse también en un
+                # proyecto que todavía no se ha guardado nunca.
+                self._record_undo_snapshot()
                 return False
             result = self.controller.save()
             if not isinstance(result, Ok):
@@ -864,10 +1244,50 @@ class MainWindow(QMainWindow):
                 return False
             self.ctx.remember_project(self.controller.current_path)
             self._record_undo_snapshot()  # WS-C: captura el estado asentado
+            self._mark_saved()  # BETA-AUDIT-01
             return True
         except Exception as exc:  # noqa: BLE001 — el autoguardado nunca rompe la app
             self.log_msg(f"Error en autoguardado: {exc}")
             return False
+
+    # ── BETA-AUDIT-01: guardado diferido a disco ─────────────────────────────
+
+    def _schedule_silent_save(self) -> None:
+        """Marca el proyecto como sucio y (re)arranca la ventana de antirrebote.
+
+        Lo llaman los controladores tras cada mutación asentada. No escribe aquí:
+        escribe ``_flush_autosave`` cuando el usuario deja de teclear.
+        """
+        self._dirty = True
+        self._publish_save_state()
+        self._autosave_timer.start()
+
+    def _flush_autosave(self) -> bool:
+        """Escribe a disco si hay cambios pendientes. Idempotente y seguro.
+
+        Si falla (p. ej. un proyecto que aún no tiene ruta) el estado sigue sucio:
+        el diálogo de cierre y la píldora «Guardar» siguen siendo la red de seguridad.
+        """
+        self._autosave_timer.stop()
+        if not self._dirty:
+            return True
+        return self._save_active_project_silent()
+
+    def _mark_saved(self) -> None:
+        """El disco ya refleja la memoria: cancela el diferido pendiente."""
+        self._autosave_timer.stop()
+        self._dirty = False
+        self._publish_save_state()
+
+    def _publish_save_state(self) -> None:
+        """Publica el estado de guardado para que la píldora «Guardar» no mienta."""
+        self.ctx.unsaved_changes = self._dirty
+        hook = getattr(self.ctx, "on_save_state_changed", None)
+        if callable(hook):
+            try:
+                hook(self._dirty)
+            except Exception:  # noqa: BLE001 — un indicador nunca rompe el guardado
+                pass
 
     # ── WS-C: deshacer/rehacer por instantánea de documento ──────────────────
 
@@ -911,6 +1331,12 @@ class MainWindow(QMainWindow):
             self._restoring = False
 
     def _undo(self) -> None:
+        # BETA-MULTIAGENT2-FIX-14 (G2-22): asienta lo que esté en vuelo ANTES de
+        # deshacer. La instantánea solo se registra al vencer el antirrebote de
+        # 1.500 ms, así que un Ctrl+Z inmediato caía en «Nada que deshacer» — y el
+        # diálogo de borrado promete ahora que se puede deshacer «mientras la
+        # ventana siga abierta». Sin esto la promesa sería falsa durante 1,5 s.
+        self._flush_autosave()
         snapshot = self._undo_history.undo()
         if snapshot is None:
             self.log_msg("Nada que deshacer")
@@ -933,6 +1359,12 @@ class MainWindow(QMainWindow):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             key = event.key()
+            # BETA-AUDIT-01: Ctrl+S no existía en todo el host. Va antes que el
+            # deshacer por ser la tecla más esperada, y no interfiere con él.
+            if key == Qt.Key.Key_S and not shift:
+                self._save()
+                event.accept()
+                return
             if key == Qt.Key.Key_Z and not shift:
                 self._undo()
                 event.accept()
@@ -943,7 +1375,57 @@ class MainWindow(QMainWindow):
                 return
         super().keyPressEvent(event)
 
+    def _flush_pending_form_autosaves(self) -> int:
+        """BETA-MULTIAGENT2-FIX-14 (G2-23): vuelca los formularios a medio escribir.
+
+        Los paneles de detalle (`NodeDetailPanel`, `MilestoneDetailPanel`,
+        `RelationDetailPanel`) tienen su PROPIO antirrebote de 800 ms: hasta que
+        vence, lo tecleado no ha llegado ni al modelo en memoria. Cerrar dentro de
+        esa ventana se comía la última frase aunque el usuario respondiera
+        «Guardar», porque `_save_active_project` persiste el modelo tal como está.
+
+        El barrido es GENÉRICO a propósito: `foco_view._flush_form_autosave` solo
+        mira `self._form_panel` y dejaba fuera el panel de hito (que no volcaba
+        NADIE, nunca), los formularios del cajón del Mapa y los dos del modo dual.
+
+        Devuelve cuántos temporizadores se volcaron (para los tests).
+        """
+        volcados = 0
+        try:
+            candidatos = QApplication.allWidgets()
+        except Exception:  # noqa: BLE001 — sin QApplication no hay nada que volcar
+            return 0
+        for widget in candidatos:
+            # El `_autosave_timer` de una VENTANA es el guardado diferido del
+            # proyecto, no un formulario a medio escribir: dispararlo aquí
+            # escribiría a disco antes de preguntar y se llevaría por delante el
+            # «Descartar» del usuario. Ese lo gestiona `closeEvent` aparte.
+            if isinstance(widget, QMainWindow):
+                continue
+            timer = getattr(widget, "_autosave_timer", None)
+            if timer is None or not _qt_alive(widget):
+                continue
+            try:
+                if not timer.isActive():
+                    continue
+                timer.stop()
+                timer.timeout.emit()  # dispara el mismo slot que habría disparado solo
+                volcados += 1
+            except RuntimeError:
+                continue  # widget con el objeto C++ ya destruido: nada que volcar
+            except Exception as exc:  # noqa: BLE001 — un panel roto no impide cerrar
+                self.log_msg(f"Error volcando el formulario al cerrar: {exc}")
+        return volcados
+
     def closeEvent(self, event):
+        # BETA-MULTIAGENT2-FIX-14 (G2-23): PRIMERO volcar lo escrito en los
+        # formularios (su antirrebote propio de 800 ms), porque eso puede ensuciar
+        # el proyecto; solo después se para el diferido y se pregunta. Al revés el
+        # diálogo mentiría sobre lo que hay en disco.
+        self._flush_pending_form_autosaves()
+        # BETA-AUDIT-01: si queda un guardado diferido en vuelo, asiéntalo antes de
+        # preguntar nada — así el diálogo refleja el estado real del disco.
+        self._autosave_timer.stop()
         if self._get_active_project() is None:
             shutdown_workers()
             event.accept()

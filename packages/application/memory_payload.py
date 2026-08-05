@@ -11,6 +11,7 @@ entidades/relaciones/hitos nuevos; solo secciones editoriales ancladas por id.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from packages.domain.narrative_memory import MemoryIssueKind, MemoryTargetKind
@@ -19,9 +20,36 @@ from packages.domain.result import Error, Ok, Result
 _ISSUE_KINDS = frozenset(k.value for k in MemoryIssueKind)
 _REF_KINDS = frozenset(k.value for k in MemoryTargetKind)
 
+# BETA-MULTIAGENT2-FIX-07: el prompt NUNCA ha pedido enlaces dentro de la prosa
+# (solo el array `wikilinks`), pero el modelo se los inventa igual: 13
+# `[Nombre](ref_id: Nombre)` en una página del beta y 8 `[[Nombre]]` en otra. El
+# visor pinta el cuerpo con `setPlainText`, así que esa sintaxis llegaba cruda a
+# la cara del usuario. Se limpia al normalizar: queda el TEXTO, se va el andamio.
+_WIKILINK_DOBLE = re.compile(r"\[\[([^\[\]]+)\]\]")
+_ENLACE_MD = re.compile(r"\[([^\[\]]+)\]\([^()]*\)")
+
 
 def _clean_str(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _sin_enlaces_inventados(value: Any) -> str:
+    """Quita del texto los enlaces markdown/wiki que el modelo se inventa.
+
+    ``[[Ana]]`` → ``Ana``; ``[[Ana|la reina]]`` → ``la reina`` (el texto visible);
+    ``[Ana](ref_id: Ana)`` → ``Ana``. No toca los corchetes sueltos ni el resto
+    de la prosa: solo esas dos formas.
+    """
+    text = _clean_str(value)
+    if not text:
+        return text
+    text = _WIKILINK_DOBLE.sub(lambda m: m.group(1).split("|")[-1].strip(), text)
+    for _ in range(3):  # enlaces anidados o pegados: converge rápido
+        limpio = _ENLACE_MD.sub(r"\1", text)
+        if limpio == text:
+            break
+        text = limpio
+    return text.strip()
 
 
 def _str_list(value: Any) -> list[str]:
@@ -77,16 +105,16 @@ def normalize_memory_payload(payload: Any) -> Result[dict[str, Any], str]:
     if not isinstance(payload, dict):
         return Error("La actualizacion de Memoria debe ser un objeto JSON")
 
-    resumen = _clean_str(payload.get("resumen_editorial") or payload.get("summary"))
+    resumen = _sin_enlaces_inventados(payload.get("resumen_editorial") or payload.get("summary"))
     if not resumen:
         return Error("Actualizacion de Memoria sin 'resumen_editorial'")
 
     return Ok(
         {
             "resumen_editorial": resumen,
-            "estado_actual": _clean_str(payload.get("estado_actual")),
+            "estado_actual": _sin_enlaces_inventados(payload.get("estado_actual")),
             # BETA2-WIKI-06: cuerpo editorial largo (la "página") + enlaces/etiquetas.
-            "cuerpo": _clean_str(payload.get("cuerpo")),
+            "cuerpo": _sin_enlaces_inventados(payload.get("cuerpo")),
             "notas_causales": _str_list(payload.get("notas_causales")),
             "issues": _issue_list(payload.get("issues")),
             "citations": _citation_list(payload.get("citations")),

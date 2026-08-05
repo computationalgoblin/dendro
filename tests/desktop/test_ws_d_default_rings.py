@@ -16,7 +16,11 @@ import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from packages.domain.project import Project  # noqa: E402
-from packages.domain.world_layer import WorldLayer, default_world_layers  # noqa: E402
+from packages.domain.world_layer import (  # noqa: E402
+    WorldLayer,
+    default_world_layers,
+    starter_world_layers,
+)
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +36,14 @@ def _wizard(app):
     return w
 
 
-def test_checkbox_on_by_default_and_seeds_16_rings(app):
+def test_checkbox_on_by_default_and_seeds_starter_rings(app):
+    """BETA-AUDIT-09: siembra el set de ARRANQUE, no los 16 del mapa causal.
+
+    Sembrar los 16 abría el Mapa de un proyecto nuevo con dieciséis anillos vacíos
+    encabezados por «Metafísica y cosmología» — la casilla se añadió para no dejar
+    perdido al usuario y conseguía lo contrario. Los 16 siguen siendo la referencia
+    del contrato §10.3 y los usa la migración v7; sólo cambia con qué se arranca.
+    """
     w = _wizard(app)
     assert w.seed_rings_check.isChecked()  # recomendado por defecto
     cfg = w.collect_config()
@@ -42,9 +53,13 @@ def test_checkbox_on_by_default_and_seeds_16_rings(app):
     assert proj.world_layers == []
     w.apply_to_project(proj)
 
-    expected = [layer.id for layer in default_world_layers()]
+    expected = [layer.id for layer in starter_world_layers()]
     assert [layer.id for layer in proj.world_layers] == expected
-    assert len(proj.world_layers) == 16
+    assert 3 <= len(proj.world_layers) <= 6
+    # Los ids son los MISMOS que en el mapa completo: adoptar la estructura entera
+    # más tarde no duplica anillos ni pierde el rango causal.
+    completos = {layer.id for layer in default_world_layers()}
+    assert {layer.id for layer in proj.world_layers} <= completos
 
 
 def test_unchecked_leaves_map_empty(app):

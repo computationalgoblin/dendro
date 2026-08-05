@@ -19,7 +19,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from packages.application.structured_reference_service import backlinks_for
+from packages.application.structured_reference_service import (
+    backlinks_for,
+    build_known_targets,
+    canon_kind_by_id,
+    resolve_page_refs,
+)
+from packages.domain.entity_taxonomy import is_branch
 from packages.domain.narrative_memory import (
     MemoryCitation,
     MemoryFreshness,
@@ -27,12 +33,18 @@ from packages.domain.narrative_memory import (
     MemoryOrigin,
     MemoryTargetKind,
 )
+from packages.domain.project_chronology import format_year_with_era
 from packages.domain.result import Error, Ok, Result
 
 _UNCONFIGURED = (
     "No hay proveedor de IA configurado. Configura NARRATIVE_AI_PROVIDER, "
     "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL para actualizar Memoria."
 )
+
+# BETA-MULTIAGENT2-FIX-07: tope de relaciones que viajan al contexto de Memoria.
+# Antes era un `rels[:12]` mudo; ahora el recorte se DECLARA en el propio texto
+# (contrato §9: no truncar callando).
+_MAX_CONTEXT_RELATIONS = 12
 
 
 def _as_kind(value: MemoryTargetKind | str) -> MemoryTargetKind:
@@ -97,6 +109,10 @@ class MemoryAIService:
         issues = [MemoryIssue.from_dict(i) for i in mem_data.get("issues", [])]
         citations = [MemoryCitation.from_dict(c) for c in mem_data.get("citations", [])]
         wikilinks = [MemoryCitation.from_dict(w) for w in mem_data.get("wikilinks", [])]
+        # BETA-MULTIAGENT2-FIX-07: ningún enlace se persiste sin existir en el canon.
+        citations, wikilinks, refs_counts = self._resolve_refs(
+            proj, citations, wikilinks, issues
+        )
         sections = dict(
             resumen_editorial=mem_data.get("resumen_editorial", ""),
             estado_actual=mem_data.get("estado_actual", ""),
@@ -109,8 +125,45 @@ class MemoryAIService:
         )
 
         if mode == "regen":
-            return self._apply_regen(kind, target_id, context, sections)
-        return self._apply_regar(kind, target_id, context, sections)
+            return self._apply_regen(kind, target_id, context, sections, refs_counts)
+        return self._apply_regar(kind, target_id, context, sections, refs_counts)
+
+    # ── resolución de enlaces contra el canon (BETA-MULTIAGENT2-FIX-07) ──
+
+    @staticmethod
+    def _resolve_refs(
+        proj,
+        citations: list[MemoryCitation],
+        wikilinks: list[MemoryCitation],
+        issues: list[MemoryIssue],
+    ) -> tuple[list[MemoryCitation], list[MemoryCitation], dict[str, int]]:
+        """Resuelve wikilinks/citas/anclajes contra el canon ANTES de persistirlos.
+
+        La IA escribe el NOMBRE dentro de ``ref_id`` (37 de 40 refs de los dos
+        mundos del beta) porque el contexto solo le daba UN id: el suyo. Aquí se
+        rescata lo rescatable, se corrige el ``ref_kind`` y se tira lo que no
+        existe — contándolo, para que el descarte no sea silencioso.
+
+        Una incidencia que pierde su anclaje SOBREVIVE: una contradicción sin
+        ancla sigue valiendo (lo contrario perdería el diagnóstico entero).
+        """
+        known = build_known_targets(proj)
+        kinds = canon_kind_by_id(proj)
+        total = {"resueltos": 0, "ambiguos": 0, "descartados": 0}
+
+        def _sumar(parcial: dict[str, int]) -> None:
+            for clave, valor in parcial.items():
+                total[clave] += valor
+
+        res_cit = resolve_page_refs(proj, citations, known=known, kinds_by_id=kinds)
+        _sumar(res_cit.counts())
+        res_wiki = resolve_page_refs(proj, wikilinks, known=known, kinds_by_id=kinds)
+        _sumar(res_wiki.counts())
+        for issue in issues:
+            res_anc = resolve_page_refs(proj, issue.anclado_a, known=known, kinds_by_id=kinds)
+            _sumar(res_anc.counts())
+            issue.anclado_a = res_anc.resueltas
+        return res_cit.resueltas, res_wiki.resueltas, total
 
     # ── reconstruccion en lote de la wiki (BETA2-WIKI-06) ───────────────
 
@@ -169,7 +222,7 @@ class MemoryAIService:
 
     # ── aplicacion segun modo ───────────────────────────────────────────
 
-    def _apply_regar(self, kind, target_id, context, sections) -> Result[dict, str]:
+    def _apply_regar(self, kind, target_id, context, sections, refs=None) -> Result[dict, str]:
         res = self.memory_service.upsert_memory(
             kind,
             target_id,
@@ -181,9 +234,9 @@ class MemoryAIService:
         )
         if isinstance(res, Error):
             return Error(res.error)
-        return Ok({"applied": True, "block": res.value})
+        return Ok({"applied": True, "block": res.value, "refs": dict(refs or {})})
 
-    def _apply_regen(self, kind, target_id, context, sections) -> Result[dict, str]:
+    def _apply_regen(self, kind, target_id, context, sections, refs=None) -> Result[dict, str]:
         existing = self.memory_service.get_memory(kind, target_id, context)
         block = existing.value if isinstance(existing, Ok) else None
         if block is None:
@@ -198,7 +251,7 @@ class MemoryAIService:
             )
             if isinstance(res, Error):
                 return Error(res.error)
-            return Ok({"applied": True, "block": res.value})
+            return Ok({"applied": True, "block": res.value, "refs": dict(refs or {})})
         after = {
             "resumen_editorial": sections["resumen_editorial"],
             "estado_actual": sections["estado_actual"],
@@ -219,7 +272,7 @@ class MemoryAIService:
         )
         if isinstance(res, Error):
             return Error(res.error)
-        return Ok({"applied": False, "proposal": res.value})
+        return Ok({"applied": False, "proposal": res.value, "refs": dict(refs or {})})
 
     # ── contexto compacto del elemento ──────────────────────────────────
 
@@ -236,17 +289,9 @@ class MemoryAIService:
             if block.estado_actual:
                 lines.append(f"ESTADO PREVIO: {block.estado_actual}")
         if kind == MemoryTargetKind.ENTITY and hasattr(proj, "relations_for"):
-            rels = proj.relations_for(target_id)
-            if rels:
-                names = []
-                for rel in rels[:12]:
-                    other = rel.target_id if rel.source_id == target_id else rel.source_id
-                    ent = proj.entity_by_id(other) if hasattr(proj, "entity_by_id") else None
-                    label = getattr(ent, "name", other) if ent else other
-                    names.append(
-                        f"{getattr(rel.relation_type, 'value', rel.relation_type)}→{label}"
-                    )
-                lines.append("RELACIONES: " + "; ".join(names))
+            lines.extend(self._entity_relation_lines(proj, target_id))
+        if kind == MemoryTargetKind.MILESTONE:
+            lines.extend(self._milestone_participant_lines(proj, target_id))
         # BETA2-WIKI-13b: identidad TEMPORAL de la entidad (lapso + hitos en los que
         # participa). Antes la Memoria era temporalmente ciega y no podía registrar
         # "en qué hitos intervino", parte de quién es. Riego ya lo tenía; aquí se iguala.
@@ -258,6 +303,70 @@ class MemoryAIService:
         return "\n".join(line for line in lines if line)
 
     @staticmethod
+    def _element_ref(proj, entity_id: str) -> str:
+        """``Nombre (entity:<id>)`` — nombre humano + referencia enlazable de una entidad."""
+        ent = proj.entity_by_id(entity_id) if hasattr(proj, "entity_by_id") else None
+        nombre = str(getattr(ent, "name", "") or "") if ent is not None else ""
+        kind = (
+            MemoryTargetKind.BRANCH.value
+            if (ent is not None and is_branch(ent))
+            else MemoryTargetKind.ENTITY.value
+        )
+        return f"{nombre or '(sin nombre)'} ({kind}:{entity_id})"
+
+    @staticmethod
+    def _entity_relation_lines(proj, target_id: str) -> list[str]:
+        """RELACIONES con DIRECCIÓN explícita e ids (BETA-MULTIAGENT2-FIX-07, G2-10).
+
+        Antes esto era ``sirve_a→Nadia Kerr`` viniera la relación de entrada o de
+        salida: en español se lee «(yo) sirvo a Nadia», y la página de Otho —que
+        es a quien Nadia sirve— escribió «Subordinado de Nadia Kerr». La IA no
+        alucinó: transcribió lo que le dijimos. Ahora cada línea dice quién es el
+        origen y quién el destino, y trae el id de la vecina y el de la relación
+        para que los ``wikilinks`` puedan ser correctos.
+        """
+        rels = proj.relations_for(target_id) or []
+        if not rels:
+            return []
+        lines = ["RELACIONES (la dirección es literal; usa estos id en 'wikilinks'):"]
+        for rel in rels[:_MAX_CONTEXT_RELATIONS]:
+            rtype = getattr(rel.relation_type, "value", rel.relation_type)
+            rel_id = str(getattr(rel, "id", "") or "")
+            sufijo = f" · vínculo relation:{rel_id}" if rel_id else ""
+            if rel.source_id == rel.target_id:
+                lines.append(f"- [refleja] ESTA ENTIDAD —{rtype}→ ESTA ENTIDAD{sufijo}")
+                continue
+            if rel.source_id == target_id:
+                otro = MemoryAIService._element_ref(proj, rel.target_id)
+                lines.append(f"- [sale] ESTA ENTIDAD —{rtype}→ {otro}{sufijo}")
+            else:
+                otro = MemoryAIService._element_ref(proj, rel.source_id)
+                lines.append(f"- [entra] {otro} —{rtype}→ ESTA ENTIDAD{sufijo}")
+        resto = len(rels) - _MAX_CONTEXT_RELATIONS
+        if resto > 0:
+            lines.append(
+                f"- (RECORTE: hay {len(rels)} relaciones y solo se listan "
+                f"{_MAX_CONTEXT_RELATIONS}; quedan {resto} sin mostrar)"
+            )
+        return lines
+
+    @staticmethod
+    def _milestone_participant_lines(proj, milestone_id: str) -> list[str]:
+        """Entidades afectadas por un hito, con su id (para que sus enlaces resuelvan)."""
+        hito = None
+        for h in getattr(proj, "causal_milestones", []) or []:
+            if getattr(h, "id", "") == milestone_id:
+                hito = h
+                break
+        if hito is None:
+            return []
+        afectadas = [str(x) for x in (getattr(hito, "affected_entity_ids", []) or []) if x]
+        if not afectadas:
+            return []
+        refs = [MemoryAIService._element_ref(proj, eid) for eid in afectadas]
+        return ["PARTICIPANTES (usa estos id en 'wikilinks'): " + "; ".join(refs)]
+
+    @staticmethod
     def _entity_temporal_lines(proj, entity_id: str) -> list[str]:
         """LAPSO + HITOS en los que participa la entidad (identidad temporal, BETA2-WIKI-13b).
 
@@ -265,12 +374,20 @@ class MemoryAIService:
         zona por año). Best-effort: nunca rompe el contexto si faltan datos o ``proj`` es
         duck-typed en tests."""
         lines: list[str] = []
+        # BETA-MULTIAGENT-FIX-03 (G-03): años con su traducción a era.
+        chrono = getattr(proj, "project_chronology", None)
         e = proj.entity_by_id(entity_id) if hasattr(proj, "entity_by_id") else None
         if e is not None:
             birth = getattr(e, "birth_year", None)
             death = getattr(e, "death_year", None)
             if birth is not None or death is not None:
-                lines.append(f"LAPSO: {birth} → {death}")
+                birth_label = (
+                    format_year_with_era(chrono, birth) if birth is not None else "abierto"
+                )
+                death_label = (
+                    format_year_with_era(chrono, death) if death is not None else "abierto"
+                )
+                lines.append(f"LAPSO: {birth_label} → {death_label}")
         if not hasattr(proj, "causal_milestones"):
             return lines
         try:
@@ -284,13 +401,36 @@ class MemoryAIService:
                     m = by_id.get(mid)
                     if m is None:
                         continue
-                    year = f"año {m.year}" if getattr(m, "year", None) is not None else "sin fecha"
-                    hito_lines.append(f"[{rol}] {getattr(m, 'title', '')} ({year})")
+                    year = format_year_with_era(chrono, getattr(m, "year", None))
+                    # FIX-07: el hito viaja con su id, o su wikilink no puede ser correcto.
+                    hito_lines.append(
+                        f"[{rol}] {getattr(m, 'title', '')} ({year}) "
+                        f"({MemoryTargetKind.MILESTONE.value}:{mid})"
+                    )
             if hito_lines:
                 lines.append("HITOS: " + "; ".join(hito_lines))
         except Exception:  # noqa: BLE001 — la Memoria nunca rompe por el contexto temporal
             pass
         return lines
+
+    @staticmethod
+    def _narrative_type_label(entity) -> str:
+        """BETA-MULTIAGENT2-FIX-08 (G2-13/A3): el TIPO NARRATIVO del elemento.
+
+        Sin este dato la IA no podía saber que una rama es un CONTENEDOR de otros
+        elementos y la describía como «el ente u objeto denominado …» (ESC-13). No
+        es un fallo de criterio del modelo: era un campo que faltaba en el contexto.
+        """
+        raw = getattr(entity, "entity_type", None)
+        tipo = str(getattr(raw, "value", raw) or "").strip()
+        meta = getattr(entity, "custom_metadata", None) or {}
+        semantic = str(meta.get("semantic_type") or "").strip() if isinstance(meta, dict) else ""
+        if tipo == "contenedor":
+            detalle = f"rama/contenedor de {semantic}" if semantic else "rama/contenedor"
+            return f"{tipo} ({detalle}: AGRUPA otros elementos, no es una cosa del mundo)"
+        if tipo:
+            return f"{tipo} (hoja: elemento individual)"
+        return "desconocido"
 
     @staticmethod
     def _element_canon(proj, kind: MemoryTargetKind, target_id: str) -> str:
@@ -299,20 +439,33 @@ class MemoryAIService:
             if e is not None:
                 return (
                     f"CANON: nombre={getattr(e, 'name', '')}; "
+                    f"tipo_narrativo={MemoryAIService._narrative_type_label(e)}; "
                     f"breve={getattr(e, 'brief_description', '')}; "
                     f"desarrollo={getattr(e, 'extended_description', '')}"
                 )
         if kind == MemoryTargetKind.RELATION and hasattr(proj, "relation_by_id"):
             r = proj.relation_by_id(target_id)
             if r is not None:
+                rtype = str(getattr(getattr(r, "relation_type", None), "value", "") or "relacion")
+                # FIX-07: extremos con NOMBRE e id (antes solo dos uuid crudos), y la
+                # dirección escrita de forma que no se pueda leer al revés.
+                origen = MemoryAIService._element_ref(proj, r.source_id)
+                destino = MemoryAIService._element_ref(proj, r.target_id)
                 return (
-                    f"CANON: relacion {r.source_id}→{r.target_id}; {getattr(r, 'description', '')}"
+                    f"CANON: relacion {origen} —{rtype}→ {destino} "
+                    f"(el ORIGEN es {origen}, el DESTINO es {destino}); "
+                    f"tipo_narrativo={rtype} "
+                    "(vínculo entre dos elementos); "
+                    f"{getattr(r, 'description', '')}"
                 )
         if kind == MemoryTargetKind.MILESTONE:
             for h in getattr(proj, "causal_milestones", []) or []:
                 if h.id == target_id:
+                    mtype = getattr(h, "milestone_type", None)
                     return (
                         f"CANON: hito={getattr(h, 'title', '')}; "
+                        f"tipo_narrativo={str(getattr(mtype, 'value', mtype) or 'hito')} "
+                        "(evento causal de la cronología); "
                         f"{getattr(h, 'description', '')}; {getattr(h, 'rationale', '')}"
                     )
         return "CANON: (elemento sin ficha localizable)"

@@ -91,7 +91,7 @@ class WorldLayerService:
 
         name = name.strip()
         if not name:
-            return Error("Layer name cannot be empty")
+            return Error("El nombre del anillo no puede estar vacío.")
 
         new_id = f"layer_user_{uuid.uuid4().hex[:8]}"
         if order is None:

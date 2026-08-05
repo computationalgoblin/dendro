@@ -48,6 +48,39 @@ class BotanicalSpinBox(QSpinBox):
     def _step(self, direction: int) -> None:
         self.setValue(self.value() + direction * self.singleStep())
 
+    # ── BETA-MULTIAGENT2-FIX-14 (G2-26b): el año «1962» se veía como «19» ──────
+    #
+    # `resizeEvent` reservaba `setTextMargins(size, 0, size, 0)` para los botones
+    # −/+ (≥24 px por lado) pero NADIE se lo contaba a `sizeHint`/`minimumSizeHint`,
+    # que seguían siendo los de `QSpinBox` y no sabían nada de esos 48+ px: el área
+    # útil del texto quedaba por debajo del ancho de un año de cuatro dígitos.
+    # El autor ya lo sabía y lo había parcheado A MANO en UN solo llamador
+    # (`milestone_detail_panel.end_year_edit`), dejando los otros cuatro rotos.
+    # Arreglado en el widget, se curan los cinco usos de golpe.
+
+    def _ancho_reservado(self) -> int:
+        """Píxeles que se comen los dos botones −/+ más su respiro lateral.
+
+        Usa la altura EFECTIVA (nunca menor que `minimumHeight`) porque el hint se
+        consulta antes del primer `resizeEvent`, cuando `height()` aún es la altura
+        provisional del widget recién creado y daría un reservado corto.
+        """
+        # El tope de 48 px acota el caso patológico del widget aún sin colocar en
+        # un layout (Qt le da 640×480 de partida y saldría un hint absurdo).
+        alto = min(max(self.height(), self.minimumHeight()), 48)
+        size = max(20, alto - 8)
+        return 2 * size + 16  # 5 px de margen a cada lado + holgura de dibujo
+
+    def sizeHint(self):  # noqa: N802 (Qt API)
+        base = super().sizeHint()
+        base.setWidth(base.width() + self._ancho_reservado())
+        return base
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt API)
+        base = super().minimumSizeHint()
+        base.setWidth(base.width() + self._ancho_reservado())
+        return base
+
     def resizeEvent(self, event):  # noqa: N802 (Qt API)
         super().resizeEvent(event)
         size = max(20, self.height() - 8)
@@ -58,6 +91,9 @@ class BotanicalSpinBox(QSpinBox):
         edit = self.lineEdit()
         if edit is not None:
             edit.setTextMargins(size, 0, size, 0)
+        # El hint depende de la altura (los botones son cuadrados): al cambiar de
+        # alto hay que reconsultarlo o el ancho mínimo se queda obsoleto.
+        self.updateGeometry()
 
 
 __all__ = ["BotanicalSpinBox"]

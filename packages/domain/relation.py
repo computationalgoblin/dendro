@@ -26,7 +26,7 @@ from packages.domain.temporal_span import TemporalSpan
 
 
 class RelationType(str, Enum):
-    """Tipos de relación narrativa — §4.3 (27 valores)."""
+    """Tipos de relación narrativa — §4.3."""
 
     PERTENECE_A = "pertenece_a"
     CONTIENE = "contiene"
@@ -38,7 +38,9 @@ class RelationType(str, Enum):
     SIRVE_A = "sirve_a"
     ES_ALIADO_DE = "es_aliado_de"
     ES_ENEMIGO_DE = "es_enemigo_de"
-    CONOCE="cono..."
+    # BETA-MULTIAGENT-FIX-04: el valor era literalmente "cono..." (typo) — el tipo
+    # legítimo "conoce" no parseaba y caía al fallback. Alias de carga más abajo.
+    CONOCE = "conoce"
     DESCONOCE = "desconoce"
     SOSPECHA = "sospecha"
     OCULTA = "oculta"
@@ -70,6 +72,23 @@ class RelationType(str, Enum):
     CONOCE_FALSAMENTE = "conoce_falsamente"
     POSEE_CONOCIMIENTO = "posee_conocimiento"
     REVELA_CONOCIMIENTO = "revela_conocimiento"
+    # ── Parentesco (BETA-MULTIAGENT2-FIX-12, G2-16) ──
+    # El enum tenía 41 tipos y NINGUNO de parentesco: en un árbol genealógico no
+    # se podía decir «madre». La familia se ofrece entera (no entra en
+    # HIDDEN_RELATION_TYPES) y viaja al Mapa, al Foco y al prompt.
+    # OJO: parentesco NO es CONTENCIÓN. Ninguno de estos valores puede entrar en
+    # los conjuntos de contención (foco_rings/foco_zones/watering_service/
+    # issue_service/temporal_coherence): una madre no es una rama que contiene a
+    # su hijo y no debe arrastrarlo de anillo.
+    ES_PROGENITOR_DE = "es_progenitor_de"
+    ES_MADRE_DE = "es_madre_de"
+    ES_PADRE_DE = "es_padre_de"
+    ES_HIJO_DE = "es_hijo_de"
+    ES_HERMANO_DE = "es_hermano_de"
+    ESTA_CASADO_CON = "esta_casado_con"
+    ES_ANTEPASADO_DE = "es_antepasado_de"
+    ES_DESCENDIENTE_DE = "es_descendiente_de"
+    ES_FAMILIAR_DE = "es_familiar_de"
 
 
 class Direction(str, Enum):
@@ -89,6 +108,77 @@ class IntensityLevel(str, Enum):
     MEDIA = "media"
     ALTA = "alta"
     MUY_ALTA = "muy_alta"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Parentesco e inversos — BETA-MULTIAGENT2-FIX-12 (G2-16)
+# ═══════════════════════════════════════════════════════════════════════
+
+# La familia de parentesco, como conjunto nombrado: la leen los tests de
+# no-contención y cualquier consumidor que quiera tratarla como bloque.
+KINSHIP_RELATION_TYPES: frozenset["RelationType"] = frozenset(
+    {
+        RelationType.ES_PROGENITOR_DE,
+        RelationType.ES_MADRE_DE,
+        RelationType.ES_PADRE_DE,
+        RelationType.ES_HIJO_DE,
+        RelationType.ES_HERMANO_DE,
+        RelationType.ESTA_CASADO_CON,
+        RelationType.ES_ANTEPASADO_DE,
+        RelationType.ES_DESCENDIENTE_DE,
+        RelationType.ES_FAMILIAR_DE,
+    }
+)
+
+# Mapa de inversos. El enum YA practicaba el patrón (`contiene`/`pertenece_a`,
+# `causo`/`fue_causado_por`) sin declararlo en ninguna parte; aquí se declara,
+# para que la ficha del otro extremo pueda decir «hijo de» sin duplicar la
+# arista.
+#
+# Reparto de género (decisión de producto de este ticket, pregunta abierta nº2):
+# `es_madre_de`/`es_padre_de` existen porque son lo que la gente dice, y son
+# ESPECIALIZACIONES de `es_progenitor_de`. Por eso el mapa es **total** (todo
+# parentesco tiene inverso, y su inverso es también parentesco) y **cerrado**,
+# pero solo es una involución estricta sobre el núcleo neutro: el inverso de
+# `es_madre_de` es `es_hijo_de`, y el de `es_hijo_de` es el neutro
+# `es_progenitor_de` (no puede adivinar el género del que no lo declaró). A
+# partir del segundo paso el mapa es estable: inv(inv(inv(x))) == inv(x).
+RELATION_INVERSES: dict["RelationType", "RelationType"] = {
+    # Pares que el enum ya practicaba de hecho.
+    RelationType.CONTIENE: RelationType.PERTENECE_A,
+    RelationType.PERTENECE_A: RelationType.CONTIENE,
+    RelationType.CAUSO: RelationType.FUE_CAUSADO_POR,
+    RelationType.FUE_CAUSADO_POR: RelationType.CAUSO,
+    # Parentesco.
+    RelationType.ES_PROGENITOR_DE: RelationType.ES_HIJO_DE,
+    RelationType.ES_MADRE_DE: RelationType.ES_HIJO_DE,
+    RelationType.ES_PADRE_DE: RelationType.ES_HIJO_DE,
+    RelationType.ES_HIJO_DE: RelationType.ES_PROGENITOR_DE,
+    # Simétricas: son su propio inverso.
+    RelationType.ES_HERMANO_DE: RelationType.ES_HERMANO_DE,
+    RelationType.ESTA_CASADO_CON: RelationType.ESTA_CASADO_CON,
+    RelationType.ES_FAMILIAR_DE: RelationType.ES_FAMILIAR_DE,
+    RelationType.ES_ANTEPASADO_DE: RelationType.ES_DESCENDIENTE_DE,
+    RelationType.ES_DESCENDIENTE_DE: RelationType.ES_ANTEPASADO_DE,
+}
+
+
+def inverse_relation_type(value: Any) -> "RelationType | None":
+    """Tipo inverso declarado, o ``None`` si ese tipo no tiene pareja.
+
+    Acepta el enum o su ``value``; un tipo desconocido devuelve ``None`` (no se
+    inventa una simetría que el dominio no declara).
+    """
+    resolved = coerce_relation_type(value)
+    if resolved is None:
+        return None
+    return RELATION_INVERSES.get(resolved)
+
+
+def is_kinship(value: Any) -> bool:
+    """¿Este tipo pertenece a la familia de parentesco?"""
+    resolved = coerce_relation_type(value)
+    return resolved is not None and resolved in KINSHIP_RELATION_TYPES
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -219,9 +309,11 @@ class NarrativeRelation:
             id=data.get("id") or str(uuid.uuid4()),
             source_id=data.get("source_id", ""),
             target_id=data.get("target_id", ""),
-            relation_type=_parse_enum(
-                RelationType, data.get("relation_type"),
-                RelationType.ESTA_RELACIONADO_CON,
+            # FIX-04: coerción con alias legado ("cono...") y fallback tolerante —
+            # SOLO para cargas; la aceptación de candidatos valida antes.
+            relation_type=(
+                coerce_relation_type(data.get("relation_type"))
+                or RelationType.ESTA_RELACIONADO_CON
             ),
             direction=_parse_enum(
                 Direction, data.get("direction"), Direction.UNIDIRECCIONAL,
@@ -288,6 +380,30 @@ def validate_relation(relation: NarrativeRelation) -> list[str]:
 _EnumType = type[Enum]
 
 
+# FIX-04: valores persistidos por versiones con el typo del enum. Cargar sin
+# pérdida (evolucion-esquema.md); al re-guardar sale ya el valor bueno.
+_LEGACY_RELATION_TYPE_ALIASES: dict[str, str] = {"cono...": "conoce"}
+
+
+def coerce_relation_type(value: Any) -> "RelationType | None":
+    """RelationType desde texto con alias legado; None si es DESCONOCIDO.
+
+    A diferencia de ``_parse_enum``, no aplana a un default: el llamador decide
+    (la aceptación de candidatos rechaza con error visible; ``from_dict`` cae al
+    default tolerante para no romper cargas).
+    """
+    if isinstance(value, RelationType):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        raw = _LEGACY_RELATION_TYPE_ALIASES.get(raw, raw)
+        try:
+            return RelationType(raw)
+        except ValueError:
+            return None
+    return None
+
+
 def _parse_enum(enum_cls: _EnumType, value: Any, default: Any) -> Any:
     if isinstance(value, enum_cls):
         return value
@@ -344,4 +460,10 @@ __all__ = [
     "Direction",
     "IntensityLevel",
     "validate_relation",
+    "coerce_relation_type",
+    # BETA-MULTIAGENT2-FIX-12 (G2-16)
+    "KINSHIP_RELATION_TYPES",
+    "RELATION_INVERSES",
+    "inverse_relation_type",
+    "is_kinship",
 ]

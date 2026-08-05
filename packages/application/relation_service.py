@@ -16,12 +16,13 @@ from typing import Any
 from packages.application.repository_port import ProjectRepository, default_repository
 from packages.application.temporal_dating import normalize_relation_dating
 from packages.domain.custom_types import CustomFieldValue
-from packages.domain.entity import CanonState, VisibilityState
+from packages.domain.entity import CanonState, CertaintyLevel, VisibilityState
 from packages.domain.relation import (
     Direction,
     IntensityLevel,
     NarrativeRelation,
     RelationType,
+    coerce_relation_type,
     validate_relation,
 )
 from packages.domain.result import Error, Ok, Result
@@ -77,6 +78,9 @@ class RelationService:
             ("intensity", IntensityLevel, IntensityLevel.MEDIA),
             ("canon_state", CanonState, CanonState.CANONICO),
             ("visibility_state", VisibilityState, VisibilityState.VISIBLE_USUARIO),
+            # FIX-11 (B1): la UI manda cadenas ("dudoso"); aquí se coercen al enum
+            # del dominio, sin modelo paralelo.
+            ("certainty_level", CertaintyLevel, CertaintyLevel.PROBABLE),
         )
         for attr, enum_cls, default in enum_specs:
             value = getattr(relation, attr, default)
@@ -151,19 +155,28 @@ class RelationService:
         if not self._entity_exists(tgt):
             return Error(f"Target entity '{tgt}' does not exist")
 
-        rtype = relation_type
-        if isinstance(rtype, str):
-            try:
-                rtype = RelationType(rtype)
-            except ValueError:
-                rtype = RelationType.ESTA_RELACIONADO_CON
-        if rtype is None:
-            rtype = (data or {}).get("relation_type", RelationType.ESTA_RELACIONADO_CON)
-            if isinstance(rtype, str):
-                try:
-                    rtype = RelationType(rtype)
-                except ValueError:
-                    rtype = RelationType.ESTA_RELACIONADO_CON
+        # BETA-MULTIAGENT2-FIX-03 (G2-03, alcance F): un tipo string fuera del
+        # dominio se aplanaba a `esta_relacionado_con` EN SILENCIO — lo aprobado
+        # dejaba de ser lo guardado. BETA-MULTIAGENT-FIX-04 (ronda 1) ya cerró
+        # esto en la aceptación de candidatos; la ruta DIRECTA seguía mintiendo.
+        # Vacío/None = default EXPLÍCITO, no desconocido. `coerce_relation_type`
+        # (dominio) devuelve None para lo desconocido: ese es el contrato.
+        raw_type: Any = relation_type
+        # Precedencia histórica: si `data` (no vacío) trae `relation_type`, manda
+        # sobre el argumento — antes lo hacía la reasignación de la línea de abajo.
+        if isinstance(data, dict) and data and data.get("relation_type") is not None:
+            raw_type = data["relation_type"]
+        if raw_type is None or (isinstance(raw_type, str) and not raw_type.strip()):
+            rtype = RelationType.ESTA_RELACIONADO_CON
+        else:
+            resolved = coerce_relation_type(raw_type)
+            if resolved is None:
+                return Error(
+                    f"Tipo de relación desconocido: «{raw_type}». Tipos válidos: "
+                    + ", ".join(t.value for t in RelationType)
+                    + "."
+                )
+            rtype = resolved
 
         relation = NarrativeRelation(
             source_id=src,
@@ -178,12 +191,19 @@ class RelationService:
                 "validity_conditions", "tags", "source_id", "target_id", "layer_ids",
                 "custom_relation_type_id",
                 "birth_year", "death_year",  # BETA1-J04: intervalo temporal
+                # BETA-MULTIAGENT2-FIX-11 (fase B1): nivel de certeza. El campo
+                # existía en el dominio desde siempre y el servicio lo TIRABA en
+                # silencio devolviendo Ok — la historiadora no podía marcar qué
+                # relación está documentada y cuál se la inventó ella (HIS-05).
+                "certainty_level",
             )
             for key in scalar_fields:
                 if key in data:
                     setattr(relation, key, data[key])
-            if "relation_type" in data:
-                relation.relation_type = data["relation_type"]
+            # FIX-03: el tipo YA está resuelto arriba (o se rechazó). Antes se
+            # reasignaba el string crudo de `data` y `_normalize_relation_enums`
+            # lo aplanaba al default si no era del dominio.
+            relation.relation_type = rtype
             if isinstance(data.get("life_span"), dict):
                 relation.life_span = TemporalSpan.from_dict(data["life_span"])
             self._normalize_relation_enums(relation)
@@ -230,6 +250,25 @@ class RelationService:
         if isinstance(proj, Error):
             return Error(proj.error)
 
+        # BETA-MULTIAGENT2-FIX-12 (G2-16): la ruta MANUAL también aplanaba al
+        # ACTUALIZAR — `setattr` crudo + `_normalize_relation_enums` devolvían el
+        # tipo desconocido al genérico y el resultado era `Ok`. FIX-03 cerró la
+        # creación; esta es la puerta gemela. Se resuelve ANTES de tocar nada
+        # para no dejar la relación a medio escribir. Vacío/None = «no se toca».
+        new_type: RelationType | None = None
+        if "relation_type" in data:
+            raw_type = data["relation_type"]
+            if raw_type is None or (isinstance(raw_type, str) and not raw_type.strip()):
+                new_type = RelationType.ESTA_RELACIONADO_CON
+            else:
+                new_type = coerce_relation_type(raw_type)
+                if new_type is None:
+                    return Error(
+                        f"Tipo de relación desconocido: «{raw_type}». Tipos válidos: "
+                        + ", ".join(t.value for t in RelationType)
+                        + "."
+                    )
+
         for r in proj.value.relations:
             if r.id == relation_id:
                 previous = {
@@ -250,6 +289,10 @@ class RelationService:
                     "layer_ids": list(getattr(r, "layer_ids", []) or []),
                     "custom_relation_type_id": getattr(r, "custom_relation_type_id", None),
                     "custom_metadata": dict(getattr(r, "custom_metadata", {}) or {}),
+                    # FIX-11 (B1): el rollback por validación tiene que devolver
+                    # también lo que ahora sí es editable.
+                    "certainty_level": getattr(r, "certainty_level", None),
+                    "life_span": getattr(r, "life_span", None),
                 }
                 scalar_fields = (
                     "source_id", "target_id", "description", "temporality", "causality",
@@ -257,12 +300,22 @@ class RelationService:
                     "visibility_state", "validity_conditions", "tags", "layer_ids",
                     "custom_relation_type_id",
                     "birth_year", "death_year",  # BETA1-G06: relation temporal interval
+                    # FIX-11 (B1): certeza editable también al ACTUALIZAR (create ya
+                    # la acepta desde este mismo ticket).
+                    "certainty_level",
                 )
                 for key in scalar_fields:
                     if key in data:
                         setattr(r, key, data[key])
-                if "relation_type" in data:
-                    setattr(r, "relation_type", data["relation_type"])
+                if new_type is not None:
+                    r.relation_type = new_type
+                # FIX-11 (B1): `create_relation` aceptaba `life_span` rico y
+                # `update_relation` no, así que la datación rica de una relación se
+                # podía crear pero no corregir. Mismo trato en las dos puertas.
+                if isinstance(data.get("life_span"), dict):
+                    # set_life_span mantiene el ESPEJO ENTERO (birth/death_year) en
+                    # sincronía: la cronología sigue ordenando por el año.
+                    r.set_life_span(TemporalSpan.from_dict(data["life_span"]))
                 self._normalize_relation_enums(r)
                 if "custom_metadata" in data and isinstance(data["custom_metadata"], dict):
                     r.custom_metadata = dict(data["custom_metadata"])

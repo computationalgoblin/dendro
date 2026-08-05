@@ -154,6 +154,10 @@ HIDDEN_RELATION_TYPES: frozenset[RelationType] = frozenset(
     }
 )
 
+# BETA-MULTIAGENT2-FIX-12 (G2-16): la familia de PARENTESCO
+# (`KINSHIP_RELATION_TYPES`) se ofrece ENTERA. No añadir ninguno de sus valores
+# a `HIDDEN_RELATION_TYPES`: sin ellos en la caja no se puede decir «madre», que
+# es literalmente por lo que un autor de novela familiar abre la aplicación.
 OFFERED_RELATION_TYPES: tuple[RelationType, ...] = tuple(
     r for r in RelationType if r not in HIDDEN_RELATION_TYPES
 )

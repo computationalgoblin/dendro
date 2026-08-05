@@ -89,7 +89,12 @@ class TestPortraitStatusVignette:
         # Media-luna inferior: dentro del círculo, zona baja — el verde puro
         # del retrato queda velado por EARTH_TINT (gana canal rojo).
         low = QColor(image.pixel(_CENTER, _CENTER + int(_RADIUS * 0.76)))
-        assert low.red() > 100, f"esperaba velo tierra abajo, r={low.red()}"
+        # BETA-MULTIAGENT2-FIX-01: el umbral era `red() > 100`, un número mágico
+        # que codificaba el EARTH_TINT CLARO de antes (#CDBB97). Ahora el tinte es
+        # oscuro (criterio 6 de contraste), así que se comprueba lo que la prueba
+        # quería decir: el verde puro del retrato queda velado por TIERRA (el
+        # canal rojo se despega del azul), sin fijar un brillo concreto.
+        assert low.red() > low.blue() + 30, f"esperaba velo tierra abajo: {low.name()}"
         # Mitad superior: el retrato sigue viéndose (verde dominante).
         high = QColor(image.pixel(_CENTER, _CENTER - int(_RADIUS * 0.5)))
         assert high.green() > high.red() + 50, "el retrato no debe quedar tapado arriba"
@@ -110,5 +115,11 @@ class TestPortraitStatusVignette:
         item.set_watering_tint("sedienta")
         image = _render(scene)
         # Comportamiento JARDIN-01 intacto: relleno EARTH_TINT visible.
+        # FIX-01: se compara con el TOKEN, no con un brillo fijo — el tinte pasó a
+        # ser oscuro para cumplir 3:1 y `red() > 150` codificaba el color viejo.
+        from hosts.DesktopHostPySide.widgets.design_system import EARTH_TINT
+
+        expected = QColor(EARTH_TINT)
         inner = QColor(image.pixel(_CENTER, _CENTER + int(_RADIUS * 0.76)))
-        assert inner.red() > 150 and inner.red() > inner.blue()
+        assert abs(inner.red() - expected.red()) <= 6
+        assert inner.red() > inner.blue()

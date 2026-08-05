@@ -26,6 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_PATH = REPO_ROOT / "packaging" / "dendro.spec"
 DIST_DIR = REPO_ROOT / "dist" / "Dendro"
 README_USUARIO = REPO_ROOT / "README-USUARIO.md"
+# Prueba guiada (dry-run de máquina limpia + recorrido del tester); viaja en el zip.
+PRUEBA_GUIADA = REPO_ROOT / "PRUEBA-GUIADA.md"
 # SHIP-06: la licencia de evaluación beta viaja dentro del zip.
 LICENSE_PATH = REPO_ROOT / "LICENSE"
 # SHIP-05: proyecto de ejemplo curado — viaja junto al exe para que la primera
@@ -143,6 +145,12 @@ def main() -> int:
         print(f"[BUILD] Copiado {README_USUARIO.name} junto al exe.")
     else:
         print("[AVISO] No existe README-USUARIO.md; el zip irá sin manual de usuario.")
+
+    if PRUEBA_GUIADA.exists():
+        shutil.copy2(PRUEBA_GUIADA, DIST_DIR / PRUEBA_GUIADA.name)
+        print(f"[BUILD] Copiada {PRUEBA_GUIADA.name} junto al exe.")
+    else:
+        print("[AVISO] No existe PRUEBA-GUIADA.md; el zip irá sin recorrido de prueba.")
 
     if EJEMPLOS_DIR.is_dir():
         shutil.copytree(EJEMPLOS_DIR, DIST_DIR / "ejemplos", dirs_exist_ok=True)

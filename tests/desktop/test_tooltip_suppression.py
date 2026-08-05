@@ -8,7 +8,6 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QEvent
     from PySide6.QtGui import QPainterPath
     from PySide6.QtWidgets import QApplication
 
@@ -24,15 +23,18 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_tooltip_suppressor_blocks_tooltip_events(qapp):
-    from hosts.DesktopHostPySide.widgets.tooltip_suppression import install_tooltip_suppression
+def test_no_queda_supresor_de_tooltips(qapp):
+    """BETA-AUDIT-06: el módulo `tooltip_suppression` se retiró.
 
-    first = install_tooltip_suppression(qapp)
-    second = install_tooltip_suppression(qapp)
+    Nunca llegó a instalarse (cero llamadas a `install_tooltip_suppression` en todo
+    el host), pero su existencia sostenía un docstring falso en `field_help.py` que
+    afirmaba que `setToolTip` no mostraba nada — y por esa creencia el vocabulario
+    del jardín se quedó sin explicar durante toda la beta.
+    """
+    import importlib
 
-    assert first is second
-    assert first.eventFilter(qapp, QEvent(QEvent.Type.ToolTip)) is True
-    assert first.eventFilter(qapp, QEvent(QEvent.Type.KeyPress)) is False
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("hosts.DesktopHostPySide.widgets.tooltip_suppression")
 
 
 def test_creation_canvas_items_do_not_define_tooltips(qapp):

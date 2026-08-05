@@ -19,6 +19,7 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,21 @@ from packages.application.repository_port import (
 )
 from packages.domain.project import Project
 from packages.domain.result import Error, Ok, Result
+
+
+def _file_fingerprint(path: Path) -> tuple[int, int] | None:
+    """Huella barata de un fichero: (mtime en ns, tamaño).
+
+    BETA-AUDIT-12. No se hashea el contenido a propósito: un proyecto grande son
+    megas y esto corre en cada guardado, incluido el autoguardado diferido. Con
+    mtime+tamaño basta para detectar que ALGUIEN MÁS escribió; los falsos negativos
+    (misma marca de tiempo y mismo tamaño exacto) son irrelevantes en la práctica.
+    """
+    try:
+        estado = Path(path).stat()
+    except OSError:
+        return None
+    return (estado.st_mtime_ns, estado.st_size)
 
 
 @dataclass
@@ -100,6 +116,9 @@ class ProjectService:
             return Error(result.error)
 
         self.active_project = result.value
+        # BETA-AUDIT-12: se recuerda de qué fichero venimos y cómo estaba.
+        self._loaded_path = Path(path)
+        self._loaded_fingerprint = _file_fingerprint(path)
         return Ok(result.value)
 
     def set_last_worked_entity(self, entity_id: str) -> Result[None, str]:
@@ -142,7 +161,55 @@ class ProjectService:
         """
         if self.active_project is None:
             return Error("No active project to save")
-        return self.store.save(self.active_project, path)
+
+        # BETA-AUDIT-12: nadie comprobaba si el fichero había cambiado por debajo.
+        # Con el proyecto en una carpeta sincronizada (OneDrive, Drive, Dropbox) o
+        # abierto dos veces, el último en guardar se llevaba por delante el trabajo
+        # del otro en silencio — agravado porque el proyecto es un JSON monolítico
+        # que se reescribe entero.
+        conflicto = self._detect_external_change(path)
+        if conflicto is not None:
+            respaldo = self._write_conflict_copy(path)
+            detalle = f" Tu trabajo se ha guardado en «{respaldo.name}»." if respaldo else ""
+            return Error(
+                "El fichero del proyecto ha cambiado fuera de Dendro desde que lo "
+                f"abriste ({conflicto}). No se ha sobrescrito para no perder esos "
+                f"cambios.{detalle}"
+            )
+
+        resultado = self.store.save(self.active_project, path)
+        if not isinstance(resultado, Error):
+            # Tras un guardado correcto la huella se refresca: si no, el SEGUNDO
+            # autoguardado seguido se detectaría a sí mismo como conflicto.
+            self._loaded_fingerprint = _file_fingerprint(path)
+            self._loaded_path = Path(path)
+        return resultado
+
+    def _detect_external_change(self, path: Path) -> str | None:
+        """Devuelve una descripción del conflicto, o ``None`` si se puede guardar.
+
+        Solo vigila la ruta de la que se cargó: un ``save_as`` a otro sitio nunca
+        puede dar falso positivo.
+        """
+        destino = Path(path)
+        origen = getattr(self, "_loaded_path", None)
+        huella = getattr(self, "_loaded_fingerprint", None)
+        if huella is None or origen is None or destino != origen:
+            return None
+        if not destino.exists():
+            return None  # lo borraron: guardar lo recrea, no hay nada que pisar
+        actual = _file_fingerprint(destino)
+        if actual == huella:
+            return None
+        return "otra copia de Dendro o una carpeta sincronizada lo reescribió"
+
+    def _write_conflict_copy(self, path: Path) -> Path | None:
+        """Vuelca lo que hay en memoria a un fichero aparte para no perderlo."""
+        destino = Path(path)
+        marca = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        alterno = destino.with_name(f"{destino.stem}-conflicto-{marca}{destino.suffix}")
+        resultado = self.store.save(self.active_project, alterno)
+        return alterno if not isinstance(resultado, Error) else None
 
     def save_as(self, path: Path) -> Result[None, str]:
         """Persist the active project to a new path.
@@ -166,6 +233,10 @@ class ProjectService:
             ``Ok(None)`` always.
         """
         self.active_project = None
+        # BETA-AUDIT-12: sin huella no hay vigilancia de conflicto sobre un fichero
+        # que ya no tenemos abierto.
+        self._loaded_path = None
+        self._loaded_fingerprint = None
         return Ok(None)
 
     # ------------------------------------------------------------------

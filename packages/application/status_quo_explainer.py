@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from packages.application.causal_links import loose_threads
+
 
 def explain_status_quo(project: Any) -> dict[str, Any]:
     """Produce a status-quo report for a project using its causal milestones.
@@ -15,7 +17,8 @@ def explain_status_quo(project: Any) -> dict[str, Any]:
     Returns a serializable dict with:
     - summary: text overview
     - hitos_count: number of milestones
-    - hitos_without_consequences: milestones with no caused relations or children
+    - hitos_without_consequences: hitos que ningún hito posterior recoge
+      (`causal_links.loose_threads`, la única implementación de la consulta)
     - relations_without_hito: causal relations not explained by any milestone
     - opportunities: suggestions for worldbuilding expansion
     """
@@ -32,12 +35,10 @@ def explain_status_quo(project: Any) -> dict[str, Any]:
     relations = list(getattr(project, "relations", []) or [])
     entities = list(getattr(project, "entities", []) or [])
 
-    # Milestones without visible consequences
-    hitos_without = [
-        h for h in hitos
-        if not getattr(h, "caused_relation_ids", [])
-        and not getattr(h, "causal_child_hito_ids", [])
-    ]
+    # Hitos «plantados sin recoger». BETA-MULTIAGENT2-FIX-09: aquí vivía la
+    # consulta PARALELA (con su propia definición) de la que hay en
+    # `causal_milestone_service`. Ahora las dos consumen la MISMA función.
+    hitos_without = loose_threads(project)
 
     # Relations not explained by any milestone
     explained_ids: set[str] = set()

@@ -32,6 +32,24 @@ _UNCONFIGURED = (
 
 _CHARS_PER_TOKEN = 3.5
 _VALID_OPS = frozenset({"open_page", "read_canon", "search"})
+
+#: BETA-MULTIAGENT2-FIX-06 (G2-10): tope DURO de caracteres del mensaje que viaja al
+#: proveedor en CADA ronda. El presupuesto declarado (``token_budget``) solo medía lo
+#: TRAÍDO (`used_chars`), nunca el índice que se re-envía cada ronda: con 800 entidades
+#: eran 73.548 caracteres (~21.000 tokens) por ronda contra un "presupuesto" de 4.000.
+#: 24.000 caracteres ≈ 6.850 tokens: cabe holgado en cualquier ventana y acota el gasto.
+_DEFAULT_ROUND_CHARS = 24000
+#: Suelo del tope: por debajo no cabe ni la petición; recortar más sería mentir.
+_MIN_ROUND_CHARS = 2000
+
+#: Cortocircuito de wiki vacía (G2-10): sin una sola página escrita no hay NADA que
+#: abrir; navegar solo compraría selección de canon a ~21.000 tokens la ronda. Se dice
+#: en voz alta (nunca degradación silenciosa, mismo principio que FIX-02).
+_SIN_PAGINAS = (
+    "La wiki no tiene ninguna página escrita todavía: no hay nada que abrir, así que se "
+    "omite la navegación (coste de IA cero) y la petición sale con su contexto determinista. "
+    "Riega entidades para que la wiki tenga páginas que navegar."
+)
 _VALID_KINDS = frozenset(k.value for k in MemoryTargetKind)
 _SEARCH_HITS = 8
 _STOPWORDS = frozenset(
@@ -71,6 +89,11 @@ class NavigationRequest:
     # re-enviaba entero por ronda, coste de entrada ilimitado en proyectos grandes. Lo
     # omitido sigue siendo alcanzable por ``search``.
     max_index_entries: int = 400
+    # BETA-MULTIAGENT2-FIX-06 (G2-10): tope de CARACTERES del mensaje de cada ronda.
+    # ``max_index_entries`` acotaba el NÚMERO de entradas, no su tamaño: 400 entradas de
+    # hasta 120 caracteres seguían dando ~73.500 caracteres por ronda. Este tope se
+    # cumple recortando entradas (lo omitido sigue alcanzable por ``search``).
+    max_round_chars: int = _DEFAULT_ROUND_CHARS
 
 
 @dataclass
@@ -83,6 +106,9 @@ class NavigationBundle:
     rounds_used: int = 0
     truncated: bool = False
     index_signature: str = ""
+    #: BETA-MULTIAGENT2-FIX-06: motivo por el que NO se navegó (wiki sin páginas). Vacío
+    #: cuando sí se navegó. El llamante lo dice en voz alta: nada de degradación muda.
+    skipped_reason: str = ""
 
     def is_empty(self) -> bool:
         return not (self.pages or self.canon)
@@ -131,6 +157,18 @@ class WikiNavigator:
         if not isinstance(index_res, Ok):
             return Error("No se pudo construir el índice de la wiki")
         index = index_res.value
+
+        # BETA-MULTIAGENT2-FIX-06 (G2-10): la wiki VACÍA no se cobra. El índice es una
+        # proyección determinista del canon (coste IA cero), así que preguntarle cuántas
+        # páginas hay es gratis; si no hay NINGUNA, ninguna ronda puede abrir nada y
+        # navegar solo compraría selección de canon a ~21.000 tokens la ronda. Se corta
+        # ANTES de la primera llamada al proveedor y se declara el motivo.
+        if int(index.counts.get("con_pagina", 0) or 0) <= 0:
+            vacio = NavigationBundle(index_signature=index.signature)
+            vacio.skipped_reason = _SIN_PAGINAS
+            vacio.notes.append(_SIN_PAGINAS)
+            return Ok(vacio)
+
         compact = self.index_service.compact_for_prompt(
             index,
             max_entries=request.max_index_entries,
@@ -193,13 +231,57 @@ class WikiNavigator:
     def _round_message(
         self, request: NavigationRequest, compact: dict, bundle: NavigationBundle
     ) -> str:
+        """Mensaje de UNA ronda, garantizado bajo ``request.max_round_chars``.
+
+        BETA-MULTIAGENT2-FIX-06 (G2-10): el tope es DURO y verificable. Si el índice
+        compacto no cabe, se recortan entradas (búsqueda binaria sobre el número de
+        entradas conservadas, las prioritarias van primero) y se DECLARA el recorte —
+        lo omitido sigue siendo alcanzable por ``search``, como el tope WS-L.
+        """
+        cap = max(_MIN_ROUND_CHARS, int(getattr(request, "max_round_chars", 0) or 0))
+        entradas = list(compact.get("entradas") or [])
+        message = self._render_round(request, compact, bundle, entradas, 0, cap)
+        if len(message) <= cap:
+            return message
+        # Invariante: `lo` entradas caben (0 siempre se prueba), `hi + 1` no.
+        lo, hi = 0, len(entradas)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            candidato = self._render_round(
+                request, compact, bundle, entradas[:mid], len(entradas) - mid, cap
+            )
+            if len(candidato) <= cap:
+                lo = mid
+            else:
+                hi = mid - 1
+        return self._render_round(
+            request, compact, bundle, entradas[:lo], len(entradas) - lo, cap
+        )
+
+    @staticmethod
+    def _render_round(
+        request: NavigationRequest,
+        compact: dict,
+        bundle: NavigationBundle,
+        entradas: list,
+        recortadas: int,
+        cap: int,
+    ) -> str:
+        indice = dict(compact)
+        indice["entradas"] = entradas
+        if recortadas:
+            indice["recortadas_por_tope"] = recortadas
+            indice["nota"] = str(compact.get("nota", "")) + (
+                f" Se recortaron {recortadas} entradas más por el tope de tamaño de la "
+                f"ronda ({cap} caracteres); usa search para llegar a ellas."
+            )
         payload = {
             "peticion": {
                 "intent": request.intent,
                 "texto": request.user_text,
                 "foco": [{"kind": request.focus_kind, "id": fid} for fid in request.focus_ids],
             },
-            "indice": compact,
+            "indice": indice,
             "ya_leido": {
                 "paginas": [
                     {"kind": p["kind"], "id": p["id"], "name": p.get("name", "")}

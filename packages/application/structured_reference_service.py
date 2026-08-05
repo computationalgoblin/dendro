@@ -14,12 +14,13 @@ Backlinks on-demand sobre las refs persistidas (O(refs), no O(texto)).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from packages.application.command_expansion import parse_mentions
 from packages.domain.entity_taxonomy import is_branch
-from packages.domain.narrative_memory import MemoryTargetKind
+from packages.domain.narrative_memory import MemoryCitation, MemoryTargetKind
 from packages.domain.result import Error, Ok, Result
 from packages.domain.structured_reference import ReferenceStatus, StructuredReference
 
@@ -77,6 +78,134 @@ def _name_index(known: Iterable[tuple[str, str, str]]) -> dict[str, list[tuple[s
     for ref_id, name, kind in known:
         index.setdefault(name.lower(), []).append((ref_id, kind))
     return index
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Resolución de los ENLACES DE UNA PÁGINA de wiki (BETA-MULTIAGENT2-FIX-07)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# La IA que escribe una página (`update_memory`) rellena `wikilinks`/`citations`/
+# `issues[].anclado_a` con `MemoryCitation`. En el beta escribía el NOMBRE dentro
+# de `ref_id` y nadie lo resolvía: 27 de 27 enlaces rotos persistidos. Aquí vive
+# la resolución, hermana de `resolve_references` y con su MISMA regla (contrato
+# §10, criterio 6: no dos reglas incompatibles) — reutiliza `build_known_targets`
+# y añade plegado de mayúsculas/acentos, que la wiki necesita porque el modelo no
+# copia los nombres carácter a carácter.
+
+
+def fold_name(text: Any) -> str:
+    """Pliega un nombre para compararlo: sin acentos, en minúsculas, sin dobles espacios."""
+    descompuesto = unicodedata.normalize("NFD", str(text or ""))
+    sin_tildes = "".join(ch for ch in descompuesto if unicodedata.category(ch) != "Mn")
+    return " ".join(sin_tildes.casefold().split())
+
+
+def canon_kind_by_id(project: Any) -> dict[str, str]:
+    """``id -> kind real`` de TODO el canon referenciable desde una página.
+
+    Más amplio que ``build_known_targets`` a propósito: cubre también las
+    relaciones (no tienen nombre corto, pero sí id enlazable) y los elementos sin
+    nombre, que existen aunque no sean mencionables por @nombre.
+    """
+    index: dict[str, str] = {}
+    for e in getattr(project, "entities", []) or []:
+        eid = str(getattr(e, "id", "") or "")
+        if eid:
+            index.setdefault(
+                eid,
+                MemoryTargetKind.BRANCH.value if is_branch(e) else MemoryTargetKind.ENTITY.value,
+            )
+    for r in getattr(project, "relations", []) or []:
+        rid = str(getattr(r, "id", "") or "")
+        if rid:
+            index.setdefault(rid, MemoryTargetKind.RELATION.value)
+    for h in getattr(project, "causal_milestones", []) or []:
+        hid = str(getattr(h, "id", "") or "")
+        if hid:
+            index.setdefault(hid, MemoryTargetKind.MILESTONE.value)
+    for layer in getattr(project, "world_layers", []) or []:
+        lid = str(getattr(layer, "id", "") or "")
+        if lid:
+            index.setdefault(lid, MemoryTargetKind.RING.value)
+    return index
+
+
+@dataclass(frozen=True)
+class PageRefResolution:
+    """Reparto de los enlaces de una página tras resolverlos contra el canon.
+
+    ``ambiguas`` y ``descartadas`` NO se persisten (``MemoryCitation`` no tiene
+    estado y dárselo sería cambio de esquema): se devuelven para que quien llama
+    los cuente y los DIGA. Descartar en silencio es el pecado que este ticket
+    corrige, no uno nuevo que introduce.
+    """
+
+    resueltas: list[MemoryCitation] = field(default_factory=list)
+    ambiguas: list[MemoryCitation] = field(default_factory=list)
+    descartadas: list[MemoryCitation] = field(default_factory=list)
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "resueltos": len(self.resueltas),
+            "ambiguos": len(self.ambiguas),
+            "descartados": len(self.descartadas),
+        }
+
+
+def resolve_page_refs(
+    project: Any,
+    refs: Iterable[MemoryCitation] | None,
+    *,
+    known: list[tuple[str, str, str]] | None = None,
+    kinds_by_id: dict[str, str] | None = None,
+) -> PageRefResolution:
+    """Resuelve enlaces de página contra el canon (función pura, sin IA).
+
+    Regla, en este orden:
+
+    1. ``ref_kind=project`` → se conserva tal cual (no apunta a un elemento; el
+       lint tampoco lo evalúa).
+    2. ``ref_id`` que YA es un id del canon → se conserva y se le **corrige el
+       kind** al real (la IA escribe ``entity`` de una rama o de un hito).
+    3. ``ref_id`` que es el NOMBRE exacto de un elemento (plegando mayúsculas y
+       acentos) → se reescribe con su id y su kind reales.
+    4. Nombre que corresponde a VARIOS elementos → **ambigua**: no se inventa un
+       ganador y no se persiste.
+    5. Todo lo demás → **descartada**.
+
+    Las relaciones solo resuelven por id: no tienen nombre corto y
+    ``build_known_targets`` no las indexa (a conciencia).
+    """
+    known = known if known is not None else build_known_targets(project)
+    kinds = kinds_by_id if kinds_by_id is not None else canon_kind_by_id(project)
+    por_nombre: dict[str, list[str]] = {}
+    for ref_id, name, _kind in known:
+        if ref_id:
+            por_nombre.setdefault(fold_name(name), []).append(ref_id)
+
+    resueltas: list[MemoryCitation] = []
+    ambiguas: list[MemoryCitation] = []
+    descartadas: list[MemoryCitation] = []
+    for ref in refs or []:
+        raw_kind = str(getattr(ref.ref_kind, "value", ref.ref_kind) or "")
+        ref_id = str(ref.ref_id or "").strip()
+        nota = ref.nota
+        if raw_kind == MemoryTargetKind.PROJECT.value:
+            resueltas.append(MemoryCitation(MemoryTargetKind.PROJECT, ref_id, nota))
+            continue
+        if ref_id and ref_id in kinds:
+            resueltas.append(MemoryCitation(MemoryTargetKind(kinds[ref_id]), ref_id, nota))
+            continue
+        candidatos = list(dict.fromkeys(por_nombre.get(fold_name(ref_id), [])))
+        if len(candidatos) == 1:
+            elegido = candidatos[0]
+            kind = kinds.get(elegido, MemoryTargetKind.ENTITY.value)
+            resueltas.append(MemoryCitation(MemoryTargetKind(kind), elegido, nota))
+        elif len(candidatos) > 1:
+            ambiguas.append(MemoryCitation(MemoryTargetKind(raw_kind or "entity"), ref_id, nota))
+        else:
+            descartadas.append(MemoryCitation(MemoryTargetKind(raw_kind or "entity"), ref_id, nota))
+    return PageRefResolution(resueltas, ambiguas, descartadas)
 
 
 def resolve_references(
@@ -284,8 +413,12 @@ class StructuredReferenceService:
 
 
 __all__ = [
+    "PageRefResolution",
     "StructuredReferenceService",
     "backlinks_for",
     "build_known_targets",
+    "canon_kind_by_id",
+    "fold_name",
+    "resolve_page_refs",
     "resolve_references",
 ]

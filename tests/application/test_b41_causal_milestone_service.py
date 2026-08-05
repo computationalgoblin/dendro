@@ -101,7 +101,11 @@ def test_causal_chain_and_gap_detection_helpers():
         "causal_parent_hito_ids": ["h_parent"],
         "caused_relation_ids": ["rel_explained"],
     }).value
-    parent.causal_child_hito_ids.append(child.id)
+    # BETA-MULTIAGENT2-FIX-09: aquí el test se parcheaba a sí mismo el enlace
+    # inverso que el servicio debía mantener (`parent.causal_child_hito_ids.append`),
+    # y por eso la aserción de cadena pasaba con el bug puesto. Ahora los hijos se
+    # derivan de los padres: declarar el padre BASTA.
+    assert parent.causal_child_hito_ids == [child.id]
     ps.active_project.relations.append(NarrativeRelation(
         id="rel_explained",
         source_id="a",
@@ -124,7 +128,11 @@ def test_causal_chain_and_gap_detection_helpers():
     assert isinstance(relations_without_hito, Ok)
     assert [r.id for r in relations_without_hito.value] == ["rel_orphan"]
     assert isinstance(hitos_without_consequences, Ok)
-    assert [h.id for h in hitos_without_consequences.value] == ["h_parent"]
+    # FIX-09: la aserción anterior (`== ["h_parent"]`) codificaba el bug —
+    # `h_parent` SÍ tiene consecuencia (`h_child`) y la consulta medía
+    # `caused_relation_ids`, que es otra cosa. El hilo suelto es el que nadie
+    # recoge: `h_child`.
+    assert [h.id for h in hitos_without_consequences.value] == ["h_child"]
 
 
 # ── Subhitos: contención temporal de 1 nivel (BETA2-SUB-01) ──────────────────

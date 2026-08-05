@@ -8,6 +8,7 @@ de un módulo de vista. Son funciones puras: sin Qt, solo stdlib.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from hashlib import sha1
 from typing import Any
 
@@ -15,6 +16,56 @@ from typing import Any
 def _metadata(obj: Any) -> dict[str, Any]:
     value = getattr(obj, "metadata", {}) or {}
     return dict(value) if isinstance(value, dict) else {}
+
+
+def milestone_order_key(
+    milestone: Any, month_names: Sequence[str] = (),
+) -> tuple[int, int, float, str, str]:
+    """Clave NUMÉRICA y homogénea para ordenar hitos DENTRO del mismo año.
+
+    BETA-MULTIAGENT2-FIX-15 (G2-28): la cronología desempataba los hitos
+    coetáneos con la CADENA que pinta (`sub_label`), así que «10.º» iba antes
+    que «2.º» y, con calendario completo, los meses se ordenaban por su NOMBRE
+    en orden alfabético. Aquí la clave es numérica y —esto es lo importante—
+    SIEMPRE de la misma forma: en un mismo año pueden convivir un hito con fecha
+    exacta y otro con solo `sort_index`, y compararlos no puede reventar.
+
+    Orden: mes (índice en el calendario del proyecto; 0 = sin fecha exacta) →
+    día → `metadata.sort_index` (0.0 = sin posición declarada) → título → id.
+    Los dos últimos solo dan estabilidad. ``month_names`` son los meses del
+    calendario del proyecto en su orden real (`CalendarConfig.month_names()`).
+
+    NO reemplaza a :func:`milestone_sort_value` (que ordena entre AÑOS y devuelve
+    un segundo elemento heterogéneo, inservible como clave de un solo `sort`):
+    la complementa dentro del año, con el mismo criterio de desempate
+    (`float(sort_index)`) que `ChronologyWalkService._sort_key`.
+    """
+
+    meta = _metadata(milestone)
+    month_index = 0
+    day = 0
+    exact = meta.get("exact_date")
+    if isinstance(exact, dict):
+        name = str(exact.get("month", "") or "").strip()
+        if name:
+            names = [str(value) for value in month_names]
+            if name in names:
+                month_index = names.index(name) + 1  # 0 queda para "sin mes"
+        try:
+            day = int(exact.get("day"))
+        except (TypeError, ValueError):
+            day = 0
+    try:
+        tiebreak = float(meta.get("sort_index", 0) or 0)
+    except (TypeError, ValueError):
+        tiebreak = 0.0
+    return (
+        month_index,
+        day,
+        tiebreak,
+        str(getattr(milestone, "title", "") or ""),
+        str(getattr(milestone, "id", "") or ""),
+    )
 
 
 def milestone_sort_value(milestone: Any) -> tuple[int, Any, str]:

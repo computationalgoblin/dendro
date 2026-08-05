@@ -65,7 +65,11 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     ElidedLabel,
     EmptyState,
     FlowLayout,
+    clear_layout,
     enum_human,
+    TYPE_BODY_PX,
+    TYPE_CAPTION_PX,
+    TYPE_LABEL_PX,
 )
 from hosts.DesktopHostPySide.widgets.foco.containment_assistant import (
     ContainmentAssistantPanel,
@@ -164,7 +168,7 @@ class _ContentThumb(QFrame):
         cap.setFixedWidth(_SHELF_THUMB + 10)
         cap.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         cap.setStyleSheet(
-            f"color: {INK_SOFT}; font-size: 11px; border: none; background: transparent;"
+            f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; border: none; background: transparent;"
         )
         lay.addWidget(cap, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -381,7 +385,7 @@ class FocoView(QWidget):
         column.addLayout(header)
         self._type_label = QLabel("", card)
         self._type_label.setStyleSheet(
-            f"color: {INK_MUTED}; font-size: 11px; border: none; background: transparent;"
+            f"color: {INK_MUTED}; font-size: {TYPE_CAPTION_PX}px; border: none; background: transparent;"
         )
         column.addWidget(self._type_label)
         # BETA2-JARDIN-04: chip «siguiente paso» — la sugerencia más urgente
@@ -429,7 +433,7 @@ class FocoView(QWidget):
         self._brief_label = QLabel("", card)
         self._brief_label.setWordWrap(True)
         self._brief_label.setStyleSheet(
-            f"color: {INK_SOFT}; font-size: 12px; border: none; background: transparent;"
+            f"color: {INK_SOFT}; font-size: {TYPE_LABEL_PX}px; border: none; background: transparent;"
         )
         column.addWidget(self._brief_label, 1)
         # FOCO-30: estantería de contenidos — solo para ramas (miniaturas de lo que
@@ -528,11 +532,11 @@ class FocoView(QWidget):
 
     def _refresh_meta_summary(self, entity: Any) -> None:
         """Metadatos como LECTURA (icono 12px + texto) en la tarjeta central."""
-        while self._meta_summary.count():
-            item = self._meta_summary.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        # BETA-MULTIAGENT2-FIX-14 (G2-21 = «texto fantasma» de G2-26): el mismo bug
+        # que el panel de Estructura. Sin `setParent(None)` los chips viejos seguían
+        # pintándose unos píxeles por debajo de los nuevos: «MedioMedio», «Medio»
+        # sobre «(edio», una «s» suelta. Fotografiado por dirección de arte.
+        clear_layout(self._meta_summary)
 
         def _pair(icon_name: str, text: str) -> None:
             if not text:
@@ -548,7 +552,7 @@ class FocoView(QWidget):
             row.addWidget(glyph)
             label = QLabel(text, box)
             label.setStyleSheet(
-                f"color: {INK_SOFT}; font-size: 11px; background: transparent; border: none;"
+                f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; background: transparent; border: none;"
             )
             row.addWidget(label)
             self._meta_summary.addWidget(box)
@@ -700,7 +704,7 @@ class FocoView(QWidget):
         header = QHBoxLayout()
         self._adjacent_title = ElidedLabel("", card)
         self._adjacent_title.setStyleSheet(
-            f"color: {INK_STRONG}; font-weight: 700; font-size: 13px; "
+            f"color: {INK_STRONG}; font-weight: 700; font-size: {TYPE_BODY_PX}px; "
             "border: none; background: transparent;"
         )
         header.addWidget(self._adjacent_title, 1)
@@ -1407,11 +1411,9 @@ class FocoView(QWidget):
         layout = getattr(self, "_contents_layout", None)
         if layout is None:
             return
-        while layout.count() > 1:  # conserva el stretch final
-            taken = layout.takeAt(0)
-            widget = taken.widget() if taken is not None else None
-            if widget is not None:
-                widget.deleteLater()
+        # BETA-MULTIAGENT2-FIX-14 (G2-21): tercera copia del mismo defecto. El
+        # `conservar_al_final=1` respeta el `addStretch` final de la estantería.
+        clear_layout(layout, conservar_al_final=1)
         project = self._project()
         if project is None or not is_branch(entity):
             self._contents_shelf.hide()
@@ -1611,6 +1613,18 @@ class FocoView(QWidget):
                 notebook.refresh()
             except RuntimeError:
                 pass  # el widget pudo ser destruido por un recentrado
+            # BETA-MULTIAGENT2-FIX-05 (G2-06): repintar TAMBIÉN la sección MEMORIA.
+            # `refresh()` solo redibuja métricas/estado, así que tras un riego con
+            # éxito el Cuaderno mostraba el chip «Regada» arriba y, tres centímetros
+            # más abajo, «Sin memoria — Riégalo para generarla» con la página ya
+            # escrita en el JSON (GUI-13, CAR-03: invitaba a pagar otro riego por algo
+            # ya hecho). El proveedor consulta la Memoria EN VIVO, así que basta con
+            # pedírselo: es una llamada, no un rediseño. Este es el punto único por el
+            # que pasan fin de lote, fin de entidad, secar y cultivar.
+            try:
+                notebook.refresh_memory()
+            except (RuntimeError, AttributeError):
+                pass  # widget destruido o cuaderno sin sección de Memoria
         self._apply_watering_tone()
         self._refresh_next_step_chip()  # JARDIN-04: la urgencia pudo cambiar
 

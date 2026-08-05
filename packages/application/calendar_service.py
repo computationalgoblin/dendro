@@ -73,15 +73,20 @@ class CalendarService:
     def configure(self, payload: dict[str, Any]) -> Result[Any, str]:
         """Configura el calendario completo desde el editor unificado.
 
-        Payload: ``{calendar_name, description, eras:[{name,duration}],
+        Payload: ``{calendar_name, description, start_year, eras:[{name,duration}],
         present:{era_index, year_within, month, day}, months:[{name,length}],
         weekdays:[...], week_anchor}``.
+
+        BETA-MULTIAGENT2-FIX-12 (G2-29): ``start_year`` (opcional, 0 por defecto) es
+        el año en que empieza la PRIMERA era — el ancla de «mi historia pasa en este
+        mundo». Ausente = comportamiento anterior, bit a bit.
         """
         if not isinstance(payload, dict):
             return Error("Calendar payload must be a dict")
         durations = _durations_from_payload(payload.get("eras"))
         if not durations:
             return Error("At least one era is required")
+        start_year = _int(payload.get("start_year"), 0)
 
         present = payload.get("present") if isinstance(payload.get("present"), dict) else {}
         last = len(durations) - 1
@@ -92,7 +97,7 @@ class CalendarService:
         year_within = max(1, _int(present.get("year_within"), 1))
 
         eras_result = self.era_service.set_eras_from_durations(
-            durations, present_index, year_within
+            durations, present_index, year_within, start_year=start_year
         )
         if isinstance(eras_result, Error):
             return eras_result
@@ -163,6 +168,10 @@ class CalendarService:
         view = {
             "calendar_name": str(getattr(chronology, "calendar_name", "") or ""),
             "description": str(getattr(chronology, "description", "") or ""),
+            # FIX-12 (G2-29): el ancla se DERIVA de la primera era canónica; no se
+            # inventa ni se guarda aparte (sin cambio de forma en disco). Un
+            # proyecto anterior al arreglo devuelve 0, que es lo que ya tenía.
+            "start_year": int(eras[0].start_year) if eras else 0,
             "eras": eras_view,
             "present": {
                 "era_index": present_index,

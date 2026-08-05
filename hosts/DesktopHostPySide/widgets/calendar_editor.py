@@ -99,6 +99,9 @@ class CalendarEditor(QWidget):
         self.timeline.eraSelected.connect(self._on_era_selected)
         root.addWidget(self.timeline)
 
+        # (b2) Ancla del calendario — FIX-12 (G2-29).
+        root.addLayout(self._build_anchor_row())
+
         # (c) Inspector mínimo de la era seleccionada + añadir "+".
         root.addLayout(self._build_inspector())
 
@@ -152,6 +155,44 @@ class CalendarEditor(QWidget):
         row.addWidget(self.weekday_preview)
         row.addStretch(1)
         return row
+
+    # ── (b2) ancla del calendario ────────────────────────────────────────
+
+    def _build_anchor_row(self) -> QHBoxLayout:
+        """BETA-MULTIAGENT2-FIX-12 (G2-29): «el calendario empieza en el año N».
+
+        Quien escribe de ESTE mundo quería «de 1900 a 2000» y el editor solo sabía
+        encadenar duraciones desde el año 0: las nueve fichas de un mundo real se
+        plantaban en el año 0 y la historiadora tuvo que inventarse una era tapón
+        de 1.250 años vacíos para que su eje coincidiera con el anno domini.
+
+        Es el ancla del ORIGEN de la cadena, no un año por era: las eras siguen
+        encadenándose por duración (BETA2-CAL retiró el editor por-era de años
+        absolutos por ser un modelo paralelo, y no se reabre aquí).
+        """
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addStretch(1)
+        row.addWidget(self._muted("El calendario empieza en el año"))
+        self.start_year_spin = MiniStepper(minimum=-999999, maximum=999999, edit_width=64)
+        self.start_year_spin.setToolTip(
+            "Año en que empieza la PRIMERA era. Pon 1900 si tu historia pasa en "
+            "este mundo; déjalo en 0 si el mundo empieza contigo. Las eras "
+            "siguientes se encadenan por duración a partir de aquí."
+        )
+        self.start_year_spin.valueChanged.connect(self._on_start_year_changed)
+        row.addWidget(self.start_year_spin)
+        row.addStretch(1)
+        return row
+
+    def _on_start_year_changed(self) -> None:
+        if self._syncing or self._loading:
+            return
+        self._emit_changed()
+
+    def start_year(self) -> int:
+        """Ancla declarada por el usuario (año de inicio de la primera era)."""
+        return int(self.start_year_spin.value())
 
     # ── (c) inspector de la era seleccionada ─────────────────────────────
 
@@ -288,7 +329,10 @@ class CalendarEditor(QWidget):
         day = self.present_day_spin.value()
         # Vista previa del día de la semana real.
         if cfg.supports_exact_dates() and eras:
-            era_start = sum(max(1, int(e["duration"])) for e in eras[:index])
+            # FIX-12: la cadena arranca en el ancla, no en el año 0.
+            era_start = self.start_year() + sum(
+                max(1, int(e["duration"])) for e in eras[:index]
+            )
             weekday = cfg.weekday_name(era_start, year_within, month, day)
             self.weekday_preview.setText(f"· {weekday}" if weekday else "")
         else:
@@ -506,6 +550,8 @@ class CalendarEditor(QWidget):
         return {
             "calendar_name": self.name_edit.text().strip(),
             "description": self.desc_edit.text().strip(),
+            # FIX-12 (G2-29): ancla del origen de la cadena de eras.
+            "start_year": self.start_year(),
             "eras": eras,
             "present": {
                 "era_index": index,
@@ -523,6 +569,13 @@ class CalendarEditor(QWidget):
         self._loading = True
         self.name_edit.setText(str(view.get("calendar_name", "") or ""))
         self.desc_edit.setText(str(view.get("description", "") or ""))
+
+        # FIX-12 (G2-29): el ancla viene DERIVADA de la primera era canónica
+        # (`CalendarService.get_view`), así que reabrir el editor muestra el año
+        # que el usuario escribió — ida y vuelta sin deriva.
+        self.start_year_spin.blockSignals(True)
+        self.start_year_spin.setValue(int(view.get("start_year", 0) or 0))
+        self.start_year_spin.blockSignals(False)
 
         eras = view.get("eras") or [{"name": "Presente", "duration": DEFAULT_ERA_DURATION}]
         present = view.get("present") if isinstance(view.get("present"), dict) else {}

@@ -50,9 +50,19 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     overline_label,
 )
 from hosts.DesktopHostPySide.widgets.milestone_labels import milestone_temporal_label
+from hosts.DesktopHostPySide.widgets.rigor_section import RigorSection
 from hosts.DesktopHostPySide.widgets.stepper import BotanicalSpinBox
+from packages.application.temporal_dating import PENDING_NOTE
 from packages.domain.causal_milestone import CausalMilestoneType
 from packages.domain.result import Error
+from packages.domain.temporal_models import EventTemporality
+
+
+def _clonar_temporalidad(temporalidad: Any, **cambios: Any) -> Any:
+    """Copia de un ``EventTemporality`` con campos sustituidos (para PINTAR, no guardar)."""
+    datos = temporalidad.to_dict() if hasattr(temporalidad, "to_dict") else {}
+    datos.update(cambios)
+    return EventTemporality.from_dict(datos)
 
 
 def _metadata(obj: Any) -> dict[str, Any]:
@@ -193,6 +203,17 @@ class MilestoneDetailPanel(PanelScaffold):
         form.addRow("Fecha / posición", self.temporal_edit)
         self.body.addLayout(form)
 
+        # BETA-MULTIAGENT2-FIX-11 (fase B2): datación RICA del hito. Escribe en
+        # `temporality` (el modelo de verdad), no en `metadata["chronology_key"]`
+        # —el modelo paralelo improvisado, que se conserva por compatibilidad—, y
+        # respeta el año entero como espejo autoritativo de la cronología.
+        self.rigor = RigorSection(
+            con_certeza=False,
+            titulo="Rigor: precisión de la fecha",
+            expandida=bool(getattr(self.ctx, "advanced_mode", False)) if self.ctx else False,
+        )
+        self.body.addWidget(self.rigor)
+
         # ── Narrativa ──
         self.body.addWidget(overline_label("Narrativa"))
         self.body.addWidget(self.summary_edit)
@@ -201,6 +222,13 @@ class MilestoneDetailPanel(PanelScaffold):
         # ── Participantes ──
         self.body.addWidget(overline_label("Participantes"))
         self.body.addWidget(self.participants_list)
+
+        # ── Hilo causal (BETA-MULTIAGENT2-FIX-09): setup → payoff ──
+        # Lo único que la app enseñaba del hilo era un contador («Consecuencias: 2»)
+        # que no decía cuáles, no era clicable y no permitía crear el enlace. Para
+        # el oficio del guionista ese hilo ES el producto.
+        self.causal_container = self._build_causal_section()
+        self.body.addWidget(self.causal_container)
 
         # ── Subhitos (BETA2-SUB-01): eventos contenidos en este hito-marco ──
         # Un hito puede abarcar un intervalo (p. ej. una guerra) y contener
@@ -264,6 +292,8 @@ class MilestoneDetailPanel(PanelScaffold):
         # BETA2-FOCO-29: la fecha exacta ahora autoguarda (era el único campo
         # editable sin autosave). El guard _loading evita disparar durante _load.
         self.exact_date_picker.on_changed = lambda *_: self._schedule_autosave()
+        # FIX-11 (B2): la datación rica también autoguarda.
+        self.rigor.changed.connect(self._schedule_autosave)
 
     def _schedule_autosave(self, *args: Any) -> None:
         if self._loading or self._hito is None:
@@ -322,6 +352,18 @@ class MilestoneDetailPanel(PanelScaffold):
         for side in (getattr(self, "save_btn", None), getattr(self, "delete_btn", None)):
             if side is not None:
                 side.setVisible(False)
+        # FIX-09: en preview el hilo causal se LEE, no se toca — el preview jamás
+        # escribe canon (PLAY-16), y el alta/baja de enlaces sí lo haría.
+        for control in (
+            getattr(self, "link_cause_btn", None),
+            getattr(self, "link_effect_btn", None),
+            getattr(self, "remove_cause_btn", None),
+            getattr(self, "remove_effect_btn", None),
+            getattr(self, "link_cause_combo", None),
+            getattr(self, "link_effect_combo", None),
+        ):
+            if control is not None:
+                control.setEnabled(False)
 
     def preview_extra_fields(self) -> dict:
         return dict(self._preview_extra)
@@ -412,6 +454,18 @@ class MilestoneDetailPanel(PanelScaffold):
         self.summary_edit.setPlainText(str(getattr(hito, "description", "")))
         self.body_edit.setPlainText(str(meta.get("body", "") or getattr(hito, "rationale", "")))
         self.temporal_edit.setText(str(meta.get("chronology_key", "") or ""))
+        # FIX-11 (B2): datación rica del hito. Puente sin pérdida con el modelo
+        # improvisado: si `world_date` está vacío pero hay `chronology_key`
+        # escrito por el usuario, se muestra ese texto (y al guardar pasa a vivir
+        # también en `temporality`, que es el modelo de verdad).
+        temporalidad = getattr(self._hito, "temporality", None)
+        if temporalidad is not None and not (getattr(temporalidad, "world_date", "") or ""):
+            heredado = str(meta.get("chronology_key", "") or "")
+            if heredado:
+                temporalidad = _clonar_temporalidad(temporalidad, world_date=heredado)
+        self.rigor.load(temporalidad=temporalidad)
+        if self.rigor.notes_edit.text().strip() == PENDING_NOTE:
+            self.rigor.notes_edit.setText("")  # marca interna, no nota del autor
         calendar_meta = self._chronology_metadata()
         exact_enabled = str(calendar_meta.get("mode") or "") == "full_calendar"
         # PULIDO-02: ocultar la FILA entera — antes la label "Fecha exacta"
@@ -439,6 +493,7 @@ class MilestoneDetailPanel(PanelScaffold):
 
         self._refresh_badges(hito)
         self._refresh_links(hito)
+        self._refresh_causal(hito)
         self._refresh_subhitos(hito)
         self._loading = False
 
@@ -459,20 +514,207 @@ class MilestoneDetailPanel(PanelScaffold):
             )
 
     def _refresh_links(self, hito: Any) -> None:
+        """Vínculos SECUNDARIOS del hito (relaciones y fuentes).
+
+        FIX-09: el hilo causal ya no se cuenta aquí —tenía su propia sección con
+        nombres clicables— y con él se fue el rótulo «Causa de (hitos previos)»,
+        que decía justo lo contrario del dato (`causal_parent_hito_ids` son los
+        hitos que CAUSAN a este, no aquellos de los que este es causa).
+        """
         lines: list[str] = []
         relations = [str(v) for v in (getattr(hito, "caused_relation_ids", []) or []) if str(v)]
         if relations:
             lines.append(f"Relaciones causadas: {len(relations)}")
-        parents = [str(v) for v in (getattr(hito, "causal_parent_hito_ids", []) or []) if str(v)]
-        children = [str(v) for v in (getattr(hito, "causal_child_hito_ids", []) or []) if str(v)]
-        if parents:
-            lines.append(f"Causa de (hitos previos): {len(parents)}")
-        if children:
-            lines.append(f"Consecuencias (hitos posteriores): {len(children)}")
         sources = [str(v) for v in (getattr(hito, "source_ids", []) or []) if str(v)]
         if sources:
             lines.append(f"Fuentes: {len(sources)}")
         self.links_label.setText("\n".join(lines) if lines else "Sin vinculos adicionales.")
+
+    # ── Hilo causal setup→payoff (BETA-MULTIAGENT2-FIX-09) ───────────────────
+
+    def _build_causal_section(self) -> QWidget:
+        """Padres e hijos POR NOMBRE, clicables, con alta y baja del enlace."""
+        container = QWidget(self)
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(SPACE_SM)
+        lay.addWidget(overline_label("Hilo causal"))
+
+        # Causas: los hitos que ESTE recoge.
+        self.causes_caption = QLabel("Recoge lo que plantó")
+        self.causes_caption.setObjectName("mutedLabel")
+        self.causes_caption.setToolTip(
+            "Hitos anteriores que este hito recoge o consuma (sus causas declaradas)."
+        )
+        lay.addWidget(self.causes_caption)
+        self.causes_list = QListWidget()
+        self.causes_list.setObjectName("causalParentsList")
+        self.causes_list.setMaximumHeight(96)
+        self.causes_list.itemDoubleClicked.connect(self._open_selected_causal)
+        lay.addWidget(self.causes_list)
+        cause_row = QHBoxLayout()
+        cause_row.setSpacing(SPACE_SM)
+        self.link_cause_combo = QComboBox()
+        cause_row.addWidget(self.link_cause_combo, 1)
+        self.link_cause_btn = QPushButton("Vincular causa")
+        self.link_cause_btn.setObjectName("linkCauseButton")
+        self.link_cause_btn.clicked.connect(self._link_cause)
+        cause_row.addWidget(self.link_cause_btn)
+        self.remove_cause_btn = QPushButton("Quitar")
+        self.remove_cause_btn.setObjectName("removeCauseButton")
+        self.remove_cause_btn.clicked.connect(self._remove_selected_cause)
+        cause_row.addWidget(self.remove_cause_btn)
+        lay.addLayout(cause_row)
+
+        # Consecuencias: los hitos que recogen lo que ESTE planta.
+        self.effects_caption = QLabel("Consecuencias")
+        self.effects_caption.setObjectName("mutedLabel")
+        self.effects_caption.setToolTip(
+            "Hitos posteriores que recogen lo que este hito planta."
+        )
+        lay.addWidget(self.effects_caption)
+        self.effects_list = QListWidget()
+        self.effects_list.setObjectName("causalChildrenList")
+        self.effects_list.setMaximumHeight(96)
+        self.effects_list.itemDoubleClicked.connect(self._open_selected_causal)
+        lay.addWidget(self.effects_list)
+        effect_row = QHBoxLayout()
+        effect_row.setSpacing(SPACE_SM)
+        self.link_effect_combo = QComboBox()
+        effect_row.addWidget(self.link_effect_combo, 1)
+        self.link_effect_btn = QPushButton("Vincular consecuencia")
+        self.link_effect_btn.setObjectName("linkEffectButton")
+        self.link_effect_btn.clicked.connect(self._link_effect)
+        effect_row.addWidget(self.link_effect_btn)
+        self.remove_effect_btn = QPushButton("Quitar")
+        self.remove_effect_btn.setObjectName("removeEffectButton")
+        self.remove_effect_btn.clicked.connect(self._remove_selected_effect)
+        effect_row.addWidget(self.remove_effect_btn)
+        lay.addLayout(effect_row)
+        return container
+
+    def _causal_label(self, hito: Any) -> str:
+        titulo = str(getattr(hito, "title", "") or "Hito sin título")
+        return f"{titulo}  ·  {milestone_temporal_label(hito)}"
+
+    def _fill_causal_list(self, widget: QListWidget, hitos: list[Any], vacio: str) -> None:
+        widget.clear()
+        if not hitos:
+            item = QListWidgetItem(vacio)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)  # silencio honesto, no caja vacía
+            widget.addItem(item)
+            return
+        for hito in hitos:
+            item = QListWidgetItem(self._causal_label(hito))
+            item.setData(Qt.ItemDataRole.UserRole, str(getattr(hito, "id", "")))
+            widget.addItem(item)
+
+    def _refresh_causal(self, hito: Any) -> None:
+        parents = list(self._causal_parents())
+        children = list(self._causal_children())
+        self._fill_causal_list(
+            self.causes_list, parents, "Este hito no recoge nada anterior."
+        )
+        self._fill_causal_list(
+            self.effects_list, children, "Nadie recoge todavía lo que este hito planta."
+        )
+        parent_ids = {str(getattr(h, "id", "")) for h in parents}
+        child_ids = {str(getattr(h, "id", "")) for h in children}
+        # Sin ciclos: una causa no puede ser ya consecuencia de este hito, y una
+        # consecuencia no puede ser ya una de sus causas (el servicio lo valida
+        # igual; aquí solo se evita ofrecer lo imposible).
+        chain_ids = {
+            str(getattr(h, "id", ""))
+            for h in (
+                self.controller.causal_chain(self.milestone_id)
+                if hasattr(self.controller, "causal_chain")
+                else []
+            )
+        }
+        todos = self.controller.list_all() if hasattr(self.controller, "list_all") else []
+        self.link_cause_combo.clear()
+        self.link_effect_combo.clear()
+        for candidato in todos:
+            cid = str(getattr(candidato, "id", ""))
+            if not cid or cid == self.milestone_id:
+                continue
+            etiqueta = self._causal_label(candidato)
+            if cid not in parent_ids and cid not in chain_ids:
+                self.link_cause_combo.addItem(etiqueta, cid)
+            if cid not in child_ids and cid not in parent_ids:
+                self.link_effect_combo.addItem(etiqueta, cid)
+        # PLAY-16: en preview el hilo se lee, no se edita (jamás escribe canon).
+        editable = self.preview_patch is None
+        self.link_cause_btn.setEnabled(editable and self.link_cause_combo.count() > 0)
+        self.link_effect_btn.setEnabled(editable and self.link_effect_combo.count() > 0)
+        self.remove_cause_btn.setEnabled(editable and bool(parents))
+        self.remove_effect_btn.setEnabled(editable and bool(children))
+
+    def _causal_parents(self) -> list[Any]:
+        if hasattr(self.controller, "causal_parents"):
+            return list(self.controller.causal_parents(self.milestone_id) or [])
+        return []
+
+    def _causal_children(self) -> list[Any]:
+        if hasattr(self.controller, "causal_children"):
+            return list(self.controller.causal_children(self.milestone_id) or [])
+        return []
+
+    def _notify(self, mensaje: str) -> None:
+        notify = getattr(self.ctx, "notify", None) if self.ctx is not None else None
+        if callable(notify):
+            notify(mensaje, "error")
+            return
+        log = getattr(self.ctx, "log", None) if self.ctx is not None else None
+        if callable(log):
+            log("warning", mensaje)
+
+    def _apply_causal(self, result: Any) -> None:
+        if isinstance(result, Error):
+            self._notify(result.error)
+            return
+        if self.on_saved:
+            self.on_saved()
+        self._load()
+
+    def _link_cause(self) -> None:
+        """Este hito pasa a recoger lo que plantó el seleccionado."""
+        if self._hito is None or not hasattr(self.controller, "link_causal"):
+            return
+        parent_id = str(self.link_cause_combo.currentData() or "")
+        if not parent_id:
+            return
+        self._apply_causal(self.controller.link_causal(self.milestone_id, parent_id))
+
+    def _link_effect(self) -> None:
+        """El hito seleccionado pasa a recoger lo que planta ESTE."""
+        if self._hito is None or not hasattr(self.controller, "link_causal"):
+            return
+        child_id = str(self.link_effect_combo.currentData() or "")
+        if not child_id:
+            return
+        self._apply_causal(self.controller.link_causal(child_id, self.milestone_id))
+
+    def _remove_selected_cause(self) -> None:
+        item = self.causes_list.currentItem()
+        parent_id = str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+        if not parent_id or not hasattr(self.controller, "unlink_causal"):
+            return
+        self._apply_causal(self.controller.unlink_causal(self.milestone_id, parent_id))
+
+    def _remove_selected_effect(self) -> None:
+        item = self.effects_list.currentItem()
+        child_id = str(item.data(Qt.ItemDataRole.UserRole) or "") if item is not None else ""
+        if not child_id or not hasattr(self.controller, "unlink_causal"):
+            return
+        self._apply_causal(self.controller.unlink_causal(child_id, self.milestone_id))
+
+    def _open_selected_causal(self, item: Any) -> None:
+        if self.on_open_milestone is None or item is None:
+            return
+        hito_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if hito_id:
+            self.on_open_milestone(hito_id)
 
     # ── Subhitos (BETA2-SUB-01) ──────────────────────────────────────────────
 
@@ -701,6 +943,10 @@ class MilestoneDetailPanel(PanelScaffold):
             temporality_data["is_duration"] = False
             temporality_data["duration_value"] = None
             temporality_data["duration_unit"] = None
+        # FIX-11 (B2): la datación rica se escribe en `temporality` — el modelo de
+        # verdad—, encima de lo ya calculado (año y duración se conservan: el año
+        # entero sigue siendo el espejo que ordena la cronología).
+        temporality_data = self.rigor.apply_to_temporality(temporality_data)
         payload = {
             "title": self.title_edit.text().strip() or "Hito sin titulo",
             "milestone_type": str(self.type_combo.currentData() or "origen"),

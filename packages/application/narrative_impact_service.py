@@ -103,12 +103,29 @@ class NarrativeImpactService:
         *,
         cause_hint: str = "",
         include_self: bool = True,
+        exclude_ids: frozenset[str] | set[str] | None = None,
+        only_via: frozenset[str] | set[str] | None = None,
     ) -> Result[ImpactResult, str]:
         """Marca Falta regar las Memorias afectadas por el cambio de un elemento.
 
         ``include_self=False`` propaga SOLO a los dependientes, no al propio elemento
         (BETA2-WIKI-06): al Regar se acaba de reescribir su página como vigente, así
         que no debe re-marcarse Falta regar a sí mismo; sí sus relacionadas.
+
+        ``exclude_ids`` (BETA-MULTIAGENT-FIX-01, G-01): entidades del MISMO lote de
+        riego en curso — sus páginas se reescriben en esta misma autorización; sin
+        la exclusión se invalidaban entre sí y un lote de vecinas jamás acababa
+        verde (solo la última regada quedaba `regada`).
+
+        ``only_via`` (BETA-MULTIAGENT2-FIX-05, G2-05): restringe la propagación a
+        ciertas VÍAS de dependencia (``self``/``mencion``/``cita_memoria``/
+        ``relacion``/``hito``). Este motor calcula el impacto de un cambio de CANON;
+        Regar NO cambia canon (solo reescribe una página de wiki), así que el camino
+        de Regar la restringe a la dependencia REAL — ``mencion`` (alguien @menciona
+        al regado) y ``cita_memoria`` (una página lo cita) —, no a la manta
+        topológica ``relacion``. Sin esto, regar B degradaba la página vigente de
+        cualquier vecina A y dos vecinas no podían estar verdes a la vez fuera de un
+        mismo lote (16,5 min de IA con balance neto cero, beta ronda 2, ART-06).
         """
         proj = self._proj()
         if proj is None:
@@ -120,6 +137,14 @@ class NarrativeImpactService:
             if not target_id:
                 continue
             if via == "self" and not include_self:
+                continue
+            if only_via is not None and via not in only_via:
+                continue  # FIX-05: solo dependencia real (ver docstring)
+            if (
+                exclude_ids
+                and target_kind is MemoryTargetKind.ENTITY
+                and target_id in exclude_ids
+            ):
                 continue
             key = (target_kind.value, target_id, context)
             if key in seen:

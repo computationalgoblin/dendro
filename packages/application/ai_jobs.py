@@ -23,6 +23,7 @@ import json
 import re
 import threading
 import time
+import unicodedata
 import uuid
 
 from packages.domain.result import Error, Ok, Result
@@ -62,6 +63,8 @@ from packages.application.candidate_service import (
     AI_EDITABLE_MILESTONE_FIELDS,
     AI_ENTITY_FIELD_ALIASES,
     AI_MILESTONE_FIELD_ALIASES,
+    field_label,
+    field_labels,
 )
 
 # Legacy constant — now sourced from Prompt Registry (B43-T01)
@@ -524,17 +527,56 @@ def _compact_chronology(project: Any) -> dict[str, Any]:
     if desc:
         out["descripcion"] = desc
     present_year = getattr(chrono, "present_year", 0) or 0
+    # BETA-MULTIAGENT2-FIX-12 (G2-29): el presente se emite cuando la cronología
+    # TIENE eras, no cuando el número es «verdadero». El `if present_year:` de
+    # antes trataba el año 0 como «sin configurar» y callaba justo en el caso más
+    # dañino: un mundo real cuya única era arranca en 0 y cuyos hitos viven en
+    # 1901-1985. El modelo recibía las eras y los hitos SIN año presente y
+    # concluía que el personaje quedaba «huérfano en la línea de tiempo oficial».
+    # No alucinaba: dedujo lo que le dimos.
+    has_eras = bool(getattr(chrono, "eras", None))
     try:
-        era = chrono.era_for_year(present_year) if present_year else None
-        if era is None and getattr(chrono, "eras", None):
+        era = chrono.era_for_year(present_year) if has_eras else None
+        if era is None and has_eras:
             era = chrono.sorted_eras()[-1]
     except Exception:  # pragma: no cover - defensive
         era = None
     era_name = str(getattr(era, "name", "") or "").strip() if era is not None else ""
     if era_name:
         out["era_actual"] = era_name
-    if present_year:
+    if has_eras:
         out["anyo_presente"] = int(present_year)
+    # BETA-MULTIAGENT-FIX-03 (G-03): las eras con sus límites ABSOLUTOS y la
+    # equivalencia explícita del presente en ambas escalas. Antes viajaban
+    # era-nombre + año absoluto + fecha regnal SIN puente y la IA alegaba
+    # incoherencias temporales falsas (arraigo hundido, walk bloqueado).
+    try:
+        eras_out: list[dict[str, Any]] = []
+        for era_item in chrono.sorted_eras():
+            entry: dict[str, Any] = {
+                "nombre": era_item.name,
+                "inicio": int(era_item.start_year),
+            }
+            if era_item.end_year is not None:
+                entry["fin"] = int(era_item.end_year)
+            eras_out.append(entry)
+        if eras_out:
+            out["eras"] = eras_out
+    except Exception:  # pragma: no cover - defensive
+        pass
+    # FIX-12: la equivalencia solo se emite si el presente cae DENTRO de la era
+    # elegida. Con el fallback a la última era, un presente anterior al ancla
+    # daría una fecha regnal falsa («año 1» de una era que aún no ha empezado).
+    if (
+        has_eras
+        and era is not None
+        and getattr(era, "start_year", None) is not None
+        and int(present_year) >= int(era.start_year)
+    ):
+        within = max(1, int(present_year) - int(era.start_year) + 1)
+        out["equivalencia_presente"] = (
+            f"año absoluto {int(present_year)} = {era_name or era.name}, año {within}"
+        )
     meta = getattr(chrono, "metadata", {}) or {}
     if isinstance(meta, dict):
         resolution = meta.get("date_resolution")
@@ -546,6 +588,102 @@ def _compact_chronology(project: Any) -> dict[str, Any]:
     return out
 
 
+# ── BETA-MULTIAGENT2-FIX-08 (G2-13): rigor de lo generado ────────────────────
+# Cada pieza que la IA propone declara EN QUÉ SE APOYA (`base`) y, si quiere, con
+# cuánta confianza. Ninguna de las dos señales se inventa aquí: sin declaración del
+# modelo, la base queda «no declarada» y la confianza NO se marca como declarada
+# (la UI no pinta entonces ningún porcentaje: un número que nadie ha medido no se
+# enseña como si fuera una medida).
+BASE_MARK_VALUES: frozenset[str] = frozenset({"canon", "inferido", "inventado"})
+BASE_MARK_UNDECLARED = "no_declarada"
+
+_BASE_MARK_ALIASES: dict[str, str] = {
+    "canon": "canon",
+    "canonico": "canon",
+    "documentado": "canon",
+    "documented": "canon",
+    "fuente": "canon",
+    "inferido": "inferido",
+    "inferida": "inferido",
+    "inferencia": "inferido",
+    "inferred": "inferido",
+    "deducido": "inferido",
+    "deduccion": "inferido",
+    "inventado": "inventado",
+    "inventada": "inventado",
+    "invencion": "inventado",
+    "invented": "inventado",
+    "ficcion": "inventado",
+    "libre": "inventado",
+}
+
+_DECLARED_CONFIDENCE_WORDS: dict[str, float] = {
+    "alta": 0.9, "high": 0.9, "alto": 0.9,
+    "media": 0.6, "medium": 0.6, "medio": 0.6,
+    "baja": 0.3, "low": 0.3, "bajo": 0.3,
+}
+
+
+def _fold(value: Any) -> str:
+    """minúsculas sin acentos (para leer marcas del modelo con tolerancia)."""
+    text = str(value or "").strip().lower()
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
+    )
+
+
+def _declared_base(piece: Any) -> dict[str, str]:
+    """Marca de BASE declarada por el modelo para UNA pieza.
+
+    Devuelve siempre un dict con `base` ∈ {canon, inferido, inventado,
+    no_declarada} y `base_nota`. Si el modelo no la manda —o manda algo fuera del
+    vocabulario— la pieza queda «no declarada»: jamás se le atribuye una base que
+    no dijo.
+    """
+    if not isinstance(piece, dict):
+        return {"base": BASE_MARK_UNDECLARED, "base_nota": ""}
+    raw = _fold(
+        piece.get("base") or piece.get("basis") or piece.get("base_narrativa") or ""
+    )
+    base = _BASE_MARK_ALIASES.get(raw, BASE_MARK_UNDECLARED)
+    nota = str(
+        piece.get("base_nota") or piece.get("base_note") or piece.get("base_razon") or ""
+    ).strip()
+    return {"base": base, "base_nota": nota}
+
+
+def _declared_confidence(piece: Any) -> float | None:
+    """Confianza DECLARADA por el modelo (0.0-1.0) o ``None`` si no la declaró.
+
+    Acepta 0-1, 0-100 y las palabras alta/media/baja (high/medium/low). Cualquier
+    otra cosa = no declarada: nunca se fabrica una confianza.
+    """
+    if not isinstance(piece, dict):
+        return None
+    raw = piece.get("confidence", piece.get("confianza"))
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        if 0.0 < value <= 1.0:
+            return value
+        if 1.0 < value <= 100.0:
+            return value / 100.0
+        return None
+    word = _DECLARED_CONFIDENCE_WORDS.get(_fold(raw))
+    if word is not None:
+        return word
+    try:
+        value = float(str(raw).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if 0.0 < value <= 1.0:
+        return value
+    if 1.0 < value <= 100.0:
+        return value / 100.0
+    return None
+
+
 def _candidate(
     *,
     title: str,
@@ -555,25 +693,40 @@ def _candidate(
     justification: str,
     confidence: float = 0.62,
     expected_impact: str = "Revisión humana requerida antes de entrar al canon.",
+    declared_confidence: float | None = None,
+    base_mark: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "ai_job_id": job.id,
+        "ai_job_type": job.type.value,
+        "prompt": job.prompt,
+        "context_scope": dict(job.context_scope),
+        "canon_auto_mutation": False,
+        "provider_backed": True,
+    }
+    # FIX-08 (G2-13): la confianza SOLO se marca como declarada cuando la declaró
+    # el modelo; el literal del código sigue existiendo para ordenar internamente,
+    # pero sin esta marca la UI no lo pinta como si fuera una medida.
+    if declared_confidence is not None:
+        confidence = float(declared_confidence)
+        metadata["confianza_declarada"] = True
+    if base_mark is not None:
+        metadata["base"] = base_mark.get("base") or BASE_MARK_UNDECLARED
+        if base_mark.get("base_nota"):
+            metadata["base_nota"] = base_mark["base_nota"]
     return {
         "candidate_type": candidate_type,
         "state": "pendiente",
         "title": title,
         "proposed_data": proposed_data,
-        "source": "ai_command_bar",
+        # FIX-08 (G2-14/B5): la barra de comandos está RETIRADA; persistir
+        # "ai_command_bar" era una procedencia falsa. El origen real es el job.
+        "source": f"ai_{job.type.value}",
         "source_id": job.id,
         "confidence": confidence,
         "justification": justification,
         "expected_impact": expected_impact,
-        "metadata": {
-            "ai_job_id": job.id,
-            "ai_job_type": job.type.value,
-            "prompt": job.prompt,
-            "context_scope": dict(job.context_scope),
-            "canon_auto_mutation": False,
-            "provider_backed": True,
-        },
+        "metadata": metadata,
     }
 
 
@@ -672,6 +825,47 @@ def _opt_nature(value: Any) -> str:
     return "mortal"
 
 
+# ── BETA-MULTIAGENT2-FIX-13 (G2-20): la salida del proveedor, saneada ──────
+#
+# Decisión tomada (pregunta abierta 3 del ticket): el Markdown se LIMPIA, y se
+# limpia en la ESTADÍA (cuando el texto del modelo se convierte en candidato),
+# no al aceptar. Motivo: limpiar al aceptar cambiaría lo que el usuario acaba de
+# leer y aprobar, y eso sí rozaría el invariante del producto. Limpiando antes,
+# lo que se lee y lo que se acepta son el mismo texto.
+#
+# El alfabeto extranjero (los «年份» que se colaron en una respuesta) NO se borra
+# —borrar contenido de alguien que sí escribe en chino sería peor— sino que se
+# DETECTA y se marca, y la primera línea de defensa es el prompt, que ya fija el
+# idioma de salida (`command_prompts._BASE_ES`).
+_MD_BOLD_ITALIC = re.compile(r"(\*{1,3}|_{2,3})(?=\S)(.+?)(?<=\S)\1", re.S)
+_MD_CODE = re.compile(r"`{1,3}(?=\S)(.+?)(?<=\S)`{1,3}", re.S)
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.M)
+_MD_BULLET = re.compile(r"^(\s*)[*+]\s+", re.M)
+# Rangos CJK/Hangul/Kana: lo que la maestra no puede leer en su novela de Cádiz.
+_NON_LATIN = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
+
+
+def sanitize_model_text(text: Any) -> str:
+    """Quita las marcas de Markdown del texto que devuelve el modelo.
+
+    Conserva el contenido íntegro: solo caen los marcadores (`**`, `__`, `*`,
+    `` ` ``, `#` de título y viñetas `*`/`+`). No toca la puntuación ni los
+    guiones de diálogo, que sí son prosa.
+    """
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else ""
+    limpio = _MD_BOLD_ITALIC.sub(lambda m: m.group(2), text)
+    limpio = _MD_CODE.sub(lambda m: m.group(1), limpio)
+    limpio = _MD_HEADING.sub("", limpio)
+    limpio = _MD_BULLET.sub(lambda m: f"{m.group(1)}• ", limpio)
+    return limpio
+
+
+def has_non_latin_script(text: Any) -> bool:
+    """¿El texto trae caracteres CJK/kana/hangul? (respuesta sospechosa)."""
+    return bool(isinstance(text, str) and _NON_LATIN.search(text))
+
+
 def _normalized_edit_fields(
     edit: dict[str, Any],
     whitelist: frozenset[str],
@@ -699,12 +893,18 @@ def _normalized_edit_fields(
             continue
         if value is None or not str(value).strip():
             continue
-        fields[key] = value
+        # BETA-MULTIAGENT2-FIX-13 (G2-20): se limpia AQUÍ, al estadiar, no al
+        # aceptar. Así lo que el usuario lee en la ventana de decidir es
+        # exactamente lo que entrará en su canon si dice que sí — el invariante
+        # («la IA nunca escribe canon») se respeta y los asteriscos no llegan.
+        fields[key] = sanitize_model_text(value) if isinstance(value, str) else value
     return fields
 
 
 def _edit_fields_summary(fields: dict[str, Any]) -> str:
-    return "\n".join(f"- {key}: {value}" for key, value in fields.items())
+    # BETA-MULTIAGENT2-FIX-13 (G2-20): el resumen que se LEE usa la etiqueta del
+    # campo, no su clave interna. El dato (`edit_fields`) conserva la clave intacta.
+    return "\n".join(f"- {field_label(key)}: {value}" for key, value in fields.items())
 
 
 def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
@@ -817,10 +1017,16 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         summary = str(milestone.get("summary") or milestone.get("description") or milestone.get("resumen") or "").strip()
         body = str(milestone.get("body") or milestone.get("rationale") or milestone.get("justification") or "").strip()
         chronology_position = str(milestone.get("chronology_position") or milestone.get("chronology_key") or "").strip()
+        # BETA-MULTIAGENT2-FIX-03 (G2-03): NO fabricar un orden que el modelo no
+        # propuso. Este `or 0` estampaba `sort_index = 0` en TODO hito de IA y la
+        # Cronología lo pintaba como «Orden 0» (un nombre de campo interno asomando
+        # por la etiqueta) mientras los hitos escritos a mano no llevaban ninguna.
+        raw_sort_index = milestone.get("sort_index")
+        sort_index: int | None
         try:
-            sort_index = int(milestone.get("sort_index", 0) or 0)
+            sort_index = int(raw_sort_index) if raw_sort_index is not None else None
         except (TypeError, ValueError):
-            sort_index = 0
+            sort_index = None
         primary = selected_entity_ids[0] if selected_entity_ids else ""
         hito_payload = {
             "title": title,
@@ -835,12 +1041,29 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             "metadata": {
                 "body": body,
                 "chronology_key": chronology_position,
-                "sort_index": sort_index,
                 "primary_entity_id": primary,
                 "ai_job_id": job.id,
                 "origin_prompt": job.prompt,
             },
         }
+        if sort_index is not None:
+            hito_payload["metadata"]["sort_index"] = sort_index
+        # BETA-MULTIAGENT-FIX-04 (G-04): el tipo y los padres causales que la IA
+        # proponga ya no se tiran — antes todo hito IA nacía `origen` sin padres.
+        proposed_type = str(
+            milestone.get("milestone_type") or milestone.get("tipo") or ""
+        ).strip()
+        if proposed_type:
+            hito_payload["milestone_type"] = proposed_type
+        proposed_parents = [
+            str(x).strip()
+            for x in _safe_list(
+                milestone.get("causal_parent_hito_ids") or milestone.get("padres_causales")
+            )
+            if str(x).strip()
+        ]
+        if proposed_parents:
+            hito_payload["causal_parent_hito_ids"] = proposed_parents
         candidates.append(_candidate(
             title=f"Hito sugerido: {title}",
             candidate_type="sugerencia_ia",
@@ -849,6 +1072,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             justification=str(milestone.get("rationale") or milestone.get("justification") or "Hito sugerido desde una seleccion existente."),
             confidence=0.60,
             expected_impact="Propone un hito relacionado; al aceptar se crea por la ruta segura de hitos.",
+            declared_confidence=_declared_confidence(milestone),
+            base_mark=_declared_base(milestone),
         ))
 
     # Process hojas (B39) — also accept legacy "entities" key for backward compatibility
@@ -885,6 +1110,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             proposed_data=proposed,
             job=job,
             justification=str(entity.get("rationale") or "Propuesta generada desde el prompt exacto del usuario."),
+            declared_confidence=_declared_confidence(entity),
+            base_mark=_declared_base(entity),
         ))
 
     # Process ramas (B39) — also accept legacy "trees" key for backward compatibility
@@ -943,6 +1170,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             proposed_data=proposed,
             job=job,
             justification=str(tree.get("rationale") or "Rama propuesta para revisión."),
+            declared_confidence=_declared_confidence(tree),
+            base_mark=_declared_base(tree),
         ))
 
     # BUG 4 fix + PLAY-15: stage entity edits as reviewable candidates. Acepta
@@ -962,7 +1191,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         if not fields:
             continue
         resumen = _edit_fields_summary(fields)
-        campos = ", ".join(fields)
+        # FIX-13: «Editar Marta Iriarte: año de nacimiento», no «: birth_year».
+        campos = field_labels(fields)
         candidates.append(_candidate(
             title=f"Editar {entity_name}: {campos}",
             candidate_type="sugerencia_ia",
@@ -982,6 +1212,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             ),
             confidence=0.65,
             expected_impact=f"Editar {len(fields)} campo(s) de '{entity_name}' tras revisión humana.",
+            declared_confidence=_declared_confidence(edit),
+            base_mark=_declared_base(edit),
         ))
 
     # UX5e: edición de RELACIÓN → UNA sola semilla con AMBOS campos (tipo + contenido).
@@ -1066,7 +1298,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         if not (target_name and proposed_value):
             continue
         candidates.append(_candidate(
-            title=f"Editar {field} de anillo: {target_name}",
+            title=f"Editar {field_label(field)} de anillo: {target_name}",
             candidate_type="sugerencia_ia",
             proposed_data={
                 "report": f"Propuesta de edición de anillo '{target_name}':\n\n{proposed_value}",
@@ -1076,14 +1308,20 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                 "edit_field": field,
                 "edit_proposed_value": proposed_value,
                 "issues": [],
-                "proposals": [{"title": f"Editar {field} de {target_name}", "description": proposed_value[:200]}],
+                "proposals": [{"title": f"Editar {field_label(field)} de {target_name}",
+                               "description": proposed_value[:200]}],
                 "open_questions": [],
                 "prompt": job.prompt,
             },
             job=job,
-            justification=str(edit.get("rationale") or f"Edición propuesta de {field} para anillo existente."),
+            justification=str(
+                edit.get("rationale")
+                or f"Edición propuesta de {field_label(field)} para anillo existente."
+            ),
             confidence=0.65,
-            expected_impact=f"Editar {field} de anillo '{target_name}' tras revisión humana.",
+            expected_impact=(
+                f"Editar {field_label(field)} de anillo '{target_name}' tras revisión humana."
+            ),
         ))
 
     # PLAY-15: milestone edits como patch multi-campo (con compat escalar). El
@@ -1105,7 +1343,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         if not fields or not (target_name or target_id):
             continue
         resumen = _edit_fields_summary(fields)
-        campos = ", ".join(fields)
+        campos = field_labels(fields)
         candidates.append(_candidate(
             title=f"Editar hito {target_name or target_id}: {campos}",
             candidate_type="sugerencia_ia",
@@ -1233,6 +1471,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             },
             job=job,
             justification=str(first.get("rationale") or "Relación entre el par seleccionado."),
+            declared_confidence=_declared_confidence(first),
+            base_mark=_declared_base(first),
         ))
         relations_payload = []  # el par forzado ya cubre Crear Relación
     for rel in relations_payload:
@@ -1260,6 +1500,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
                     },
                     job=job,
                     justification=str(rel.get("rationale") or "Relación propuesta con endpoints del contexto."),
+                    declared_confidence=_declared_confidence(rel),
+                    base_mark=_declared_base(rel),
                 ))
             continue
 
@@ -1281,6 +1523,8 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
             },
             job=job,
             justification=f"Relación propuesta entre '{source_name}' y '{target_name}'. Se resolverá por nombre al aceptar.",
+            declared_confidence=_declared_confidence(rel),
+            base_mark=_declared_base(rel),
         ))
 
     kind = "analysis_report" if analytical else "candidate_batch"
@@ -1695,10 +1939,12 @@ class AIJobService:
             return Error("Job IA cancelado")
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         if provider_name == "simulated" and not self.allow_simulated:
+            # BETA-MULTIAGENT-FIX-06 (NOV-04): sin instrucciones de la CLI — se
+            # eliminó en BETA-CIERRE WS-G; el único camino real es Ajustes → IA.
             msg = (
-                "IA no configurada: añade un proveedor en Ajustes de IA (en la CLI: "
-                "variables NARRATIVE_AI_PROVIDER, NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY "
-                "y NARRATIVE_AI_MODEL). No se genera contenido simulado."
+                "IA no configurada: actívala en los Ajustes de IA (elige un proveedor "
+                "compatible con OpenAI e indica URL, modelo y API key). "
+                "No se genera contenido simulado."
             )
             self.update_status(job_id, AIJobStatus.FAILED, message="Provider IA no configurado", error=msg, progress=1.0)
             self._record_observability(job, status="error", error_type="provider_unconfigured")

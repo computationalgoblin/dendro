@@ -233,6 +233,36 @@ class ProjectPanel(QWidget):
         close_btn.clicked.connect(self.callbacks["close_project"])
         btn_row.addWidget(close_btn)
         card.layout.addLayout(btn_row)
+
+        # BETA-AUDIT-04 y 15: las dos puertas que faltaban en el panel de Proyecto.
+        # Exportar existía como servicio sin superficie (ningún fichero de hosts/
+        # importaba ExportService), y Restaurar sólo aparecía de forma REACTIVA
+        # cuando abrir un proyecto ya había fallado, restaurando la copia más
+        # reciente a ciegas. PRUEBA-GUIADA.md §13 pedía probarlo desde aquí.
+        segunda_fila = QHBoxLayout()
+        segunda_fila.setSpacing(8)
+        self.export_btn = QPushButton("Exportar a Markdown…")
+        self.export_btn.setToolTip(
+            "Escribe una carpeta con un fichero por entidad y un índice. Se lee en "
+            "cualquier editor de texto, sin Dendro."
+        )
+        self.export_btn.setEnabled("export_project" in self.callbacks and self.project is not None)
+        if "export_project" in self.callbacks:
+            self.export_btn.clicked.connect(self.callbacks["export_project"])
+        segunda_fila.addWidget(self.export_btn)
+
+        self.restore_btn = QPushButton("Restaurar copia de seguridad…")
+        self.restore_btn.setToolTip(
+            "Vuelve a una copia anterior de este proyecto, eligiéndola por fecha."
+        )
+        self.restore_btn.setEnabled(
+            "restore_backup" in self.callbacks and self.project is not None
+        )
+        if "restore_backup" in self.callbacks:
+            self.restore_btn.clicked.connect(self.callbacks["restore_backup"])
+        segunda_fila.addWidget(self.restore_btn)
+        card.layout.addLayout(segunda_fila)
+
         self.root_layout.addWidget(card)
 
     def _build_project_type_section(self):
@@ -527,7 +557,7 @@ class AISettingsPanel(_PanelBase):
         status = self.ai.provider_status()
         connected = "error" if danger or status.get("fallback") else "conectado"
         if status.get("provider") == "simulated":
-            connected = "simulado"
+            connected = "sin conectar"  # BETA-AUDIT-07: no hay «modo simulado»
         key_text = "sí" if status.get("has_key") else "no"
         safe = (
             f"Estado: {connected}\n"
@@ -605,12 +635,12 @@ def _build_appearance_tab(ctx, on_apply=None, parent: QWidget | None = None) -> 
     anim_combo.setCurrentIndex(anim_idx)
     form.addRow("Intensidad de animación", anim_combo)
 
-    # Language
-    lang_combo = QComboBox()
-    lang_combo.addItems(["Español", "English"])
-    current_lang = getattr(ctx, 'language', 'es')
-    lang_combo.setCurrentIndex(0 if current_lang == 'es' else 1)
-    form.addRow("Idioma", lang_combo)
+    # BETA-AUDIT-13: aquí vivía un combo «Idioma» (Español / English) que NO traducía
+    # nada: no hay QTranslator ni ficheros .ts en todo el host, así que elegir English
+    # dejaba la interfaz entera en español. Su único consumidor real era el system
+    # prompt del asistente, así que el control se mudó a la pestaña IA con el nombre
+    # que dice la verdad («Idioma del asistente»). Un control que promete algo que no
+    # hace cuesta credibilidad y genera reportes de bug inútiles.
 
     card.layout.addLayout(form)
     lay.addWidget(card)
@@ -620,7 +650,7 @@ def _build_appearance_tab(ctx, on_apply=None, parent: QWidget | None = None) -> 
         ctx.font_size = _FONT_SIZE_MAP.get(font_size_combo.currentText(), "medium")
         ctx.font_family = _FONT_FAMILY_MAP.get(font_family_combo.currentText(), "Georgia")
         ctx.animation_intensity = _ANIM_MAP.get(anim_combo.currentText(), "normal")
-        ctx.language = 'es' if lang_combo.currentText() == "Español" else 'en'
+        # `ctx.language` ya NO se toca aquí: lo gobierna la pestaña IA.
         ctx.save_preferences()
         status_lbl.setText("✓ Preferencias de apariencia guardadas")
         if on_apply:
@@ -696,6 +726,18 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
     timeout_combo.setCurrentIndex(timeout_idx if timeout_idx >= 0 else 4)
     form.addRow("Timeout", timeout_combo)
 
+    # BETA-AUDIT-13: el idioma vivía en Apariencia dando a entender que traducía la
+    # interfaz. No la traduce (no hay QTranslator en todo el host): su único efecto
+    # real es qué system prompt recibe el asistente. Aquí, y con este nombre, es
+    # verdad.
+    assistant_lang_combo = QComboBox()
+    assistant_lang_combo.addItems(["Español", "English"])
+    assistant_lang_combo.setCurrentIndex(0 if getattr(ctx, "language", "es") == "es" else 1)
+    assistant_lang_combo.setToolTip(
+        "Idioma en el que te responde el asistente de Dendro. No traduce la interfaz."
+    )
+    form.addRow("Idioma del asistente", assistant_lang_combo)
+
     provider_card.layout.addLayout(form)
     lay.addWidget(provider_card)
 
@@ -718,18 +760,17 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
         ctx.ai_model = model
         ctx.ai_timeout = timeout_text
         ctx.ai_temperature = temperature
+        ctx.language = "es" if assistant_lang_combo.currentText() == "Español" else "en"
         if key:
             ctx.ai_api_key = key
             api_key_edit.clear()
             api_key_edit.setPlaceholderText("Clave guardada")
         ctx.save_preferences()
 
-        os.environ["NARRATIVE_AI_PROVIDER"] = prov
-        os.environ["NARRATIVE_AI_BASE_URL"] = base_url
-        os.environ["NARRATIVE_AI_MODEL"] = model
-        os.environ["NARRATIVE_AI_TIMEOUT"] = timeout_text
-        if ctx.ai_api_key:
-            os.environ["NARRATIVE_AI_API_KEY"] = ctx.ai_api_key
+        # BETA-MULTIAGENT2-FIX-14 (G2-30): el volcado al entorno lo hace ya
+        # `ctx.save_preferences()` → `_apply_ai_environment()`, que MIRA el
+        # proveedor. Repetirlo aquí a mano reexportaba la clave incluso al cambiar
+        # a `simulated`: apagar la IA no la apagaba.
         try:
             ai_controller.__init__(ai_controller.ps)
         except Exception as exc:
@@ -773,9 +814,12 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
             # simulated» engañaba (luego regar/sugerir fallan con «IA no
             # configurada»). Se avisa claramente de que no generará contenido.
             if str(provider) == "simulated":
+                # BETA-AUDIT-07: «Modo simulado» sugiere una demo que genera contenido
+                # de mentira. No existe tal modo: `simulated` es sólo el valor por
+                # defecto de un proveedor sin configurar, y los trabajos de IA fallan.
                 ia_status_label.setText(
-                    "Modo simulado: no generará contenido real. Elige un proveedor "
-                    "compatible con OpenAI y añade tu API key para activar la IA."
+                    "Sin conectar. Elige un proveedor compatible con OpenAI y añade tu "
+                    "API key para activar Regar, Sugerencias y Play."
                 )
                 return
             ia_status_label.setText(f"Conectado: {provider}")
@@ -792,8 +836,42 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
     test_btn = QPushButton("Probar conexión")
     test_btn.clicked.connect(_test_connection)
     btn_row.addWidget(test_btn)
+
+    # BETA-MULTIAGENT2-FIX-14 (G2-30): no había NINGUNA forma de retirar la clave.
+    # `_save_ia_env` solo la escribía cuando el campo traía texto y nunca la
+    # borraba al pasar a `simulated`: quedaba en claro en `settings.json` para
+    # siempre. Este botón la borra del fichero Y del entorno del proceso.
+    def _forget_key():
+        forget = getattr(ctx, "forget_api_key", None)
+        if not callable(forget):
+            return
+        forget()
+        api_key_edit.clear()
+        api_key_edit.setPlaceholderText("API key / token")
+        ia_status_label.setText("Clave olvidada: ya no está en el archivo de ajustes.")
+        if on_status:
+            on_status("Clave de IA olvidada")
+
+    forget_key_btn = QPushButton("Olvidar la clave")
+    forget_key_btn.setToolTip(
+        "Borra la API key del archivo de ajustes y del entorno de esta sesión."
+    )
+    forget_key_btn.clicked.connect(_forget_key)
+    btn_row.addWidget(forget_key_btn)
     lay.addLayout(btn_row)
     lay.addWidget(ia_status_label)
+
+    # FIX-14 (G2-30): decir la verdad sobre dónde vive la clave. El panel no la
+    # enseña (eco de contraseña), pero el disco la guarda en texto plano y en
+    # Windows no hay permiso de fichero que la proteja.
+    key_note = QLabel(
+        "La clave se guarda en texto plano en el archivo de ajustes de tu perfil de "
+        "usuario. Dendro no la cifra. Si no quieres dejarla en disco, usa «Olvidar la "
+        "clave» al terminar."
+    )
+    key_note.setObjectName("mutedLabel")
+    key_note.setWordWrap(True)
+    lay.addWidget(key_note)
 
     # ── Mini chatbot area ──
     chat_card = Card("Asistente Dendro", "Pregunta sobre las funcionalidades de la app.")

@@ -92,6 +92,13 @@ class AppContext:
     # SHIP-01: abre el panel de Ajustes de IA in-app desde cualquier vista (lo fija
     # MainWindow). Fail-soft: si es None, la UI degrada a texto sin botón.
     open_ai_settings: Callable[[], None] | None = None
+    # BETA-AUDIT-01: programa un guardado a disco DIFERIDO (coalescente). Lo fija
+    # MainWindow y lo llaman los controladores tras cada mutación asentada.
+    request_save_debounced: Callable[[], None] | None = None
+    # ¿Hay cambios en memoria que aún no están en disco? Lo publica MainWindow para
+    # que la píldora «Guardar» diga la verdad en vez de afirmar siempre lo mismo.
+    unsaved_changes: bool = False
+    on_save_state_changed: Callable[[bool], None] | None = None
 
     # Appearance preferences (B31-UX-FIX-02-T04)
     font_size: str = "medium"  # small, medium, large
@@ -114,17 +121,66 @@ class AppContext:
     # arranca colapsado). Estado de UI, no de proyecto → vive aquí, sin migración.
     creation_chrono_expanded_ids: list[str] = field(default_factory=list)
 
+    # BETA-MULTIAGENT2-FIX-14 (G2-30). Sin anotación de tipo a propósito: NO es un
+    # campo del dataclass (no debe aparecer en `__init__`), es estado de proceso.
+    #: True si esta app puso `NARRATIVE_AI_API_KEY` en el entorno (y puede quitarla).
+    _ai_key_exported = False
+
+    #: Proveedores que CONSUMEN la clave (ver `openai_compatible_provider.get_provider`).
+    _PROVEEDORES_CON_CLAVE = ("openai_compatible", "openai")
+
     def __post_init__(self):
         self.load_preferences()
 
+    def provider_consumes_api_key(self) -> bool:
+        """¿El proveedor configurado llega a usar `NARRATIVE_AI_API_KEY`?
+
+        `simulated` nunca la usa. El resto la usa si es un proveedor conocido o si
+        hay `base_url` (que es la otra puerta de `get_provider`).
+        """
+        provider = (self.ai_provider or "simulated").strip().lower()
+        if provider == "simulated":
+            return False
+        return provider in self._PROVEEDORES_CON_CLAVE or bool((self.ai_base_url or "").strip())
+
+    def forget_api_key(self) -> None:
+        """BETA-MULTIAGENT2-FIX-14 (G2-30): retira la clave del disco Y del proceso.
+
+        No había NINGUNA forma de retirarla: `_save_ia_env` solo la escribía cuando
+        el campo traía texto y nunca la borraba al cambiar a `simulated`.
+        """
+        self.ai_api_key = ""
+        os.environ.pop("NARRATIVE_AI_API_KEY", None)
+        self._ai_key_exported = False
+        self.save_preferences()
+
     def _apply_ai_environment(self) -> None:
-        """Mirror persisted AI settings into the legacy provider env vars."""
+        """Vuelca los ajustes de IA persistidos a las variables de entorno.
+
+        BETA-MULTIAGENT2-FIX-14 (G2-30): la clave SOLO viaja al entorno si el
+        proveedor configurado la consume. Antes se exportaba sin mirar el proveedor,
+        en CADA arranque y en CADA guardado: apagar la IA (`simulated`) no apagaba
+        nada, la clave seguía en el entorno del proceso. Ahora, además, al apagar se
+        RETIRA lo que esta app hubiera exportado — apagar apaga de verdad.
+
+        Una `NARRATIVE_AI_API_KEY` que el usuario haya puesto a mano en su entorno
+        se respeta: ni se toca ni se persiste en `settings.json`.
+        """
         os.environ["NARRATIVE_AI_PROVIDER"] = self.ai_provider or "simulated"
         os.environ["NARRATIVE_AI_BASE_URL"] = self.ai_base_url or ""
         os.environ["NARRATIVE_AI_MODEL"] = self.ai_model or ""
         os.environ["NARRATIVE_AI_TIMEOUT"] = str(self.ai_timeout or "300")
-        if self.ai_api_key:
+        if self.ai_api_key and self.provider_consumes_api_key():
             os.environ["NARRATIVE_AI_API_KEY"] = self.ai_api_key
+            self._ai_key_exported = True
+            return
+        actual = os.environ.get("NARRATIVE_AI_API_KEY")
+        nuestra = bool(self._ai_key_exported) or (
+            actual is not None and self.ai_api_key and actual == self.ai_api_key
+        )
+        if actual is not None and nuestra:
+            os.environ.pop("NARRATIVE_AI_API_KEY", None)
+        self._ai_key_exported = False
 
     def remember_project(self, path: str | None) -> None:
         """Persist the last opened/saved project path and a short recents list."""
@@ -207,10 +263,19 @@ class AppContext:
             }
             self._apply_ai_environment()
             PREFERENCES_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            try:
-                PREFERENCES_PATH.chmod(0o600)
-            except Exception:
-                pass
+            # BETA-MULTIAGENT2-FIX-14 (G2-30): el `chmod(0o600)` solo restringe de
+            # verdad en POSIX. En Windows `Path.chmod` mueve el bit de solo-lectura
+            # y NO toca las ACL: ahí no protege nada, así que ni se intenta (dejarlo
+            # sugería una protección que en la plataforma de la beta no existe).
+            # La clave sigue en claro en el fichero: cifrarla exige una dependencia
+            # de terceros (keyring/DPAPI) y el repo no tiene ninguna — decisión
+            # aparte. Mientras tanto, «Olvidar la clave» (`forget_api_key`) es la
+            # salida honesta para quien no quiera dejarla en disco.
+            if os.name == "posix":
+                try:
+                    PREFERENCES_PATH.chmod(0o600)
+                except OSError:
+                    pass
         except Exception as exc:
             self.log("error", f"No se pudieron guardar preferencias UI: {exc}")
 

@@ -44,8 +44,10 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     INK_STRONG,
     LINE,
     LINE_MUTED,
+    LINE_STRONG,
     SESSION_INK,
     SESSION_LINE,
+    SURFACE,
     SURFACE_HI,
     WHITE,
 )
@@ -506,12 +508,32 @@ class HomeNode(QFrame):
         )
 
     def set_dimmed(self, dimmed: bool):
-        """Set dimmed/disabled appearance when no project is loaded."""
+        """Señala «aquí todavía no hay nada» SIN apagar el texto.
+
+        BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA B. Esto ponía un
+        `QGraphicsOpacityEffect` a 0,45 sobre el widget ENTERO, así que tarjeta y
+        texto se componían a la vez contra el fondo del Home y el contraste caía
+        de 5,73:1 a ~1,2-2,0:1. Una maestra jubilada lo midió sobre sus propios
+        píxeles: **1,19:1**. Es decir: la ÚNICA puerta de la aplicación se apagaba
+        justo cuando era lo único que había que pulsar. Se quedó mirando el centro
+        de la pantalla pensando «¿y ahora qué?».
+
+        Atenuar sigue siendo necesario —dice algo verdadero— pero ahora lo dice por
+        OTRO medio: superficie más plana, borde neutro en vez de dorado y el
+        subtítulo intacto. La opacidad se queda en 1,0: el efecto se conserva
+        porque `animate_zoom_in`/`animate_restore` lo necesitan, pero deja de ser
+        el mecanismo del «apagado».
+        """
+        self._opacity_effect.setOpacity(1.0)
         if dimmed:
-            self._opacity_effect.setOpacity(0.45)
             self._subtitle_label.setText("Abre o crea un proyecto")
+            self.setStyleSheet(
+                f"QFrame#dendroNode {{ background: {SURFACE}; border: 1px dashed {LINE_STRONG}; "
+                f"border-radius: 36px; }} "
+                f"QFrame#dendroNode:hover {{ background: {WHITE}; border: 2px solid {GOLD}; }}"
+            )
         else:
-            self._opacity_effect.setOpacity(1.0)
+            self._apply_tone_style(self._tone)
 
     def set_worldbuilding_indicator(self, active: bool):
         """Show or hide the worldbuilding 'Capas' indicator."""
@@ -735,6 +757,28 @@ class HomeView(QWidget):
         self._btn_memory.clicked.connect(lambda: self._action("memory_menu"))
         bottom_row.addWidget(self._btn_memory)
 
+        # BETA-MULTIAGENT2-FIX-11 (fase A): «Salud del proyecto» — el lint de la
+        # wiki existía y funcionaba sin ninguna puerta. Se revisa bajo demanda
+        # (nada de contador permanente en la esquina, G2-07).
+        self._btn_health = QuietIconButton("✓", "Salud del proyecto")
+        self._btn_health.setToolTip(
+            "Revisar la salud del proyecto: enlaces rotos y páginas obsoletas de la wiki"
+        )
+        self._btn_health.clicked.connect(lambda: self._action("health_menu"))
+        bottom_row.addWidget(self._btn_health)
+
+        # BETA-AUDIT-05: la beta cerrada existe para recoger feedback y no tenía
+        # canal. Lo único que había era «Abrir carpeta de registros», escondido
+        # dentro del diálogo «Acerca de», y PRUEBA-GUIADA.md daba por hecho este
+        # botón dos veces (§1 y §16).
+        self._btn_report = QuietIconButton("!", "Reportar problema")
+        self._btn_report.setToolTip(
+            "Prepara un correo con la versión, tu sistema y las últimas líneas del "
+            "registro. Puedes revisarlo antes de enviarlo."
+        )
+        self._btn_report.clicked.connect(lambda: self._action("report_problem"))
+        bottom_row.addWidget(self._btn_report)
+
         # BETA1-F01: música ambiental — opcional, APAGADA por defecto,
         # control visible y discreto. Si QtMultimedia no está, no aparece.
         self._music = _AmbientMusic() if _HAS_AUDIO else None
@@ -786,9 +830,16 @@ class HomeView(QWidget):
         row = QHBoxLayout(banner)
         row.setContentsMargins(14, 8, 10, 8)
         row.setSpacing(10)
+        # BETA-AUDIT-07: decía «La IA está en modo simulado», y un lector razonable
+        # entiende que la app va a inventarle contenido falso — justo lo contrario de
+        # lo que hace. No existe ningún modo simulado: sin proveedor, los trabajos de
+        # IA FALLAN con un mensaje claro (ai_jobs.py, watering_service.py: «No se
+        # genera contenido simulado»). El texto además filtraba el nombre interno del
+        # valor por defecto (`ai_provider = "simulated"`) a la cara del usuario.
         text = QLabel(
-            "La IA está en modo simulado. Configura un proveedor para regar, "
-            "pedir sugerencias y mantener la Memoria."
+            "Aún no has conectado una IA. Dendro funciona sin ella: puedes crear, "
+            "relacionar y ordenar tu mundo con normalidad. Sólo Regar, Sugerencias y "
+            "Play la necesitan."
         )
         text.setWordWrap(True)
         text.setStyleSheet(

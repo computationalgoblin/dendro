@@ -84,8 +84,39 @@ _B36_CAUSAL_DEFAULT_METADATA: dict[str, dict[str, str]] = {
     "layer_conflictos": {"causal_rank": "12", "causal_role": "active_conflicts", "causal_aliases": "conflictos activos,guerras,tensiones,disputas", "causal_parent_layer_ids": "layer_historia,layer_economia,layer_religion"},
     "layer_narrativa": {"causal_rank": "13", "causal_role": "narrative_plots_characters", "causal_aliases": "narrativa,tramas,personajes,facciones,escenas", "causal_parent_layer_ids": "layer_conflictos,layer_historia,layer_situacion"},
     "layer_situacion": {"causal_rank": "14", "causal_role": "status_quo", "causal_aliases": "situación actual,status quo,equilibrio presente,estado actual", "causal_parent_layer_ids": "layer_historia,layer_conflictos,layer_economia"},
-    "layer_campaña": {"causal_rank": "15", "causal_role": "play_consequence", "causal_aliases": "campaña,sesiones,consecuencias de juego,partida", "causal_parent_layer_ids": "layer_narrativa,layer_situacion,layer_conflictos"},
+    "layer_campaña": {"causal_rank": "15", "causal_role": "play_consequence", "causal_aliases": "desenlace,consecuencias,secuelas,resolución", "causal_parent_layer_ids": "layer_narrativa,layer_situacion,layer_conflictos"},
 }
+
+
+#: BETA-AUDIT-09 — anillos con los que arranca un proyecto nuevo.
+#:
+#: Los 16 de ``default_world_layers()`` son el mapa causal completo del contrato §10.3
+#: y siguen siendo la referencia (los usan la migración v7 y ``foco_rings``), pero
+#: sembrarlos todos en un proyecto vacío abruma: un usuario nuevo abre el Mapa y ve
+#: sistemas concéntricos vacíos encabezados por «Metafísica y cosmología».
+#:
+#: Este subconjunto usa los MISMOS ids, así que un proyecto que arranque con él y luego
+#: adopte la estructura completa no duplica anillos ni pierde rangos causales.
+#: Se eligen los cinco CONCRETOS y se deja fuera la cabecera abstracta (premisa,
+#: metafísica, reglas, física): abrir un mundo vacío cuyo primer anillo es «Metafísica
+#: y cosmología» pide una decisión que nadie tiene tomada el primer día. Quien quiera
+#: el mapa causal completo lo sigue teniendo en `default_world_layers()`.
+_STARTER_LAYER_IDS = (
+    "layer_geografia",
+    "layer_comunidades",
+    "layer_historia",
+    "layer_situacion",
+    "layer_conflictos",
+)
+
+
+def starter_world_layers() -> list[WorldLayer]:
+    """Subconjunto legible para un proyecto nuevo (ver ``_STARTER_LAYER_IDS``)."""
+    por_id = {capa.id: capa for capa in default_world_layers()}
+    elegidas = [por_id[i] for i in _STARTER_LAYER_IDS if i in por_id]
+    for orden, capa in enumerate(elegidas, start=1):
+        capa.order = orden
+    return elegidas
 
 
 def default_world_layers() -> list[WorldLayer]:
@@ -205,10 +236,15 @@ def default_world_layers() -> list[WorldLayer]:
             order=15,
             is_default=True,
         ),
+        # BETA-AUDIT-09: se llamaba «Campaña, sesiones y consecuencias» y hablaba de
+        # «decisiones de jugadores». WS-A retiró el rol del producto, pero el copy
+        # sobrevivía aquí y se sembraba en CADA proyecto nuevo: la guarda
+        # tests/test_positioning_copy.py sólo recorría hosts/, no packages/.
+        # El id se conserva (lo referencian la migración v7 y el mapa causal).
         WorldLayer(
             id="layer_campaña",
-            name="Campaña, sesiones y consecuencias",
-            description="Sesiones de juego, decisiones de jugadores, consecuencias, evolución de la campaña",
+            name="Desenlaces y consecuencias",
+            description="Cómo se resuelven las tramas: decisiones tomadas, secuelas y estado en que queda el mundo",
             order=16,
             is_default=True,
         ),

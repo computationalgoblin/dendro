@@ -31,7 +31,7 @@ propone son semillas que tú aceptas o rechazas. Tu mundo es tuyo.
 Dendro funciona sin IA, pero **Regar, las Sugerencias y el modo Play la necesitan**.
 Para activarla:
 
-1. Pulsa el **engranaje** (⚙) → **Configuración** → pestaña **IA**.
+1. En el Inicio, pulsa **Ajustes** → pestaña **IA** (o el botón **Configurar IA** del aviso).
 2. Rellena:
    - **URL** de un servicio compatible con OpenAI (por ejemplo, la de tu proveedor
      o la de un servidor local tipo LM Studio / Ollama).
@@ -42,8 +42,11 @@ Para activarla:
 ## Tu primer proyecto
 
 1. Pulsa **«Nuevo / abrir proyecto»** y elige crear uno nuevo.
-2. El **asistente** te ofrece varios *presets* (tipo de mundo/relato) para empezar
-   con una estructura razonable. Elige uno, dale nombre y escoge dónde guardarlo.
+2. El **asistente** te ofrece varias *plantillas de tono* («Tragedia íntima»,
+   «Fábula oscura»…) que rellenan la configuración creativa —género, tono, temas—
+   para que la IA sepa de qué va tu obra. No crean entidades ni estructura: eso lo
+   plantas tú. Elige una si te encaja, dale nombre y escoge dónde guardarlo.
+   El Mapa arranca con unos anillos básicos que puedes cambiar.
 3. Ya puedes plantar tus primeras entidades en el Mapa, abrirlas en Foco,
    regarlas y ver crecer el jardín.
 
@@ -81,8 +84,21 @@ Dendro **no** tiene telemetría ni te rastrea: no se envía nada más que lo ant
 Gracias por probar Dendro. Es una versión beta: puede haber errores. Si algo falla,
 la app intenta seguir viva, te lo avisa y deja un rastro en
 `C:\Users\<tu usuario>\.narrative-architect\dendro_crash.log` — adjúntalo cuando
-reportes un problema, junto con qué estabas haciendo. Tus datos están a salvo:
-cada guardado conserva la copia `.bak` anterior.
+reportes un problema, junto con qué estabas haciendo. Lo más rápido es el botón
+**«Reportar problema»** del Inicio: prepara el correo con la versión, tu sistema y
+las últimas líneas del registro (puedes revisarlo antes de enviarlo).
+
+Tus datos están a salvo:
+
+- Lo que escribes **se guarda solo** en cuanto dejas de teclear. Puedes forzarlo con
+  **Ctrl+S** en cualquier momento; la píldora **Guardar** avisa con un punto (•) si
+  queda algo por escribir.
+- **Ctrl+Z** y **Ctrl+Y** deshacen y rehacen cambios de tu mundo (crear, borrar,
+  editar), no solo lo último que tecleaste.
+- Cada guardado conserva la copia `.bak` anterior, y en **Proyecto → Restaurar copia
+  de seguridad** puedes volver a un momento anterior eligiéndolo por fecha.
+- En **Proyecto → Exportar a Markdown** te llevas el mundo entero como carpeta de
+  ficheros de texto, legible sin Dendro.
 
 ## Licencia
 

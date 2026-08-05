@@ -53,6 +53,22 @@ class ProjectChronology:
     def sorted_eras(self) -> list[Era]:
         return sorted(self.eras, key=lambda era: (era.start_year, era.order))
 
+    def year_label(self, year: int | None) -> str:
+        """«año N (Era X, año M)» — puente año absoluto ↔ era (BETA-MULTIAGENT-FIX-03).
+
+        Los prompts recibían año absoluto y año-de-era sin traducción y la IA
+        alegaba incoherencias temporales falsas. Sin año → «sin fecha»; año fuera
+        de toda era → «año N» pelado (degradación sin crash).
+        """
+        if year is None:
+            return "sin fecha"
+        y = int(year)
+        era = self.era_for_year(y)
+        if era is None or getattr(era, "start_year", None) is None:
+            return f"año {y}"
+        within = max(1, y - int(era.start_year) + 1)
+        return f"año {y} ({era.name}, año {within})"
+
     def link_milestone(self, milestone_id: str) -> None:
         normalized = str(milestone_id).strip()
         if normalized and normalized not in self.milestone_ids:
@@ -96,6 +112,18 @@ class ProjectChronology:
             eras=_parse_eras(data.get("eras")),
             present_year=_parse_int(data.get("present_year"), 0),
         )
+
+
+def format_year_with_era(chronology: "ProjectChronology | None", year: int | None) -> str:
+    """Helper ÚNICO del puente temporal para los serializadores de prompts.
+
+    Tolera cronología ausente (proyectos sin calendario): devuelve el año pelado.
+    """
+    if year is None:
+        return "sin fecha"
+    if chronology is None:
+        return f"año {int(year)}"
+    return chronology.year_label(year)
 
 
 def _parse_str_list(value: Any) -> list[str]:

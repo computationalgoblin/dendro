@@ -68,14 +68,21 @@ def _create_entity(ec, name, *, kind="personaje", **extra):
 # ── Panel de hoja (BETA1-UX2C: lapso SOLO-LECTURA; se edita en cronología) ──
 
 def test_node_panel_has_no_lifespan_text(qapp):
-    # BETA2-FOCO-27: el lapso ya NO se muestra como texto en el formulario — se
-    # define en la cronología del PIE del editor. El panel no expone año editable
-    # inline ni la etiqueta muerta de lapso.
+    # BETA2-FOCO-27: el lapso RICO ya NO se muestra como texto en el formulario —
+    # se define en la cronología del PIE del editor. La etiqueta muerta de lapso
+    # sigue sin existir.
+    #
+    # BETA-MULTIAGENT2-FIX-12 (G2-29) REVISA la otra mitad de aquella decisión:
+    # el AÑO entero vuelve a ser editable en la Ficha («Nació»/«Murió»). Sin él,
+    # el único editor de fecha era un arrastre sobre una ventana de 0 a 10 años y
+    # un mundo real entregado en el beta llegó con sus nueve fichas sin datar.
     ctx, ps, ec, _rc = _ctx_with_project()
     entity = _create_entity(ec, "Eldrin", birth_year=-500, death_year=-450)
     panel = NodeDetailPanel(ctx, ec, entity.id, on_saved=lambda: None)
-    assert not hasattr(panel, "birth_year_edit")
     assert not hasattr(panel, "lifespan_label")
+    # El año se escribe, y se carga con lo que la entidad ya tiene.
+    assert panel.birth_year_edit.text() == "-500"
+    assert panel.death_year_edit.text() == "-450"
 
 
 def test_node_panel_undated_loads_without_lifespan_text(qapp):

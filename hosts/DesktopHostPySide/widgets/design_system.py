@@ -5,6 +5,7 @@ or infrastructure and do not mutate domain objects directly.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -59,18 +60,46 @@ SURFACE_HI  = "#FBF8EF"   # tarjetas elevadas, barras flotantes
 INPUT_BG    = "#FFFDF8"   # campos de texto
 
 # Tinta (texto) — más profunda y cálida, para contraste profesional
+#
+# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A. La escalera de tinta tenía tres
+# peldaños pero solo los dos primeros se leían: `INK_MUTED` medía 2,93:1 sobre
+# SURFACE, 2,58:1 sobre PAPER y 2,30:1 sobre WELL, e `INK_SOFT` se quedaba a
+# 4,24:1 sobre PAPER. Y no eran tintas decorativas: `QLabel#mutedLabel` es
+# exactamente lo que pinta la justificación de la IA (structure_review_panel),
+# el origen del candidato (candidate_review_panel) y las filas de riesgo del
+# Cuaderno de Cultivo. O sea: la prosa humana a 10:1 y el razonamiento de la
+# máquina a 2,58:1, justo al revés de lo que pide la confianza.
+#
+# La escalera NO se aplana (sigue habiendo tres niveles de énfasis): se BAJA
+# ENTERA hasta que su último peldaño cumple AA sobre la superficie más oscura
+# del sistema (WELL). Medido con `contrast_ratio`, sobre WELL / PAPER / SURFACE:
+#   INK        7,08 · 7,95 · 9,02
+#   INK_SOFT   5,53 · 6,21 · 7,04
+#   INK_MUTED  4,67 · 5,24 · 5,95   (antes: 2,30 · 2,58 · 2,93)
+# ΔE entre peldaños ≈ 7 y ≈ 5: la jerarquía se sigue viendo.
 INK_STRONG  = "#34301E"
 INK         = "#45402E"
-INK_SOFT    = "#6E6950"
-INK_MUTED   = "#948C6E"
+INK_SOFT    = "#55503A"
+INK_MUTED   = "#605B41"
 
 # Líneas y bordes
 LINE        = "#D2CAB1"
 LINE_SOFT   = "#E3DCC8"
 LINE_STRONG = "#BCB28E"
+# Borde de CONTROL interactivo (WCAG 1.4.11 · 3:1 para componentes de interfaz).
+# FIX-13: `LINE` (1,43:1 sobre SURFACE) y `LINE_STRONG` (1,85:1) valen como
+# ornamento —separadores, rejillas, marcos decorativos— pero NO como el único
+# indicio visual de que ahí hay un botón o un campo. Este token sí llega:
+# 3,86 sobre SURFACE · 4,36 sobre INPUT_BG · 3,40 sobre PAPER · 3,03 sobre WELL.
+LINE_CONTROL = "#807855"
 
 # Acento — oro-oliva (identidad / acciones)
-GOLD        = "#8B7A36"
+# FIX-13 (G2-17): el oro era #8B7A36 y la etiqueta del botón primario (INK_INVERSE)
+# medía 4,01:1 contra él — el peor punto de su gradiente, y es el control más
+# pulsado de la app. Bajado un peldaño de luminosidad SIN mover el tono: ahora
+# 4,98:1 contra INK_INVERSE (el stop inferior, GOLD_DEEP, ya daba 5,73:1) y
+# 4,60:1 sobre SURFACE, con lo que el oro además pasa a ser legible como texto.
+GOLD        = "#7A6B2F"
 GOLD_DEEP   = "#6E622E"
 GOLD_PRESS  = "#5E5427"   # oro hundido (estado :pressed de acciones doradas)
 GOLD_SOFT   = "#BBAA66"
@@ -81,11 +110,31 @@ SAGE        = "#6E7E58"
 SAGE_DEEP   = "#546243"  # verde profundo (reservado; aún sin uso)
 
 # Tierra (BETA2-JARDIN-01): ciclo de riego en el Mapa — sedienta (marrón) y
-# secada (gris-tierra). Tintes claros para rellenos con texto legible encima.
+# secada (carbón-tierra).
+#
+# BETA-MULTIAGENT2-FIX-01 (criterio 6): los tintes ANTIGUOS eran claros
+# (#CDBB97 / #D0CCBE) y medían 1,09:1 contra la parada más oscura de la viñeta
+# (#CFC4A8) y 1,17:1 ENTRE SÍ: dos estados de significado opuesto pintados del
+# mismo color e invisibles sobre el pergamino. Con un lienzo CLARO la única
+# forma de que un relleno alcance 3:1 es oscurecerlo (un relleno claro tiene un
+# techo matemático de 1,73:1 contra #CFC4A8), y para que además los dos estados
+# se separen 3:1 entre sí uno tiene que ser carbón. De ahí estos valores:
+#   sedienta  vs #CFC4A8 = 3,12:1 · vs CANVAS = 4,07:1
+#   secada    vs #CFC4A8 = 9,67:1 · vs CANVAS = 12,6:1
+#   sedienta  vs secada  = 3,10:1
+# Al ser rellenos OSCUROS, el texto que va encima se invierte a EARTH_INK.
 EARTH           = "#8A6B45"   # borde/acento de entidad sedienta (falta regar)
-EARTH_TINT      = "#CDBB97"   # relleno de entidad sedienta
+EARTH_TINT      = "#8C6137"   # relleno de entidad sedienta (marrón tierra)
 EARTH_GREY      = "#A29B87"   # borde de entidad secada (pausada a propósito)
-EARTH_GREY_TINT = "#D0CCBE"   # relleno de entidad secada
+EARTH_GREY_TINT = "#231C1A"   # relleno de entidad secada (carbón cálido)
+EARTH_INK       = "#F7F1E8"   # tinta sobre relleno de tierra (4,8:1 / 14,4:1)
+EARTH_INK_SOFT  = "#EDE6D6"   # tinta secundaria sobre relleno de tierra
+
+# Perímetro de la hoja SANA. El relleno blanco de una entidad sana no puede
+# alcanzar 3:1 contra el pergamino (techo 1,73:1), así que quien porta el
+# contraste del componente es su BORDE — que es lo que WCAG 1.4.11 mide.
+# LEAF_EDGE vs #CFC4A8 = 3,42:1 · vs CANVAS = 4,46:1 · vs el relleno = 5,9:1.
+LEAF_EDGE       = "#6B6448"
 
 # Sombra cálida base (RGB) — las sombras nunca son grises neutros aquí
 SHADOW_RGB  = (52, 47, 28)
@@ -196,17 +245,52 @@ TICK_INTERVAL = 40  # ms entre fotogramas de animaciones pintadas a mano
 # Paleta cálida por tipo de entidad (BETA1-UX05): única fuente para nodos del grafo
 # y paneles de detalle (antes duplicada idéntica en cada widget). Tonos botánicos
 # coherentes con el pergamino, NUNCA azules/púrpuras fríos.
+#
+# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A: la paleta cubría 10 claves para los
+# 21 `EntityType` del dominio — 14 tipos caían al neutro y eran indistinguibles
+# entre sí. Se COMPLETA sin mover ni uno de los 9 hex históricos (fijados por
+# `test_ux15_entity_palette.py`): los 14 colores nuevos se eligieron dentro de la
+# misma banda estética (H 0-130 y 280-350, S 0,20-0,56, V 0,42-0,88 — cálidos,
+# nunca azules fríos) con la restricción de quedar a ΔE(CIE76) ≥ 10 de TODOS los
+# demás. Los únicos pares por debajo de 10 son los cuatro que YA existían entre
+# los hex históricos (concepto/nota 4,62 · contenedor/nota 4,86 ·
+# concepto/contenedor 8,11 · organizacion/evento 9,35): no se tocan porque
+# moverlos rompe el snapshot y es un cambio visual que nadie pidió.
 ENTITY_KIND_PALETTE: dict[str, str] = {
     "personaje": "#C07B53",      # terracota — calidez humana
-    "lugar": "#7E9568",          # salvia — tierra y lugar
-    "localizacion": "#7E9568",   # alias de lugar
-    "organizacion": "#B28A3C",   # oro-oliva — institución
+    "lugar": "#7E9568",          # salvia — legado; ver _ENTITY_LEGACY_KEYS
+    "localizacion": "#7E9568",   # salvia — el tipo real del dominio
+    "organizacion": "#B28A3C",   # oro-oliva — legado; ver _ENTITY_LEGACY_KEYS
     "faccion": "#A65C54",        # granate-arcilla — conflicto
     "objeto": "#937083",         # ciruela apagada — reliquia
     "evento": "#C8A24C",         # miel — momento
-    "concepto": "#8E8A6A",       # oliva-piedra — idea
+    "concepto": "#8E8A6A",       # oliva-piedra — legado; ver _ENTITY_LEGACY_KEYS
     "contenedor": "#A89878",     # madera clara — rama
     "nota": "#9A8E72",           # piedra cálida — nota
+    # FIX-13 — los 14 que faltaban
+    "cultura": "#9E7D5C",          # arena tostada — costumbre heredada
+    "escena": "#D1C38A",           # trigo claro — momento representado
+    "sesion": "#856A58",           # cuero — mesa de juego
+    "conflicto": "#854A4C",        # granate hondo — la herida abierta
+    "secreto": "#704F6B",          # ciruela oscura — lo que no se dice
+    "pista": "#B8B56A",            # oliva luminosa — el rastro que se sigue
+    "regla_del_mundo": "#6A704C",  # musgo profundo — la ley que sostiene
+    "tecnologia": "#6B5B54",       # peltre cálido — el artefacto
+    "sistema_magico": "#916C9E",   # amatista cálida — lo prodigioso reglado
+    "religion": "#E0D3AB",         # incienso — lo sagrado
+    "idioma": "#598059",           # verde hoja — la lengua viva
+    "institucion": "#856C3A",      # bronce viejo — la estructura que dura
+    "criatura": "#B2796B",         # arcilla rojiza — lo que respira
+    "trama": "#8A5869",            # vino apagado — el hilo que enhebra
+}
+# Claves que NO son un `EntityType` del dominio y se conservan a propósito: son
+# el vocabulario natural con el que el modelo (y proyectos viejos) nombran tipos.
+# Sin ellas caerían al neutro. Declaradas por escrito para que nadie las confunda
+# con tipos reales.
+_ENTITY_LEGACY_KEYS: dict[str, str] = {
+    "lugar": "localizacion",       # el dominio dice «localizacion»
+    "organizacion": "institucion",  # el dominio dice «institucion»
+    "concepto": "regla_del_mundo",  # idea abstracta → regla del mundo
 }
 _ENTITY_KIND_DEFAULT = "#9A8E72"  # piedra cálida (neutro de la propia gama)
 
@@ -220,40 +304,111 @@ def entity_kind_color(kind: str | None, default: str = _ENTITY_KIND_DEFAULT) -> 
 # grafo y el panel de detalle. Familias por significado: vínculo (salvia), conflicto
 # (granate), contención/lugar (oliva), jerarquía (oro-oliva), afecto/familia
 # (terracota/rosa), causalidad (ciruela apagada). NUNCA azules/púrpuras fríos.
-RELATION_KIND_PALETTE: dict[str, str] = {
-    "es_aliado_de": "#7E9568",
-    "es_amigo_de": "#7E9568",
-    "protege": "#7E9568",
-    "es_enemigo_de": "#A65C54",
-    "es_rival_de": "#A65C54",
-    "esta_en_conflicto_con": "#A65C54",
-    "traiciono": "#A65C54",
-    "contradice": "#A65C54",
-    "pertenece_a": "#B28A3C",
-    "es_mentor_de": "#B28A3C",
-    "depende_de": "#B28A3C",
-    "sospecha": "#B28A3C",
-    "gobierna": "#B28A3C",
-    "controla": "#B28A3C",
-    "contiene": "#94A06F",
-    "esta_ubicado_en": "#94A06F",
-    "esta_en": "#94A06F",
-    "sirve_a": "#94A06F",
-    "es_familiar_de": "#C07B53",
-    "ama_a": "#BD7E73",
-    "posee": "#C07B53",
-    "busca": "#C8A24C",
-    "oculta": "#8E8A6A",
-    "conoce": "#8E8A6A",
-    "simboliza": "#8E8A6A",
-    "esta_relacionado_con": "#9A8E72",
-    "deriva_de": "#8A6B7C",
-    "condiciona": "#8A6B7C",
-    "explica": "#8A6B7C",
-    "produce_consecuencia_en": "#8A6B7C",
-    "faccion": "#A65C54",
+#
+# El color de una relación identifica su FAMILIA de significado, no el tipo
+# concreto: dos arcos de la misma familia comparten tono a propósito (así el
+# lienzo se lee de un vistazo). Los tonos canónicos viven en
+# RELATION_FAMILY_TONES y cada tipo del dominio se asigna a uno de ellos.
+RELATION_FAMILY_TONES: dict[str, str] = {
+    "vinculo": "#7E9568",       # salvia — alianza, protección
+    "conflicto": "#A65C54",     # granate — enemistad, traición, contradicción
+    "jerarquia": "#B28A3C",     # oro-oliva — pertenencia, mando, obligación
+    "contencion": "#94A06F",    # oliva — contener, ubicar, servir
+    "afecto": "#C07B53",        # terracota — posesión, vínculo íntimo
+    "busqueda": "#C8A24C",      # miel — lo que se persigue
+    "conocimiento": "#8E8A6A",  # oliva-piedra — saber, creer, ocultar, revelar
+    "causalidad": "#8A6B7C",    # ciruela apagada — causa, consecuencia, derivación
+    "neutro": "#9A8E72",        # piedra cálida — relación genérica
 }
-_RELATION_KIND_DEFAULT = "#9A8E72"  # piedra cálida (neutro de la propia gama)
+
+# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A: la paleta declaraba 31 claves para
+# los 41 `RelationType` del dominio y 7 de esas claves no correspondían a ningún
+# tipo. Faltaban 17 tipos, entre ellos `causo` y `fue_causado_por`, que son la
+# columna vertebral causal del producto: la causalidad se pintaba del neutro.
+RELATION_KIND_PALETTE: dict[str, str] = {
+    # vínculo
+    "es_aliado_de": RELATION_FAMILY_TONES["vinculo"],
+    "protege": RELATION_FAMILY_TONES["vinculo"],
+    # conflicto
+    "es_enemigo_de": RELATION_FAMILY_TONES["conflicto"],
+    "esta_en_conflicto_con": RELATION_FAMILY_TONES["conflicto"],
+    "traiciono": RELATION_FAMILY_TONES["conflicto"],
+    "contradice": RELATION_FAMILY_TONES["conflicto"],
+    # jerarquía / obligación
+    "pertenece_a": RELATION_FAMILY_TONES["jerarquia"],
+    "depende_de": RELATION_FAMILY_TONES["jerarquia"],
+    "sospecha": RELATION_FAMILY_TONES["jerarquia"],
+    "gobierna": RELATION_FAMILY_TONES["jerarquia"],
+    "controla": RELATION_FAMILY_TONES["jerarquia"],
+    "tiene_deuda_con": RELATION_FAMILY_TONES["jerarquia"],
+    # contención / lugar
+    "contiene": RELATION_FAMILY_TONES["contencion"],
+    "esta_ubicado_en": RELATION_FAMILY_TONES["contencion"],
+    "sirve_a": RELATION_FAMILY_TONES["contencion"],
+    # afecto / posesión
+    "posee": RELATION_FAMILY_TONES["afecto"],
+    # búsqueda
+    "busca": RELATION_FAMILY_TONES["busqueda"],
+    # conocimiento (lo que un personaje sabe, cree, oculta o revela)
+    "oculta": RELATION_FAMILY_TONES["conocimiento"],
+    "conoce": RELATION_FAMILY_TONES["conocimiento"],
+    "simboliza": RELATION_FAMILY_TONES["conocimiento"],
+    "desconoce": RELATION_FAMILY_TONES["conocimiento"],
+    "revela": RELATION_FAMILY_TONES["conocimiento"],
+    "sabe": RELATION_FAMILY_TONES["conocimiento"],
+    "cree": RELATION_FAMILY_TONES["conocimiento"],
+    "ignora": RELATION_FAMILY_TONES["conocimiento"],
+    "malinterpreta": RELATION_FAMILY_TONES["conocimiento"],
+    "ha_oido": RELATION_FAMILY_TONES["conocimiento"],
+    "ha_visto": RELATION_FAMILY_TONES["conocimiento"],
+    "ha_recibido_pista": RELATION_FAMILY_TONES["conocimiento"],
+    "conoce_parcialmente": RELATION_FAMILY_TONES["conocimiento"],
+    "conoce_falsamente": RELATION_FAMILY_TONES["conocimiento"],
+    "posee_conocimiento": RELATION_FAMILY_TONES["conocimiento"],
+    "revela_conocimiento": RELATION_FAMILY_TONES["conocimiento"],
+    # causalidad — la columna vertebral del producto
+    "causo": RELATION_FAMILY_TONES["causalidad"],
+    "fue_causado_por": RELATION_FAMILY_TONES["causalidad"],
+    "participo_en": RELATION_FAMILY_TONES["causalidad"],
+    "deriva_de": RELATION_FAMILY_TONES["causalidad"],
+    "condiciona": RELATION_FAMILY_TONES["causalidad"],
+    "explica": RELATION_FAMILY_TONES["causalidad"],
+    "produce_consecuencia_en": RELATION_FAMILY_TONES["causalidad"],
+    # parentesco (BETA-MULTIAGENT2-FIX-12, G2-16) — el color del vínculo íntimo
+    # ya estaba reservado en `es_familiar_de` esperando a que el dominio tuviera
+    # los tipos. Ahora existen y la clave deja de ser huérfana.
+    "es_familiar_de": RELATION_FAMILY_TONES["afecto"],
+    "es_progenitor_de": RELATION_FAMILY_TONES["afecto"],
+    "es_madre_de": RELATION_FAMILY_TONES["afecto"],
+    "es_padre_de": RELATION_FAMILY_TONES["afecto"],
+    "es_hijo_de": RELATION_FAMILY_TONES["afecto"],
+    "es_hermano_de": RELATION_FAMILY_TONES["afecto"],
+    "es_antepasado_de": RELATION_FAMILY_TONES["afecto"],
+    "es_descendiente_de": RELATION_FAMILY_TONES["afecto"],
+    # El matrimonio comparte el tono de la familia (el color identifica la
+    # FAMILIA de significado, no el tipo concreto — regla UX05/FIX-13).
+    "esta_casado_con": RELATION_FAMILY_TONES["afecto"],
+    # genérica
+    "esta_relacionado_con": RELATION_FAMILY_TONES["neutro"],
+}
+
+# Claves que el dominio NO define como `RelationType` y que se conservan a
+# propósito: el modelo todavía las emite (son el vocabulario natural de un
+# escritor) y sin color caerían al neutro. Se declaran aquí, por escrito, para
+# que ningún lector futuro las confunda con tipos reales.
+# BETA-MULTIAGENT2-FIX-12 (G2-16): `es_familiar_de` YA NO vive aquí — el dominio
+# tiene la familia de parentesco y su color se declara arriba, con los tipos
+# reales. Las que quedan siguen siendo huérfanas a propósito.
+_RELATION_LEGACY_KEYS: dict[str, str] = {
+    "es_amigo_de": RELATION_FAMILY_TONES["vinculo"],
+    "es_rival_de": RELATION_FAMILY_TONES["conflicto"],
+    "es_mentor_de": RELATION_FAMILY_TONES["jerarquia"],
+    "esta_en": RELATION_FAMILY_TONES["contencion"],
+    "ama_a": "#BD7E73",   # rosa-arcilla — el único afecto con tono propio
+    "faccion": RELATION_FAMILY_TONES["conflicto"],
+}
+RELATION_KIND_PALETTE.update(_RELATION_LEGACY_KEYS)
+_RELATION_KIND_DEFAULT = RELATION_FAMILY_TONES["neutro"]  # piedra cálida
 
 
 def relation_kind_color(rel_type: str | None, default: str = _RELATION_KIND_DEFAULT) -> str:
@@ -266,23 +421,183 @@ def relation_kind_color(rel_type: str | None, default: str = _RELATION_KIND_DEFA
 FONT_SERIF = '"Georgia", "Iowan Old Style", "Palatino Linotype", serif'
 FONT_SANS = '"Segoe UI", "Inter", "Helvetica Neue", "Arial", sans-serif'
 
-TYPE_H1_PX = 19       # título de sección
-TYPE_H2_PX = 16       # título de tarjeta/panel
-TYPE_BODY_PX = 13     # cuerpo del sistema
-TYPE_LABEL_PX = 12    # etiquetas/chips
-TYPE_CAPTION_PX = 11  # subtítulos muted / pies (PISO del sistema: nada por debajo)
-TYPE_OVERLINE_PX = 11  # PULIDO-05: micro-título en mayúsculas con tracking
+# Escala nombrada. BETA-MULTIAGENT2-FIX-13 (G2-18), TANDA C: estos valores dejan
+# de ser constantes muertas y pasan a ser FUNCIÓN de la preferencia «Tamaño de
+# fuente» (ver `set_font_scale`). Hasta ahora la preferencia sí llegaba —
+# `main_window._apply_live_preferences` emitía un override correcto— pero perdía
+# contra los ~190 `font-size:` literales que los widgets se ponen a sí mismos:
+# en Qt, la hoja de estilo del PROPIO widget gana a la del ancestro (comprobado:
+# hijo con `font-size: 11px` bajo un padre a 16px sigue midiendo 11 px). Poner la
+# preferencia en «Grande» no agrandaba nada donde se trabaja.
+_TYPE_BASE_PX: dict[str, int] = {
+    "h1": 19,       # título de sección
+    "h2": 16,       # título de tarjeta/panel
+    "subhead": 14,  # subtítulo de tarjeta (entre cuerpo y h2)
+    "body": 13,     # cuerpo del sistema
+    "label": 12,    # etiquetas/chips
+    "caption": 11,  # subtítulos muted / pies (PISO del sistema: nada por debajo)
+    "overline": 11,  # PULIDO-05: micro-título en mayúsculas con tracking
+}
+
+# Factor por preferencia. «Grande» debe NOTARSE (es el único ajuste que salva la
+# vista de quien lee con gafas), «Pequeño» encoge pero nunca por debajo del piso.
+FONT_SCALE_FACTORS: dict[str, float] = {"small": 0.88, "medium": 1.0, "large": 1.30}
+# Piso absoluto del sistema: ningún texto baja de aquí, ni en «Pequeño».
+TYPE_FLOOR_PX = 11
+_FONT_SCALE = 1.0
+
+TYPE_H1_PX = _TYPE_BASE_PX["h1"]
+TYPE_H2_PX = _TYPE_BASE_PX["h2"]
+TYPE_SUBHEAD_PX = _TYPE_BASE_PX["subhead"]
+TYPE_BODY_PX = _TYPE_BASE_PX["body"]
+TYPE_LABEL_PX = _TYPE_BASE_PX["label"]
+TYPE_CAPTION_PX = _TYPE_BASE_PX["caption"]
+TYPE_OVERLINE_PX = _TYPE_BASE_PX["overline"]
 
 WEIGHT_BOLD = 700
 WEIGHT_SEMIBOLD = 600
 
-_TYPE_ROLES: dict[str, tuple[int, QFont.Weight]] = {
-    "h1": (TYPE_H1_PX, QFont.Weight.Bold),
-    "h2": (TYPE_H2_PX, QFont.Weight.Bold),
-    "body": (TYPE_BODY_PX, QFont.Weight.Normal),
-    "label": (TYPE_LABEL_PX, QFont.Weight.DemiBold),
-    "caption": (TYPE_CAPTION_PX, QFont.Weight.Normal),
+_TYPE_WEIGHTS: dict[str, QFont.Weight] = {
+    "h1": QFont.Weight.Bold,
+    "h2": QFont.Weight.Bold,
+    "subhead": QFont.Weight.DemiBold,
+    "body": QFont.Weight.Normal,
+    "label": QFont.Weight.DemiBold,
+    "caption": QFont.Weight.Normal,
+    "overline": QFont.Weight.Bold,
 }
+
+
+def scale_px(px: int | float) -> int:
+    """Aplica la escala tipográfica activa a un tamaño en píxeles, con piso."""
+    try:
+        value = int(round(float(px) * _FONT_SCALE))
+    except (TypeError, ValueError):
+        return int(TYPE_FLOOR_PX)
+    return max(int(TYPE_FLOOR_PX), value)
+
+
+def fs(role: str = "body") -> int:
+    """Píxeles del rol tipográfico *role* con la preferencia activa aplicada."""
+    return scale_px(_TYPE_BASE_PX.get(role, _TYPE_BASE_PX["body"]))
+
+
+def font_scale() -> float:
+    """Factor de escala tipográfica activo (1.0 = «Mediano»)."""
+    return _FONT_SCALE
+
+
+def set_font_scale(size_key: str) -> float:
+    """Fija la escala desde la preferencia («small»/«medium»/«large»).
+
+    Recalcula las constantes `TYPE_*_PX` del módulo para que TODO widget que se
+    construya a partir de ahora nazca ya con el tamaño correcto. Para los que ya
+    existen está `apply_font_scale`, que reescribe sus hojas de estilo.
+    """
+    global _FONT_SCALE, TYPE_H1_PX, TYPE_H2_PX, TYPE_SUBHEAD_PX
+    global TYPE_BODY_PX, TYPE_LABEL_PX, TYPE_CAPTION_PX, TYPE_OVERLINE_PX
+    _FONT_SCALE = FONT_SCALE_FACTORS.get(str(size_key or "medium"), 1.0)
+    TYPE_H1_PX = fs("h1")
+    TYPE_H2_PX = fs("h2")
+    TYPE_SUBHEAD_PX = fs("subhead")
+    TYPE_BODY_PX = fs("body")
+    TYPE_LABEL_PX = fs("label")
+    TYPE_CAPTION_PX = fs("caption")
+    TYPE_OVERLINE_PX = fs("overline")
+    return _FONT_SCALE
+
+
+_FONT_SIZE_RE = re.compile(r"(font-size\s*:\s*)(\d+(?:\.\d+)?)(\s*px)")
+_QSS_BASE_PROP = "_ds_qss_base"
+_QSS_APPLIED_PROP = "_ds_qss_scaled"
+
+
+def scale_stylesheet(qss: str) -> str:
+    """Reescribe cada `font-size: Npx` de *qss* con la escala activa.
+
+    Es el ÚNICO punto donde se corrige el problema de precedencia de Qt: como el
+    literal del propio widget gana a cualquier override del ancestro, la única
+    forma fiable de que «Grande» agrande es tocar ese literal.
+    """
+    if not qss or _FONT_SCALE == 1.0:
+        return qss
+    return _FONT_SIZE_RE.sub(lambda m: f"{m.group(1)}{scale_px(float(m.group(2)))}px", qss)
+
+
+def _rescale_widget_qss(widget: QWidget) -> None:
+    try:
+        current = widget.styleSheet()
+        base = widget.property(_QSS_BASE_PROP)
+        applied = widget.property(_QSS_APPLIED_PROP)
+        # Si el widget se ha reestilado por su cuenta desde la última pasada, su
+        # hoja actual pasa a ser la nueva base (nunca se reescala dos veces).
+        if base is None or current != applied:
+            base = current
+            widget.setProperty(_QSS_BASE_PROP, base)
+        if not base or "font-size" not in base:
+            return
+        scaled = scale_stylesheet(base)
+        if scaled != current:
+            widget.setStyleSheet(scaled)
+        widget.setProperty(_QSS_APPLIED_PROP, scaled)
+    except Exception:  # noqa: BLE001 — la accesibilidad nunca rompe el render
+        pass
+
+
+def apply_font_scale(root: QWidget, *, include_root: bool = False) -> int:
+    """Reaplica la escala tipográfica a un árbol de widgets YA construido.
+
+    Devuelve cuántos widgets se revisaron. Idempotente: guarda la hoja original
+    de cada widget y siempre reescala desde ella, así que llamarla N veces con
+    la misma preferencia no compone tamaños.
+    """
+    try:
+        widgets = list(root.findChildren(QWidget))
+    except Exception:  # noqa: BLE001
+        return 0
+    if include_root:
+        widgets.append(root)
+    for widget in widgets:
+        _rescale_widget_qss(widget)
+    return len(widgets)
+
+
+class _FontScaleWatcher(QObject):
+    """Reescala las superficies que se construyen DESPUÉS del cambio de ajuste.
+
+    Un panel, un cajón o un diálogo que nace más tarde trae sus propios
+    `font-size:` literales y nadie los habría tocado. Se reescalan al mostrarse.
+    """
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Show and _FONT_SCALE != 1.0:
+            if isinstance(obj, QWidget):
+                _rescale_widget_qss(obj)
+                apply_font_scale(obj)
+        return False
+
+
+_FONT_SCALE_WATCHER = _FontScaleWatcher()
+
+
+def sync_font_scale_watcher(app) -> None:
+    """Engancha el vigía SOLO si la escala no es la de casa.
+
+    Es un filtro de eventos de aplicación: ve pasar TODOS los eventos, así que
+    con «Mediano» —el caso por defecto— se desengancha del todo y no cuesta ni un
+    ciclo. La app ya arrastra quejas de fluidez; la accesibilidad no las agrava.
+    """
+    try:
+        activo = getattr(app, "_ds_font_scale_watcher", None) is not None
+        hace_falta = _FONT_SCALE != 1.0
+        if hace_falta and not activo:
+            app.installEventFilter(_FONT_SCALE_WATCHER)
+            app._ds_font_scale_watcher = _FONT_SCALE_WATCHER
+        elif activo and not hace_falta:
+            app.removeEventFilter(_FONT_SCALE_WATCHER)
+            app._ds_font_scale_watcher = None
+    except Exception:  # noqa: BLE001 — la accesibilidad nunca impide arrancar
+        pass
 
 
 def relative_luminance(hex_color: str) -> float:
@@ -304,12 +619,12 @@ def role_font(role: str = "body", *, serif: bool = True) -> QFont:
     """QFont para un rol tipográfico nombrado (h1/h2/body/label/caption).
 
     Para widgets que fijan fuente por código; el QSS global sigue usando el stack
-    completo de familias. Rol desconocido → body."""
-    size, weight = _TYPE_ROLES.get(role, _TYPE_ROLES["body"])
+    completo de familias. Rol desconocido → body. FIX-13: el tamaño sale de la
+    escala activa, así que también obedece a «Tamaño de fuente»."""
     font = QFont()
     font.setFamily("Georgia" if serif else "Segoe UI")
-    font.setPixelSize(size)
-    font.setWeight(weight)
+    font.setPixelSize(fs(role))
+    font.setWeight(_TYPE_WEIGHTS.get(role, QFont.Weight.Normal))
     return font
 
 # Movimiento: tres niveles + curvas con carácter
@@ -378,7 +693,9 @@ QToolTip {{
 }}
 QPushButton {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {SURFACE_HI}, stop:1 {SURFACE});
-    border: 1px solid {LINE};
+    /* FIX-13 (WCAG 1.4.11): el borde es la ÚNICA señal de que aquí hay un
+       control — `LINE` daba 1,43:1 y no lo marcaba para nadie. */
+    border: 1px solid {LINE_CONTROL};
     border-radius: {RADIUS_MD}px;
     padding: 8px 14px;
     color: {INK_SOFT};
@@ -430,7 +747,7 @@ QLabel#sectionTitle {{
 }}
 QTextEdit, QPlainTextEdit, QLineEdit, QComboBox, QTableWidget, QSpinBox, QDoubleSpinBox {{
     background: {INPUT_BG};
-    border: 1px solid {LINE};
+    border: 1px solid {LINE_CONTROL};   /* FIX-13: 3:1 real (WCAG 1.4.11) */
     border-radius: {RADIUS_MD}px;
     color: {INK};
     padding: 8px 10px;
@@ -819,6 +1136,61 @@ class FlowLayout(QLayout):
             x = next_x
             line_height = max(line_height, hint.height())
         return y + line_height - rect.y()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# BETA-MULTIAGENT2-FIX-14 (G2-21): vaciar un layout SIN dejar fantasmas
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def clear_layout(layout, *, conservar_al_final: int = 0) -> int:
+    """Retira y destruye el contenido de `layout`. Devuelve cuántos ítems sacó.
+
+    `conservar_al_final` deja intactos los N últimos ítems (típicamente el
+    `addStretch` final de una estantería, que es un espaciador y no un widget).
+
+    El idioma repetido por el host —``while layout.count(): layout.takeAt(0)`` +
+    ``widget.deleteLater()``— NO basta: ``deleteLater`` solo ENCOLA el borrado, así
+    que hasta que el bucle de eventos lo procese el widget sigue siendo hijo del
+    contenedor y **sigue pintándose**. De ahí el mensaje nuevo escrito encima del
+    viejo en el panel de Estructura y los chips «MedioMedio» de la Ficha del Foco:
+    el mismo defecto en dos ficheros.
+
+    ``setParent(None)`` lo saca del árbol AL INSTANTE (deja de pintarse y de contar
+    como hijo) y ``deleteLater`` libera el objeto C++ cuando toque. Recurre sobre
+    los sub-layouts porque varios ``_build`` mezclan ``addWidget`` y ``addLayout``.
+    """
+    if layout is None:
+        return 0
+    retirados = 0
+    while layout.count() > max(0, conservar_al_final):
+        item = layout.takeAt(0)
+        if item is None:
+            break
+        retirados += 1
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+            continue
+        hijo = item.layout()
+        if hijo is not None:
+            clear_layout(hijo)
+            hijo.setParent(None)
+            hijo.deleteLater()
+    return retirados
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# BETA-MULTIAGENT2-FIX-14 (G2-22): microcopia de borrado que no miente
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Los tres diálogos de borrado (Foco entidad, Foco relación, Mapa) afirmaban
+# «Esta acción no se puede deshacer» — y Ctrl+Z la deshacía en 0,19 s medidos.
+# El daño no es el bug: es la conducta que induce (nadie borra nada, el proyecto
+# se llena de basura intocable). El resto del mensaje NO se toca: decir QUÉ se
+# lleva por delante es el mejor microcopy del producto según dos testers.
+AVISO_DESHACER_BORRADO = "Podrás deshacerlo con Ctrl+Z mientras la ventana siga abierta."
 
 
 class Badge(QLabel):
@@ -1425,9 +1797,82 @@ def install_wheel_guard(container: QWidget) -> None:
         pass
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# BETA-MULTIAGENT2-FIX-13 (G2-20), TANDA E — las tildes.
+#
+# Los valores de los enums son la FORMA EN DISCO y van sin tilde por diseño
+# (`localizacion`, `faccion`, `catastrofe`…). `enum_human` era un
+# `replace("_"," ").capitalize()` sin mapa, así que la app enseñaba a una
+# novelista «Localizacion», «Faccion», «Sistema magico» y «Catastrofe».
+#
+# El mapa vive DENTRO de `enum_human` a propósito: `node_detail_panel` y
+# `relation_detail_panel` reseleccionan su combo con `combo.findText(
+# enum_human(value))`. Si la etiqueta se pusiera en los `addItem`, la ficha
+# dejaría de reseleccionar su propio tipo al abrirse, en silencio.
+#
+# Ningún valor cambia en disco: esto es SOLO la cara visible.
+# ─────────────────────────────────────────────────────────────────────────
+
+_ENUM_LABELS: dict[str, str] = {
+    # EntityType
+    "localizacion": "Localización",
+    "faccion": "Facción",
+    "tecnologia": "Tecnología",
+    "sistema_magico": "Sistema mágico",
+    "religion": "Religión",
+    "institucion": "Institución",
+    "sesion": "Sesión",
+    "organizacion": "Organización",
+    "regla_del_mundo": "Regla del mundo",
+    # CausalMilestoneType
+    "fundacion": "Fundación",
+    "traicion": "Traición",
+    "catastrofe": "Catástrofe",
+    "migracion": "Migración",
+    "caida": "Caída",
+    "revelacion": "Revelación",
+    # RelationType — verbos con tilde y preposiciones en minúscula
+    "participo_en": "Participó en",
+    "causo": "Causó",
+    "traiciono": "Traicionó",
+    "esta_ubicado_en": "Está ubicado en",
+    "esta_en_conflicto_con": "Está en conflicto con",
+    "esta_relacionado_con": "Está relacionado con",
+    "ha_oido": "Ha oído",
+    "esta_en": "Está en",
+    # CanonState / VisibilityState
+    "canonico": "Canónico",
+    "publico_mundo": "Público en el mundo",
+    # Candidatos / incidencias
+    "requiere_revision": "Requiere revisión",
+    "correccion": "Corrección",
+    "fusion": "Fusión",
+    "relacion": "Relación",
+    "contradiccion": "Contradicción",
+    "propuesta_post_sesion": "Propuesta tras la sesión",
+    "nota_post_sesion": "Nota tras la sesión",
+    "actualizacion_post_sesion": "Actualización tras la sesión",
+    "cambio_configuracion": "Cambio de configuración",
+    "creacion_relacion": "Creación de relación",
+    "edicion_relacion": "Edición de relación",
+    "archivado_relacion": "Archivado de relación",
+    "memoria_propuesta_revision": "Memoria: propuesta de revisión",
+    # Otros enums visibles
+    "vision": "Visión",
+    "investigacion": "Investigación",
+    "conspiracion": "Conspiración",
+    "preparacion": "Preparación",
+    "estado_revision": "Estado de revisión",
+}
+
+
 def enum_human(value: Any) -> str:
+    """Etiqueta legible (y ACENTUADA) de un valor de enum del dominio."""
     raw = getattr(value, "value", value)
-    text = str(raw or "—")
+    text = str(raw if raw not in (None, "") else "—")
+    etiqueta = _ENUM_LABELS.get(text.strip().lower())
+    if etiqueta:
+        return etiqueta
     return text.replace("_", " ").replace("-", " ").strip().capitalize() or "—"
 
 

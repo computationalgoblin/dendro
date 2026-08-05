@@ -36,7 +36,7 @@ class SourceService:
 
         name = str(data.get("name", "")).strip()
         if not name:
-            return Error("Source name cannot be empty")
+            return Error("El nombre de la fuente no puede estar vacío.")
 
         source = Source.from_dict(data)
         source.name = name

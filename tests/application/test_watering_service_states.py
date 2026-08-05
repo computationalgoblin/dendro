@@ -150,7 +150,24 @@ class TestBasicStates:
 
 @pytest.mark.application
 class TestNeighborhoodInvalidation:
-    def test_direct_neighbor_edit_invalidates(self):
+    """Caducidad por vecindario — RENEGOCIADA en BETA-MULTIAGENT2-FIX-05 (G2-05).
+
+    Regla vieja: editar la ficha de cualquier vecina (o de una de 2º grado de
+    relevancia alta) caducaba un diagnóstico recién pagado. Era la TERCERA vía de
+    invalidación del jardín —la que ningún tester identificó— y la que mantenía
+    sedientas las 4 entidades regadas del mundo real del beta, incluida la única
+    cuya página seguía `Regada`.
+
+    Regla nueva: caduca solo el canon PROPIO de la entidad (su ficha, sus relaciones)
+    y los cambios de FORMA del vecindario (altas/bajas/borrados), que invalidan el
+    contexto enviado a la IA. El CONTENIDO de una vecina viaja ahora por el camino
+    honesto: `NarrativeImpactService` marca `Falta regar` la PÁGINA de quien depende
+    de ella y la unificación de frescura (WIKI-13) lo refleja en el jardín — a quien
+    depende de verdad, no a todo el vecindario topológico.
+    """
+
+    def test_direct_neighbor_edit_no_longer_invalidates(self):
+        # RENEGOCIADO (FIX-05): antes esto marcaba `falta_regar`. Ver docstring.
         project_service, watering = _setup()
         center = _entity(project_service, "Centro")
         neighbor = _entity(project_service, "Vecina")
@@ -160,8 +177,8 @@ class TestNeighborhoodInvalidation:
 
         _edit(project_service, neighbor)
         report = _status(watering, center)
-        assert report.status == WateringStatus.FALTA_REGAR.value
-        assert report.stale is True
+        assert report.status == WateringStatus.REGADA.value
+        assert report.stale is False
 
     def test_relation_edit_invalidates(self):
         project_service, watering = _setup()
@@ -173,7 +190,9 @@ class TestNeighborhoodInvalidation:
         _edit(project_service, relation)
         assert _status(watering, center).status == WateringStatus.FALTA_REGAR.value
 
-    def test_container_branch_edit_invalidates(self):
+    def test_container_branch_edit_no_longer_invalidates(self):
+        # RENEGOCIADO (FIX-05): la rama madre es una vecina; editar su ficha ya no
+        # caduca la hoja. Editar la RELACIÓN de contención sí (test de arriba).
         project_service, watering = _setup()
         center = _entity(project_service, "Hoja")
         branch = _entity(project_service, "Rama madre")
@@ -181,7 +200,7 @@ class TestNeighborhoodInvalidation:
         _water(watering, center)
 
         _edit(project_service, branch)
-        assert _status(watering, center).status == WateringStatus.FALTA_REGAR.value
+        assert _status(watering, center).status == WateringStatus.REGADA.value
 
     def test_new_neighbor_after_watering_invalidates(self):
         project_service, watering = _setup()
@@ -206,7 +225,10 @@ class TestNeighborhoodInvalidation:
         project.touch()
         assert _status(watering, center).status == WateringStatus.FALTA_REGAR.value
 
-    def test_second_degree_only_high_importance(self):
+    def test_second_degree_edits_no_longer_invalidate(self):
+        # RENEGOCIADO (FIX-05): ni la vecina de 2º grado modesta ni la crítica
+        # caducan ya un diagnóstico fresco. Con 2º grado abierto, en un mundo real
+        # de 30 fichas y 37 relaciones casi cualquier edición secaba casi todo.
         project_service, watering = _setup()
         center = _entity(project_service, "Centro")
         bridge = _entity(project_service, "Puente")
@@ -226,6 +248,18 @@ class TestNeighborhoodInvalidation:
         assert _status(watering, center).status == WateringStatus.REGADA.value
 
         _edit(project_service, critical)
+        assert _status(watering, center).status == WateringStatus.REGADA.value
+
+    def test_own_edit_still_invalidates_after_the_renegotiation(self):
+        # La mitad que NO se relaja: el canon PROPIO sigue caducando el diagnóstico.
+        project_service, watering = _setup()
+        center = _entity(project_service, "Centro")
+        neighbor = _entity(project_service, "Vecina")
+        _relate(project_service, center, neighbor)
+        _water(watering, center)
+        assert _status(watering, center).status == WateringStatus.REGADA.value
+
+        _edit(project_service, center)
         assert _status(watering, center).status == WateringStatus.FALTA_REGAR.value
 
 

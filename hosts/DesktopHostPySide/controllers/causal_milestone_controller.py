@@ -9,9 +9,10 @@ from packages.application.causal_milestone_service import CausalMilestoneService
 from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.domain.result import Error, Ok
 from hosts.DesktopHostPySide.app_trace import _apptrace
+from hosts.DesktopHostPySide.controllers.mutation_hook import MutationNotifier
 
 
-class CausalMilestoneController:
+class CausalMilestoneController(MutationNotifier):
     """Thin UI adapter: delegates all logic to CausalMilestoneService.
 
     Never touches persistence or domain collections directly.
@@ -33,27 +34,31 @@ class CausalMilestoneController:
 
     def create_manual(self, data: dict):
         _apptrace(f"CTRL CausalMilestoneController.create_manual data_keys={list(data.keys())}"[:120])
-        return self.svc.create_hito_manual(data)
+        return self._notify_mutation(self.svc.create_hito_manual(data))
 
     def create_candidate(self, data: dict, *, source: str = "ia", confidence: float = 0.5):
         _apptrace(f"CTRL CausalMilestoneController.create_candidate source={source!r} conf={confidence}"[:120])
-        return self.svc.create_hito_candidate(data, source=source, confidence=confidence)
+        return self._notify_mutation(
+            self.svc.create_hito_candidate(data, source=source, confidence=confidence)
+        )
 
     def approve(self, hito_or_candidate_id: str):
         _apptrace(f"CTRL CausalMilestoneController.approve id={hito_or_candidate_id!r}"[:120])
-        return self.svc.approve_hito(hito_or_candidate_id)
+        return self._notify_mutation(self.svc.approve_hito(hito_or_candidate_id))
 
     def reject(self, hito_or_candidate_id: str):
         _apptrace(f"CTRL CausalMilestoneController.reject id={hito_or_candidate_id!r}"[:120])
-        return self.svc.reject_hito(hito_or_candidate_id)
+        return self._notify_mutation(self.svc.reject_hito(hito_or_candidate_id))
 
     def update(self, hito_id: str, data: dict):
         _apptrace(f"CTRL CausalMilestoneController.update hito_id={hito_id!r}"[:120])
-        return self.svc.update_hito(hito_id, data, impact_service=self.impact)
+        return self._notify_mutation(
+            self.svc.update_hito(hito_id, data, impact_service=self.impact)
+        )
 
     def delete(self, hito_id: str):
         _apptrace(f"CTRL CausalMilestoneController.delete hito_id={hito_id!r}"[:120])
-        return self.svc.delete_hito(hito_id)
+        return self._notify_mutation(self.svc.delete_hito(hito_id))
 
     # ── Subhitos: contención temporal de 1 nivel (BETA2-SUB-01) ──
 
@@ -61,20 +66,50 @@ class CausalMilestoneController:
         _apptrace(
             f"CTRL CausalMilestoneController.set_parent child={child_id!r} parent={parent_id!r}"[:120]
         )
-        return self.svc.set_milestone_parent(child_id, parent_id)
+        return self._notify_mutation(self.svc.set_milestone_parent(child_id, parent_id))
 
     def clear_parent(self, child_id: str):
         _apptrace(f"CTRL CausalMilestoneController.clear_parent child={child_id!r}"[:120])
-        return self.svc.clear_milestone_parent(child_id)
+        return self._notify_mutation(self.svc.clear_milestone_parent(child_id))
 
     def create_subhito(self, parent_id: str, data: dict):
         _apptrace(f"CTRL CausalMilestoneController.create_subhito parent={parent_id!r}"[:120])
-        return self.svc.create_subhito(parent_id, data)
+        return self._notify_mutation(self.svc.create_subhito(parent_id, data))
 
     def list_subhitos(self, parent_id: str):
         _apptrace(f"CTRL CausalMilestoneController.list_subhitos parent={parent_id!r}"[:120])
         result = self.svc.list_subhitos(parent_id)
         return result.value if isinstance(result, Ok) else []
+
+    # ── Hilo causal setup→payoff (BETA-MULTIAGENT2-FIX-09) ──
+
+    def link_causal(self, child_id: str, parent_id: str):
+        """Declara que ``child_id`` recoge lo que plantó ``parent_id``."""
+        _apptrace(
+            f"CTRL CausalMilestoneController.link_causal child={child_id!r} "
+            f"parent={parent_id!r}"[:120]
+        )
+        return self._notify_mutation(self.svc.link_causal(child_id, parent_id))
+
+    def unlink_causal(self, child_id: str, parent_id: str):
+        _apptrace(
+            f"CTRL CausalMilestoneController.unlink_causal child={child_id!r} "
+            f"parent={parent_id!r}"[:120]
+        )
+        return self._notify_mutation(self.svc.unlink_causal(child_id, parent_id))
+
+    def causal_parents(self, hito_id: str):
+        result = self.svc.list_causal_parents(hito_id)
+        return result.value if isinstance(result, Ok) else []
+
+    def causal_children(self, hito_id: str):
+        result = self.svc.list_causal_children(hito_id)
+        return result.value if isinstance(result, Ok) else []
+
+    def reconcile_causal_links(self):
+        """Normaliza el hilo causal del proyecto abierto (idempotente, sin IA)."""
+        result = self.svc.reconcile_causal_links()
+        return bool(result.value) if isinstance(result, Ok) else False
 
     # ── Queries ──
 

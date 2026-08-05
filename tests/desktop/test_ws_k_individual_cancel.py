@@ -89,6 +89,10 @@ def test_busy_refresh_toggles_cancel_button_visibility():
     src = _WORKSPACES.read_text(encoding="utf-8")
     body = src.split("def _refresh_busy_indicator(self):")[1].split("\n    def ")[0]
     assert 'cancel_btn = getattr(self, "_job_cancel_btn", None)' in body
-    assert 'cancel_btn.setVisible(bool(getattr(self, "_ai_workers", None)))' in body
+    # BETA-MULTIAGENT-FIX-02: visible con jobs en vuelo O con la PREPARACIÓN de
+    # una Sugerencia corriendo (_wiki_nav_workers) — antes la fase más larga no
+    # tenía botón de cancelar.
+    assert 'bool(getattr(self, "_ai_workers", None))' in body
+    assert 'bool(getattr(self, "_wiki_nav_workers", None))' in body
     # Y el botón se cablea al handler de cancelación.
     assert "self._job_cancel_btn.clicked.connect(self._cancel_active_ai_jobs)" in src

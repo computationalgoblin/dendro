@@ -48,10 +48,14 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SPACE_XS,
     SURFACE_HI,
     overline_label,
+    TYPE_CAPTION_PX,
+    TYPE_LABEL_PX,
+    TYPE_SUBHEAD_PX,
 )
 
 # BETA2-JARDIN-04: umbral y decisión del «siguiente paso» compartidos con el
 # chip de la cabecera de Foco — una sola fuente de verdad.
+from hosts.DesktopHostPySide.widgets.field_help import metric_tooltip
 from packages.application.watering_guidance import WEAK_THRESHOLD, next_step
 
 _METRICS = (
@@ -84,16 +88,22 @@ def _risk_row(text: str, parent: QWidget) -> QWidget:
     label = QLabel(text, row)
     label.setWordWrap(True)
     label.setStyleSheet(
-        f"color: {INK_SOFT}; font-size: 11px; background: transparent; border: none;"
+        f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; background: transparent; border: none;"
     )
     box.addWidget(label, 1)
     return row
 
+# BETA-AUDIT-08: este diccionario y `_METRICS` son paralelos salvo en su 4.ª clave, y
+# ahí nacía la confusión: las barras muestran `relevancia` (la fija el USUARIO y la IA
+# tiene prohibido evaluarla) mientras que aquí la 4.ª es `calidad`, que no es ninguna
+# barra sino la pasada general de pulido cuando las tres métricas están sanas.
+# Llamarla «calidad narrativa» la disfrazaba de métrica y dejaba tres nombres para dos
+# conceptos. Se le da un nombre de ACCIÓN, que es lo que realmente es.
 _SUGGEST_LABELS = {
     "arraigo": "Sugerir arraigo",
     "nutrida": "Sugerir nutrición",
     "iluminada": "Sugerir iluminación",
-    "calidad": "Sugerir calidad narrativa",
+    "calidad": "Sugerir mejoras",
 }
 
 _STATUS_STYLES = {
@@ -126,6 +136,10 @@ class CultivationNotebook(QWidget):
         self.history_provider = history_provider
         self._entity_id = ""
         self._status = ""
+        # BETA-MULTIAGENT2-FIX-06 (G2-08): hay un lote de riego EN VUELO. Es un CAMPO
+        # del widget, no un `setEnabled` suelto: `refresh()`/`_set_step` se llaman a
+        # cada paso del lote y devolvían el botón a la vida, invitando a pagar dos veces.
+        self._batch_running = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, SPACE_XS)
@@ -136,13 +150,13 @@ class CultivationNotebook(QWidget):
         self.status_chip = QLabel("", self)
         self.status_chip.setStyleSheet(
             f"QLabel {{ border-radius: {RADIUS_SM}px; padding: 2px 10px; color: {INK_INVERSE}; "
-            "font-weight: 700; font-size: 11px; }"
+            f"font-weight: 700; font-size: {TYPE_CAPTION_PX}px; }}"
         )
         status_row.addWidget(self.status_chip)
         self.state_note = QLabel("", self)
         self.state_note.setWordWrap(True)
         self.state_note.setStyleSheet(
-            f"color: {INK_MUTED}; background: transparent; font-size: 11px;"
+            f"color: {INK_MUTED}; background: transparent; font-size: {TYPE_CAPTION_PX}px;"
         )
         status_row.addWidget(self.state_note, 1)
         # BETA2-FOCO-37: Regar/Secar/Cultivar se movieron a la franja de cultivo
@@ -165,12 +179,15 @@ class CultivationNotebook(QWidget):
             )
             metric_glyph.setFixedSize(16, 16)
             metric_glyph.setStyleSheet("background: transparent; border: none;")
-            metric_glyph.setToolTip(label_text)
+            # BETA-AUDIT-06: el tooltip repetía la etiqueta («Arraigo» → «Arraigo»),
+            # que no dice nada a quien no conoce ya la palabra. Ahora define.
+            metric_glyph.setToolTip(metric_tooltip(metric_key, label_text))
             metrics_row.addWidget(metric_glyph)
             name_label = QLabel(label_text, self)
+            name_label.setToolTip(metric_tooltip(metric_key, label_text))
             name_label.setFixedWidth(78)
             name_label.setStyleSheet(
-                f"color: {INK_SOFT}; background: transparent; font-size: 11px;"
+                f"color: {INK_SOFT}; background: transparent; font-size: {TYPE_CAPTION_PX}px;"
             )
             metrics_row.addWidget(name_label)
             bar = QProgressBar(self)
@@ -187,7 +204,7 @@ class CultivationNotebook(QWidget):
             pct_label.setFixedWidth(56)
             pct_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             pct_label.setStyleSheet(
-                f"color: {INK_STRONG}; background: transparent; font-size: 11px;"
+                f"color: {INK_STRONG}; background: transparent; font-size: {TYPE_CAPTION_PX}px;"
             )
             metrics_row.addWidget(pct_label)
             layout.addLayout(metrics_row)
@@ -241,7 +258,7 @@ class CultivationNotebook(QWidget):
         )
         self.report_label.setStyleSheet(
             f"color: {INK_STRONG}; background: transparent; "
-            f"font-family: {FONT_SERIF}; font-size: 14px;"
+            f"font-family: {FONT_SERIF}; font-size: {TYPE_SUBHEAD_PX}px;"
         )
         layout.addWidget(self.report_label)
 
@@ -255,7 +272,7 @@ class CultivationNotebook(QWidget):
         self.history_toggle.setIconSize(QSize(12, 12))
         self.history_toggle.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none; color: {INK_MUTED}; "
-            "font-size: 11px; font-weight: 600; text-align: left; padding: 2px 0; } "
+            f"font-size: {TYPE_CAPTION_PX}px; font-weight: 600; text-align: left; padding: 2px 0; }} "
             f"QPushButton:hover {{ color: {INK_STRONG}; }}"
         )
         self.history_toggle.toggled.connect(self._on_history_toggled)
@@ -277,7 +294,7 @@ class CultivationNotebook(QWidget):
         self.obs_toggle.setIconSize(QSize(12, 12))
         self.obs_toggle.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none; color: {INK_MUTED}; "
-            "font-size: 11px; font-weight: 600; text-align: left; padding: 2px 0; } "
+            f"font-size: {TYPE_CAPTION_PX}px; font-weight: 600; text-align: left; padding: 2px 0; }} "
             f"QPushButton:hover {{ color: {INK_STRONG}; }}"
         )
         self.obs_toggle.toggled.connect(self._on_obs_toggled)
@@ -337,7 +354,7 @@ class CultivationNotebook(QWidget):
             self.status_chip.setStyleSheet(
                 f"QLabel {{ background: {SAGE}; border-radius: {RADIUS_SM}px; "
                 f"padding: 2px 10px; color: {INK_INVERSE}; font-weight: 700; "
-                "font-size: 11px; }"
+                f"font-size: {TYPE_CAPTION_PX}px; }}"
             )
             self.state_note.setText("La IA está leyendo y diagnosticando esta entidad.")
         else:
@@ -366,6 +383,33 @@ class CultivationNotebook(QWidget):
         self.step_reason.setText(reason)
         self.step_button.setText(button_text)
         self.step_button.setVisible(bool(button_text))
+        self._apply_batch_running()
+
+    def set_batch_running(self, running: bool) -> None:
+        """BETA-MULTIAGENT2-FIX-06 (G2-08): el disparador «Regar ahora» se apaga
+        mientras hay un lote en vuelo y vuelve solo al terminar.
+
+        La tester de 58 años lo dijo así: la app «deja activo el botón "Regar ahora"
+        mientras trabaja, invitándome a pagar dos veces»."""
+        self._batch_running = bool(running)
+        self._apply_batch_running()
+
+    def batch_running(self) -> bool:
+        return bool(self._batch_running)
+
+    def _apply_batch_running(self) -> None:
+        button = getattr(self, "step_button", None)
+        if button is None:
+            return
+        try:
+            if self._batch_running:
+                button.setEnabled(False)
+                button.setToolTip("Hay un riego en curso; espera a que termine.")
+            else:
+                button.setEnabled(True)
+                button.setToolTip("")
+        except RuntimeError:  # widget Qt ya destruido
+            pass
 
     def _on_history_toggled(self, expanded: bool) -> None:
         """UI2-15: pliegue plano del historial (chevron expand/collapse)."""
@@ -414,7 +458,7 @@ class CultivationNotebook(QWidget):
             stamp = str(created)[:10] if created else ""
             head = QLabel(f"{stamp} · recorrido cronológico".strip(" ·"), frame)
             head.setStyleSheet(
-                f"color: {INK_SOFT}; font-size: 11px; font-weight: 600; "
+                f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; font-weight: 600; "
                 "background: transparent; border: none;"
             )
             frame_layout.addWidget(head)
@@ -425,7 +469,7 @@ class CultivationNotebook(QWidget):
                 body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 body.setStyleSheet(
                     f"color: {INK_STRONG}; background: transparent; border: none; "
-                    f"font-family: {FONT_SERIF}; font-size: 12px;"
+                    f"font-family: {FONT_SERIF}; font-size: {TYPE_LABEL_PX}px;"
                 )
                 frame_layout.addWidget(body)
             self.obs_layout.addWidget(frame)
@@ -475,7 +519,7 @@ class CultivationNotebook(QWidget):
         self.status_chip.setText(text)
         self.status_chip.setStyleSheet(
             f"QLabel {{ background: {color}; border-radius: {RADIUS_SM}px; padding: 2px 10px; "
-            f"color: {INK_INVERSE}; font-weight: 700; font-size: 11px; }}"
+            f"color: {INK_INVERSE}; font-weight: 700; font-size: {TYPE_CAPTION_PX}px; }}"
         )
         notes: list[str] = []
         if report.last_error:
@@ -540,8 +584,7 @@ class CultivationNotebook(QWidget):
             self._set_step(
                 "suggest",
                 "calidad",
-                "Métricas sanas. Puedes pulir la calidad narrativa con una "
-                "pasada de sugerencias.",
+                "Métricas sanas. Puedes pulir la ficha con una pasada de sugerencias.",
                 _SUGGEST_LABELS["calidad"],
             )
 
@@ -587,7 +630,7 @@ class CultivationNotebook(QWidget):
             head = QLabel(head_text, entry)
             head.setWordWrap(True)
             head.setStyleSheet(
-                f"color: {INK_SOFT}; font-size: 11px; font-weight: 600; "
+                f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; font-weight: 600; "
                 "background: transparent; border: none;"
             )
             entry_layout.addWidget(head)
@@ -597,7 +640,7 @@ class CultivationNotebook(QWidget):
                 body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 body.setStyleSheet(
                     f"color: {INK_STRONG}; background: transparent; border: none; "
-                    f"font-family: {FONT_SERIF}; font-size: 12px;"
+                    f"font-family: {FONT_SERIF}; font-size: {TYPE_LABEL_PX}px;"
                 )
                 entry_layout.addWidget(body)
             for risk_text in diagnostic.risks or []:

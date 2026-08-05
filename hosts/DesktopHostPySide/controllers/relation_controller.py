@@ -4,9 +4,10 @@ from __future__ import annotations
 from packages.application.narrative_impact_service import NarrativeImpactService
 from packages.application.relation_service import RelationService
 from hosts.DesktopHostPySide.app_trace import _apptrace
+from hosts.DesktopHostPySide.controllers.mutation_hook import MutationNotifier
 
 
-class RelationController:
+class RelationController(MutationNotifier):
     def __init__(self, project_service):
         if project_service is None:
             raise ValueError("RelationController requires project_service")
@@ -25,20 +26,24 @@ class RelationController:
 
     def create(self, source_id, target_id, relation_type, data=None):
         _apptrace(f"CTRL RelationController.create source={source_id!r} target={target_id!r} type={relation_type!r}"[:120])
-        return self.rs.create_relation(source_id, target_id, relation_type, data or {})
+        return self._notify_mutation(
+            self.rs.create_relation(source_id, target_id, relation_type, data or {})
+        )
 
     def update(self, relation_id, data):
         _apptrace(f"CTRL RelationController.update relation_id={relation_id!r}"[:120])
-        return self.rs.update_relation(relation_id, data, impact_service=self.impact)
+        return self._notify_mutation(
+            self.rs.update_relation(relation_id, data, impact_service=self.impact)
+        )
 
     def archive(self, relation_id):
         _apptrace(f"CTRL RelationController.archive relation_id={relation_id!r}"[:120])
-        return self.rs.archive_relation(relation_id)
+        return self._notify_mutation(self.rs.archive_relation(relation_id))
 
     def restore(self, relation_id):
         _apptrace(f"CTRL RelationController.restore relation_id={relation_id!r}"[:120])
-        return self.rs.restore_relation(relation_id)
+        return self._notify_mutation(self.rs.restore_relation(relation_id))
 
     def delete(self, relation_id):
         _apptrace(f"CTRL RelationController.delete relation_id={relation_id!r}"[:120])
-        return self.rs.delete_relation(relation_id)
+        return self._notify_mutation(self.rs.delete_relation(relation_id))

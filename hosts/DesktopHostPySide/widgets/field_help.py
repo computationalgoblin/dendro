@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -27,8 +28,11 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD_SOFT,
     GOLD_TINT,
     INK,
+    INK_SOFT,
     INK_STRONG,
     SURFACE_HI,
+    TYPE_BODY_PX,
+    TYPE_CAPTION_PX,
 )
 
 # ---------------------------------------------------------------------------
@@ -110,16 +114,227 @@ FIELD_HELP: dict[str, str] = {
     # Reglas y límites
     "reglas_canon": "Reglas duras de canon que la IA NUNCA debe contradecir.",
     "evitar": "Espacio negativo: tropos, tonos, soluciones, frases o tics que se deben evitar.",
+    # -----------------------------------------------------------------------
+    # BETA-AUDIT-06 — Vocabulario del jardín.
+    #
+    # Estas palabras (anillo, regar, semilla, arraigo…) son el idioma propio de
+    # Dendro y hasta ahora no se explicaban en ninguna parte de la app: las
+    # definiciones buenas existían sólo dentro del prompt que se le manda al
+    # modelo (packages/application/command_prompts.py, tarea "water_entity").
+    # Es decir, la IA tenía el glosario y el usuario no. Aquí se adaptan a
+    # lenguaje llano, para quien abre la app por primera vez.
+    #
+    # Prefijo `glosario_` para no colisionar con los 30 campos de arriba.
+    # -----------------------------------------------------------------------
+    "glosario_anillo": (
+        "Un estrato del mundo. Los anillos ordenan tus cosas por cuánta consecuencia "
+        "pueden desencadenar: al centro lo que causa (una guerra, una ley del mundo), "
+        "hacia fuera lo que la sufre (una posada, un secundario)."
+    ),
+    "glosario_capa": "Otro nombre para el anillo. Es el mismo concepto.",
+    "glosario_rama": (
+        "Una entidad que agrupa a otras, como una carpeta con nombre propio: una "
+        "familia, un gremio, una ciudad con sus barrios. No es una bifurcación de la "
+        "historia."
+    ),
+    "glosario_hoja": (
+        "Una entidad suelta, la unidad básica: un personaje, un lugar, un objeto, una "
+        "idea. Se llama hoja por oposición a rama, que contiene otras."
+    ),
+    "glosario_hito": (
+        "Un suceso fechado de tu mundo: una batalla, un pacto, una muerte. Vive en la "
+        "Cronología y puede tener causas y consecuencias."
+    ),
+    "glosario_era": (
+        "Un tramo con nombre de tu calendario: «Era de la Helada». Sirve para situar "
+        "hitos y vidas sin manejar años sueltos."
+    ),
+    "glosario_lapso_vida": (
+        "Desde cuándo hasta cuándo existe algo. En la Cronología es la barra que puedes "
+        "arrastrar por los extremos."
+    ),
+    "glosario_canon": (
+        "Lo que es verdad en tu mundo, lo que tú has aceptado. La IA nunca escribe "
+        "aquí: sólo propone, y tú decides qué entra."
+    ),
+    "glosario_semilla": (
+        "Una propuesta de la IA que aún no es tuya. Germina en el lienzo con un aviso; "
+        "si la aceptas florece y pasa a ser canon, si la rechazas se marchita. Hasta "
+        "que aceptas, tu mundo no ha cambiado."
+    ),
+    "glosario_fantasma": (
+        "Un hueco con nombre: marcas que ahí falta algo («aquí va un traidor») sin "
+        "inventártelo todavía. Puedes relacionarlo como cualquier entidad, pero no "
+        "cuenta como canon ni sostiene nada."
+    ),
+    "glosario_regar": (
+        "Pedirle a la IA que lea lo que hay y escriba la página de Memoria de esa "
+        "entidad, con una puntuación de cómo está. No inventa canon nuevo: lo resume "
+        "y lo juzga."
+    ),
+    "glosario_memoria": (
+        "La wiki que la IA mantiene sobre tu mundo: una página por elemento, con "
+        "enlaces y preguntas abiertas. Es interpretación, no canon; tu texto manda."
+    ),
+    "glosario_arraigo": (
+        "Cuánto sostiene el resto del mundo a esta entidad: los contextos, hitos y "
+        "relaciones que hacen creíble que exista. Las fechas que no cuadran restan "
+        "arraigo."
+    ),
+    "glosario_nutrida": (
+        "Cuánto tiene por dentro y cuánto encaja con sus vecinas: descripciones, "
+        "coherencia propia e integración con su rama y su entorno."
+    ),
+    "glosario_iluminada": (
+        "Cuánto proyecta hacia fuera: consecuencias, derivaciones e influencia sobre "
+        "otras entidades. Una entidad iluminada deja huella en el resto."
+    ),
+    "glosario_relevancia": (
+        "Cuánto te importa a TI para tu historia. La fijas tú, no la IA, y es "
+        "independiente de que algo cause mucho o poco."
+    ),
+    "glosario_potencia_causal": (
+        "Cuánta consecuencia puede desatar algo por su naturaleza: una guerra mucha, "
+        "un campesino poca. Es lo que decide en qué anillo debería vivir. La atribuye "
+        "la IA al regar."
+    ),
+    "glosario_falta_regar": (
+        "Algo cambió cerca y esta página se quedó vieja. No es un error ni una regañina: "
+        "es un aviso de que conviene revisarla."
+    ),
+    "glosario_secada": (
+        "La has apartado del ciclo a propósito para que deje de pedirte atención. Se "
+        "revierte cuando quieras con «Cultivar»."
+    ),
+    # -----------------------------------------------------------------------
+    # BETA-MULTIAGENT2-FIX-13 (G2-20) — los 8 que faltaban del «Diccionario de
+    # Carmen». El glosario cubría 19 términos y estaba bien escrito, pero se
+    # quedaba corto justo en las palabras con las que uno se tropieza el primer
+    # día: qué es una entidad, qué significa que algo «germine», qué es el Foco.
+    #
+    # Aviso deliberado: la metáfora del jardín NO se renombra. Gusta («los
+    # anillos son una idea de primera», dos informes). Lo que fallaba es que no
+    # se enseñaba.
+    # -----------------------------------------------------------------------
+    "glosario_entidad": (
+        "Cualquier cosa de tu mundo con nombre propio: una persona, un lugar, un objeto, "
+        "una facción, una idea. Es la pieza con la que se construye todo lo demás; hojas "
+        "y ramas son entidades."
+    ),
+    "glosario_germinar": (
+        "Lo que hace una propuesta de la IA mientras esperas: aparece en el lienzo "
+        "latiendo, todavía sin ser tuya. Si la aceptas FLORECE y pasa a ser canon; si la "
+        "rechazas se MARCHITA y desaparece sin dejar rastro."
+    ),
+    "glosario_cultivar": (
+        "Devolver al ciclo una entidad que habías apartado («secada»). Vuelve a contar "
+        "para el riego y a pedirte atención cuando algo cambie a su alrededor."
+    ),
+    "glosario_foco": (
+        "La vista que pone UNA entidad en el centro y dibuja a su alrededor todo lo que "
+        "la toca. Es donde se trabaja de cerca: su ficha, sus relaciones y su cuaderno de "
+        "cultivo."
+    ),
+    "glosario_raices": (
+        "En el Foco, lo que sostiene a la entidad del centro: de dónde viene, quién la "
+        "causó, a qué pertenece. Su ENTORNO es lo que la rodea en pie de igualdad, y sus "
+        "BROTES son lo que ella provoca hacia fuera."
+    ),
+    "glosario_estructura": (
+        "La propuesta de la app para colocar cada cosa en su anillo: mover una entidad, "
+        "crear un anillo que falta o fusionar dos que sobran. Son sugerencias con "
+        "justificación; tú decides."
+    ),
+    "glosario_play": (
+        "Un recorrido guiado por tu cronología, hito a hito, como quien pasa páginas. "
+        "Sirve para revisar la historia en orden y anotar sobre la marcha."
+    ),
+    "glosario_token": (
+        "La unidad con la que se mide cuánto texto lee o escribe la IA (viene a ser "
+        "media palabra). Importa porque cada consulta tiene un presupuesto: cuanto mejor "
+        "esté la Memoria, menos hace falta enviarle."
+    ),
+}
+
+# Orden de lectura del glosario visible: de lo que se ve primero a lo que se
+# entiende después. No es alfabético a propósito — el alfabeto no enseña nada.
+GLOSSARY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Las piezas de tu mundo",
+        ("entidad", "hoja", "rama", "anillo", "capa", "hito", "era", "lapso_vida", "canon"),
+    ),
+    (
+        "Cómo se trabaja",
+        ("foco", "raices", "estructura", "play", "fantasma"),
+    ),
+    (
+        "El jardín: cuidar lo que has escrito",
+        ("regar", "cultivar", "falta_regar", "secada", "memoria", "potencia_causal"),
+    ),
+    (
+        "Lo que propone la IA",
+        ("semilla", "germinar", "token"),
+    ),
+    (
+        "Las cuatro medidas de una entidad",
+        ("arraigo", "nutrida", "iluminada", "relevancia"),
+    ),
+)
+
+# Título visible de cada término (el que ve el usuario; la clave es interna).
+GLOSSARY_TITLES: dict[str, str] = {
+    "lapso_vida": "Lapso de vida",
+    "falta_regar": "Falta regar",
+    "potencia_causal": "Potencia causal",
+    "raices": "Raíces, entorno y brotes",
+    "germinar": "Germinar, florecer, marchitarse",
+    "memoria": "Memoria (la wiki)",
 }
 
 
-class _HelpPopover(QFrame):
-    """Globo de ayuda propio (no usa el tooltip nativo, que el host suprime).
+def glossary_title(term: str) -> str:
+    """Título visible de un término del glosario."""
+    return GLOSSARY_TITLES.get(term, term.replace("_", " ").capitalize())
 
-    El host instala un ``TooltipSuppressor`` global que bloquea ``QEvent.ToolTip``,
-    así que ``setToolTip`` no muestra nada. Este popover es una ventana flotante
-    (``Qt.ToolTip``) que el supresor NO intercepta, con el mismo estilo que el
-    popover de ayuda del command bar.
+
+def glossary_terms() -> list[str]:
+    """Todos los términos del glosario, en orden de lectura."""
+    ordenados = [t for _titulo, terminos in GLOSSARY_SECTIONS for t in terminos]
+    sueltos = sorted(
+        k[len("glosario_") :] for k in FIELD_HELP if k.startswith("glosario_")
+    )
+    return ordenados + [t for t in sueltos if t not in ordenados]
+
+
+def glossary(term: str, *, fallback: str = "") -> str:
+    """Definición del vocabulario del jardín para ``term`` (sin el prefijo).
+
+    BETA-AUDIT-06. Devuelve ``fallback`` si el término no está en el catálogo, para
+    que ningún widget se quede sin tooltip por una clave mal escrita.
+    """
+    return FIELD_HELP.get(f"glosario_{term}", fallback)
+
+
+def metric_tooltip(metric_key: str, label: str) -> str:
+    """Tooltip de una barra de métrica: «Etiqueta — definición».
+
+    Antes el tooltip repetía la etiqueta («Arraigo» → «Arraigo»), que no explicaba
+    nada a quien no conocía ya la palabra.
+    """
+    definicion = glossary(metric_key)
+    return f"{label} — {definicion}" if definicion else label
+
+
+class _HelpPopover(QFrame):
+    """Globo de ayuda propio, con el estilo del resto de la app.
+
+    BETA-AUDIT-06: este docstring afirmaba que el host instalaba un
+    ``TooltipSuppressor`` global que bloqueaba ``QEvent.ToolTip`` y que por eso
+    ``setToolTip`` no mostraba nada. Era falso: el supresor nunca llegó a
+    instalarse y se ha retirado. Los ``setToolTip`` normales funcionan, y de hecho
+    son la vía por la que el vocabulario del jardín llega ahora a las métricas y
+    a los chips. Este popover se conserva porque da un globo más legible y
+    consistente para los campos de configuración creativa.
     """
 
     def __init__(self, text: str, anchor: QWidget):
@@ -222,4 +437,114 @@ def labeled_row(label_text: str, help_key: str, parent: QWidget | None = None) -
     return row
 
 
-__all__ = ["FIELD_HELP", "FieldHelp", "labeled_row"]
+class GlossaryPanel(QWidget):
+    """El glosario, LEGIBLE SIN HOVER (BETA-MULTIAGENT2-FIX-13, G2-20).
+
+    El catálogo existía desde BETA-AUDIT-06 y estaba bien escrito, pero todos sus
+    consumidores eran `setToolTip`. Para quien declara «si no pone lo que hace,
+    para mí no existe», un glosario que sólo sale al pasar el ratón no existe.
+    Esta es la superficie que abre «Ayuda → Glosario».
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("glossaryPanel")
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(0, 0, 0, 0)
+        raiz.setSpacing(0)
+
+        area = QScrollArea(self)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        cuerpo = QWidget(area)
+        columna = QVBoxLayout(cuerpo)
+        columna.setContentsMargins(16, 12, 16, 16)
+        columna.setSpacing(10)
+
+        entrada = QLabel(
+            "El idioma propio de Dendro, en cristiano. Ninguna de estas palabras "
+            "hace falta aprendérsela: están aquí para cuando aparezcan."
+        )
+        entrada.setWordWrap(True)
+        entrada.setStyleSheet(
+            f"color: {INK}; font-size: {TYPE_BODY_PX}px; background: transparent; border: none;"
+        )
+        columna.addWidget(entrada)
+
+        self._term_labels: dict[str, QLabel] = {}
+        vistos: set[str] = set()
+        for titulo_seccion, terminos in GLOSSARY_SECTIONS:
+            cabecera = QLabel(titulo_seccion.upper())
+            cabecera.setStyleSheet(
+                f"color: {GOLD_DEEP}; font-size: {TYPE_CAPTION_PX}px; font-weight: 700; "
+                "letter-spacing: 1px; background: transparent; border: none; margin-top: 8px;"
+            )
+            columna.addWidget(cabecera)
+            for termino in terminos:
+                definicion = glossary(termino)
+                if not definicion:
+                    continue
+                columna.addWidget(self._entrada(termino, definicion))
+                vistos.add(termino)
+
+        # Red de seguridad: ningún término del catálogo se queda fuera de la
+        # pantalla por olvidarse de añadirlo a una sección.
+        sueltos = [t for t in glossary_terms() if t not in vistos and glossary(t)]
+        if sueltos:
+            cabecera = QLabel("OTROS TÉRMINOS")
+            cabecera.setStyleSheet(
+                f"color: {GOLD_DEEP}; font-size: {TYPE_CAPTION_PX}px; font-weight: 700; "
+                "letter-spacing: 1px; background: transparent; border: none; margin-top: 8px;"
+            )
+            columna.addWidget(cabecera)
+            for termino in sueltos:
+                columna.addWidget(self._entrada(termino, glossary(termino)))
+
+        columna.addStretch(1)
+        area.setWidget(cuerpo)
+        raiz.addWidget(area)
+
+    def _entrada(self, termino: str, definicion: str) -> QWidget:
+        tarjeta = QFrame(self)
+        tarjeta.setObjectName("glossaryEntry")
+        tarjeta.setStyleSheet(
+            f"QFrame#glossaryEntry {{ background: {SURFACE_HI}; border: 1px solid {GOLD_SOFT}; "
+            # OJO: linea PLANA (sin prefijo f) → el cierre va con UNA llave. Con `}}`
+            # Qt descarta la hoja entera y la tarjeta se pinta gris nativa (BETA2-SHIP-07).
+            "border-radius: 12px; }"
+        )
+        caja = QVBoxLayout(tarjeta)
+        caja.setContentsMargins(12, 9, 12, 9)
+        caja.setSpacing(3)
+        titulo = QLabel(glossary_title(termino))
+        titulo.setStyleSheet(
+            f"color: {INK_STRONG}; font-size: {TYPE_BODY_PX}px; font-weight: 700; "
+            "background: transparent; border: none;"
+        )
+        cuerpo = QLabel(definicion)
+        cuerpo.setWordWrap(True)
+        cuerpo.setStyleSheet(
+            f"color: {INK_SOFT}; font-size: {TYPE_BODY_PX}px; background: transparent; "
+            "border: none;"
+        )
+        caja.addWidget(titulo)
+        caja.addWidget(cuerpo)
+        self._term_labels[termino] = cuerpo
+        return tarjeta
+
+    def terms_on_screen(self) -> list[str]:
+        """Términos que el panel pinta de verdad (para la guarda de tests)."""
+        return list(self._term_labels)
+
+
+__all__ = [
+    "FIELD_HELP",
+    "GLOSSARY_SECTIONS",
+    "FieldHelp",
+    "GlossaryPanel",
+    "glossary",
+    "glossary_terms",
+    "glossary_title",
+    "labeled_row",
+    "metric_tooltip",
+]

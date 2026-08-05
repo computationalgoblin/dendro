@@ -120,7 +120,9 @@ class TestCreativePresets:
 
         p = get_preset("weird_mystery")
         assert p is not None
-        assert p["label"] == "Weird mystery"
+        # BETA-AUDIT-13: la etiqueta se tradujo (era el único preset en inglés entre
+        # diez en español). La CLAVE no cambia: es dato ya guardado en proyectos.
+        assert p["label"] == "Misterio extraño"
 
         assert get_preset("nonexistent") is None
 

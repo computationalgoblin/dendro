@@ -56,7 +56,7 @@ class TestCreateEntity:
         svc = _setup(tmp_path)
         result = svc.create_entity({"name": "", "entity_type": "personaje"})
         assert isinstance(result, Error)
-        assert "name" in result.error.lower()
+        assert "nombre" in result.error.lower()  # BETA-MULTIAGENT-FIX-06: error en español
 
     def test_create_no_active_project(self):
         store = ProjectStore()

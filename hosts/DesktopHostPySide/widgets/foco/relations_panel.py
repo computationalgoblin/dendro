@@ -48,7 +48,18 @@ def relation_entries_for(project, entity_id: str) -> list[tuple[str, str]]:
             continue
         outgoing = src == entity_id
         other = by_id.get(tgt if outgoing else src)
-        kind_text = enum_human(_enum_value(getattr(relation, "relation_type", None), "relación"))
+        # BETA-MULTIAGENT2-FIX-12 (G2-16), pregunta abierta nº4: la escotilla de
+        # texto libre (`custom_metadata["custom_relation_label"]`, que escribe el
+        # combo editable del panel de relación) tenía CINCO apariciones en el
+        # repo y las cinco en el fichero que la escribía: ni el Foco, ni el Mapa,
+        # ni la IA sabían nunca cómo llamaba el autor a ese vínculo. Con la
+        # familia de parentesco en el dominio pierde casi todo su motivo, pero
+        # mientras exista tiene que VIAJAR al menos a la lista que el usuario lee.
+        meta = getattr(relation, "custom_metadata", {}) or {}
+        etiqueta_libre = str(meta.get("custom_relation_label") or "").strip()
+        kind_text = etiqueta_libre or enum_human(
+            _enum_value(getattr(relation, "relation_type", None), "relación")
+        )
         relation_id = str(getattr(relation, "id", "") or "")
         direction = _enum_value(getattr(relation, "direction", None), "")
         glyph = "↔" if direction == "bidireccional" else ("→" if outgoing else "←")

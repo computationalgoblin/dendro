@@ -33,6 +33,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     LINE_SOFT,
     TICK_INTERVAL,
 )
+from hosts.DesktopHostPySide.widgets.field_help import glossary, metric_tooltip
 from hosts.DesktopHostPySide.widgets.foco.cultivation_notebook import (
     _METRIC_ICONS,
     _METRICS,
@@ -40,10 +41,16 @@ from hosts.DesktopHostPySide.widgets.foco.cultivation_notebook import (
 )
 
 # (tool_id, icono SVG, tooltip). Réplica de los controles del viejo rail.
+# BETA-AUDIT-06: los rótulos decían QUÉ hace el botón pero no qué significa la
+# metáfora. «Secar» sonaba a avería y es una acción deliberada y reversible.
 _ACTION_SPECS = (
-    ("water", "tool_water", "Regar (diagnóstico IA de la entidad en foco)"),
-    ("dry", "tool_dry", "Secar (sacar del ciclo de riego, sin IA)"),
-    ("cultivate", "tool_cultivate", "Cultivar (volver al ciclo de riego, sin IA)"),
+    ("water", "tool_water", f"Regar — {glossary('regar')}"),
+    ("dry", "tool_dry", f"Secar — {glossary('secada')} No usa IA."),
+    (
+        "cultivate",
+        "tool_cultivate",
+        "Cultivar — devuelve la entidad al ciclo de riego tras haberla secado. No usa IA.",
+    ),
 )
 _ICON_BTN_STYLE = (
     "QPushButton { background: transparent; border: 1px solid transparent; "
@@ -126,7 +133,8 @@ class CultivationStrip(QFrame):
             glyph.setPixmap(icons.pixmap(_METRIC_ICONS[metric_key], size=12, color=INK_MUTED))
             glyph.setFixedSize(14, 14)
             glyph.setStyleSheet("background: transparent; border: none;")
-            glyph.setToolTip(self._labels[metric_key])
+            # BETA-AUDIT-06: definición en vez de repetir la etiqueta.
+            glyph.setToolTip(metric_tooltip(metric_key, self._labels[metric_key]))
             row.addWidget(glyph)
             bar = QProgressBar(self)
             bar.setRange(0, 100)

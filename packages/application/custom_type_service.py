@@ -56,7 +56,7 @@ class CustomTypeService:
 
         ct = CustomEntityType.from_dict(data)
         if not ct.name.strip():
-            return Error("Custom entity type name cannot be empty")
+            return Error("El nombre del tipo de entidad personalizado no puede estar vacío.")
 
         proj.value.custom_entity_types.append(ct)
         proj.value.touch()
@@ -132,7 +132,7 @@ class CustomTypeService:
 
         fd = CustomFieldDefinition.from_dict(data)
         if not fd.name.strip():
-            return Error("Field definition name cannot be empty")
+            return Error("El nombre del campo personalizado no puede estar vacío.")
 
         proj.value.custom_field_definitions.append(fd)
         proj.value.touch()
@@ -227,7 +227,7 @@ class CustomTypeService:
 
         crt = CustomRelationType.from_dict(data)
         if not crt.name.strip():
-            return Error("Custom relation type name cannot be empty")
+            return Error("El nombre del tipo de relación personalizado no puede estar vacío.")
 
         proj.value.custom_relation_types.append(crt)
         proj.value.touch()

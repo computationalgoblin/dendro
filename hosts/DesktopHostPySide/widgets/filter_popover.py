@@ -101,6 +101,14 @@ class FilterPopover(Popover):
             form.addRow("Rama", self.tree)
             form.addRow("Estado", self.canon)
             form.addRow("Relaciones", self.show_relations)
+            # BETA-AUDIT-02: la casilla se construía, se conectaba y se leía, pero
+            # nunca se añadía a ningún layout: era un widget huérfano. Ahora que la
+            # ficha permite marcar entidades reservadas, el filtro sirve de algo.
+            self.hide_secret.setToolTip(
+                "Oculta del Mapa las entidades reservadas (secretas, privadas u ocultas). "
+                "Útil para enseñar la pantalla sin destripar nada."
+            )
+            form.addRow("Privacidad", self.hide_secret)
         self._layout.addLayout(form)
 
         if initial_state is not None:

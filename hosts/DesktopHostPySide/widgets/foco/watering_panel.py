@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hosts.DesktopHostPySide.widgets.field_help import metric_tooltip
 from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD,
     GOLD_DEEP,
@@ -35,6 +36,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     SAGE,
     PanelScaffold,
     overline_label,
+    TYPE_CAPTION_PX,
 )
 
 # BETA2-JARDIN-04: umbral único compartido (chip, Cuaderno y este drawer).
@@ -78,6 +80,11 @@ class WateringPanel(PanelScaffold):
         self.watering_service = watering_service
         self._entity_id = ""
         self._status = ""
+        # BETA-MULTIAGENT2-FIX-06 (G2-08): lote de riego en vuelo. Es un CAMPO que
+        # `refresh()` consulta, no un `setEnabled` suelto: `set_batch_running` existía
+        # desde FOCO-07 sin un solo llamador y, aunque se hubiera llamado, el siguiente
+        # `refresh()` (uno por paso del lote) volvía a habilitar el botón.
+        self._batch_running = False
 
         layout = self.body
         layout.setSpacing(8)
@@ -96,11 +103,16 @@ class WateringPanel(PanelScaffold):
         self.bars: dict[str, tuple[QProgressBar, QLabel]] = {}
         for metric_key, label_text in _METRICS:
             row = QHBoxLayout()
+            # BETA-AUDIT-06: estas barras no tenían ningún tooltip, así que la
+            # primera vez que alguien abría el cajón veía cuatro palabras sueltas.
+            ayuda = metric_tooltip(metric_key, label_text)
             name_label = QLabel(label_text, self)
             name_label.setFixedWidth(78)
             name_label.setStyleSheet(f"color: {INK_SOFT}; background: transparent;")
+            name_label.setToolTip(ayuda)
             row.addWidget(name_label)
             bar = QProgressBar(self)
+            bar.setToolTip(ayuda)
             bar.setRange(0, 100)
             bar.setTextVisible(False)
             bar.setFixedHeight(10)
@@ -129,7 +141,7 @@ class WateringPanel(PanelScaffold):
         self.context_label = QLabel("", self)
         self.context_label.setWordWrap(True)
         self.context_label.setStyleSheet(
-            f"color: {INK_MUTED}; font-size: 11px; background: transparent;"
+            f"color: {INK_MUTED}; font-size: {TYPE_CAPTION_PX}px; background: transparent;"
         )
         layout.addWidget(self.context_label)
 
@@ -183,7 +195,7 @@ class WateringPanel(PanelScaffold):
         self.history_list.setMaximumHeight(150)
         self.history_list.setStyleSheet(
             f"QListWidget {{ background: transparent; border: 1px solid {LINE_SOFT}; "
-            f"border-radius: 8px; color: {INK_SOFT}; font-size: 11px; }}"
+            f"border-radius: 8px; color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; }}"
         )
         layout.addWidget(self.history_list)
 
@@ -257,10 +269,19 @@ class WateringPanel(PanelScaffold):
         return list(getattr(self, "_card_ids", []))
 
     def set_batch_running(self, running: bool, progress_text: str = "") -> None:
-        self.cancel_button.setVisible(bool(running))
-        self.water_button.setEnabled(not running)
+        """FIX-06: el lote en vuelo apaga «Regar» y enciende «Cancelar». El estado se
+        recuerda para que ``refresh()`` no lo deshaga en el siguiente paso del lote."""
+        self._batch_running = bool(running)
+        self.cancel_button.setVisible(self._batch_running)
+        self.water_button.setEnabled(not self._batch_running and self._status != "secada")
+        self.water_button.setToolTip(
+            "Hay un riego en curso; espera a que termine." if self._batch_running else ""
+        )
         if running and progress_text:
             self.state_note.setText(progress_text)
+
+    def batch_running(self) -> bool:
+        return bool(self._batch_running)
 
     def _toggle_pause(self) -> None:
         # True = Secar (si está en ciclo), False = Cultivar (si está secada).
@@ -334,7 +355,8 @@ class WateringPanel(PanelScaffold):
 
         is_paused = report.status == "secada"
         self.pause_button.setText("Cultivar" if is_paused else "Secar")
-        self.water_button.setEnabled(not is_paused)
+        # FIX-06: un lote en vuelo manda sobre el estado de la entidad (nadie paga dos veces).
+        self.water_button.setEnabled(not is_paused and not self._batch_running)
         for metric_key, button in self.suggest_buttons.items():
             if latest is None:
                 button.setEnabled(False)

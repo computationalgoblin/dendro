@@ -129,6 +129,10 @@ class StructuralAnalysisService:
     _structure_proposals: list[StructuralFinding] = field(
         default_factory=list, init=False, repr=False
     )
+    # BETA-MULTIAGENT-FIX-05 (G-05): fingerprints YA APLICADOS en esta sesión.
+    # Sin esto una tarjeta aceptada seguía re-aceptable (candidato duplicado) si
+    # la caché/las propuestas de sesión la re-emitían antes de refrescarse.
+    _applied_fingerprints: set = field(default_factory=set, init=False, repr=False)
 
     def _proj(self):
         return getattr(self.project_service, "active_project", None)
@@ -142,16 +146,35 @@ class StructuralAnalysisService:
             return Error("No hay proyecto activo")
         key = (getattr(proj, "id", ""), getattr(proj, "_index_revision", 0))
         if self._cache_key == key:
-            return Ok(list(self._cache))
+            return Ok(self._without_applied(self._cache))
         findings = self._compute(proj)
         self._cache_key = key
         self._cache = findings
-        return Ok(list(findings))
+        return Ok(self._without_applied(findings))
+
+    def _without_applied(self, findings: list[StructuralFinding]) -> list[StructuralFinding]:
+        """FIX-05: un hallazgo aplicado no vuelve a listarse aunque la caché lo tenga."""
+        return [f for f in findings if f.fingerprint not in self._applied_fingerprints]
+
+    def mark_applied(self, fingerprint: str) -> None:
+        """FIX-05: sella un hallazgo como aplicado (idempotencia de la aceptación)."""
+        normalized = str(fingerprint or "").strip()
+        if normalized:
+            self._applied_fingerprints.add(normalized)
+
+    def is_applied(self, fingerprint: str) -> bool:
+        return str(fingerprint or "").strip() in self._applied_fingerprints
 
     def count(self) -> int:
-        """Contador ambiental '(N) ajustes estructurales' (coste IA cero)."""
+        """Contador ambiental '(N) ajustes estructurales' (coste IA cero).
+
+        FIX-05: cuenta lo MISMO que lista el panel — hallazgos deterministas +
+        propuestas de estructura IA vigentes (antes excluía las propuestas y la
+        píldora «⚙ N» no cuadraba con las tarjetas).
+        """
         res = self.analyze()
-        return len(res.value) if isinstance(res, Ok) else 0
+        deterministas = len(res.value) if isinstance(res, Ok) else 0
+        return deterministas + len(self.structure_proposals())
 
     def as_candidate(self, finding: StructuralFinding) -> Candidate:
         """Materializa un Candidato transitorio para enrutar por el pipeline de aceptación."""
@@ -244,7 +267,7 @@ class StructuralAnalysisService:
 
     def structure_proposals(self) -> list[StructuralFinding]:
         """Propuestas de estructura vigentes en la sesión (crear/fusionar)."""
-        return list(self._structure_proposals)
+        return self._without_applied(self._structure_proposals)
 
     def discard_structure_proposal(self, fingerprint: str) -> None:
         """Quita una propuesta de estructura de la sesión (tras aceptar o descartar)."""
@@ -311,12 +334,28 @@ class StructuralAnalysisService:
 
     def _parse_structure(self, proj, data: dict) -> list[StructuralFinding]:
         out: list[StructuralFinding] = []
+        # FIX-05: dedup por fingerprint (la IA puede repetir un nombre en la misma
+        # respuesta → dos tarjetas con el mismo fingerprint) y sin re-proponer
+        # anillos que YA existen en el proyecto (reintento tras aceptar).
+        seen: set[str] = set()
+        existing_ring_names = {
+            str(getattr(layer, "name", "") or "").strip().lower()
+            for layer in getattr(proj, "world_layers", []) or []
+        }
         for c in data.get("crear") or []:
             if not isinstance(c, dict):
                 continue
             nombre = str(c.get("nombre") or "").strip()
             if not nombre:
                 continue
+            fingerprint = f"ring_create:{nombre}"
+            if (
+                fingerprint in seen
+                or fingerprint in self._applied_fingerprints
+                or nombre.lower() in existing_ring_names
+            ):
+                continue
+            seen.add(fingerprint)
             rank = c.get("rank")
             has_rank = isinstance(rank, (int, float))
             desc = str(c.get("descripcion") or "").strip()
@@ -343,6 +382,10 @@ class StructuralAnalysisService:
             dst = str(m.get("destino_id") or "").strip()
             if not src or not dst or src == dst:
                 continue
+            merge_fingerprint = f"ring_merge:{src}->{dst}"
+            if merge_fingerprint in seen or merge_fingerprint in self._applied_fingerprints:
+                continue
+            seen.add(merge_fingerprint)
             motivo = str(m.get("motivo") or "").strip()
             pd = {
                 "kind": "ring_merge",
@@ -441,6 +484,23 @@ class StructuralAnalysisService:
         tiene potencia atribuida alta — su influencia real escala hacia el extremo
         superior, pero el motor de impacto no la propagará mientras la relación no
         esté marcada como excepción (§16). El detector la propone; el usuario acepta.
+
+        BETA-MULTIAGENT2-FIX-05 (G2-07) — CALIBRACIÓN. En la campaña larga del beta
+        (800 fichas, 1.760 relaciones, 9 anillos) esta vía sola emitía **105 de los 203
+        avisos** (51,7 %), sin tope ni agrupación: hasta 13 tarjetas para la MISMA
+        entidad. Dos acotaciones, las dos semánticas (no umbrales al tuntún):
+
+        1. **La potencia del extremo inferior debe alcanzar a la del superior.** Antes
+           bastaba con ≥70 aunque el extremo de arriba tuviera 95: proponer que un 72
+           "apalanque" a un 95 no es una excepción ascendente, es ruido. Sin potencia
+           atribuida arriba no se juzga a la baja (silencio honesto: se propone).
+        2. **Una tarjeta por ENTIDAD inferior**, no una por relación — la decisión que
+           el usuario toma es sobre la entidad ("esta cosa de abajo empuja hacia
+           arriba"); se conserva la relación de mayor confianza y se desempata por id
+           para que el panel no baile entre refrescos.
+
+        Medido sobre ese mismo mundo: 105 → 28 (total 203 → 126), sin perder ninguno
+        de los 57 hallazgos de movimiento con `gap == 3` (los 55 desajustes plantados).
         """
         if not hasattr(proj, "entity_by_id"):
             return []
@@ -452,7 +512,8 @@ class StructuralAnalysisService:
                 pos_cache[entity_id] = pos
             return pos_cache[entity_id]
 
-        findings: list[StructuralFinding] = []
+        # entidad inferior → mejor hallazgo (agrupación, punto 2 del docstring).
+        best: dict[str, StructuralFinding] = {}
         for rel in getattr(proj, "relations", []) or []:
             if rel.relation_type in CAUSAL_RELATION_TYPES or is_ascending_exception(rel):
                 continue  # ya escala (causal) o ya está marcada
@@ -473,21 +534,37 @@ class StructuralAnalysisService:
             potency = get_annotated_potency(low)
             if potency is None or potency < _ASC_MIN_POTENCY:
                 continue  # silencio honesto: sin potencia alta atribuida en el extremo inferior
+            high_potency = get_annotated_potency(high)
+            if high_potency is not None and potency < high_potency:
+                continue  # FIX-05 punto 1: no apalanca a quien ya es más potente
             finding = self._build_ascending_finding(rel, low, high, potency)
             if self._is_suppressed(low, finding.fingerprint, current_rev):
                 continue
-            findings.append(finding)
-        return findings
+            current = best.get(low.id)
+            if current is None or (finding.confidence, finding.fingerprint) > (
+                current.confidence,
+                current.fingerprint,
+            ):
+                best[low.id] = finding
+        return [best[key] for key in sorted(best)]
 
     def _build_ascending_finding(self, rel, source, target, potency: int) -> StructuralFinding:
         source_name = getattr(source, "name", "") or source.id
         target_name = getattr(target, "name", "") or target.id
         rel_type = getattr(rel.relation_type, "value", rel.relation_type)
+        # BETA-MULTIAGENT2-FIX-13 (G2-20). Esto decía, literalmente, «(contrato
+        # §16)»: la aplicación citaba su propia especificación interna, por número
+        # de sección, a una novelista que no tiene ningún §16 que abrir. Y usaba
+        # «apalancamiento» a pelo, que no significa nada fuera del repo.
+        # El DATO no cambia (`exception_kind` sigue valiendo "apalancamiento",
+        # fijado por tests y consumido por candidate_service): cambia el texto.
         reasons = [
             f"«{source_name}» (potencial atribuido {potency}/100) está en un anillo inferior "
             f"al de «{target_name}», unidos por la relación no-causal «{rel_type}».",
-            "Sin marca de excepción, un cambio en el extremo inferior no escala hacia arriba "
-            f"(contrato §16); su potencial sugiere que sí debería ({_DEFAULT_ASC_KIND}).",
+            f"Hoy, si cambias «{source_name}», el aviso no sube hasta «{target_name}»: "
+            "los avisos viajan del centro hacia fuera. Por su potencial, este caso "
+            "debería ser una excepción y avisar también hacia dentro (en Dendro eso se "
+            f"llama «{_DEFAULT_ASC_KIND}»: algo pequeño que mueve algo grande).",
         ]
         expected = [
             f"Los cambios en «{source_name}» podrán marcar «Falta regar» ascendentemente "

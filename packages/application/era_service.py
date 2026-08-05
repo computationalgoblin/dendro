@@ -72,7 +72,7 @@ class EraService:
             return chrono
         name = str((data or {}).get("name", "")).strip()
         if not name:
-            return Error("Era name cannot be empty")
+            return Error("El nombre de la era no puede estar vacío.")
         era = Era.from_dict(dict(data, name=name))
         if era.end_year is not None and era.end_year < era.start_year:
             return Error("Era end_year is earlier than start_year")
@@ -90,7 +90,7 @@ class EraService:
                 merged[key] = data[key]
         updated = Era.from_dict(merged)
         if not updated.name.strip():
-            return Error("Era name cannot be empty")
+            return Error("El nombre de la era no puede estar vacío.")
         if updated.end_year is not None and updated.end_year < updated.start_year:
             return Error("Era end_year is earlier than start_year")
         era = existing.value
@@ -147,14 +147,24 @@ class EraService:
         durations: list[tuple[str, int]],
         present_index: int,
         present_year_within: int,
+        *,
+        start_year: int = 0,
     ) -> Result[int, str]:
         """Reemplaza las eras por una cadena derivada de ``(nombre, duración)``.
 
-        Las eras se encadenan: ``start`` = suma de duraciones previas; todas cerradas
-        salvo la ÚLTIMA, que queda ABIERTA (``end_year=None``) para preservar la
-        no-atemporalidad. Fija ``present_year`` absoluto a partir de (era + año dentro de
-        la era, estilo regnal) y lo devuelve. Reusa ids/descripciones existentes por
-        posición para no churnear. Contrato G01: siempre ≥1 era.
+        Las eras se encadenan: ``start`` = ``start_year`` + suma de duraciones previas;
+        todas cerradas salvo la ÚLTIMA, que queda ABIERTA (``end_year=None``) para
+        preservar la no-atemporalidad. Fija ``present_year`` absoluto a partir de (era +
+        año dentro de la era, estilo regnal) y lo devuelve. Reusa ids/descripciones
+        existentes por posición para no churnear. Contrato G01: siempre ≥1 era.
+
+        BETA-MULTIAGENT2-FIX-12 (G2-29): ``start_year`` es el ANCLA del origen de la
+        cadena — «este calendario empieza en el año 1900». Antes el cursor era 0 fijo
+        y quien escribía de ESTE mundo tenía que inventarse una era tapón de 1.900
+        años vacíos para que su eje coincidiera con el anno domini. Se mueve el
+        ORIGEN, NO se reabre el editor por-era de años absolutos que BETA2-CAL retiró
+        por modelo paralelo: las eras siguen encadenándose por duración. Por defecto
+        vale 0, así que un proyecto existente se reconfigura exactamente igual.
         """
         chrono = self._chronology()
         if isinstance(chrono, Error):
@@ -162,13 +172,16 @@ class EraService:
         items = list(durations or [])
         if not items:
             return Error("At least one era is required")
+        try:
+            cursor = int(start_year)
+        except (TypeError, ValueError):
+            return Error(f"Invalid start_year: {start_year!r}")
         existing = list(chrono.value.eras)
         new_eras: list[Era] = []
-        cursor = 0
         for index, item in enumerate(items):
             name = str(item[0]).strip()
             if not name:
-                return Error("Era name cannot be empty")
+                return Error("El nombre de la era no puede estar vacío.")
             try:
                 duration = int(item[1])
             except (TypeError, ValueError, IndexError):

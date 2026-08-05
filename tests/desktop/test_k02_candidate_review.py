@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QTextEdit
 
 from hosts.DesktopHostPySide.widgets.candidate_review_panel import (
     CandidateReviewPanel,
+    base_mark_text,
     source_badge_text,
 )
 
@@ -26,19 +27,49 @@ def _cand(**kw):
     base = dict(
         candidate_type=SimpleNamespace(value="cambio"),
         title="Editar Aurora",
-        source="ai_command_bar",
+        source="ai_suggest_composite",
         confidence=0.62,
         proposed_data={},
+        metadata={},
     )
     base.update(kw)
     return SimpleNamespace(**base)
 
 
 # ── badge de fuente ──────────────────────────────────────────────────────────
-def test_source_badge_ia_con_confianza():
-    text = source_badge_text(_cand(source="ai_command_bar", confidence=0.62))
+def test_source_badge_ia_con_confianza_declarada():
+    """BETA-MULTIAGENT2-FIX-08 (G2-13): el porcentaje solo se pinta si la confianza
+    la DECLARÓ el modelo. El 0,62 literal del código no se enseña como medida."""
+    declarada = _cand(confidence=0.62, metadata={"confianza_declarada": True})
+    text = source_badge_text(declarada)
     assert "IA" in text
     assert "62%" in text
+    assert "declarada" in text
+
+
+def test_source_badge_sin_senal_declarada_no_pinta_porcentaje():
+    text = source_badge_text(_cand(confidence=0.62, metadata={}))
+    assert "IA" in text
+    assert "%" not in text
+
+
+# ── marca de base (canon / inferido / inventado) ─────────────────────────────
+def test_base_mark_text_muestra_la_marca_declarada():
+    text = base_mark_text(_cand(metadata={"base": "inventado", "base_nota": "sin canon"}))
+    assert "invención" in text
+    assert "sin canon" in text
+    assert base_mark_text(_cand(metadata={"base": "no_declarada"})).startswith("Base:")
+    # Sin familia que declare base, no se pinta fila hueca (ni se inventa la marca).
+    assert base_mark_text(_cand(metadata={})) == ""
+
+
+def test_panel_muestra_la_fila_de_base():
+    from PySide6.QtWidgets import QLabel
+
+    cand = _cand(metadata={"base": "canon", "base_nota": "consta en la crónica"})
+    panel = CandidateReviewPanel(cand, _controller_with_entity("Aurora", "x"))
+    textos = [w.text() for w in panel.findChildren(QLabel)]
+    assert any("Base:" in t and "consta en la crónica" in t for t in textos)
 
 
 def test_source_badge_usuario_y_origen_desconocido():

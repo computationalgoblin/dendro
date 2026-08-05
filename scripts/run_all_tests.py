@@ -120,6 +120,11 @@ SUITES: dict[str, list[str]] = {
         "tests/test_ws_m_window_fit.py",
         "tests/test_ws_i_packaging.py",
         "tests/test_ws_o_logging.py",
+        # BETA-AUDIT-03: el proyecto de ejemplo que viaja en el zip es la primera
+        # impresión de todo tester; esta guarda impide que vuelva a degradarse.
+        "tests/test_beta_audit_ejemplo_curado.py",
+        # BETA-AUDIT-14: ata el inventario de módulos sin superficie a su tabla.
+        "tests/test_beta_audit_unreachable_inventory.py",
     ],
 }
 

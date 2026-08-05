@@ -28,6 +28,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     INK_SOFT,
     SURFACE_HI,
     TICK_INTERVAL,
+    TYPE_LABEL_PX,
 )
 
 _ERROR_COLOR = "#C0392B"
@@ -41,7 +42,7 @@ def _pill_style(base: str, hover: str) -> str:
     mismo radio, padding, tipografía y feedback de hover/pressed."""
     return (
         f"QPushButton {{ background: {base}; color: {INK_INVERSE}; border: none; "
-        f"border-radius: 15px; padding: 0px 14px; font-weight: 700; font-size: 12px; }} "
+        f"border-radius: 15px; padding: 0px 14px; font-weight: 700; font-size: {TYPE_LABEL_PX}px; }} "
         f"QPushButton:hover {{ background: {hover}; }} "
         f"QPushButton:pressed {{ background: {GOLD_PRESS}; }}"
     )

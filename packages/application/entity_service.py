@@ -18,7 +18,7 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Any
 
@@ -35,19 +35,95 @@ from packages.domain.entity import (
     EntityType,
     NarrativeEntity,
     VisibilityState,
+    normalize_entity_type,
     validate_entity,
 )
 from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.result import Error, Ok, Result
+
+# ── BETA-MULTIAGENT2-FIX-03 (G2-03): claves que no se tiran en silencio ──────
+#
+# `NarrativeEntity.from_dict` lee UNA A UNA las claves que conoce y ni mira las
+# demás: una ficha creada con `description` (19 veces, en el beta) nacía vacía y
+# el servicio devolvía `Ok`. La doctrina del repo ya estaba escrita para
+# `entity_type` (BETA-MULTIAGENT-FIX-06): **la tolerancia es del dominio —que es
+# también la ruta de CARGA— y el rigor es del servicio**. Esto la extiende a las
+# claves.
+
+#: Alias documentados del emisor → campo del dominio. Son los DOS que `ai_jobs`
+#: ya venía parcheando a mano (ai_jobs.py:1020,1023): al aceptarlos aquí, el
+#: servicio deja de necesitar guardaespaldas río arriba. El campo del dominio
+#: manda si viene con contenido (misma precedencia que `ai_jobs`).
+ENTITY_KEY_ALIASES: dict[str, str] = {
+    "description": "brief_description",
+    "body": "extended_description",
+}
+
+#: Claves de PASO: no son campos del dominio, pero el flujo de candidatos las
+#: entrega legítimamente a `create_entity` y se consumen FUERA de `from_dict`.
+#: Lista explícita a propósito: un rechazo duro sin ella revienta la aceptación
+#: de semillas (`candidate_service` pasa `dict(c.proposed_data)` entero).
+ENTITY_PASSTHROUGH_KEYS: frozenset[str] = frozenset(
+    {
+        "temporal_nature",  # la lee este mismo servicio (normalize_entity_dating)
+        "display_type",     # ai_jobs: marcador visual hoja/rama del candidato
+        "child_leaves",     # candidate_service materializa las hojas hijas DESPUÉS
+        "contained_entity_ids",  # idem: miembros existentes de una rama
+        "kind",             # discriminador del payload de candidato
+    }
+)
+
+#: Campos reales del dominio (derivados del dataclass, no copiados a mano: una
+#: constante copiada se desincroniza en cuanto se añade un campo).
+ENTITY_DOMAIN_KEYS: frozenset[str] = frozenset(f.name for f in dataclass_fields(NarrativeEntity))
+
+#: Todo lo que `create_entity` acepta.
+ENTITY_ACCEPTED_KEYS: frozenset[str] = (
+    ENTITY_DOMAIN_KEYS | ENTITY_PASSTHROUGH_KEYS | frozenset(ENTITY_KEY_ALIASES)
+)
+
+
+def _valid_entity_keys_text(accepted: frozenset[str]) -> str:
+    return ", ".join(sorted(accepted))
+
+
+def normalize_entity_payload(
+    data: dict[str, Any], accepted: frozenset[str]
+) -> tuple[dict[str, Any], list[str]]:
+    """Aplica los alias y separa las claves que el servicio NO reconoce.
+
+    Devuelve ``(payload_normalizado, claves_desconocidas)``. No decide nada: el
+    llamador rechaza (creación/edición explícita) — la ruta de carga del dominio
+    sigue siendo tolerante y no pasa por aquí.
+    """
+    normalized: dict[str, Any] = {}
+    unknown: list[str] = []
+    for key, value in data.items():
+        name = str(key)
+        target = ENTITY_KEY_ALIASES.get(name, name)
+        if target not in accepted:
+            unknown.append(name)
+            continue
+        if target != name:
+            # Alias: el campo del dominio manda si ya vino con contenido.
+            if str(normalized.get(target) or "").strip() or str(data.get(target) or "").strip():
+                continue
+        normalized[target] = value
+    return normalized, unknown
 
 
 @dataclass
 class EntityService:
     """Application service for NarrativeEntity lifecycle.
 
-    Delegates persistence to ``store`` and derives the active project
-    from ``project_service``.  All mutating methods persist via
-    ``store.save()`` using the project's current path.
+    Deriva el proyecto activo de ``project_service``.
+
+    BETA-AUDIT-01 — **este servicio NO escribe en disco.** Los métodos que mutan
+    modifican el ``Project`` en memoria y devuelven ``Ok``; el único punto de la capa
+    que llama a ``store.save()`` es ``ProjectService.save``. Quien mute es
+    responsable de pedir el guardado (en el escritorio lo hace el controlador, que
+    programa un guardado diferido). La docstring anterior afirmaba lo contrario y era
+    falsa: por eso una caída perdía todo lo editado desde el último guardado.
 
     Attributes:
         project_service: The active ``ProjectService`` (stateful).
@@ -99,7 +175,32 @@ class EntityService:
 
         name = str(data.get("name", "")).strip()
         if not name:
-            return Error("Entity name cannot be empty")
+            return Error("El nombre de la entidad no puede estar vacío.")
+
+        # BETA-MULTIAGENT2-FIX-03 (G2-03): las claves que el servicio no conoce
+        # ya NO se tiran devolviendo Ok. Los dos alias documentados se traducen;
+        # el resto se rechaza nombrando la clave, como ya se hacía con el tipo.
+        data, unknown_keys = normalize_entity_payload(data, ENTITY_ACCEPTED_KEYS)
+        if unknown_keys:
+            listed = ", ".join(f"«{k}»" for k in unknown_keys)
+            return Error(
+                f"Clave desconocida al crear la entidad: {listed}. "
+                f"Claves válidas: {_valid_entity_keys_text(ENTITY_ACCEPTED_KEYS)}."
+            )
+
+        # BETA-MULTIAGENT-FIX-06 (NOV-05): un tipo desconocido en una CREACIÓN
+        # explícita se rechaza con error claro. La coerción tolerante a NOTA de
+        # ``from_dict`` se mantiene SOLO para cargas de persistencia (proyectos
+        # viejos no deben romper al abrir).
+        raw_type = data.get("entity_type")
+        if isinstance(raw_type, str) and raw_type.strip():
+            try:
+                EntityType(normalize_entity_type(raw_type))
+            except ValueError:
+                valid = ", ".join(t.value for t in EntityType)
+                return Error(
+                    f"Tipo de entidad desconocido: «{raw_type}». Tipos válidos: {valid}."
+                )
 
         entity = NarrativeEntity.from_dict(data)
         entity.name = name
@@ -116,7 +217,7 @@ class EntityService:
 
         issues = validate_entity(entity)
         if issues:
-            return Error(f"Entity validation failed: {'; '.join(issues)}")
+            return Error(f"La entidad no supera la validación: {'; '.join(issues)}")
 
         proj.value.entities.append(entity)
         proj.value.touch()
@@ -137,7 +238,7 @@ class EntityService:
         history_service: Any = None,
         impact_service: Any = None,
     ) -> Result[NarrativeEntity, str]:
-        """Modify an existing entity and persist.
+        """Modify an existing entity **in memory** (no escribe en disco).
 
         Args:
             entity_id: The entity to modify.
@@ -172,6 +273,25 @@ class EntityService:
             "birth_year", "death_year",  # BETA1-G02
             "life_span",  # BETA1-J04: lapso temporal rico
         }
+        # BETA-MULTIAGENT2-FIX-03 (G2-03): el bucle de `editable_fields` ignoraba
+        # sin decir nada toda clave fuera de la lista → `Ok(entidad_sin_cambiar)`.
+        # Ahora se traducen los alias y se rechaza lo desconocido. Se admiten
+        # además las claves que este servicio consume aparte (`temporal_nature`) y
+        # las de identidad/sellado que gestiona él mismo (id/created_at/
+        # updated_at): un llamador que devuelva `to_dict()` entero no es un error,
+        # pero esos campos NO se editan desde fuera.
+        accepted_update = (
+            editable_fields
+            | {"temporal_nature", "id", "created_at", "updated_at"}
+            | set(ENTITY_KEY_ALIASES)
+        )
+        data, unknown_keys = normalize_entity_payload(data, frozenset(accepted_update))
+        if unknown_keys:
+            listed = ", ".join(f"«{k}»" for k in unknown_keys)
+            return Error(
+                f"Clave desconocida al editar la entidad: {listed}. "
+                f"Claves válidas: {_valid_entity_keys_text(frozenset(accepted_update))}."
+            )
         merged = found.to_dict()
         for key in editable_fields:
             if key in data:
@@ -742,6 +862,12 @@ class EntityService:
         proj.value.relations = [
             r for r in proj.value.relations
             if r.source_id != entity_id and r.target_id != entity_id
+        ]
+        # BETA-AUDIT-11: la cascada se olvidaba de los diagnósticos de riego, así que
+        # cada borrado dejaba entradas flotando que nadie volvía a ver y que viajaban
+        # en cada guardado, cada `.bak` y cada instantánea de deshacer.
+        proj.value.watering_diagnostics = [
+            d for d in proj.value.watering_diagnostics if d.entity_id != entity_id
         ]
         proj.value.touch()
         return Ok(None)

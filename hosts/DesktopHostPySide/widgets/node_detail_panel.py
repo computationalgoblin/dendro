@@ -10,8 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -29,6 +32,7 @@ from PySide6.QtWidgets import (
 from hosts.DesktopHostPySide.app_context import AppContext
 from hosts.DesktopHostPySide.app_trace import _apptrace
 from hosts.DesktopHostPySide.widgets import icons, portrait_cache, portrait_flow
+from hosts.DesktopHostPySide.widgets.field_help import glossary
 from hosts.DesktopHostPySide.widgets.mention_support import attach_mention_support
 from packages.application.structured_reference_service import (
     StructuredReferenceService,
@@ -57,6 +61,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     meta_chip_style,
 )
 from hosts.DesktopHostPySide.widgets.qt_lifecycle import _qt_safe_slot, track_worker
+from hosts.DesktopHostPySide.widgets.rigor_section import RigorSection
 from packages.application.world_layer_causal import get_causal_rank, sort_layers_by_causal_rank
 from packages.domain.entity import EntityType
 from packages.domain.entity_taxonomy import (
@@ -65,7 +70,10 @@ from packages.domain.entity_taxonomy import (
     has_temporal_nature,
     is_branch_type,
 )
+from packages.application.temporal_dating import PENDING_NOTE
 from packages.domain.result import Error
+from packages.domain.temporal_models import TemporalPrecision
+from packages.domain.temporal_span import TemporalSpan
 
 # ---------------------------------------------------------------------------
 # Warm palette constants
@@ -115,6 +123,24 @@ def _enum_value(value: Any, default: str = "") -> str:
 def _default_color_for_type(entity_type_str: str) -> str:
     """Return the default hex colour for *entity_type_str*, or a fallback."""
     return _NODE_COLORS.get((entity_type_str or "").lower(), "#8EA4C8")
+
+
+def _is_undetermined(precision: Any) -> bool:
+    """¿La precisión temporal está sin determinar (o ausente)? — FIX-12."""
+    raw = _enum_value(precision, "").strip()
+    return not raw or raw == TemporalPrecision.UNKNOWN.value
+
+
+# BETA-AUDIT-02: subconjunto legible de VisibilityState para la Ficha. Los cuatro
+# reservados coinciden EXACTAMENTE con los tokens que oculta a la IA
+# packages/application/ai_privacy.py, para que la etiqueta no prometa de más.
+_VISIBILITY_CHOICES: tuple[tuple[str, str], ...] = (
+    ("visible_usuario", "Visible"),
+    ("privado_autor", "Privada — solo para mí"),
+    ("secreto_mundo", "Secreta en el mundo"),
+    ("preparado_no_revelado", "Preparada, aún sin revelar"),
+    ("no_exportable", "No exportable"),
+)
 
 
 def _meta_chip(icon_name: str, combo: QComboBox, tooltip: str) -> QWidget:
@@ -454,6 +480,12 @@ class NodeDetailPanel(QWidget):
         # editable por los tipos personalizados.
         for item in OFFERED_ENTITY_TYPES:
             self.type_combo.addItem(enum_human(item.value), item.value)
+        # BETA-AUDIT-06: elegir un tipo de rama convierte la entidad en rama, y eso
+        # no se deducía de ninguna parte de la interfaz.
+        self.type_combo.setToolTip(
+            f"Qué es esta entidad. {glossary('hoja')}\n\n"
+            f"Si eliges un tipo de rama, pasa a contener otras: {glossary('rama')}"
+        )
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         # Legacy ref kept for older code paths; never shown as UI. If this
         # empty label is made visible without a layout, Qt opens it as a
@@ -462,6 +494,7 @@ class NodeDetailPanel(QWidget):
         self.layer_label.hide()
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("— Sin anillo —", "")
+        self.layer_combo.setToolTip(f"Anillo — {glossary('anillo')}")
         # UX28/BETA2-UX-03: el color del nodo lo decide el TIPO de entidad
         # (paleta de Dendro); no hay selector manual de color.
 
@@ -482,15 +515,65 @@ class NodeDetailPanel(QWidget):
         self.nature_label = QLabel("Naturaleza temporal")
         self.nature_label.setStyleSheet(_label_ss)
 
+        # BETA-MULTIAGENT2-FIX-12 (G2-29): «Nació» y «Murió» en la FICHA. Hasta
+        # aquí el único editor de fecha era un arrastre sobre una ventana de 0 a
+        # 10 años en la cronología del Foco: quien escribía de este mundo entregó
+        # sus nueve fichas con `birth_year: null` en un proyecto con seis hitos
+        # fechados entre 1901 y 1985. Escriben el mismo `birth_year`/`death_year`
+        # que el panel ya enviaba por pass-through (el servicio los acepta desde
+        # BETA1-G02); la datación RICA (precisión, era, fecha del mundo, notas)
+        # se conserva intacta — contrato BETA2-SHIP-07.
+        self.birth_year_edit = QLineEdit()
+        self.birth_year_edit.setPlaceholderText("año")
+        self.birth_year_edit.setMaximumWidth(84)
+        self.birth_year_edit.setToolTip(
+            "Año diegético en que nace o empieza a existir. Vacío = sin datar. "
+            "Se admiten años negativos (antes del año 0 de tu calendario)."
+        )
+        self.death_year_edit = QLineEdit()
+        self.death_year_edit.setPlaceholderText("año")
+        self.death_year_edit.setMaximumWidth(84)
+        self.death_year_edit.setToolTip(
+            "Año diegético en que muere o deja de existir. Vacío = sigue vigente."
+        )
+        # El validador impide teclear algo que no sea un año: sin él, un texto
+        # ilegible se leería como «sin datar» y BORRARÍA el año ya guardado.
+        for _edit in (self.birth_year_edit, self.death_year_edit):
+            _edit.setValidator(QIntValidator(-999999, 999999, _edit))
+        self.birth_year_label = QLabel("Nació")
+        self.birth_year_label.setStyleSheet(_label_ss)
+        self.death_year_label = QLabel("Murió")
+        self.death_year_label.setStyleSheet(_label_ss)
+
         # FOCO-20: «Relevancia narrativa» visible en el formulario principal
         # (calibra el riego y la invalidación de 2º grado; antes estaba
         # enterrada en «Más opciones»). Se crea aquí y se conecta al autosave.
         self.importance_combo = QComboBox()
         for val in ("critico", "alto", "medio", "bajo", "menor"):
             self.importance_combo.addItem(enum_human(val), val)
+        # BETA-AUDIT-06: la definición sale del glosario del jardín, para que
+        # «Relevancia» signifique lo mismo aquí y en el Cuaderno de cultivo.
         self.importance_combo.setToolTip(
-            "Cuánto pesa esta entidad en la trama. Calibra la exigencia del "
-            "riego y qué cambios vecinos la invalidan."
+            f"Relevancia — {glossary('relevancia')} Calibra la exigencia del riego "
+            "y qué cambios vecinos la invalidan."
+        )
+
+        # BETA-AUDIT-02: la visibilidad volvió a ser editable. BETA2-UX-03 la había
+        # dejado en pass-through («ya no editable»), y eso dejaba SIN USO el borde de
+        # redacción de WS-B: la app prometía en el README no compartir lo privado con
+        # la IA, pero nada podía marcarse como privado.
+        #
+        # Se ofrecen 5 de los 14 estados del enum: los que el motor trata de verdad
+        # como reservados (ai_privacy._WITHHELD_VISIBILITY_TOKENS) más el visible por
+        # defecto. Los 14 crudos eran ilegibles para quien abre la app por primera vez.
+        self.visibility_combo = QComboBox()
+        for value, label in _VISIBILITY_CHOICES:
+            self.visibility_combo.addItem(label, value)
+        self.visibility_combo.setToolTip(
+            "Quién puede ver esta entidad.\n\n"
+            "Privada, Secreta, Preparada y No exportable se consideran RESERVADAS: su "
+            "contenido no se envía a la IA (viaja como «[reservado]») y no sale en una "
+            "exportación pública."
         )
 
         if self.variant == "foco":
@@ -521,19 +604,14 @@ class NodeDetailPanel(QWidget):
             chips_layout.addWidget(self.name_edit)
             # UI2-12: cada chip lleva su icono SVG identificador + tooltip.
             meta_row = FlowLayout(spacing=8)
+            # BETA-AUDIT-06: los chips reusan el tooltip que ya define el combo
+            # (tomado del glosario del jardín) en vez de repetir una frase propia
+            # que decía dónde vive el dato pero no qué significa.
             meta_row.addWidget(
-                _meta_chip(
-                    "field_type",
-                    self.type_combo,
-                    "Tipo de entidad — decide su color y su papel en el jardín.",
-                )
+                _meta_chip("field_type", self.type_combo, self.type_combo.toolTip())
             )
             meta_row.addWidget(
-                _meta_chip(
-                    "rings",
-                    self.layer_combo,
-                    "Anillo del mundo al que pertenece la entidad.",
-                )
+                _meta_chip("rings", self.layer_combo, self.layer_combo.toolTip())
             )
             self._nature_chip_wrapper = _meta_chip(
                 "field_nature",
@@ -548,7 +626,17 @@ class NodeDetailPanel(QWidget):
                     self.importance_combo.toolTip(),
                 )
             )
+            meta_row.addWidget(
+                _meta_chip(
+                    "lock",
+                    self.visibility_combo,
+                    self.visibility_combo.toolTip(),
+                )
+            )
             chips_layout.addLayout(meta_row)
+            # FIX-12: las dos casillas de fecha, en su propia fila bajo los chips
+            # (una caja de texto no es un chip: se escribe, no se elige).
+            chips_layout.addLayout(self._build_dating_row())
         else:
             form_layout = QFormLayout(form_card)
             form_layout.setContentsMargins(0, 4, 0, 4)
@@ -565,6 +653,8 @@ class NodeDetailPanel(QWidget):
             importance_label = QLabel("Relevancia")
             importance_label.setStyleSheet(_label_ss)
             form_layout.addRow(importance_label, self.importance_combo)
+            # FIX-12: «Nació» / «Murió» también en la variante de formulario.
+            form_layout.addRow(self._build_dating_row())
 
         # Descripción breve: tras la imagen (montada fuera del form) — el
         # widget se crea aquí, se monta más abajo en el orden F05.
@@ -613,6 +703,36 @@ class NodeDetailPanel(QWidget):
         self.extended_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.extended_edit.setStyleSheet(self._editorial_card_ss)
         root.addWidget(self.extended_edit, 1)
+
+        # BETA-MULTIAGENT2-FIX-11 (fase B): sección «Rigor» — certeza y datación
+        # rica (precisión, fecha del mundo, periodo, nota, fuentes que se
+        # contradicen). Nace PLEGADA: la Ficha de quien no la necesita no crece
+        # ni un campo. El año entero sigue siendo el espejo autoritativo.
+        self.rigor = RigorSection(expandida=bool(getattr(self.ctx, "advanced_mode", False)))
+        self.rigor.changed.connect(self._schedule_autosave)
+        # FIX-11 (fase B3): FUENTES de la entidad — crear, ENLAZAR y ver. El
+        # servicio lo soportaba entero y no había ni una llamada en `hosts/`; el
+        # único formulario que existía colgaba de una tarjeta muerta
+        # (`NarrativeWorkbench`, jamás instanciada). Ahora cuelga de la Ficha.
+        # OJO: no existe `entity.source_ids` — el enlace vive EN LA FUENTE y la
+        # consulta inversa es `get_sources_for_entity`.
+        sources_box = QWidget(self)
+        sources_layout = QVBoxLayout(sources_box)
+        sources_layout.setContentsMargins(0, 0, 0, 0)
+        sources_layout.setSpacing(4)
+        self.sources_label = QLabel("Sin fuentes enlazadas")
+        self.sources_label.setWordWrap(True)
+        self.sources_label.setStyleSheet(f"color: {_MUTED_COLOR}; background: transparent;")
+        sources_layout.addWidget(self.sources_label)
+        self.add_source_btn = QPushButton("Añadir fuente…")
+        self.add_source_btn.setToolTip(
+            "Anota de dónde sale esto: referencia (signatura, página, enlace) y la "
+            "cita literal si la tienes. Queda enlazada a este elemento."
+        )
+        self.add_source_btn.clicked.connect(self._open_source_dialog)
+        sources_layout.addWidget(self.add_source_btn)
+        self.rigor.add_row("Fuentes", sources_box)
+        root.addWidget(self.rigor)
 
         # BETA2-MEM-03: @menciones estructuradas en la prosa (breve + cuerpo).
         self._mention_supports = {}
@@ -812,6 +932,48 @@ class NodeDetailPanel(QWidget):
         self._update_nature_visibility()
         self._schedule_autosave()
 
+    # ------------------------------------------------------------------
+    # BETA-MULTIAGENT2-FIX-12 (G2-29): fechas de la entidad en la Ficha
+    # ------------------------------------------------------------------
+
+    def _build_dating_row(self) -> QHBoxLayout:
+        """Fila «Nació [año]  ·  Murió [año]», idéntica en las dos variantes."""
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self.birth_year_label)
+        row.addWidget(self.birth_year_edit)
+        row.addSpacing(10)
+        row.addWidget(self.death_year_label)
+        row.addWidget(self.death_year_edit)
+        row.addStretch(1)
+        return row
+
+    def _parse_year_text(self, text: str, previo: int | None = None) -> int | None:
+        """Año entero escrito por el usuario; vacío → ``None`` (sin datar).
+
+        Un texto ilegible NO se interpreta como «sin datar»: se conserva el año
+        que ya había. Borrar un año tiene que ser una decisión, no un descuido de
+        teclado (el validador ya impide teclear letras; esto es el cinturón).
+        """
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return previo
+
+    def _sync_dating_row(self, entity) -> None:
+        """Vuelca el espejo entero de la entidad en las dos casillas."""
+        for edit, attr in (
+            (self.birth_year_edit, "birth_year"),
+            (self.death_year_edit, "death_year"),
+        ):
+            value = getattr(entity, attr, None)
+            edit.blockSignals(True)
+            edit.setText("" if value is None else str(int(value)))
+            edit.blockSignals(False)
+
     def _update_nature_visibility(self):
         """BETA1-J08: el combo de naturaleza solo aparece para seres."""
         type_val = self.type_combo.currentData() or self.type_combo.currentText().strip().lower()
@@ -842,11 +1004,16 @@ class NodeDetailPanel(QWidget):
         self.brief_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.extended_edit.textChanged.connect(self._schedule_autosave_if_active)
         self.importance_combo.currentIndexChanged.connect(self._schedule_autosave)
+        self.visibility_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.nature_combo.currentIndexChanged.connect(self._schedule_autosave)
-        # BETA1-UX2C: el lapso de vida ya no se edita aquí (se estira el nodo en
-        # la cronología), así que no hay campos de año que autoguardar.
+        # BETA-MULTIAGENT2-FIX-12 (G2-29): los años vuelven a ser editables aquí
+        # (arrastrar el borde en una escala de 0 a 10 no sirve para escribir
+        # 1901). `editingFinished` y no `textEdited`: no se autoguarda «1», «19»,
+        # «190» mientras se teclea el año.
+        self.birth_year_edit.editingFinished.connect(self._schedule_autosave)
+        self.death_year_edit.editingFinished.connect(self._schedule_autosave)
 
     def _schedule_autosave(self):
         """Restart the debounce timer (800 ms of inactivity triggers save)."""
@@ -1108,6 +1275,25 @@ class NodeDetailPanel(QWidget):
         self.nature_combo.blockSignals(False)
         self._update_nature_visibility()
 
+    def _sync_visibility_combo(self, entity) -> None:
+        """BETA-AUDIT-02: refleja la visibilidad de la entidad en el chip.
+
+        El combo ofrece 5 de los 14 estados del enum por legibilidad. Si el proyecto
+        trae uno de los otros 9 (creado por una versión anterior o por la CLI
+        retirada), se añade al vuelo en vez de perderlo: guardar no debe degradar en
+        silencio un estado que el usuario no eligió aquí.
+        """
+        actual = _enum_value(getattr(entity, "visibility_state", None), "visible_usuario")
+        self.visibility_combo.blockSignals(True)
+        try:
+            idx = self.visibility_combo.findData(actual)
+            if idx < 0:
+                self.visibility_combo.addItem(enum_human(actual), actual)
+                idx = self.visibility_combo.count() - 1
+            self.visibility_combo.setCurrentIndex(idx)
+        finally:
+            self.visibility_combo.blockSignals(False)
+
     def _worldbuilding_active(self) -> bool:
         project = self._project()
         return bool(getattr(project, "worldbuilding_active", False)) if project is not None else False
@@ -1192,9 +1378,11 @@ class NodeDetailPanel(QWidget):
             self.name_edit.setText(getattr(entity, "name", ""))
             self._set_combo_value(self.type_combo, display_kind)
 
-            # BETA2-FOCO-27: solo se sincroniza la naturaleza temporal; el lapso se
-            # define en la cronología del pie del editor.
+            # BETA2-FOCO-27: se sincroniza la naturaleza temporal; el lapso RICO
+            # sigue definiéndose en la cronología del pie del editor.
             self._sync_nature_combo(entity)
+            # FIX-12 (G2-29): …pero el AÑO entero ya se escribe aquí.
+            self._sync_dating_row(entity)
             self.brief_edit.setPlainText(getattr(entity, "brief_description", "") or "")
             self.extended_edit.setPlainText(getattr(entity, "extended_description", "") or "")
 
@@ -1207,6 +1395,14 @@ class NodeDetailPanel(QWidget):
                 self.importance_combo,
                 _enum_value(getattr(entity, "narrative_importance", None), "medio"),
             )
+            self._sync_visibility_combo(entity)  # BETA-AUDIT-02
+            # FIX-11 (fase B): certeza + datación rica del INICIO del lapso.
+            span = getattr(entity, "life_span", None)
+            self.rigor.load(
+                certeza=getattr(entity, "certainty_level", None),
+                temporalidad=getattr(span, "start", None) if span is not None else None,
+            )
+            self._refresh_sources()
 
 
             # Color
@@ -1356,6 +1552,139 @@ class NodeDetailPanel(QWidget):
         except Exception:  # noqa: BLE001 — nunca romper el guardado por las @menciones
             pass
 
+    # ── FIX-11 (B3): fuentes de la entidad ──────────────────────────────
+
+    def _source_controller(self):
+        """Controlador de fuentes (la UI nunca toca persistencia directamente)."""
+        ctrl = getattr(self, "_src_ctrl", None)
+        if ctrl is not None:
+            return ctrl
+        ps = getattr(self.entity_controller, "ps", None)
+        if ps is None:
+            return None
+        from hosts.DesktopHostPySide.controllers.source_controller import SourceController
+
+        self._src_ctrl = SourceController(project_service=ps)
+        return self._src_ctrl
+
+    def _refresh_sources(self) -> None:
+        ctrl = self._source_controller()
+        if ctrl is None or not self.entity_id:
+            return
+        result = ctrl.sources_for_entity(self.entity_id)
+        fuentes = result.value if not isinstance(result, Error) else []
+        if not fuentes:
+            self.sources_label.setText("Sin fuentes enlazadas")
+            return
+        lineas = []
+        for fuente in fuentes:
+            nombre = str(getattr(fuente, "name", "") or "Fuente sin nombre")
+            referencia = str(getattr(fuente, "reference", "") or "")
+            lineas.append(f"• {nombre}{f' — {referencia}' if referencia else ''}")
+        self.sources_label.setText("\n".join(lineas))
+
+    def add_source(self, name: str, reference: str = "", fragment: str = "") -> bool:
+        """Crea la fuente y la ENLAZA a esta entidad. Devuelve si salió bien."""
+        ctrl = self._source_controller()
+        if ctrl is None or not (name or "").strip():
+            return False
+        creada = ctrl.create(
+            {
+                "name": name.strip(),
+                "reference": reference.strip(),
+                "fragment": fragment.strip(),
+            }
+        )
+        if isinstance(creada, Error):
+            self.ctx.log("error", creada.error)
+            return False
+        enlazada = ctrl.link_to_entity(creada.value.id, self.entity_id)
+        if isinstance(enlazada, Error):
+            self.ctx.log("error", enlazada.error)
+            return False
+        save = getattr(self.ctx, "request_save_silent", None) or getattr(
+            self.ctx, "request_save_debounced", None
+        )
+        if callable(save):
+            save()
+        self._refresh_sources()
+        return True
+
+    def _open_source_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Añadir fuente")
+        layout = QFormLayout(dialog)
+        nombre = QLineEdit()
+        nombre.setPlaceholderText("López de Ayala — Crónica del rey don Pedro")
+        referencia = QLineEdit()
+        referencia.setPlaceholderText("BNE MSS/1234, f. 12r · ISBN · enlace")
+        fragmento = QTextEdit()
+        fragmento.setPlaceholderText("Cita literal (opcional)")
+        fragmento.setMaximumHeight(90)
+        layout.addRow("Nombre", nombre)
+        layout.addRow("Referencia", referencia)
+        layout.addRow("Fragmento", fragmento)
+        botones = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        botones.accepted.connect(dialog.accept)
+        botones.rejected.connect(dialog.reject)
+        layout.addRow(botones)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.add_source(nombre.text(), referencia.text(), fragmento.toPlainText())
+
+    def _life_span_payload(self, birth_year: int | None, death_year: int | None) -> dict:
+        """FIX-11 (fase B): lapso con la capa DESCRIPTIVA del inicio puesta al día.
+
+        Parte del lapso vivo de la entidad (o del espejo entero si aún no hay
+        lapso) y solo reescribe precisión/fecha-mundo/periodo/nota/fuentes: la
+        era y la naturaleza temporal se conservan tal cual.
+
+        FIX-12 (G2-29): además mueve el EJE ENTERO al año que el usuario acaba de
+        escribir en «Nació»/«Murió». Hace falta hacerlo aquí porque el panel manda
+        SIEMPRE `life_span`, y `reconcile_entity_dating` da prioridad al lapso
+        sobre el espejo: sin esto, el año tecleado se perdería contra el lapso
+        viejo. Se mueve SOLO el año — la precisión, la fecha del mundo, el periodo
+        y las notas siguen siendo las que el usuario tenga puestas (BETA2-SHIP-07).
+        """
+        span = getattr(self._entity, "life_span", None)
+        if span is None:
+            span = TemporalSpan.from_years(
+                getattr(self._entity, "birth_year", None),
+                getattr(self._entity, "death_year", None),
+            )
+        datos = span.to_dict()
+        inicio = dict(self.rigor.apply_to_temporality(datos.get("start")) or {})
+        inicio["year"] = birth_year
+        # Misma regla que `_apply_mirror_years_to_span` (BETA2-SHIP-07): un año
+        # escrito sobre una precisión «sin determinar» pasa a exacto. No hay dos
+        # criterios; si el usuario quiere «h. 1334», elige la precisión y manda.
+        if birth_year is not None and _is_undetermined(inicio.get("precision")):
+            inicio["precision"] = TemporalPrecision.EXACT.value
+            combo = self.rigor.precision_combo
+            combo.blockSignals(True)  # no relanzar el autoguardado desde dentro
+            self._set_combo_value(combo, TemporalPrecision.EXACT.value)
+            combo.blockSignals(False)
+        # La nota «sin datar (pendiente)» es del sistema, no del usuario: en cuanto
+        # hay año, deja de ser verdad. Si el usuario escribió su propia nota, se
+        # respeta. Se limpia también el widget (`setText` no emite `textEdited`,
+        # así que no dispara un autoguardado en cascada).
+        if birth_year is not None and str(inicio.get("notes") or "").strip() == PENDING_NOTE:
+            inicio["notes"] = ""
+            self.rigor.notes_edit.setText("")
+        datos["start"] = inicio
+        if death_year is None:
+            datos["end"] = None
+            datos["ongoing"] = True
+        else:
+            fin = dict(datos.get("end") or {})
+            fin["year"] = death_year
+            if _is_undetermined(fin.get("precision")):
+                fin["precision"] = TemporalPrecision.EXACT.value
+            datos["end"] = fin
+            datos["ongoing"] = False
+        return datos
+
     def _do_save(self, *, refresh_after: bool = True):
         """Core save logic. refresh_after=True for manual save, False for auto-save."""
         _apptrace(f"UI node _do_save entity_id={self.entity_id!r} refresh_after={refresh_after}")
@@ -1402,6 +1731,14 @@ class NodeDetailPanel(QWidget):
         if meta.get("_node_color") == default_color:
             meta.pop("_node_color", None)
 
+        # FIX-12 (G2-29): años enteros escritos en la ficha.
+        birth_year = self._parse_year_text(
+            self.birth_year_edit.text(), getattr(self._entity, "birth_year", None)
+        )
+        death_year = self._parse_year_text(
+            self.death_year_edit.text(), getattr(self._entity, "death_year", None)
+        )
+
         payload = {
             "name": self.name_edit.text().strip(),
             "entity_type": entity_type_value,
@@ -1412,16 +1749,28 @@ class NodeDetailPanel(QWidget):
             "exportable_notes": getattr(self._entity, "exportable_notes", "") or "",
             # BETA2-FOCO: relevancia narrativa del usuario (calibra el riego).
             "narrative_importance": self.importance_combo.currentData() or "medio",
-            "visibility_state": _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
+            # BETA-AUDIT-02: editable de nuevo. Si el proyecto trae un estado fuera
+            # del subconjunto que ofrece la Ficha, el combo lo conserva (ver
+            # _sync_visibility_combo) en vez de degradarlo a «Visible» al guardar.
+            "visibility_state": self.visibility_combo.currentData()
+            or _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
-            # BETA1-UX2C: el lapso de vida se edita en la cronología; al guardar
-            # el panel se conservan TAL CUAL (pass-through) para no borrarlo.
-            "birth_year": getattr(self._entity, "birth_year", None),
-            "death_year": getattr(self._entity, "death_year", None),
+            # BETA-MULTIAGENT2-FIX-12 (G2-29): los años salen de las casillas
+            # «Nació»/«Murió» de la ficha (antes viajaban por pass-through desde
+            # la entidad y NO había ningún control que los pidiera).
+            "birth_year": birth_year,
+            "death_year": death_year,
             # BETA1-J07: naturaleza temporal editada en la ficha.
             "temporal_nature": self.nature_combo.currentData(),
+            # BETA-MULTIAGENT2-FIX-11 (fase B): certeza editable de verdad (el campo
+            # existía en el dominio y tenía CERO apariciones en `hosts/`).
+            "certainty_level": self.rigor.certeza(),
         }
+        # FIX-11: datación rica sobre el INICIO del lapso. Se parte del lapso actual
+        # (o del espejo entero) para NO perder el año, la era ni la naturaleza: aquí
+        # solo se escribe la capa descriptiva (precisión/fecha-mundo/periodo/nota).
+        payload["life_span"] = self._life_span_payload(birth_year, death_year)
         self.ctx.log(
             "info",
             "B44TRACE node_save_layers "

@@ -35,9 +35,15 @@ def qapp():
 class _FakeWateringService:
     def __init__(self):
         self.watered: list[str] = []
+        self.batches: list[list[str]] = []
 
-    def water_batch_step(self, entity_id: str):
+    def water_batch_step(self, entity_id: str, *, batch_ids=None):
+        # BETA-MULTIAGENT2-FIX-05 (punto 10): el doble estaba desincronizado de la
+        # firma real (BETA-MULTIAGENT-FIX-01 añadió `batch_ids=`). El `TypeError`
+        # lo tragaba el `except` del worker, el paso se reportaba «fallido» en
+        # silencio y este test afirmaba sobre una lista vacía sin enterarse.
         self.watered.append(entity_id)
+        self.batches.append(list(batch_ids or []))
         return SimpleNamespace(value=object())  # no-Error
 
 
@@ -53,6 +59,21 @@ class TestWorkerAnnouncesStart:
         worker.run()  # síncrono en el test (sin hilo)
         assert events == [("started", "a"), ("done", "a"), ("started", "b"), ("done", "b")]
         assert service.watered == ["a", "b"]
+        assert service.batches == [["a", "b"], ["a", "b"]]  # el lote viaja a cada paso
+
+    def test_firma_incompatible_se_reporta_como_error_de_programacion(self, qapp):
+        """FIX-05: el `except` genérico ya no disfraza un bug de firma de riego fallido."""
+        from hosts.DesktopHostPySide.widgets.foco.watering_batch import WateringBatchWorker
+
+        class _StaleDouble:
+            def water_batch_step(self, entity_id):  # sin batch_ids: firma vieja
+                raise AssertionError("no debería llegar a ejecutarse")
+
+        worker = WateringBatchWorker(_StaleDouble(), ["a"])
+        errores: list[str] = []
+        worker.entityDone.connect(lambda _eid, ok, err: errores.append(err) if not ok else None)
+        worker.run()
+        assert errores and "error de programación" in errores[0]
 
 
 # ── Mapa: anillo savia por nodo ─────────────────────────────────────────────

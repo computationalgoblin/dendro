@@ -224,6 +224,11 @@ def test_milestone_ghosts_for_unlinked_entities_within_lifespan(world):
     # BETA1-HITO-MULTI: el hito de `world` vincula a `a` y `c`. En sus cruces hay
     # puntos SÓLIDOS; en los carriles de entidades NO vinculadas y vivas en ese
     # año hay puntos FANTASMA (clic = vincular).
+    # BETA-MULTIAGENT2-FIX-15: este mundo (4 líneas × 1 hito) está MUY por debajo
+    # de CHRONO_GHOST_SEED_BUDGET, así que el rebuild los siembra igual que
+    # siempre. Por encima del presupuesto ya no se siembra ninguno y se
+    # materializan al hover — contrato nuevo en
+    # tests/desktop/test_beta_m2fix15_crono_escala_fantasmas.py.
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication

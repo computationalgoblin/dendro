@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from packages.application.causal_links import has_consequences
 from packages.domain.causal_milestone import CausalMilestone, CausalMilestoneStatus
 
 
@@ -58,7 +59,11 @@ def review_causal_milestone(
     has_entities = bool(milestone.affected_entity_ids)
     has_relations = bool(milestone.caused_relation_ids)
     has_parents = bool(milestone.causal_parent_hito_ids)
-    has_children = bool(milestone.causal_child_hito_ids)
+    # BETA-MULTIAGENT2-FIX-09: las consecuencias se DERIVAN de los padres (única
+    # definición del repo). Leer `causal_child_hito_ids` —que no llenaba nadie—
+    # hacía que «Causalidad débil» se disparase SIEMPRE, incluso en el hito que
+    # causaba los quince episodios siguientes.
+    has_children = has_consequences(project, milestone)
 
     # ── Orphan detection ──
     if not has_entities and not has_relations and not has_parents:

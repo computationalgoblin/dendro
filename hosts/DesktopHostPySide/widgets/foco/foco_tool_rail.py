@@ -17,7 +17,7 @@ visible para anclar sus popovers.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from hosts.DesktopHostPySide.widgets import icons
@@ -26,6 +26,7 @@ from hosts.DesktopHostPySide.widgets.design_system import (
     GOLD_SOFT,
     INK_SOFT,
     SURFACE_HI,
+    TYPE_CAPTION_PX,
 )
 
 # (tool_id, icono, tooltip). El orden de referencia (todas las herramientas).
@@ -80,12 +81,53 @@ _COLUMN: tuple[object, ...] = (
     "delete_focus",
 )
 
+# BETA-MULTIAGENT2-FIX-13 (G2-19), TANDA D — «Si no pone lo que hace, para mí no
+# existe» (Carmen, 58 años). Once círculos de 32×32 con la papelera dentro y sin
+# una sola letra: el ÚNICO rótulo era el tooltip, o sea, había que pasar el ratón
+# por encima y esperar para saber cuál borra.
+#
+# Decisión (pregunta abierta 1 del ticket): la tercera vía. Rótulo VISIBLE por
+# defecto + interruptor para plegar el rail a iconos cuando ya te lo sabes. Así
+# el Foco —«la joya», según dos informes— se puede recuperar entero con un clic,
+# pero nadie se topa de primeras con una columna de jeroglíficos.
+TOOL_LABELS: dict[str, str] = {
+    "create_entity": "Crear entidad",
+    "create_related": "Crear relacionada",
+    "create_relation": "Crear relación",
+    "ghost_relation": "Relación fantasma",
+    "add_to_branch": "Añadir a una rama",
+    "create_branch": "Crear rama",
+    "create_in_branch": "Crear en la rama",
+    "create_ring": "Crear anillo",
+    "ghost_node": "Nodo fantasma",
+    "ghost_convert": "Convertir fantasma",
+    "ghost_link": "Vincular fantasma",
+    "view_map": "Ver en el Mapa",
+    "view_chrono": "Ver en la Cronología",
+    "delete_focus": "Eliminar",
+}
+_GROUP_LABELS: dict[str, str] = {"ghost": "Fantasmas"}
+
 _BUTTON_STYLE = (
     "QPushButton { background: rgba(255,255,255,0.55); border: 1px solid %(line)s; "
     "border-radius: 16px; padding: 0; } "
     "QPushButton:hover:enabled { background: %(hover)s; border: 1px solid %(gold)s; } "
     "QPushButton:disabled { background: rgba(255,255,255,0.22); border: 1px solid #E3DCC8; }"
 )
+# Con rótulo el botón es una píldora, no un círculo: texto a la izquierda y aire.
+_LABELLED_STYLE = (
+    "QPushButton { background: rgba(255,255,255,0.55); border: 1px solid %(line)s; "
+    "border-radius: 16px; padding: 0 12px; text-align: left; color: %(ink)s; "
+    "font-size: %(fs)dpx; font-weight: 600; } "
+    "QPushButton:hover:enabled { background: %(hover)s; border: 1px solid %(gold)s; } "
+    "QPushButton:disabled { background: rgba(255,255,255,0.22); border: 1px solid #E3DCC8; "
+    "color: #A8A28A; }"
+)
+# La herramienta DESTRUCTIVA no se distingue de las otras diez solo por su icono:
+# lleva tinta y borde de aviso, y va separada por una línea.
+_DANGER_LINE = "#A65C54"
+_DANGER_INK = "#7E3B36"
+_DESTRUCTIVAS = ("delete_focus",)
 
 
 class FocoToolRail(QFrame):
@@ -108,34 +150,119 @@ class FocoToolRail(QFrame):
         self._group_of: dict[str, str] = {}
         self._group_buttons: dict[str, QPushButton] = {}
         self._group_flyouts: dict[str, QFrame] = {}
+        # FIX-13: los botones de la COLUMNA llevan rótulo; los del flyout no
+        # (van en fila y no cabrían), pero todos llevan nombre accesible.
+        self._column_buttons: list[QPushButton] = []
+        self._labels_visible = True
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 8, 5, 8)
         layout.setSpacing(4)
+        self._layout = layout
+
+        self._labels_toggle = self._build_labels_toggle()
+        layout.addWidget(self._labels_toggle)
 
         groups = {gid: (icon, tip, tools) for gid, icon, tip, tools in _TOOL_GROUPS}
         for entry in _COLUMN:
             if isinstance(entry, tuple) and entry[0] == "group":
                 gid = entry[1]
                 icon, tip, tools = groups[gid]
-                layout.addWidget(self._build_group(gid, icon, tip, tools))
+                boton = self._build_group(gid, icon, tip, tools)
             else:
-                layout.addWidget(self._make_tool_button(str(entry), parent=self))
+                tool_id = str(entry)
+                boton = self._make_tool_button(tool_id, parent=self)
+                if tool_id in _DESTRUCTIVAS:
+                    # Separador: la papelera no vive pegada a «crear».
+                    layout.addSpacing(6)
+            layout.addWidget(boton)
+            self._column_buttons.append(boton)
         layout.addStretch(1)
+        self.set_labels_visible(True)
         self.set_selection_context({})
 
     # ── construcción ─────────────────────────────────────────────────────────
+
+    def _build_labels_toggle(self) -> QPushButton:
+        """Interruptor «mostrar/ocultar los nombres de las herramientas»."""
+        button = QPushButton(self)
+        button.setCheckable(True)
+        button.setChecked(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setAccessibleName("Mostrar u ocultar los nombres de las herramientas")
+        button.setToolTip("Mostrar u ocultar los nombres de las herramientas")
+        button.toggled.connect(self.set_labels_visible)
+        return button
 
     def _make_tool_button(self, tool_id: str, parent: QWidget) -> QPushButton:
         button = QPushButton(parent)
         button.setFixedSize(32, 32)
         button.setToolTip(self._tooltips.get(tool_id, tool_id))
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setIcon(icons.icon(self._icons.get(tool_id, ""), color=INK_SOFT, size=17))
-        button.setStyleSheet(self._style)
+        color = _DANGER_INK if tool_id in _DESTRUCTIVAS else INK_SOFT
+        button.setIcon(icons.icon(self._icons.get(tool_id, ""), color=color, size=17))
+        button.setStyleSheet(self._estilo_de(tool_id, con_rotulo=False))
+        # FIX-13: nombre accesible SIEMPRE (lectores de pantalla y arneses), aunque
+        # el rail esté plegado a iconos. El tooltip pasa a ser la descripción larga.
+        button.setAccessibleName(TOOL_LABELS.get(tool_id, self._tooltips.get(tool_id, tool_id)))
+        button.setAccessibleDescription(self._tooltips.get(tool_id, ""))
         button.clicked.connect(lambda _=False, t=tool_id: self.toolTriggered.emit(t))
         self._buttons[tool_id] = button
         return button
+
+    def _estilo_de(self, tool_id: str, *, con_rotulo: bool) -> str:
+        destructiva = tool_id in _DESTRUCTIVAS
+        linea = _DANGER_LINE if destructiva else "#D8D6C8"
+        hover = "#F3DEDC" if destructiva else "#ECE4C7"
+        gold = _DANGER_LINE if destructiva else GOLD_DEEP
+        if not con_rotulo:
+            return _BUTTON_STYLE % {"line": linea, "hover": hover, "gold": gold}
+        return _LABELLED_STYLE % {
+            "line": linea,
+            "hover": hover,
+            "gold": gold,
+            "ink": _DANGER_INK if destructiva else INK_SOFT,
+            "fs": TYPE_CAPTION_PX,
+        }
+
+    # ── rótulos visibles (FIX-13) ────────────────────────────────────────────
+
+    def labels_visible(self) -> bool:
+        return self._labels_visible
+
+    def set_labels_visible(self, visible: bool) -> None:
+        """Muestra u oculta el rótulo de cada herramienta de la COLUMNA."""
+        visible = bool(visible)
+        self._labels_visible = visible
+        etiquetas = {**TOOL_LABELS, **_GROUP_LABELS}
+        for tool_id, button in self._buttons.items():
+            if button not in self._column_buttons:
+                continue  # los del flyout van en fila: siempre icono
+            self._aplicar_rotulo(button, tool_id, etiquetas.get(tool_id, ""), visible)
+        for gid, button in self._group_buttons.items():
+            self._aplicar_rotulo(button, gid, _GROUP_LABELS.get(gid, gid), visible)
+        if self._labels_toggle is not None:
+            self._labels_toggle.setText("‹ Solo iconos" if visible else "›")
+            self._labels_toggle.setFixedSize(168 if visible else 32, 24)
+            self._labels_toggle.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; text-align: left; "
+                f"color: {INK_SOFT}; font-size: {TYPE_CAPTION_PX}px; padding: 0 8px; }} "
+                f"QPushButton:hover {{ color: {GOLD_DEEP}; }}"
+            )
+        self.adjustSize()
+
+    def _aplicar_rotulo(
+        self, button: QPushButton, key: str, etiqueta: str, visible: bool
+    ) -> None:
+        if visible and etiqueta:
+            button.setText(f"  {etiqueta}")
+            button.setFixedSize(168, 32)
+            button.setIconSize(QSize(17, 17))
+            button.setStyleSheet(self._estilo_de(key, con_rotulo=True))
+        else:
+            button.setText("")
+            button.setFixedSize(32, 32)
+            button.setStyleSheet(self._estilo_de(key, con_rotulo=False))
 
     def _build_group(
         self, gid: str, icon: str, tooltip: str, tools: tuple[str, ...]
@@ -146,6 +273,8 @@ class FocoToolRail(QFrame):
         group_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         group_btn.setIcon(icons.icon(icon, color=GOLD_DEEP, size=17))
         group_btn.setStyleSheet(self._style)
+        group_btn.setAccessibleName(_GROUP_LABELS.get(gid, gid))
+        group_btn.setAccessibleDescription(tooltip)
         self._group_buttons[gid] = group_btn
 
         flyout = QFrame(self, Qt.WindowType.Popup)

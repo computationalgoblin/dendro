@@ -65,7 +65,7 @@ from packages.application.calendar_service import CalendarService
 from packages.domain.creative_config import ESTADO_OPCIONES
 from packages.domain.creative_presets import CREATIVE_PRESETS, apply_preset_to_project
 from packages.domain.project import Project
-from packages.domain.world_layer import default_world_layers
+from packages.domain.world_layer import starter_world_layers
 
 
 def _names_from_length_text(text: str) -> list[str]:
@@ -406,8 +406,12 @@ class ProjectWizard(QFrame):
         # VACÍO (sin anillos), sin explicar dónde va cada cosa. Marcado por
         # defecto siembra las 16 capas causales predefinidas como esqueleto del
         # Mapa; el usuario puede vaciarlo para empezar en blanco.
+        # BETA-AUDIT-09: sembraba las 16, y un usuario nuevo abría el Mapa con
+        # dieciséis anillos vacíos encabezados por «Metafísica y cosmología». La
+        # casilla existía para NO dejarle perdido y conseguía lo contrario. Ahora
+        # arranca con cinco concretos; el mapa causal completo sigue disponible.
         self.seed_rings_check = QCheckBox(
-            "Empezar con los anillos causales por defecto (recomendado)"
+            "Empezar con unos anillos básicos (recomendado)"
         )
         self.seed_rings_check.setChecked(True)
         self.seed_rings_check.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -417,8 +421,9 @@ class ProjectWizard(QFrame):
         )
         box.addWidget(self.seed_rings_check)
         rings_hint = QLabel(
-            "El Mapa se organiza en anillos por potencia causal (de la metafísica "
-            "a la situación actual). Puedes reorganizarlos luego."
+            "El Mapa ordena tu mundo en anillos: al centro lo que causa, hacia fuera "
+            "lo que lo sufre. Empezarás con cinco (geografía, gentes, historia, "
+            "situación y conflictos) y podrás añadir o cambiar los que quieras."
         )
         rings_hint.setWordWrap(True)
         rings_hint.setStyleSheet(
@@ -595,7 +600,7 @@ class ProjectWizard(QFrame):
         # WS-D: siembra el esqueleto de anillos por defecto si el usuario lo pidió
         # y el Mapa sigue vacío (no pisa anillos que un preset u otro paso ya creara).
         if cfg.get("seed_default_rings") and not getattr(project, "world_layers", None):
-            project.world_layers = default_world_layers()
+            project.world_layers = starter_world_layers()
 
     @staticmethod
     def _truthy(value) -> bool:

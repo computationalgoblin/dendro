@@ -7,13 +7,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from packages.application import causal_links
 from packages.application.causal_potency import set_ascending_exception
 from packages.application.foco_rings import contained_descendant_ids
+from packages.application.milestone_promotion import promote_milestone
 from packages.application.project_chronology_service import ProjectChronologyService
 from packages.application.world_layer_causal import set_causal_rank
 from packages.domain.candidate_issue import Candidate, CandidateState, CandidateType
 from packages.domain.causal_milestone import CausalMilestone
+from packages.domain.relation import RelationType, coerce_relation_type
 from packages.domain.result import Error, Ok, Result
+from packages.domain.source_history import HistoryEventType, SourceType
 from packages.domain.world_layer import WorldLayer
 
 # BETA2-PLAY-15: campos que la IA puede proponer editar (decisión de producto:
@@ -49,6 +53,65 @@ AI_ENTITY_FIELD_ALIASES: dict[str, str] = {
 }
 AI_MILESTONE_FIELD_ALIASES: dict[str, str] = {"body": "rationale", "summary": "description"}
 
+# BETA-MULTIAGENT2-FIX-13 (G2-20): ETIQUETA visible de cada campo editable.
+#
+# El dato no cambia — `edit_field`, `edit_fields` y las listas blancas de arriba
+# siguen hablando en claves internas, y el prompt le sigue pidiendo a la IA que
+# use esas claves, que es lo correcto. Lo que estaba mal era IMPRIMIR ese
+# vocabulario en la cara del usuario: «Campo: extended_description» en la ventana
+# de decidir y «Editar Marta Iriarte: birth_year» como título de una semilla.
+#
+# Vive aquí, junto al catálogo canónico de campos, para que lo consuman las dos
+# capas (`ai_jobs` al fabricar el título y el panel de revisión del host al
+# pintarlo) sin crear un segundo mapa paralelo en `hosts/`.
+FIELD_LABELS: dict[str, str] = {
+    # Entidad
+    "name": "nombre",
+    "aliases": "otros nombres",
+    "entity_type": "tipo",
+    "brief_description": "descripción breve",
+    "extended_description": "descripción larga",
+    "certainty_level": "nivel de certeza",
+    "tags": "etiquetas",
+    "exportable_notes": "notas exportables",
+    "narrative_importance": "relevancia",
+    "development_level": "nivel de desarrollo",
+    "birth_year": "año de nacimiento",
+    "death_year": "año de muerte",
+    "life_span": "lapso de vida",
+    "temporal_nature": "naturaleza temporal",
+    # Hito
+    "title": "título",
+    "description": "descripción",
+    "rationale": "justificación",
+    "year": "año",
+    "milestone_type": "tipo de hito",
+    # Relación / anillo
+    "relation_type": "tipo de relación",
+    "body": "contenido",
+    "summary": "resumen",
+    "order": "orden",
+}
+
+
+def field_label(field: str) -> str:
+    """Nombre legible de un campo (nunca la clave interna en crudo).
+
+    Ante una clave desconocida devuelve la clave con guiones bajos convertidos en
+    espacios: sigue siendo mejor que `extended_description`, y no oculta el hecho
+    de que falta una etiqueta.
+    """
+    clave = str(field or "").strip()
+    if not clave:
+        return "campo"
+    return FIELD_LABELS.get(clave, clave.replace("_", " "))
+
+
+def field_labels(fields) -> str:
+    """Lista legible de campos, separada por comas («año de nacimiento, tipo»)."""
+    etiquetas = [field_label(f) for f in fields if str(f or "").strip()]
+    return ", ".join(etiquetas)
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -60,6 +123,11 @@ class CandidateService:
     entity_service: Any = None
     relation_service: Any = None
     history_service: Any = None
+    # BETA-MULTIAGENT2-FIX-08 (G2-14): servicio de fuentes para dejar constancia de
+    # DE QUÉ SEMILLA vino cada pieza de canon. Opcional: sin él (y sin proyecto
+    # activo) la aceptación sigue funcionando — la trazabilidad nunca convierte un
+    # accept correcto en Error.
+    source_service: Any = None
 
     def _proj(self):
         p = self.project_service.active_project
@@ -169,19 +237,103 @@ class CandidateService:
 
     # ── Decisions ─────────────────────────────────────────────────────
 
-    def _add_history(self, proj, event_type: str, entity_id: str = "",
+    def _add_history(self, proj, event_type: HistoryEventType | None, entity_id: str = "",
                      note: str = "", candidate_id: str = "") -> None:
-        if not self.history_service:
+        """Registra la decisión sobre una semilla en el historial del proyecto.
+
+        BETA-MULTIAGENT2-FIX-08 (G2-14/B3): antes esto no escribía NADA por tres
+        razones a la vez — el servicio no se inyectaba, ``add_entry`` no existía y
+        el tipo de evento era un literal fuera del enum que ``HistoryService``
+        degradaba en silencio a ``creacion_entidad``. Ahora se llama a la API real
+        (``record``) con un ``HistoryEventType`` de verdad. Las decisiones que NO
+        tienen evento propio en el dominio (rechazo, aplazamiento, archivado,
+        conversión) reciben ``None`` y NO escriben historial: una traza falsa es
+        peor que ninguna. Añadir esos eventos es un cambio de dominio, no de aquí.
+        """
+        if not self.history_service or event_type is None:
             return
         try:
-            self.history_service.add_entry({
-                "event_type": event_type,
-                "entity_id": entity_id,
-                "description": note or f"Candidate {candidate_id[:8]} decision",
-                "metadata": {"candidate_id": candidate_id},
+            self.history_service.record(
+                event_type,
+                note or f"Decisión sobre la semilla {candidate_id[:8]}",
+                affected_entity_ids=[entity_id] if entity_id else [],
+                metadata={"candidate_id": candidate_id},
+            )
+        except Exception:  # noqa: BLE001 — el historial es derivado: nunca rompe la decisión
+            pass
+
+    # ── Trazabilidad de la aceptación (BETA-MULTIAGENT2-FIX-08, G2-14) ────
+
+    @staticmethod
+    def _provenance_source_type(c: Candidate) -> SourceType:
+        """Tipo de fuente que corresponde al ORIGEN REAL de la semilla."""
+        source = str(getattr(c, "source", "") or "").lower()
+        if source.startswith("ai") or source in ("ia", "generacion_ia"):
+            return SourceType.SUGERENCIA_IA_ACEPTADA
+        return SourceType.DECISION_USUARIO
+
+    def _sources(self):
+        """SourceService inyectado o, si no lo hay, uno construido al vuelo.
+
+        La trazabilidad no puede depender de que un host se acuerde de inyectar el
+        servicio: sin esto, el canon aceptado seguía naciendo sin fuente.
+        """
+        if self.source_service is None:
+            from packages.application.source_service import SourceService
+
+            self.source_service = SourceService(project_service=self.project_service)
+        return self.source_service
+
+    def _record_provenance(
+        self,
+        c: Candidate,
+        *,
+        entity_id: str = "",
+        relation_id: str = "",
+        milestone: Any = None,
+    ) -> str:
+        """Crea UNA `Source` por aceptación y la enlaza con lo creado.
+
+        Devuelve "" si todo fue bien, o el motivo del fallo (que se guarda en la
+        metadata del candidato). Nunca lanza: un fallo de trazabilidad no puede
+        convertir un accept correcto en `Error`.
+        """
+        if not (entity_id or relation_id or milestone is not None):
+            return ""
+        try:
+            svc = self._sources()
+            meta = dict(getattr(c, "metadata", None) or {})
+            res = svc.create_source({
+                "name": f"Semilla aceptada: {c.title}"[:180] or "Semilla aceptada",
+                "source_type": self._provenance_source_type(c).value,
+                "description": str(getattr(c, "expected_impact", "") or ""),
+                # Referencia auditable: el job de IA que la produjo (o la semilla).
+                "reference": str(meta.get("ai_job_id") or getattr(c, "source_id", "") or c.id),
+                "fragment": str(getattr(c, "justification", "") or ""),
+                "metadata": {
+                    "candidate_id": c.id,
+                    "candidate_source": str(getattr(c, "source", "") or ""),
+                    "ai_job_type": str(meta.get("ai_job_type") or ""),
+                    "base": str(meta.get("base") or ""),
+                },
             })
-        except Exception:
-            pass  # history is non-critical
+            if isinstance(res, Error):
+                return res.error
+            source = res.value
+            if entity_id:
+                linked = svc.link_to_entity(source.id, entity_id)
+                if isinstance(linked, Error):
+                    return linked.error
+            if relation_id:
+                linked = svc.link_to_relation(source.id, relation_id)
+                if isinstance(linked, Error):
+                    return linked.error
+            if milestone is not None and source.id not in milestone.source_ids:
+                # `Source` no tiene derived_milestone_ids: el hito guarda la fuente.
+                milestone.source_ids.append(source.id)
+            return ""
+        except Exception as exc:  # noqa: BLE001 — derivado: jamás rompe la aceptación
+            return f"{type(exc).__name__}: {exc}"
 
     def _collect_temporal_warnings(
         self, project, entity_id: str, relation_id: str, milestone_id: str
@@ -249,11 +401,37 @@ class CandidateService:
         entity_id = ""
         created_relation_id = ""  # SEM03: id de la arista creada (bloom de relación)
         created_milestone_id = ""  # SEM03: id del hito creado (bloom en cronología)
+        created_milestone: Any = None  # FIX-08: hito creado, para enlazarle su fuente
         edited_stamp: dict[str, str] = {}  # UX4 (C5): elemento editado al aceptar
+        # FIX-08 (G2-14): procedencia que se escribe en los huecos que YA persisten
+        # (`entity.origin`, `relation.source`, `milestone.candidate_id`). Sin migración.
+        provenance = self._provenance_source_type(c).value
         if c.candidate_type == CandidateType.ENTIDAD:
             if not self.entity_service:
                 return Error("EntityService not available")
-            result = self.entity_service.create_entity(c.proposed_data)
+            # BETA-MULTIAGENT-FIX-04 (G-04): si la propuesta no trae anillo, se
+            # hereda del context_scope del candidato (mismo orden de precedencia
+            # que ai_jobs._first_active_layer) — las entidades IA dejaban de nacer
+            # «Sin anillo» cuando el scope sí lo conocía.
+            proposed_entity = dict(c.proposed_data)
+            if not (proposed_entity.get("layer_ids") or []):
+                scope_meta = (getattr(c, "metadata", None) or {}).get("context_scope") or {}
+                inherited_ring = (
+                    scope_meta.get("active_ring_id")
+                    or scope_meta.get("focused_ring_id")
+                    or (scope_meta.get("active_layer_ids") or [""])[0]
+                )
+                if inherited_ring:
+                    proposed_entity["layer_ids"] = [str(inherited_ring)]
+            # FIX-08 (G2-14/B2): la entidad de canon recuerda de dónde vino. `origin`
+            # existe y persiste desde siempre; nadie lo rellenaba. El id exacto de la
+            # semilla viaja en `custom_metadata` (dict libre ya serializado).
+            if not str(proposed_entity.get("origin") or "").strip():
+                proposed_entity["origin"] = provenance
+            entity_meta = dict(proposed_entity.get("custom_metadata") or {})
+            entity_meta.setdefault("candidate_id", c.id)
+            proposed_entity["custom_metadata"] = entity_meta
+            result = self.entity_service.create_entity(proposed_entity)
             if isinstance(result, Error):
                 return result
             entity_id = result.value.id
@@ -276,7 +454,8 @@ class CandidateService:
                             child.get("brief_description") or child.get("description") or ""
                         ).strip(),
                         "layer_ids": list(c.proposed_data.get("layer_ids") or []),
-                        "custom_metadata": {"origin_prompt": origin},
+                        "origin": provenance,
+                        "custom_metadata": {"origin_prompt": origin, "candidate_id": c.id},
                     })
                     if isinstance(child_res, Error):
                         continue
@@ -352,13 +531,46 @@ class CandidateService:
             found_s = any(e.id == sid for e in proj.value.entities)
             found_t = any(e.id == tid for e in proj.value.entities)
             if not found_s or not found_t:
+                # BETA-MULTIAGENT-FIX-04 (G-04): mensaje honesto y en español — y
+                # el caso concreto del beta: la IA proponía relación con un HITO.
+                milestone_ids = {m.id for m in proj.value.causal_milestones}
+                if tid in milestone_ids or sid in milestone_ids:
+                    return Error(
+                        "La relación propone unir con un HITO, pero las relaciones "
+                        "unen entidades. Vincula la entidad al hito desde la ficha "
+                        "del hito (entidades afectadas) y rechaza esta semilla."
+                    )
                 return Error(
-                    "Relation endpoints not found in project"
+                    "Los extremos de la relación no existen como entidades del proyecto."
                 )
+            # FIX-04: un tipo fuera del dominio se RECHAZA con error visible; antes
+            # se aplanaba en silencio a esta_relacionado_con (lo aprobado ≠ lo
+            # guardado). Vacío = default explícito, no desconocido.
+            raw_type = str(c.proposed_data.get("relation_type", "") or "").strip()
+            if raw_type:
+                resolved_type = coerce_relation_type(raw_type)
+                if resolved_type is None:
+                    return Error(
+                        f"Tipo de relación desconocido: «{raw_type}». La semilla "
+                        "propone un tipo fuera del dominio; recházala o pide otra "
+                        "(ejemplos válidos: esta_relacionado_con, causo, depende_de, "
+                        "contiene, pertenece_a, es_aliado_de, sirve_a)."
+                    )
+            else:
+                resolved_type = RelationType.ESTA_RELACIONADO_CON
+            # FIX-08 (G2-14/B2): `NarrativeRelation.source` («Traceability (13)») es
+            # copiable desde este mismo dict —está en `scalar_fields`— y nadie lo
+            # ponía: la relación aceptada nacía sin procedencia.
+            relation_data = {**c.proposed_data, "relation_type": resolved_type.value}
+            if not str(relation_data.get("source") or "").strip():
+                relation_data["source"] = provenance
+            relation_meta = dict(relation_data.get("custom_metadata") or {})
+            relation_meta.setdefault("candidate_id", c.id)
+            relation_data["custom_metadata"] = relation_meta
             result = self.relation_service.create_relation(
                 source_id=sid, target_id=tid,
-                relation_type=c.proposed_data.get("relation_type", ""),
-                data=c.proposed_data,
+                relation_type=resolved_type,
+                data=relation_data,
             )
             if isinstance(result, Error):
                 return result
@@ -367,9 +579,30 @@ class CandidateService:
             milestone_data = c.proposed_data.get("milestone")
             if not isinstance(milestone_data, dict):
                 return Error("Causal milestone candidate has no milestone payload")
+            # FIX-08 (G2-14/B1): el hito recuerda su semilla. `candidate_id`,
+            # `source_ids` y `confidence` existen y persisten desde B41; el payload
+            # de `ai_jobs` nunca los traía y el hito aceptado nacía con los tres
+            # vacíos. La confianza SOLO se copia si el modelo la declaró (si no, un
+            # literal del código se leería como una medida).
+            milestone_data = dict(milestone_data)
+            milestone_data["candidate_id"] = c.id
+            cand_meta = dict(getattr(c, "metadata", None) or {})
+            if cand_meta.get("confianza_declarada") and milestone_data.get("confidence") is None:
+                milestone_data["confidence"] = c.confidence
             hito = CausalMilestone.from_dict(milestone_data)
+            # BETA-MULTIAGENT2-FIX-03 (G2-03): PROMOCIÓN. Esta rama appendeaba el
+            # hito con los defaults del dominio — `status=candidate`,
+            # `created_at=""`, sin normalizar la datación — mientras el toast decía
+            # «Semilla integrada al canon». `approve_hito` lo hacía bien a 200
+            # líneas de aquí; ahora las dos llaman al MISMO helper.
+            promote_milestone(hito, candidate_id=c.id)
             proj.value.causal_milestones.append(hito)
+            # BETA-MULTIAGENT2-FIX-09 (G2-15): una Semilla de hito puede traer sus
+            # causas; el espejo del padre se reconstruye en el punto único de
+            # reconciliación para que A sepa que tiene a B como consecuencia.
+            causal_links.sync_children_mirror(proj.value)
             created_milestone_id = hito.id
+            created_milestone = hito
             chronology = getattr(proj.value, "project_chronology", None)
             if chronology is not None and hasattr(chronology, "link_milestone"):
                 chronology.link_milestone(hito.id)
@@ -554,7 +787,19 @@ class CandidateService:
         # que la UI pueda «germinar» (foco + glow) lo recién nacido: nodo (entidad),
         # arista (relación), banda (anillo) o marca de cronología (hito). metadata ya
         # se serializa, sin migración de esquema.
+        # FIX-08 (G2-14): UNA `Source` de tipo `sugerencia_ia_aceptada` por aceptación,
+        # enlazada a lo creado (entidad/relación por `derived_*_ids`, hito por
+        # `source_ids`). Efecto derivado y aislado: si falla, se anota y el accept sigue.
+        provenance_error = self._record_provenance(
+            c,
+            entity_id=entity_id if c.candidate_type == CandidateType.ENTIDAD else "",
+            relation_id=created_relation_id,
+            milestone=created_milestone,
+        )
+
         stamps: dict[str, str] = {}
+        if provenance_error:
+            stamps["provenance_error"] = provenance_error
         if c.candidate_type == CandidateType.ENTIDAD and entity_id:
             stamps["created_entity_id"] = entity_id
         if created_relation_id:
@@ -584,8 +829,8 @@ class CandidateService:
         c.state = CandidateState.ACEPTADO
         c.final_action = "aceptado"
         c.reviewed_at = _now()
-        self._add_history(proj.value, "candidato_aceptado", entity_id,
-                          f"Candidate '{c.title}' accepted", c.id)
+        self._add_history(proj.value, HistoryEventType.ACEPTACION_SUGERENCIA, entity_id,
+                          f"Semilla aceptada: '{c.title}'", c.id)
         # BETA2-MEM-04: al florecer canon (semilla→canon), propaga impacto (Falta
         # regar) para lo creado/editado. Efecto derivado: nunca rompe el accept.
         if impact_service is not None:
@@ -881,8 +1126,8 @@ class CandidateService:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
-        self._add_history(proj.value, "candidato_parcialmente_aceptado",
-                          note=note, candidate_id=c.id)
+        # FIX-08: sin evento propio en `HistoryEventType` (ver `_add_history`).
+        self._add_history(proj.value, None, note=note, candidate_id=c.id)
         return Ok(c)
 
     def reject_candidate(self, cid: str, note: str = "") -> Result[Candidate, str]:
@@ -896,8 +1141,7 @@ class CandidateService:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
-        self._add_history(proj.value, "candidato_rechazado",
-                          note=note, candidate_id=c.id)
+        self._add_history(proj.value, None, note=note, candidate_id=c.id)
         return Ok(c)
 
     def postpone_candidate(self, cid: str) -> Result[Candidate, str]:
@@ -909,7 +1153,7 @@ class CandidateService:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
-        self._add_history(proj.value, "candidato_pospuesto", candidate_id=c.id)
+        self._add_history(proj.value, None, candidate_id=c.id)
         return Ok(c)
 
     def merge_candidate(self, cid: str, entity_id: str) -> Result[Candidate, str]:
@@ -934,8 +1178,8 @@ class CandidateService:
         c.state = CandidateState.FUSIONADO
         c.final_action = "fusionado"
         c.reviewed_at = _now()
-        self._add_history(proj.value, "candidato_fusionado", entity_id,
-                          f"Candidate '{c.title}' merged into entity", c.id)
+        self._add_history(proj.value, HistoryEventType.FUSION_ENTIDADES, entity_id,
+                          f"Semilla '{c.title}' fusionada en una entidad existente", c.id)
         return Ok(c)
 
     def convert_candidate(self, cid: str, new_type: str) -> Result[Candidate, str]:
@@ -950,8 +1194,7 @@ class CandidateService:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
-        self._add_history(proj.value, "candidato_convertido",
-                          f"Converted to {new_type}", candidate_id=c.id)
+        self._add_history(proj.value, None, note=f"Convertido a {new_type}", candidate_id=c.id)
         return Ok(c)
 
     def archive_candidate(self, cid: str) -> Result[Candidate, str]:
@@ -963,7 +1206,7 @@ class CandidateService:
         proj = self._proj()
         if isinstance(proj, Error):
             return proj
-        self._add_history(proj.value, "candidato_archivado", candidate_id=c.id)
+        self._add_history(proj.value, None, candidate_id=c.id)
         return Ok(c)
 
     @staticmethod

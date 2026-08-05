@@ -332,19 +332,19 @@ def validate_entity(entity: NarrativeEntity) -> list[str]:
     issues: list[str] = []
 
     if not entity.name.strip():
-        issues.append("Entity name is empty")
+        issues.append("el nombre está vacío")
 
     if not entity.id:
-        issues.append("Entity id is empty")
+        issues.append("falta el id")
 
     if entity.entity_type is None:
-        issues.append("Entity type is missing")
+        issues.append("falta el tipo de entidad")
 
     if entity.created_at is None:
-        issues.append("Entity created_at is missing")
+        issues.append("falta la fecha de creación (created_at)")
 
     if entity.updated_at is None:
-        issues.append("Entity updated_at is missing")
+        issues.append("falta la fecha de actualización (updated_at)")
 
     # BETA1-G02: coherencia temporal (validación suave — no bloquea creación)
     if (
@@ -352,7 +352,7 @@ def validate_entity(entity: NarrativeEntity) -> list[str]:
         and entity.death_year is not None
         and entity.death_year < entity.birth_year
     ):
-        issues.append("Entity death_year is earlier than birth_year")
+        issues.append("el año de fin es anterior al de inicio")
 
     return issues
 
@@ -420,6 +420,9 @@ _ENTITY_TYPE_SYNONYMS: dict[str, str] = {
     "ubicacion": "localizacion",
     "ubicación": "localizacion",
     "sitio": "localizacion",
+    "region": "localizacion",
+    "región": "localizacion",
+    "reino": "localizacion",
     "persona": "personaje",
     "personaje_jugador": "personaje",
     "organizacion": "institucion",
