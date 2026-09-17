@@ -431,9 +431,9 @@ La epica BETA2-MEM debe implementarse en este orden:
 
 No se debe saltar al servicio IA o UI antes de tener dominio/persistencia y referencias estructuradas suficientes.
 
-## 23. Reglas para agentes
+## 23. Reglas de implementación
 
-Cualquier agente que trabaje en BETA2-MEM debe respetar estas reglas:
+Cualquier cambio en BETA2-MEM debe respetar estas reglas:
 
 1. No crear modelos paralelos si el core ya representa el concepto.
 2. No hacer que UI escriba directamente en persistencia.

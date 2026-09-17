@@ -25,14 +25,14 @@ DEFECTO (asignación automática), nunca por bloqueo del flujo de creación.
 
 - `CausalMilestone` NO tiene campos temporales (solo created/updated técnicos).
 - Ninguna entidad de dominio tiene birth/death/era. No existe modelo `Era`.
-- Existe `MilestoneChronologyView` (Hermes H03) — panel en drawer, ordenación
+- Existe `MilestoneChronologyView` (H03) — panel en drawer, ordenación
   no temporal-espacial. Se conserva como base/acceso, la vista G04 lo
   trasciende.
 - Schema de persistencia actual: **v24** (corrección G02: el contrato decía
   v7 por error) → la fase introduce **v25**.
-- Existe `ProjectChronology` (Hermes H02) como contenedor de calendario:
+- Existe `ProjectChronology` (H02) como contenedor de calendario:
   decisión G02 — las **eras** y el **present_year** viven DENTRO de
-  `ProjectChronology` (se extiende la pieza de Hermes, no se duplica).
+  `ProjectChronology` (se extiende la pieza existente, no se duplica).
 
 ## 3. Modelo temporal
 
@@ -137,7 +137,7 @@ Al abrir un proyecto v24:
 
 ## 9. Riesgos
 
-1. **Colisión con Hermes**: dominio y cronología (H03) son suyos también —
+1. **Colisión con trabajo en paralelo**: dominio y cronología (H03) se tocan a la vez —
    auditar `git status` antes de G02 y commit quirúrgico.
 2. Escala temporal extrema (eras de 10.000 años + vidas de 80): compresión
    logarítmica por era si hace falta — decidir en G04 con datos reales.

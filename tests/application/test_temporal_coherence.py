@@ -278,7 +278,7 @@ class TestNoFalsePositives:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Reglas de CONTINUIDAD — BETA-MULTIAGENT2-FIX-10 (G2-15)
+# Reglas de CONTINUIDAD — BETA2-FIX-10 (G2-15)
 #
 # Las tres roturas de sala de guion que el modelo ya podía computar y que nadie
 # miraba, más el aviso que explica el ruido de calendario.

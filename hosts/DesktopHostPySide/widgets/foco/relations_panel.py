@@ -48,7 +48,7 @@ def relation_entries_for(project, entity_id: str) -> list[tuple[str, str]]:
             continue
         outgoing = src == entity_id
         other = by_id.get(tgt if outgoing else src)
-        # BETA-MULTIAGENT2-FIX-12 (G2-16), pregunta abierta nº4: la escotilla de
+        # BETA2-FIX-12 (G2-16), pregunta abierta nº4: la escotilla de
         # texto libre (`custom_metadata["custom_relation_label"]`, que escribe el
         # combo editable del panel de relación) tenía CINCO apariciones en el
         # repo y las cinco en el fichero que la escribía: ni el Foco, ni el Mapa,

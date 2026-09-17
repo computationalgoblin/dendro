@@ -101,7 +101,7 @@ def test_causal_chain_and_gap_detection_helpers():
         "causal_parent_hito_ids": ["h_parent"],
         "caused_relation_ids": ["rel_explained"],
     }).value
-    # BETA-MULTIAGENT2-FIX-09: aquí el test se parcheaba a sí mismo el enlace
+    # BETA2-FIX-09: aquí el test se parcheaba a sí mismo el enlace
     # inverso que el servicio debía mantener (`parent.causal_child_hito_ids.append`),
     # y por eso la aserción de cadena pasaba con el bug puesto. Ahora los hijos se
     # derivan de los padres: declarar el padre BASTA.

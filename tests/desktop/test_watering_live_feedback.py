@@ -38,8 +38,8 @@ class _FakeWateringService:
         self.batches: list[list[str]] = []
 
     def water_batch_step(self, entity_id: str, *, batch_ids=None):
-        # BETA-MULTIAGENT2-FIX-05 (punto 10): el doble estaba desincronizado de la
-        # firma real (BETA-MULTIAGENT-FIX-01 añadió `batch_ids=`). El `TypeError`
+        # BETA2-FIX-05 (punto 10): el doble estaba desincronizado de la
+        # firma real (BETA-FIX-01 añadió `batch_ids=`). El `TypeError`
         # lo tragaba el `except` del worker, el paso se reportaba «fallido» en
         # silencio y este test afirmaba sobre una lista vacía sin enterarse.
         self.watered.append(entity_id)

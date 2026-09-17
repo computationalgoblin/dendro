@@ -4,7 +4,7 @@
 > Este documento describía la Importación como "capacidad central de BETA1"; esa decisión se
 > revirtió: el subsistema (canon + reservorio/contexto + germinación + extracción de texto +
 > `import_baskets`) se eliminó por inviable. La app ya no acepta documentos. Ignora las líneas
-> que marcan Importación como KEEP/central. Ver `.kanban/tickets/BETA1-CLEANUP-IMPORT.md`.
+> que marcan Importación como KEEP/central.
 
 Fecha: 2026-06-15
 Estado: contrato de limpieza aprobado por entrevista de producto

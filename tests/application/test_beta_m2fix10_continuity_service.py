@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-10 (G2-15): la Continuidad corre sobre el canon del AUTOR.
+"""BETA2-FIX-10 (G2-15): la Continuidad corre sobre el canon del AUTOR.
 
 Aitor, showrunner, rompió su propia serie cuatro veces a propósito —como canon
 MANUAL, que es como escribe un jefe de continuidad— y no saltó ni un aviso: el
@@ -144,7 +144,7 @@ def test_beta_m2fix10_las_cuatro_roturas_de_aitor_saltan():
 
 
 def test_beta_m2fix10_count_cuadra_con_lo_que_lista():
-    """Lección de BETA-MULTIAGENT-FIX-05 (ronda 1): la píldora y las tarjetas
+    """Lección de BETA-FIX-05 (ronda 1): la píldora y las tarjetas
     se descuadraron por contar cosas distintas."""
     svc = _servicio()
     assert svc.count() == len(svc.analyze().value) == 4

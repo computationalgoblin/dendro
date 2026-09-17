@@ -123,7 +123,7 @@ def build_demo_project(path: str | Path) -> DemoManifest:
     relate(valdor, mira, "contiene")
     relate(valdor, bosque, "contiene")
     relate(elen, diario, "contiene")
-    # BETA-MULTIAGENT2-FIX-03/12 (cierre de oleada): estos dos usaban
+    # BETA2-FIX-03/12 (cierre de oleada): estos dos usaban
     # `antepasado_de` y `conoce_a`, que NO son valores de `RelationType`. Antes
     # `create_relation` los aplanaba en silencio al default y devolvia Ok; desde
     # FIX-03 devuelve Error, asi que el demo se quedaba en 5 relaciones de 7.

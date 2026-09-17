@@ -1,6 +1,6 @@
-"""BETA-MULTIAGENT2-FIX-07 (G2-11): la wiki no puede nacer con los enlaces rotos.
+"""BETA2-FIX-07 (G2-11): la wiki no puede nacer con los enlaces rotos.
 
-En el beta multi-agente ronda 2, regar dos entidades produjo **27 enlaces rotos de
+En el beta ronda 2, regar dos entidades produjo **27 enlaces rotos de
 27**: la IA escribia el NOMBRE dentro de `ref_id` (porque el contexto solo le daba
 UN id, el suyo) y nada lo resolvia contra el canon antes de persistirlo.
 

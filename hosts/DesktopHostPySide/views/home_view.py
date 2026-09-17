@@ -510,7 +510,7 @@ class HomeNode(QFrame):
     def set_dimmed(self, dimmed: bool):
         """Señala «aquí todavía no hay nada» SIN apagar el texto.
 
-        BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA B. Esto ponía un
+        BETA2-FIX-13 (G2-17), TANDA B. Esto ponía un
         `QGraphicsOpacityEffect` a 0,45 sobre el widget ENTERO, así que tarjeta y
         texto se componían a la vez contra el fondo del Home y el contraste caía
         de 5,73:1 a ~1,2-2,0:1. Una maestra jubilada lo midió sobre sus propios
@@ -757,7 +757,7 @@ class HomeView(QWidget):
         self._btn_memory.clicked.connect(lambda: self._action("memory_menu"))
         bottom_row.addWidget(self._btn_memory)
 
-        # BETA-MULTIAGENT2-FIX-11 (fase A): «Salud del proyecto» — el lint de la
+        # BETA2-FIX-11 (fase A): «Salud del proyecto» — el lint de la
         # wiki existía y funcionaba sin ninguna puerta. Se revisa bajo demanda
         # (nada de contador permanente en la esquina, G2-07).
         self._btn_health = QuietIconButton("✓", "Salud del proyecto")

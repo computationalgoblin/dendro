@@ -35,7 +35,7 @@ def explain_status_quo(project: Any) -> dict[str, Any]:
     relations = list(getattr(project, "relations", []) or [])
     entities = list(getattr(project, "entities", []) or [])
 
-    # Hitos «plantados sin recoger». BETA-MULTIAGENT2-FIX-09: aquí vivía la
+    # Hitos «plantados sin recoger». BETA2-FIX-09: aquí vivía la
     # consulta PARALELA (con su propia definición) de la que hay en
     # `causal_milestone_service`. Ahora las dos consumen la MISMA función.
     hitos_without = loose_threads(project)

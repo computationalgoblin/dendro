@@ -1,4 +1,4 @@
-"""Normalización y puntuación de texto para BÚSQUEDA (BETA-MULTIAGENT2-FIX-04).
+"""Normalización y puntuación de texto para BÚSQUEDA (BETA2-FIX-04).
 
 Helper único y compartido para que las superficies de búsqueda de la app comparen
 texto de la misma manera. Nace del hallazgo **G2-04** de la 2ª ronda de beta

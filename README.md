@@ -1,4 +1,11 @@
-# Dendro (narrative-architect)
+# Dendro
+
+> **EN** — Desktop app for narrative design and worldbuilding. Dendro is a structured story knowledge base: entities, relations, concentric rings of influence, timelines with custom calendars and eras, and an editorial wiki. AI can suggest and grow candidate ideas ("seeds"), but it **never changes canon** without the writer's explicit approval.
+> Python 3.12 · PySide6 · clean layered architecture checked by tests · versioned project store with schema migrations · Windows build with PyInstaller. Status: **beta** (0.9.0b1). Source available under a beta evaluation license (all rights reserved), see [LICENSE](LICENSE).
+
+| Inicio | Mapa concéntrico |
+|---|---|
+| ![Pantalla de inicio de Dendro](docs/screenshots/01-inicio.png) | ![Mapa concéntrico de un mundo](docs/screenshots/02-mapa-concentrico.png) |
 
 **Dendro** es una aplicación de escritorio para creación narrativa, worldbuilding
 y escritura asistida por IA.
@@ -19,8 +26,6 @@ canon** sin aceptación explícita del usuario.
 .venv/Scripts/python -m pytest                       # pruebas (ver scripts/run_all_tests.py)
 .venv/Scripts/python -m ruff check packages/ tests/  # lint
 
-# CLI
-python -m narrative_architect <comando> [--project RUTA]
 
 # Escritorio (PySide6, extra `desktop`)
 python -m hosts.DesktopHostPySide.main
@@ -65,4 +70,4 @@ Las reglas de dependencia se verifican estáticamente en `tests/architecture/`.
 6. **No modelos paralelos** — si el core lo representa, reutilizar.
 7. **La UI no escribe en persistencia** — siempre a través de servicios.
 8. **La aplicación funciona sin IA** — la IA es asistencia opcional.
-9. **Contratos prevalecen** — sobre sugerencias creativas de agentes.
+9. **Contratos prevalecen** — sobre sugerencias creativas de la IA.

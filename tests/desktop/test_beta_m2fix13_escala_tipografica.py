@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA C — que «Tamaño de fuente» agrande de verdad (G2-18).
+"""BETA2-FIX-13 · TANDA C — que «Tamaño de fuente» agrande de verdad (G2-18).
 
     «Lo primero que hago yo en cualquier programa es buscar cómo agrandar la
     letra. Lo puse en Grande. No cambió absolutamente nada. Lo medí: 11 píxeles

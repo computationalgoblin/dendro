@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-01 — el Mapa se abre LEGIBLE.
+"""BETA2-FIX-01 — el Mapa se abre LEGIBLE.
 
 Siete de las ocho personas de la 2ª ronda de beta testing abrieron su proyecto y
 vieron una hoja en blanco. Aquí se fijan las tres mitades del arreglo del Mapa:

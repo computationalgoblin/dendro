@@ -30,7 +30,7 @@ def test_no_font_sizes_below_caption_floor():
 
 
 def test_creation_sources_consume_the_named_type_scale():
-    """BETA-MULTIAGENT2-FIX-13 (G2-18): ni un `font-size:` literal en las
+    """BETA2-FIX-13 (G2-18): ni un `font-size:` literal en las
     superficies de trabajo.
 
     En Qt la hoja de estilo del propio widget gana a la del ancestro, así que un

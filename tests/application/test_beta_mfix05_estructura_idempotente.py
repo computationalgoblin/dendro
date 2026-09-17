@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-05: idempotencia del panel de estructura (G-05).
+"""BETA-FIX-05: idempotencia del panel de estructura (G-05).
 
 - Un hallazgo aplicado no vuelve a listarse (analyze/structure_proposals) ni el
   parseo de la IA lo re-propone.

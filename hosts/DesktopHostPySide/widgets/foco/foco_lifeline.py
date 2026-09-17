@@ -101,7 +101,7 @@ class FocoLifelineBand(QWidget):
         self._marks: list[_MilestoneMark] = []
         # BETA2-CAL-08: eras (contexto) + presente + ventana de vista.
         self._eras: list[Any] = []
-        # BETA-MULTIAGENT2-FIX-14 (G2-26c): rects REALES de los rótulos de era del
+        # BETA2-FIX-14 (G2-26c): rects REALES de los rótulos de era del
         # último repintado. El aviso «Arrastra el borde…» se pintaba centrado en el
         # ancho ENTERO de la franja sin mirar dónde caían: «Arrastra el borde…»
         # impreso sobre «Era de los Pigmentos», con ninguna de las dos legible.
@@ -767,7 +767,7 @@ class FocoLifelineBand(QWidget):
     # ------------------------------------------------------------------
 
     def hint_rect(self, width: float, band_top: float, band_bottom: float) -> QRectF | None:
-        """BETA-MULTIAGENT2-FIX-14 (G2-26c): hueco libre para el aviso de lapso.
+        """BETA2-FIX-14 (G2-26c): hueco libre para el aviso de lapso.
 
         Devuelve el rect donde pintar «Arrastra el borde para fijar el lapso» sin
         pisar ningún rótulo de era (ni el año de muerte), o `None` si no hay hueco

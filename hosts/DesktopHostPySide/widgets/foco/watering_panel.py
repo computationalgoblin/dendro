@@ -80,7 +80,7 @@ class WateringPanel(PanelScaffold):
         self.watering_service = watering_service
         self._entity_id = ""
         self._status = ""
-        # BETA-MULTIAGENT2-FIX-06 (G2-08): lote de riego en vuelo. Es un CAMPO que
+        # BETA2-FIX-06 (G2-08): lote de riego en vuelo. Es un CAMPO que
         # `refresh()` consulta, no un `setEnabled` suelto: `set_batch_running` existía
         # desde FOCO-07 sin un solo llamador y, aunque se hubiera llamado, el siguiente
         # `refresh()` (uno por paso del lote) volvía a habilitar el botón.

@@ -159,7 +159,7 @@ class CalendarEditor(QWidget):
     # ── (b2) ancla del calendario ────────────────────────────────────────
 
     def _build_anchor_row(self) -> QHBoxLayout:
-        """BETA-MULTIAGENT2-FIX-12 (G2-29): «el calendario empieza en el año N».
+        """BETA2-FIX-12 (G2-29): «el calendario empieza en el año N».
 
         Quien escribe de ESTE mundo quería «de 1900 a 2000» y el editor solo sabía
         encadenar duraciones desde el año 0: las nueve fichas de un mundo real se

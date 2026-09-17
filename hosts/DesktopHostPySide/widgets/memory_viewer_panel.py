@@ -1,4 +1,4 @@
-"""Visor/EDITOR editorial de la wiki de Memoria (BETA2-MEM-10 + BETA-MULTIAGENT2-FIX-11).
+"""Visor/EDITOR editorial de la wiki de Memoria (BETA2-MEM-10 + BETA2-FIX-11).
 
 Función de PROYECTO (no del flujo de Creación): consultar, **escribir**, crear,
 borrar y regenerar páginas de la wiki. Leer/escribir/crear/borrar funcionan SIN

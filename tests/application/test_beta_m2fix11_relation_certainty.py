@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-11 (fase B): la puerta del servicio para el rigor.
+"""BETA2-FIX-11 (fase B): la puerta del servicio para el rigor.
 
 Dos agujeros verificados el 2026-08-04:
 - `RelationService` **tiraba `certainty_level` en silencio** (no estaba entre sus

@@ -1,13 +1,13 @@
-"""BETA-MULTIAGENT2-FIX-12 (G2-16) — el parentesco llega vivo hasta donde se lee.
+"""BETA2-FIX-12 (G2-16) — el parentesco llega vivo hasta donde se lee.
 
 Complementa a `tests/domain/test_beta_m2fix12_parentesco.py` (el catálogo) con la
 RUTA MANUAL de escritura y las superficies de lectura:
 
 - crear una relación con un tipo de parentesco lo PERSISTE (hasta ahora ninguna
-  prueba cubría la ruta manual: la de BETA-MULTIAGENT-FIX-04 de la ronda 1 solo
+  prueba cubría la ruta manual: la de BETA-FIX-04 de la ronda 1 solo
   cubría `accept_candidate`);
 - un tipo fuera del dominio ya no devuelve `Ok` con `esta_relacionado_con`
-  dentro (el arreglo del servicio es de BETA-MULTIAGENT2-FIX-03; aquí se guarda
+  dentro (el arreglo del servicio es de BETA2-FIX-03; aquí se guarda
   que sigue cerrado y que NO se cierra sobre los tipos nuevos);
 - `_normalize_relation_enums` no revierte un parentesco al actualizar;
 - el tipo viaja a la arista del Mapa y al payload que recibe la IA;

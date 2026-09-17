@@ -112,12 +112,12 @@ class NarrativeImpactService:
         (BETA2-WIKI-06): al Regar se acaba de reescribir su página como vigente, así
         que no debe re-marcarse Falta regar a sí mismo; sí sus relacionadas.
 
-        ``exclude_ids`` (BETA-MULTIAGENT-FIX-01, G-01): entidades del MISMO lote de
+        ``exclude_ids`` (BETA-FIX-01, G-01): entidades del MISMO lote de
         riego en curso — sus páginas se reescriben en esta misma autorización; sin
         la exclusión se invalidaban entre sí y un lote de vecinas jamás acababa
         verde (solo la última regada quedaba `regada`).
 
-        ``only_via`` (BETA-MULTIAGENT2-FIX-05, G2-05): restringe la propagación a
+        ``only_via`` (BETA2-FIX-05, G2-05): restringe la propagación a
         ciertas VÍAS de dependencia (``self``/``mencion``/``cita_memoria``/
         ``relacion``/``hito``). Este motor calcula el impacto de un cambio de CANON;
         Regar NO cambia canon (solo reescribe una página de wiki), así que el camino

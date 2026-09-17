@@ -27,7 +27,7 @@ def test_texto_secundario_cumple_AA_en_surface() -> None:
 
 
 def test_ink_muted_dejo_de_ser_decorativo_y_cumple_AA() -> None:
-    """BETA-MULTIAGENT2-FIX-13 (G2-17): este test AFIRMABA lo contrario.
+    """BETA2-FIX-13 (G2-17): este test AFIRMABA lo contrario.
 
     Decía `2.5 <= ratio(INK_MUTED, SURFACE) < 4.5` y lo justificaba con «INK_MUTED
     es deliberadamente tenue: NO es texto principal». Esa decisión la desmintió la

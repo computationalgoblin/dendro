@@ -759,7 +759,7 @@ class FocoSeedItem(QGraphicsObject):
 
     is_seed = True
 
-    # BETA-MULTIAGENT2-FIX-14 (G2-26f): geometría declarada UNA vez.
+    # BETA2-FIX-14 (G2-26f): geometría declarada UNA vez.
     #
     # `boundingRect` llegaba hasta +30 por debajo del origen pero `paint` escribía
     # la etiqueta hasta +33: el texto se salía 3 px de la región que la escena

@@ -5,7 +5,7 @@ Lógica pura para el badge global «💧 N»: qué entidades están sedientas
 ciclo visible; las secadas llegan con su propio estado (``secada``) y por tanto se
 excluyen solas.
 
-BETA-MULTIAGENT2-FIX-05 (G2-07): el orden ya NO es puramente cronológico. Con 800
+BETA2-FIX-05 (G2-07): el orden ya NO es puramente cronológico. Con 800
 sedientas —entre 48 y 68 horas de reloj a los tiempos medidos en el beta— «la más
 antigua primero» no es una recomendación: es una lista sin cabeza. La cola ordena
 ahora por VALOR (lo que más cambia el mundo si se riega) y solo desempata por

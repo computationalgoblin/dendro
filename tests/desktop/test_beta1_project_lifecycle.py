@@ -24,7 +24,7 @@ def qapp():
 def _preferencias_aisladas(tmp_path, monkeypatch):
     """Aisla `settings.json` del usuario REAL.
 
-    Cierre de la oleada BETA-MULTIAGENT2: sin esto, `MainWindow()` autoabre el
+    Cierre de la oleada BETA2: sin esto, `MainWindow()` autoabre el
     ultimo proyecto de las preferencias de la maquina, la premisa del fichero
     ("no hay proyecto activo") se vuelve falsa y el `window.close()` del
     `finally` levanta un `QMessageBox.question` MODAL que, bajo

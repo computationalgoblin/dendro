@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-04: candidatos de relación IA cableados y honestos (G-04).
+"""BETA-FIX-04: candidatos de relación IA cableados y honestos (G-04).
 
 - El tipo aprobado es el tipo persistido; un tipo fuera de dominio se rechaza con
   error claro (nada de aplanar en silencio a esta_relacionado_con).

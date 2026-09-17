@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-05 (G2-06): tras regar, el Cuaderno repinta la MEMORIA.
+"""BETA2-FIX-05 (G2-06): tras regar, el Cuaderno repinta la MEMORIA.
 
 Escena descrita por dos testers distintos de la ronda 2 (GUI-13 y CAR-03): el riego
 termina, el chip de arriba dice «Regada», las métricas se actualizan… y tres centímetros

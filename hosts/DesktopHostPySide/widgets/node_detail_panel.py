@@ -515,7 +515,7 @@ class NodeDetailPanel(QWidget):
         self.nature_label = QLabel("Naturaleza temporal")
         self.nature_label.setStyleSheet(_label_ss)
 
-        # BETA-MULTIAGENT2-FIX-12 (G2-29): «Nació» y «Murió» en la FICHA. Hasta
+        # BETA2-FIX-12 (G2-29): «Nació» y «Murió» en la FICHA. Hasta
         # aquí el único editor de fecha era un arrastre sobre una ventana de 0 a
         # 10 años en la cronología del Foco: quien escribía de este mundo entregó
         # sus nueve fichas con `birth_year: null` en un proyecto con seis hitos
@@ -704,7 +704,7 @@ class NodeDetailPanel(QWidget):
         self.extended_edit.setStyleSheet(self._editorial_card_ss)
         root.addWidget(self.extended_edit, 1)
 
-        # BETA-MULTIAGENT2-FIX-11 (fase B): sección «Rigor» — certeza y datación
+        # BETA2-FIX-11 (fase B): sección «Rigor» — certeza y datación
         # rica (precisión, fecha del mundo, periodo, nota, fuentes que se
         # contradicen). Nace PLEGADA: la Ficha de quien no la necesita no crece
         # ni un campo. El año entero sigue siendo el espejo autoritativo.
@@ -933,7 +933,7 @@ class NodeDetailPanel(QWidget):
         self._schedule_autosave()
 
     # ------------------------------------------------------------------
-    # BETA-MULTIAGENT2-FIX-12 (G2-29): fechas de la entidad en la Ficha
+    # BETA2-FIX-12 (G2-29): fechas de la entidad en la Ficha
     # ------------------------------------------------------------------
 
     def _build_dating_row(self) -> QHBoxLayout:
@@ -1008,7 +1008,7 @@ class NodeDetailPanel(QWidget):
         self.type_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.layer_combo.currentIndexChanged.connect(self._schedule_autosave)
         self.nature_combo.currentIndexChanged.connect(self._schedule_autosave)
-        # BETA-MULTIAGENT2-FIX-12 (G2-29): los años vuelven a ser editables aquí
+        # BETA2-FIX-12 (G2-29): los años vuelven a ser editables aquí
         # (arrastrar el borde en una escala de 0 a 10 no sirve para escribir
         # 1901). `editingFinished` y no `textEdited`: no se autoguarda «1», «19»,
         # «190» mientras se teclea el año.
@@ -1756,14 +1756,14 @@ class NodeDetailPanel(QWidget):
             or _enum_value(getattr(self._entity, "visibility_state", None), "visible_usuario"),
             "layer_ids": ([self.layer_combo.currentData()] if self.layer_combo.currentData() else list(getattr(self._entity, "layer_ids", []) or [])) if self._worldbuilding_active() else list(getattr(self._entity, "layer_ids", []) or []),
             "custom_metadata": meta,
-            # BETA-MULTIAGENT2-FIX-12 (G2-29): los años salen de las casillas
+            # BETA2-FIX-12 (G2-29): los años salen de las casillas
             # «Nació»/«Murió» de la ficha (antes viajaban por pass-through desde
             # la entidad y NO había ningún control que los pidiera).
             "birth_year": birth_year,
             "death_year": death_year,
             # BETA1-J07: naturaleza temporal editada en la ficha.
             "temporal_nature": self.nature_combo.currentData(),
-            # BETA-MULTIAGENT2-FIX-11 (fase B): certeza editable de verdad (el campo
+            # BETA2-FIX-11 (fase B): certeza editable de verdad (el campo
             # existía en el dominio y tenía CERO apariciones en `hosts/`).
             "certainty_level": self.rigor.certeza(),
         }

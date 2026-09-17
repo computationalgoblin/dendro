@@ -80,7 +80,7 @@ def _num_suggestions_for_depth(depth: WalkDepth) -> int:
 def _sort_key(hito: Any) -> tuple[int, float, float, str]:
     """Clave de orden cronológico (año primero), espejo de milestone_sort_value.
 
-    BETA-MULTIAGENT2-FIX-09: la implementación vive ahora en
+    BETA2-FIX-09: la implementación vive ahora en
     ``causal_links.milestone_sort_key`` —una sola definición, compartida con la
     cadena causal, que antes ordenaba en anchura por no tener ninguna—. Se
     conserva el nombre porque ya es API de facto (lo importan tests del repo).
@@ -190,7 +190,7 @@ class ChronologyWalkService:
             "description": getattr(hito, "description", ""),
             "affected_entity_ids": list(getattr(hito, "affected_entity_ids", []) or []),
         }
-        # BETA-MULTIAGENT-FIX-03 (G-03): puente absoluto↔era también en el walk —
+        # BETA-FIX-03 (G-03): puente absoluto↔era también en el walk —
         # el análisis de paso comparaba años absolutos contra un presente regnal y
         # bloqueaba el avance con falsos positivos de coherencia.
         if brief["year"] is not None and chrono is not None:

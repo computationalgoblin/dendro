@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-02: preparación de Sugerencias con vigilante (G-02).
+"""BETA-FIX-02: preparación de Sugerencias con vigilante (G-02).
 
 - compose_generation emite las fases por progress_callback y respeta cancel_check
   ENTRE fases (corte cooperativo).

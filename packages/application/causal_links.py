@@ -1,6 +1,6 @@
 """Hilo causal setup→payoff: UNA sola definición de hijos, cadena e hilos sueltos.
 
-BETA-MULTIAGENT2-FIX-09 (G2-15, parte causal).
+BETA2-FIX-09 (G2-15, parte causal).
 
 **Decisión de diseño** (la que pedía elegir el ticket, y la que queda escrita):
 la FUENTE DE VERDAD del enlace causal es ``causal_parent_hito_ids`` —el lado que

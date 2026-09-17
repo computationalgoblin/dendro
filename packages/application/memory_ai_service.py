@@ -41,7 +41,7 @@ _UNCONFIGURED = (
     "NARRATIVE_AI_BASE_URL, NARRATIVE_AI_API_KEY y NARRATIVE_AI_MODEL para actualizar Memoria."
 )
 
-# BETA-MULTIAGENT2-FIX-07: tope de relaciones que viajan al contexto de Memoria.
+# BETA2-FIX-07: tope de relaciones que viajan al contexto de Memoria.
 # Antes era un `rels[:12]` mudo; ahora el recorte se DECLARA en el propio texto
 # (contrato §9: no truncar callando).
 _MAX_CONTEXT_RELATIONS = 12
@@ -109,7 +109,7 @@ class MemoryAIService:
         issues = [MemoryIssue.from_dict(i) for i in mem_data.get("issues", [])]
         citations = [MemoryCitation.from_dict(c) for c in mem_data.get("citations", [])]
         wikilinks = [MemoryCitation.from_dict(w) for w in mem_data.get("wikilinks", [])]
-        # BETA-MULTIAGENT2-FIX-07: ningún enlace se persiste sin existir en el canon.
+        # BETA2-FIX-07: ningún enlace se persiste sin existir en el canon.
         citations, wikilinks, refs_counts = self._resolve_refs(
             proj, citations, wikilinks, issues
         )
@@ -128,7 +128,7 @@ class MemoryAIService:
             return self._apply_regen(kind, target_id, context, sections, refs_counts)
         return self._apply_regar(kind, target_id, context, sections, refs_counts)
 
-    # ── resolución de enlaces contra el canon (BETA-MULTIAGENT2-FIX-07) ──
+    # ── resolución de enlaces contra el canon (BETA2-FIX-07) ──
 
     @staticmethod
     def _resolve_refs(
@@ -316,7 +316,7 @@ class MemoryAIService:
 
     @staticmethod
     def _entity_relation_lines(proj, target_id: str) -> list[str]:
-        """RELACIONES con DIRECCIÓN explícita e ids (BETA-MULTIAGENT2-FIX-07, G2-10).
+        """RELACIONES con DIRECCIÓN explícita e ids (BETA2-FIX-07, G2-10).
 
         Antes esto era ``sirve_a→Nadia Kerr`` viniera la relación de entrada o de
         salida: en español se lee «(yo) sirvo a Nadia», y la página de Otho —que
@@ -374,7 +374,7 @@ class MemoryAIService:
         zona por año). Best-effort: nunca rompe el contexto si faltan datos o ``proj`` es
         duck-typed en tests."""
         lines: list[str] = []
-        # BETA-MULTIAGENT-FIX-03 (G-03): años con su traducción a era.
+        # BETA-FIX-03 (G-03): años con su traducción a era.
         chrono = getattr(proj, "project_chronology", None)
         e = proj.entity_by_id(entity_id) if hasattr(proj, "entity_by_id") else None
         if e is not None:
@@ -415,7 +415,7 @@ class MemoryAIService:
 
     @staticmethod
     def _narrative_type_label(entity) -> str:
-        """BETA-MULTIAGENT2-FIX-08 (G2-13/A3): el TIPO NARRATIVO del elemento.
+        """BETA2-FIX-08 (G2-13/A3): el TIPO NARRATIVO del elemento.
 
         Sin este dato la IA no podía saber que una rama es un CONTENEDOR de otros
         elementos y la describía como «el ente u objeto denominado …» (ESC-13). No

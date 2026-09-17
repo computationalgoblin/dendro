@@ -33,7 +33,7 @@ _UNCONFIGURED = (
 _CHARS_PER_TOKEN = 3.5
 _VALID_OPS = frozenset({"open_page", "read_canon", "search"})
 
-#: BETA-MULTIAGENT2-FIX-06 (G2-10): tope DURO de caracteres del mensaje que viaja al
+#: BETA2-FIX-06 (G2-10): tope DURO de caracteres del mensaje que viaja al
 #: proveedor en CADA ronda. El presupuesto declarado (``token_budget``) solo medía lo
 #: TRAÍDO (`used_chars`), nunca el índice que se re-envía cada ronda: con 800 entidades
 #: eran 73.548 caracteres (~21.000 tokens) por ronda contra un "presupuesto" de 4.000.
@@ -89,7 +89,7 @@ class NavigationRequest:
     # re-enviaba entero por ronda, coste de entrada ilimitado en proyectos grandes. Lo
     # omitido sigue siendo alcanzable por ``search``.
     max_index_entries: int = 400
-    # BETA-MULTIAGENT2-FIX-06 (G2-10): tope de CARACTERES del mensaje de cada ronda.
+    # BETA2-FIX-06 (G2-10): tope de CARACTERES del mensaje de cada ronda.
     # ``max_index_entries`` acotaba el NÚMERO de entradas, no su tamaño: 400 entradas de
     # hasta 120 caracteres seguían dando ~73.500 caracteres por ronda. Este tope se
     # cumple recortando entradas (lo omitido sigue alcanzable por ``search``).
@@ -106,7 +106,7 @@ class NavigationBundle:
     rounds_used: int = 0
     truncated: bool = False
     index_signature: str = ""
-    #: BETA-MULTIAGENT2-FIX-06: motivo por el que NO se navegó (wiki sin páginas). Vacío
+    #: BETA2-FIX-06: motivo por el que NO se navegó (wiki sin páginas). Vacío
     #: cuando sí se navegó. El llamante lo dice en voz alta: nada de degradación muda.
     skipped_reason: str = ""
 
@@ -158,7 +158,7 @@ class WikiNavigator:
             return Error("No se pudo construir el índice de la wiki")
         index = index_res.value
 
-        # BETA-MULTIAGENT2-FIX-06 (G2-10): la wiki VACÍA no se cobra. El índice es una
+        # BETA2-FIX-06 (G2-10): la wiki VACÍA no se cobra. El índice es una
         # proyección determinista del canon (coste IA cero), así que preguntarle cuántas
         # páginas hay es gratis; si no hay NINGUNA, ninguna ronda puede abrir nada y
         # navegar solo compraría selección de canon a ~21.000 tokens la ronda. Se corta
@@ -233,7 +233,7 @@ class WikiNavigator:
     ) -> str:
         """Mensaje de UNA ronda, garantizado bajo ``request.max_round_chars``.
 
-        BETA-MULTIAGENT2-FIX-06 (G2-10): el tope es DURO y verificable. Si el índice
+        BETA2-FIX-06 (G2-10): el tope es DURO y verificable. Si el índice
         compacto no cabe, se recortan entradas (búsqueda binaria sobre el número de
         entradas conservadas, las prioritarias van primero) y se DECLARA el recorte —
         lo omitido sigue siendo alcanzable por ``search``, como el tope WS-L.

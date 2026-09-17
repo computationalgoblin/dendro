@@ -38,7 +38,7 @@ class RelationType(str, Enum):
     SIRVE_A = "sirve_a"
     ES_ALIADO_DE = "es_aliado_de"
     ES_ENEMIGO_DE = "es_enemigo_de"
-    # BETA-MULTIAGENT-FIX-04: el valor era literalmente "cono..." (typo) — el tipo
+    # BETA-FIX-04: el valor era literalmente "cono..." (typo) — el tipo
     # legítimo "conoce" no parseaba y caía al fallback. Alias de carga más abajo.
     CONOCE = "conoce"
     DESCONOCE = "desconoce"
@@ -72,7 +72,7 @@ class RelationType(str, Enum):
     CONOCE_FALSAMENTE = "conoce_falsamente"
     POSEE_CONOCIMIENTO = "posee_conocimiento"
     REVELA_CONOCIMIENTO = "revela_conocimiento"
-    # ── Parentesco (BETA-MULTIAGENT2-FIX-12, G2-16) ──
+    # ── Parentesco (BETA2-FIX-12, G2-16) ──
     # El enum tenía 41 tipos y NINGUNO de parentesco: en un árbol genealógico no
     # se podía decir «madre». La familia se ofrece entera (no entra en
     # HIDDEN_RELATION_TYPES) y viaja al Mapa, al Foco y al prompt.
@@ -111,7 +111,7 @@ class IntensityLevel(str, Enum):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Parentesco e inversos — BETA-MULTIAGENT2-FIX-12 (G2-16)
+# Parentesco e inversos — BETA2-FIX-12 (G2-16)
 # ═══════════════════════════════════════════════════════════════════════
 
 # La familia de parentesco, como conjunto nombrado: la leen los tests de
@@ -461,7 +461,7 @@ __all__ = [
     "IntensityLevel",
     "validate_relation",
     "coerce_relation_type",
-    # BETA-MULTIAGENT2-FIX-12 (G2-16)
+    # BETA2-FIX-12 (G2-16)
     "KINSHIP_RELATION_TYPES",
     "RELATION_INVERSES",
     "inverse_relation_type",

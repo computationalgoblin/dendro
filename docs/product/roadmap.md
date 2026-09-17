@@ -9,7 +9,6 @@ coherencia → árboles → anillos → física de grafo. 44 bloques, 30+ suites
 
 ## Fase actual: BETA — implementación COMPLETA, pendiente de smokes de usuario
 
-Estado operativo autoritativo: [.kanban/KANBAN.md](../../.kanban/KANBAN.md).
 Épicas entregadas (todas con tests en verde):
 
 - **BETA1** — recorte de runtime (A), estabilidad IA/trazabilidad (D), UX (F/UX,

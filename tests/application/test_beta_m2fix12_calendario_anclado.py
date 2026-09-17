@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-12 (G2-29) — el calendario puede empezar en 1900.
+"""BETA2-FIX-12 (G2-29) — el calendario puede empezar en 1900.
 
 El editor unificado solo sabía encadenar eras por duración desde el año 0
 (`EraService.set_eras_from_durations`, `cursor = 0` fijo). Quien escribía de ESTE

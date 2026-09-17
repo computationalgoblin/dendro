@@ -41,12 +41,12 @@ from packages.domain.entity import (
 from packages.application.repository_port import ProjectRepository, default_repository
 from packages.domain.result import Error, Ok, Result
 
-# ── BETA-MULTIAGENT2-FIX-03 (G2-03): claves que no se tiran en silencio ──────
+# ── BETA2-FIX-03 (G2-03): claves que no se tiran en silencio ──────
 #
 # `NarrativeEntity.from_dict` lee UNA A UNA las claves que conoce y ni mira las
 # demás: una ficha creada con `description` (19 veces, en el beta) nacía vacía y
 # el servicio devolvía `Ok`. La doctrina del repo ya estaba escrita para
-# `entity_type` (BETA-MULTIAGENT-FIX-06): **la tolerancia es del dominio —que es
+# `entity_type` (BETA-FIX-06): **la tolerancia es del dominio —que es
 # también la ruta de CARGA— y el rigor es del servicio**. Esto la extiende a las
 # claves.
 
@@ -177,7 +177,7 @@ class EntityService:
         if not name:
             return Error("El nombre de la entidad no puede estar vacío.")
 
-        # BETA-MULTIAGENT2-FIX-03 (G2-03): las claves que el servicio no conoce
+        # BETA2-FIX-03 (G2-03): las claves que el servicio no conoce
         # ya NO se tiran devolviendo Ok. Los dos alias documentados se traducen;
         # el resto se rechaza nombrando la clave, como ya se hacía con el tipo.
         data, unknown_keys = normalize_entity_payload(data, ENTITY_ACCEPTED_KEYS)
@@ -188,7 +188,7 @@ class EntityService:
                 f"Claves válidas: {_valid_entity_keys_text(ENTITY_ACCEPTED_KEYS)}."
             )
 
-        # BETA-MULTIAGENT-FIX-06 (NOV-05): un tipo desconocido en una CREACIÓN
+        # BETA-FIX-06 (NOV-05): un tipo desconocido en una CREACIÓN
         # explícita se rechaza con error claro. La coerción tolerante a NOTA de
         # ``from_dict`` se mantiene SOLO para cargas de persistencia (proyectos
         # viejos no deben romper al abrir).
@@ -273,7 +273,7 @@ class EntityService:
             "birth_year", "death_year",  # BETA1-G02
             "life_span",  # BETA1-J04: lapso temporal rico
         }
-        # BETA-MULTIAGENT2-FIX-03 (G2-03): el bucle de `editable_fields` ignoraba
+        # BETA2-FIX-03 (G2-03): el bucle de `editable_fields` ignoraba
         # sin decir nada toda clave fuera de la lista → `Ok(entidad_sin_cambiar)`.
         # Ahora se traducen los alias y se rechaza lo desconocido. Se admiten
         # además las claves que este servicio consume aparte (`temporal_nature`) y

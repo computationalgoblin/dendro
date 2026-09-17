@@ -20,7 +20,7 @@ from packages.domain.result import Error, Ok, Result
 _ISSUE_KINDS = frozenset(k.value for k in MemoryIssueKind)
 _REF_KINDS = frozenset(k.value for k in MemoryTargetKind)
 
-# BETA-MULTIAGENT2-FIX-07: el prompt NUNCA ha pedido enlaces dentro de la prosa
+# BETA2-FIX-07: el prompt NUNCA ha pedido enlaces dentro de la prosa
 # (solo el array `wikilinks`), pero el modelo se los inventa igual: 13
 # `[Nombre](ref_id: Nombre)` en una página del beta y 8 `[[Nombre]]` en otra. El
 # visor pinta el cuerpo con `setPlainText`, así que esa sintaxis llegaba cruda a

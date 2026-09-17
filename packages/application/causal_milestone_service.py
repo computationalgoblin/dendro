@@ -91,7 +91,7 @@ class CausalMilestoneService:
         if isinstance(proj, Error):
             return proj
         hito = CausalMilestone.from_dict(data)
-        # BETA-MULTIAGENT2-FIX-03: misma promoción que las rutas de aceptación
+        # BETA2-FIX-03: misma promoción que las rutas de aceptación
         # (esta ya la hacía bien a mano; ahora no hay dos copias de la regla).
         promote_milestone(hito)
         if enforce_dating and not hito.as_temporal_span().is_dated():
@@ -100,7 +100,7 @@ class CausalMilestoneService:
                 "(un año concreto o una precisión explícita)."
             )
         proj.value.causal_milestones.append(hito)
-        # BETA-MULTIAGENT2-FIX-09: el hito puede nacer declarando padres; el espejo
+        # BETA2-FIX-09: el hito puede nacer declarando padres; el espejo
         # del padre se reconstruye aquí (punto único), así que A sabe que tiene a B
         # como consecuencia sin que esta ruta escriba el enlace inverso a mano.
         causal_links.sync_children_mirror(proj.value)
@@ -128,7 +128,7 @@ class CausalMilestoneService:
             return Error("Candidate is not a causal milestone")
 
         hito = CausalMilestone.from_dict(proposed["milestone"])
-        # BETA-MULTIAGENT2-FIX-03: la promoción (canon + datación honesta +
+        # BETA2-FIX-03: la promoción (canon + datación honesta +
         # sellos + trazabilidad) vive en un único sitio y las tres rutas de
         # aceptación la comparten. Aquí estaba escrita a mano y era la ÚNICA
         # correcta; ahora es la referencia extraída.
@@ -335,7 +335,7 @@ class CausalMilestoneService:
             return proj
         return Ok([hito for hito in proj.value.causal_milestones if predicate(hito)])
 
-    # ── Hilo causal setup→payoff (BETA-MULTIAGENT2-FIX-09) ───────────────────
+    # ── Hilo causal setup→payoff (BETA2-FIX-09) ───────────────────
 
     def list_causal_parents(self, hito_id: str) -> Result[list[CausalMilestone], str]:
         """Hitos que este recoge (sus causas declaradas), en orden cronológico."""

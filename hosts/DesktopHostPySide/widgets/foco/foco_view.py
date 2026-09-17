@@ -532,7 +532,7 @@ class FocoView(QWidget):
 
     def _refresh_meta_summary(self, entity: Any) -> None:
         """Metadatos como LECTURA (icono 12px + texto) en la tarjeta central."""
-        # BETA-MULTIAGENT2-FIX-14 (G2-21 = «texto fantasma» de G2-26): el mismo bug
+        # BETA2-FIX-14 (G2-21 = «texto fantasma» de G2-26): el mismo bug
         # que el panel de Estructura. Sin `setParent(None)` los chips viejos seguían
         # pintándose unos píxeles por debajo de los nuevos: «MedioMedio», «Medio»
         # sobre «(edio», una «s» suelta. Fotografiado por dirección de arte.
@@ -1411,7 +1411,7 @@ class FocoView(QWidget):
         layout = getattr(self, "_contents_layout", None)
         if layout is None:
             return
-        # BETA-MULTIAGENT2-FIX-14 (G2-21): tercera copia del mismo defecto. El
+        # BETA2-FIX-14 (G2-21): tercera copia del mismo defecto. El
         # `conservar_al_final=1` respeta el `addStretch` final de la estantería.
         clear_layout(layout, conservar_al_final=1)
         project = self._project()
@@ -1613,7 +1613,7 @@ class FocoView(QWidget):
                 notebook.refresh()
             except RuntimeError:
                 pass  # el widget pudo ser destruido por un recentrado
-            # BETA-MULTIAGENT2-FIX-05 (G2-06): repintar TAMBIÉN la sección MEMORIA.
+            # BETA2-FIX-05 (G2-06): repintar TAMBIÉN la sección MEMORIA.
             # `refresh()` solo redibuja métricas/estado, así que tras un riego con
             # éxito el Cuaderno mostraba el chip «Regada» arriba y, tres centímetros
             # más abajo, «Sin memoria — Riégalo para generarla» con la página ya

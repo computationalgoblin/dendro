@@ -1,6 +1,6 @@
-"""BETA-MULTIAGENT2-FIX-05 (G2-05/G2-07): el jardín puede llegar a verde y quedarse.
+"""BETA2-FIX-05 (G2-05/G2-07): el jardín puede llegar a verde y quedarse.
 
-Ronda 2 del beta multi-agente: la directora de arte regó cuatro entidades en 16 min 30 s
+Ronda 2 del beta: la directora de arte regó cuatro entidades en 16 min 30 s
 de IA real y acabó con el mismo número de verdes que al empezar, porque TRES mecanismos
 independientes invalidaban trabajo recién pagado:
 
@@ -206,7 +206,7 @@ def test_beta_m2fix05_vecina_editada_no_caduca_el_diagnostico_por_si_sola():
 
 @pytest.mark.application
 def test_beta_m2fix05_lote_sigue_saliendo_verde():
-    """No regresar BETA-MULTIAGENT-FIX-01: regar A, B y C en un lote deja las tres verdes."""
+    """No regresar BETA-FIX-01: regar A, B y C en un lote deja las tres verdes."""
     _ps, ids, watering, memories = _jardin()
     lote = [ids["A"], ids["B"], ids["C"]]
     for entity_id in lote:

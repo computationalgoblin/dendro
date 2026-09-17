@@ -81,7 +81,7 @@ class CausalMilestoneController(MutationNotifier):
         result = self.svc.list_subhitos(parent_id)
         return result.value if isinstance(result, Ok) else []
 
-    # ── Hilo causal setup→payoff (BETA-MULTIAGENT2-FIX-09) ──
+    # ── Hilo causal setup→payoff (BETA2-FIX-09) ──
 
     def link_causal(self, child_id: str, parent_id: str):
         """Declara que ``child_id`` recoge lo que plantó ``parent_id``."""

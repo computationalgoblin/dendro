@@ -16,10 +16,10 @@ DESKTOP = ROOT / "hosts" / "DesktopHostPySide"
 PARENTLESS_WIDGET_RE = re.compile(r"\b(QFrame|QWidget|QGroupBox)\(\)")
 
 EXPECTED_PARENTLESS_WIDGETS = {
-    # Baseline regenerado en el CIERRE DE LA OLEADA BETA-MULTIAGENT2 (2026-08-05).
+    # Baseline regenerado en el CIERRE DE LA OLEADA BETA2 (2026-08-05).
     # El baseline se indexa por `fichero:LINEA:codigo`, asi que 15 tickets editando
     # los mismos ficheros lo dejan rojo solo por desplazamiento. Esta es la pasada
-    # unica que pedia BETA-MULTIAGENT2-FIX-01.
+    # unica que pedia BETA2-FIX-01.
     #
     # El conjunto MEJORA: 52 -> 49. Salen 3 entradas de `workspaces.py`
     # (grid_host/_layer_section/_layer_chips_container) porque FIX-11 borro

@@ -72,7 +72,7 @@ def test_node_panel_has_no_lifespan_text(qapp):
     # se define en la cronología del PIE del editor. La etiqueta muerta de lapso
     # sigue sin existir.
     #
-    # BETA-MULTIAGENT2-FIX-12 (G2-29) REVISA la otra mitad de aquella decisión:
+    # BETA2-FIX-12 (G2-29) REVISA la otra mitad de aquella decisión:
     # el AÑO entero vuelve a ser editable en la Ficha («Nació»/«Murió»). Sin él,
     # el único editor de fecha era un arrastre sobre una ventana de 0 a 10 años y
     # un mundo real entregado en el beta llegó con sus nueve fichas sin datar.
@@ -173,7 +173,7 @@ def test_milestone_sort_prefers_year_with_sort_index_tiebreak(qapp):
 
 
 def test_milestone_sort_without_year_falls_back_to_sort_index(qapp):
-    # Compatibilidad H03 (Hermes): hitos pre-migración sin año
+    # Compatibilidad H03: hitos pre-migración sin año
     late = CausalMilestone(id="h2", title="Tarde", metadata={"sort_index": 20})
     early = CausalMilestone(id="h1", title="Temprano", metadata={"sort_index": 1})
     assert milestone_sort_value(early) < milestone_sort_value(late)

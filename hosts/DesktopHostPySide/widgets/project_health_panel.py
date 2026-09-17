@@ -1,4 +1,4 @@
-"""Panel único «Salud del proyecto» (BETA-MULTIAGENT2-FIX-11, fase A).
+"""Panel único «Salud del proyecto» (BETA2-FIX-11, fase A).
 
 Una sola puerta a «qué va mal», con PESTAÑAS, en vez de varios paneles que dicen
 lo mismo con otras palabras. Las pestañas previstas son **Continuidad · Wiki ·
@@ -6,7 +6,7 @@ Estructura**; este ticket entrega la de **Wiki** (lint determinista de la wiki d
 Memoria) y deja la API (``add_section``) para que las otras se enchufen sin
 rediseñar nada:
 
-- *Continuidad* — coherencia temporal del canon: la trae BETA-MULTIAGENT2-FIX-10.
+- *Continuidad* — coherencia temporal del canon: la trae BETA2-FIX-10.
 - *Estructura* — el ``StructureReviewPanel`` que ya existe (misma clase, aquí como
   pestaña; su píldora de Creación sigue siendo la puerta en contexto).
 

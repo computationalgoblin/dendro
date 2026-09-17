@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA B — la puerta de entrada de la portada (G2-17).
+"""BETA2-FIX-13 · TANDA B — la puerta de entrada de la portada (G2-17).
 
     «Me quedé mirando el centro de la pantalla pensando "¿y ahora qué?". Aquí ya
     sentí lo de siempre: que el problema soy yo, que se me escapa algo evidente.

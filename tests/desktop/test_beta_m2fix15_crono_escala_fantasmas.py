@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-15 (G2-25) — la Cronología no siembra un objeto gráfico
+"""BETA2-FIX-15 (G2-25) — la Cronología no siembra un objeto gráfico
 por cada cruce hito × entidad.
 
 El sembrado de `_GhostNode` era ciego: por CADA hito recorría TODAS las líneas de

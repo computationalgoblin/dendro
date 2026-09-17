@@ -3,7 +3,7 @@
 ## B44-T00 — Auditoría y diseño de layout concéntrico
 
 Fecha: 2026-06-07
-Agente: UI/UX Agent
+Área: UI/UX
 Alcance: diseño técnico previo. No implementa código funcional.
 
 ---

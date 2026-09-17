@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-01 (criterio 6) — contraste de los estados del jardín.
+"""BETA2-FIX-01 (criterio 6) — contraste de los estados del jardín.
 
 Vera midió sobre píxeles que los dos estados de salud se separaban entre sí
 1,17:1; calculado sobre los tokens da exactamente lo mismo. Sedienta («necesita
@@ -6,7 +6,7 @@ atención») y secada («pausada a propósito») llevan acciones OPUESTAS y eran
 mismo color, y ninguno de los dos se despegaba del pergamino (1,09:1).
 
 Este fichero es la red que impide que ese contraste se vuelva a perder — también
-desde BETA-MULTIAGENT2-FIX-13, que toca el mismo `design_system.py`.
+desde BETA2-FIX-13, que toca el mismo `design_system.py`.
 
 NOTA HONESTA sobre el alcance del criterio. El enunciado pedía además que el
 «relleno sano» alcanzara 3:1 contra la parada más oscura de la viñeta (#CFC4A8).

@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-11: lo escrito a mano sobrevive a cerrar y reabrir.
+"""BETA2-FIX-11: lo escrito a mano sobrevive a cerrar y reabrir.
 
 Dos cosas, sin cambio de esquema (v40 intacta):
 - la **página de wiki escrita a mano** (cuerpo + tags + autoría de usuario), que

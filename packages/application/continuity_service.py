@@ -1,6 +1,6 @@
 """Continuidad: el validador temporal corriendo sobre TODO el canon del autor.
 
-BETA-MULTIAGENT2-FIX-10 (G2-15). El motor determinista de BETA1-J02
+BETA2-FIX-10 (G2-15). El motor determinista de BETA1-J02
 (``temporal_coherence``) existía, era puro y tenía **un solo llamador de
 producto**: ``CandidateService.accept_candidate``. Es decir, la app vigilaba lo
 que propone la IA y no vigilaba lo que escribe el autor —justo al revés de como
@@ -187,7 +187,7 @@ class ContinuityService:
         """«Plantado sin recoger»: hitos que ningún hito posterior recoge.
 
         Consume la definición ÚNICA del repo (``causal_links.loose_threads``,
-        BETA-MULTIAGENT2-FIX-09). Aquí no se reimplementa la consulta: la vieja
+        BETA2-FIX-09). Aquí no se reimplementa la consulta: la vieja
         medía ``caused_relation_ids`` y devolvía 20 de 20.
         """
         proj = self._proj()

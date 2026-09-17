@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-03: puente año absoluto ↔ era en los prompts (G-03).
+"""BETA-FIX-03: puente año absoluto ↔ era en los prompts (G-03).
 
 La IA recibía año absoluto + fecha regnal sin puente y alegaba incoherencias
 temporales falsas (arraigo hundido, walk bloqueado). Ahora `cronologia` viaja con

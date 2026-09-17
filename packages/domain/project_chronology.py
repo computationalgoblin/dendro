@@ -54,7 +54,7 @@ class ProjectChronology:
         return sorted(self.eras, key=lambda era: (era.start_year, era.order))
 
     def year_label(self, year: int | None) -> str:
-        """«año N (Era X, año M)» — puente año absoluto ↔ era (BETA-MULTIAGENT-FIX-03).
+        """«año N (Era X, año M)» — puente año absoluto ↔ era (BETA-FIX-03).
 
         Los prompts recibían año absoluto y año-de-era sin traducción y la IA
         alegaba incoherencias temporales falsas. Sin año → «sin fecha»; año fuera

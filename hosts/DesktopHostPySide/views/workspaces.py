@@ -372,7 +372,7 @@ class RingPanel(_SimpleFormPanel):
 # CalendarEditor). El present_year se sigue editando en el pill temporal vía era_controller.
 
 
-# BETA-MULTIAGENT2-FIX-11 (fase B3): `NarrativeWorkbench` («Taller narrativo»,
+# BETA2-FIX-11 (fase B3): `NarrativeWorkbench` («Taller narrativo»,
 # rejilla de tarjetas Hoja/Relaciones/Fuentes/Anillos) ERA CÓDIGO MUERTO: la clase
 # no se instanciaba en ningún sitio del repo, y su tarjeta «Fuentes» era el único
 # llamador de `open_source_create` — es decir, el formulario de fuentes existía y
@@ -484,7 +484,7 @@ class _PlayPrefetchWorker(QThread):
             self.failed.emit(str(exc))
 
 
-#: BETA-MULTIAGENT2-FIX-06 (G2-09): ancho máximo del texto de estado de IA. Sin él, el
+#: BETA2-FIX-06 (G2-09): ancho máximo del texto de estado de IA. Sin él, el
 #: resumen que devuelve el modelo (`job.message`) se pintaba en UNA línea y el floater
 #: crecía más que la ventana: un guionista pagó trece minutos y leyó media frase.
 _STATUS_LABEL_MAX_WIDTH = 720
@@ -503,7 +503,7 @@ def geometria_floater_estado(
 ) -> tuple[int, int, int]:
     """(x, y, ancho) del floater de estado, SIEMPRE dentro del lienzo.
 
-    BETA-MULTIAGENT2-FIX-06 (G2-09): el cálculo viejo era
+    BETA2-FIX-06 (G2-09): el cálculo viejo era
     ``move(max(12, (width - floater.width()) // 2), …)``. Con un floater más ancho que
     la ventana la resta es negativa, el ``max`` clava x=12 y el resto se pinta FUERA.
     Aquí el ancho se acota primero al hueco disponible y luego se centra, así que
@@ -526,7 +526,7 @@ class _StatusLabel(QLabel):
     cuando el texto aparece/desaparece SIN tener que tocar los ~15 puntos de llamada a
     setText repartidos por el workspace; este QLabel lo centraliza.
 
-    BETA-MULTIAGENT2-FIX-06 (G2-09): envuelve el texto. Lo que se pinta aquí ES la
+    BETA2-FIX-06 (G2-09): envuelve el texto. Lo que se pinta aquí ES la
     respuesta de la IA (``job.message`` es el ``summary`` del modelo): no puede salirse
     de la ventana."""
 
@@ -551,7 +551,7 @@ class _StatusLabel(QLabel):
 
 
 class _AIHistoryDialog(QDialog):
-    """BETA-MULTIAGENT2-FIX-06 (G2-09): respuestas de IA de la SESIÓN.
+    """BETA2-FIX-06 (G2-09): respuestas de IA de la SESIÓN.
 
     «Pago trece minutos por la opinión de mi guionista junior y la app me la enseña
     medio tapada durante seis segundos y luego la tira a la basura.» El auto-borrado
@@ -631,7 +631,7 @@ class _SuggestionPrepWorker(QThread):
         self.peticion = peticion
 
     def run(self):
-        # BETA-MULTIAGENT-FIX-02 (G-02): progreso por fases + cancelación
+        # BETA-FIX-02 (G-02): progreso por fases + cancelación
         # cooperativa; el resultado distingue cancelado/fallo del éxito para que
         # el host no lance el job base tras una cancelación.
         try:
@@ -731,7 +731,7 @@ class CreationRingPanel(_SimpleFormPanel):
 # escribe en la barra flotante. Permite teclear seguido sin perder el foco.
 _SEARCH_DEBOUNCE_MS = 280
 
-# BETA-MULTIAGENT2-FIX-04: cuántos resultados enseña la barra de una vez y hasta
+# BETA2-FIX-04: cuántos resultados enseña la barra de una vez y hasta
 # dónde puede crecer con «Ver más». La barra flotante es un overlay de ancho fijo
 # que crece hacia abajo sin límite propio, así que el tope alto es una guarda de
 # altura, no una opinión sobre la búsqueda: para pasar de aquí, afina la consulta.
@@ -742,7 +742,7 @@ _SEARCH_MAX_VISIBLE = 16
 class _ResultadosBusqueda(list):
     """Resultados visibles de la barra + el TOTAL real de coincidencias.
 
-    BETA-MULTIAGENT2-FIX-04: la barra enseñaba ocho sin decir nunca si había
+    BETA2-FIX-04: la barra enseñaba ocho sin decir nunca si había
     ocho o quinientas, y el tester concluyó —razonablemente— que su ficha no
     existía. Sigue siendo una lista de dicts para todos los consumidores.
     """
@@ -819,7 +819,7 @@ class _FloatingSearchBar(QFrame):
 
     @staticmethod
     def texto_de_recuento(mostrados: int, total: int) -> str:
-        """BETA-MULTIAGENT2-FIX-04: la barra dice la verdad sobre el volumen.
+        """BETA2-FIX-04: la barra dice la verdad sobre el volumen.
 
         Antes solo se creaba un botón por resultado visible: ni recuento, ni
         paginación, ni ninguna señal de que existiera un resto. Con 800 fichas,
@@ -869,7 +869,7 @@ class _FloatingSearchBar(QFrame):
     def _result_button(self, item: dict) -> QPushButton:
         tag = "Hito" if item["kind"] == "milestone" else (item.get("type_label") or "")
         label = f"{item['title']}   ·  {tag}" if tag else item["title"]
-        # BETA-MULTIAGENT2-FIX-04: segunda línea con el resumen (en una relación,
+        # BETA2-FIX-04: segunda línea con el resumen (en una relación,
         # «origen → destino»). Sin ella, tres relaciones del mismo tipo se leían
         # las tres «Posee · Posee» y no había forma de saber cuál era cuál.
         detalle = str(item.get("summary") or "").strip()
@@ -1526,10 +1526,10 @@ class CreationWorkspace(QWidget):
         # (id → "pending"/"watering"/"done"/"error").
         self._batch_state: dict[str, str] = {}
         self._batch_total = 0
-        # BETA-MULTIAGENT2-FIX-06: encabezado vivo del riego («Regando «X» (k/N)») al
+        # BETA2-FIX-06: encabezado vivo del riego («Regando «X» (k/N)») al
         # que las fases del pipeline se enganchan como sufijo.
         self._watering_status_prefix = ""
-        # BETA-MULTIAGENT2-FIX-06: ventana de historial de IA de la sesión (perezosa).
+        # BETA2-FIX-06: ventana de historial de IA de la sesión (perezosa).
         self._ai_history_dialog = None
         # BETA2-FOCO-39: popover de progreso vivo (se refresca en cada paso).
         self._watering_progress_popover = None
@@ -1841,7 +1841,7 @@ class CreationWorkspace(QWidget):
         self._job_cancel_btn.clicked.connect(self._cancel_active_ai_jobs)
         self._job_cancel_btn.setVisible(False)
         row.addWidget(self._job_cancel_btn)
-        # BETA-MULTIAGENT2-FIX-06 (G2-09): puerta al HISTORIAL de la sesión. El estado
+        # BETA2-FIX-06 (G2-09): puerta al HISTORIAL de la sesión. El estado
         # se auto-borra a los 6 s (WIKI-13, y sigue haciéndolo: los mensajes terminales
         # no pueden quedarse clavados), pero la respuesta que costó minutos tiene que
         # seguir siendo recuperable. Se llega desde el propio indicador de estado.
@@ -1919,7 +1919,7 @@ class CreationWorkspace(QWidget):
         CANCELLED (el worker descarta su resultado al volver del proveedor) y se
         pide interrupción cooperativa; consistente con el cancelar del lote."""
         workers = dict(getattr(self, "_ai_workers", {}) or {})
-        # BETA-MULTIAGENT-FIX-02 (G-02): la fase más larga era invisible para la
+        # BETA-FIX-02 (G-02): la fase más larga era invisible para la
         # cancelación — los _SuggestionPrepWorker viven en _wiki_nav_workers.
         prep_workers = list(getattr(self, "_wiki_nav_workers", set()) or set())
         if not workers and not prep_workers:
@@ -2181,7 +2181,7 @@ class CreationWorkspace(QWidget):
             self._on_foco_cultivate(entity_id)
 
     def _watering_batch_running(self) -> bool:
-        """BETA-MULTIAGENT2-FIX-06 (G2-08): ¿hay un lote de riego EN VUELO?
+        """BETA2-FIX-06 (G2-08): ¿hay un lote de riego EN VUELO?
 
         Sin esta guarda, un segundo clic sobrescribía ``self._watering_worker`` y
         arrancaba un SEGUNDO ``WateringBatchWorker``: dos lotes concurrentes contra el
@@ -2596,7 +2596,7 @@ class CreationWorkspace(QWidget):
         )
 
         def _launch(prepared: dict) -> None:
-            # BETA-MULTIAGENT2-FIX-06 (G2-10): la wiki vacía no se cobra — y se DICE.
+            # BETA2-FIX-06 (G2-10): la wiki vacía no se cobra — y se DICE.
             # Mismo principio que la degradación visible de FIX-02: un atajo que ahorra
             # ~21.000 tokens por ronda no puede colarse en silencio.
             omitida = str(prepared.get("wiki_skipped") or "").strip()
@@ -2612,7 +2612,7 @@ class CreationWorkspace(QWidget):
             )
 
         worker = _SuggestionPrepWorker(svc, entity_id, metric, payload.get("peticion", ""))
-        # BETA-MULTIAGENT-FIX-02 (G-02): fases visibles + vigilante de demora
+        # BETA-FIX-02 (G-02): fases visibles + vigilante de demora
         # (patrón del walk, PLAY-12) + cancelación que cubre la preparación.
         worker.progressText.connect(self._job_status_label.setText)
         watchdog = QTimer(self)
@@ -2711,7 +2711,7 @@ class CreationWorkspace(QWidget):
             struct_timer.start()
 
     def _garden_pills_suppressed(self) -> bool:
-        """BETA-MULTIAGENT2-FIX-05 (G2-07): ¿deben callarse las píldoras del jardín?
+        """BETA2-FIX-05 (G2-07): ¿deben callarse las píldoras del jardín?
 
         Dos motivos, los dos verificados en el beta ronda 2:
         - **La IA está apagada** (SIA-01/SIA-12): la guarda de proveedor existía solo
@@ -2792,7 +2792,7 @@ class CreationWorkspace(QWidget):
         svc = getattr(self, "structural_service", None)
         project = self._get_active_project()
         available = svc is not None and project is not None
-        # BETA-MULTIAGENT2-FIX-05 (G2-07): STRUCT-08 fijó la píldora SIEMPRE visible
+        # BETA2-FIX-05 (G2-07): STRUCT-08 fijó la píldora SIEMPRE visible
         # por descubribilidad, y eso se respeta — salvo en los dos casos en que no
         # puede tener contenido ni sitio: sin proveedor de IA (la potencia causal solo
         # la atribuye la IA al Regar, así que su panel estaría vacío para siempre y sus
@@ -2834,7 +2834,7 @@ class CreationWorkspace(QWidget):
             on_accept=self._accept_structural_finding,
             on_close=self._close_structure_panel,
             log=self.ctx.log,
-            # BETA-MULTIAGENT2-FIX-06 (G2-08): «Proponer estructura» dejaba de ser mudo
+            # BETA2-FIX-06 (G2-08): «Proponer estructura» dejaba de ser mudo
             # fuera de su propio QLabel — estado global al arrancar, toast al terminar
             # (también con 0 propuestas y con timeout de lectura).
             notify=self.ctx.notify,
@@ -2871,7 +2871,7 @@ class CreationWorkspace(QWidget):
         controller = getattr(self, "candidate_controller", None)
         if svc is None or project is None or controller is None:
             return
-        # BETA-MULTIAGENT-FIX-05 (G-05): aceptar es idempotente — un segundo clic
+        # BETA-FIX-05 (G-05): aceptar es idempotente — un segundo clic
         # (panel viejo, doble clic, re-propuesta) no re-materializa el candidato.
         fingerprint = str(getattr(finding, "fingerprint", "") or "")
         if fingerprint and callable(getattr(svc, "is_applied", None)) and svc.is_applied(fingerprint):
@@ -3101,7 +3101,7 @@ class CreationWorkspace(QWidget):
         chrono_on = view == "chrono"
         foco_on = view == "foco"
         play_on = view == "play"  # BETA2-PLAY: recorrido inmersivo (sin píldora)
-        # BETA-MULTIAGENT2-FIX-01 (criterio 3): MOSTRAR ANTES DE ENCUADRAR. Antes
+        # BETA2-FIX-01 (criterio 3): MOSTRAR ANTES DE ENCUADRAR. Antes
         # se llamaba a `fit_all()` con la vista todavía oculta, así que el
         # encuadre se calculaba contra un viewport que aún no existía: la
         # Cronología abría a 0,0711 cuando el encuadre correcto era 0,125 (un
@@ -3156,12 +3156,12 @@ class CreationWorkspace(QWidget):
         # FOCO-13: la visibilidad de las Semillas depende de la vista — los
         # chips pulsantes se recalculan al cambiar de modo (idempotente).
         QTimer.singleShot(0, self._rehydrate_seed_notifications)
-        # BETA-MULTIAGENT2-FIX-05 (G2-07): las píldoras del jardín (💧 y ⚙) dependen
+        # BETA2-FIX-05 (G2-07): las píldoras del jardín (💧 y ⚙) dependen
         # de la vista — entrar en Play las calla, salir las devuelve. Directo, no por
         # el debounce de 400 ms: si no, se pintaban un instante sobre la inmersiva.
         self._refresh_thirsty_badge()
         self._refresh_structural_badge()
-        # BETA-MULTIAGENT2-FIX-14 (G2-26e): Play es una vista INMERSIVA y ya lo
+        # BETA2-FIX-14 (G2-26e): Play es una vista INMERSIVA y ya lo
         # declara arriba («recorrido inmersivo (sin píldora)»), pero hasta aquí no
         # ocultaba NINGUNO de sus flotantes: son hijos del workspace y
         # `_position_floats` los recolocaba sin condición, así que la píldora
@@ -3169,7 +3169,7 @@ class CreationWorkspace(QWidget):
         # «Continuar» del pie de Play. Chocaban por construcción.
         self._apply_immersive_chrome()
 
-    # ── BETA-MULTIAGENT2-FIX-14 (G2-26e): cromo de Creación fuera de Play ─────
+    # ── BETA2-FIX-14 (G2-26e): cromo de Creación fuera de Play ─────
 
     _CROMO_DE_CREACION = ("_float_right", "_float_focus", "_float_search", "_seed_notifications")
 
@@ -3405,7 +3405,7 @@ class CreationWorkspace(QWidget):
                     self._play_step_queued = True
                 return
         self._walk_analyzing = True
-        # BETA-MULTIAGENT2-FIX-06 (G2-08): Play/walk NUNCA escribía en el canal
+        # BETA2-FIX-06 (G2-08): Play/walk NUNCA escribía en el canal
         # compartido: lanzado desde la Cronología dejaba al usuario 581 s sin una sola
         # señal (su vigilante hablaba por `ctx.log`, panel oculto, y por la vista Play,
         # que no estaba abierta). Ahora habla desde t=0, como Sugerencias.
@@ -4320,7 +4320,7 @@ class CreationWorkspace(QWidget):
             self._position_floats()
 
     # ------------------------------------------------------------------
-    # BETA-MULTIAGENT2-FIX-09 (G2-15): hilos sueltos (plantado sin recoger)
+    # BETA2-FIX-09 (G2-15): hilos sueltos (plantado sin recoger)
     # ------------------------------------------------------------------
 
     def _ensure_threads_badge(self):
@@ -4447,7 +4447,7 @@ class CreationWorkspace(QWidget):
             search.move((self.width() - search.width()) // 2, 14)
             search.raise_()
         # BETA2-STRUCT-02: píldora de ajustes estructurales, abajo-izquierda.
-        # BETA-MULTIAGENT2-FIX-05 (G2-07): nunca sobre Play ni con la IA apagada —
+        # BETA2-FIX-05 (G2-07): nunca sobre Play ni con la IA apagada —
         # `_position_floats` no miraba `_active_view` y la píldora seguía al usuario a
         # la vista inmersiva aunque nadie la hubiera pedido allí.
         struct = getattr(self, "_float_structure", None)
@@ -4899,10 +4899,10 @@ class CreationWorkspace(QWidget):
 
         Antes esto iba solo a ctx.log, cuyo panel está oculto: el botón parecía
         muerto. Ahora: toast de error + diálogo accionable con acceso a Ajustes.
-        BETA-MULTIAGENT-FIX-06 (NOV-07): el toast — lo único que queda visible al
+        BETA-FIX-06 (NOV-07): el toast — lo único que queda visible al
         cerrarse el diálogo — nombra dónde activarla.
 
-        BETA-MULTIAGENT2-FIX-06 (G2-08): el DIÁLOGO va una sola vez por sesión. La
+        BETA2-FIX-06 (G2-08): el DIÁLOGO va una sola vez por sesión. La
         tester sin proveedor midió cinco clics = cinco toasts + cinco QMessageBox
         modales en 0,33 s. La ruta de fallo de job ya tenía esta guarda
         (``_ai_config_hint_shown``); esta no. El toast SÍ sale en cada intento: no
@@ -4992,7 +4992,7 @@ class CreationWorkspace(QWidget):
         # BETA2-WIKI-11: el panel «Tareas IA» (AIJobsPanel) se eliminó con la
         # superficie IA legada; el hook quedó en no-op aunque el pipeline compartido
         # lo sigue invocando en sus TRES transiciones de estado.
-        # BETA-MULTIAGENT2-FIX-06 (G2-09): ese enganche vivo es justo donde va el
+        # BETA2-FIX-06 (G2-09): ese enganche vivo es justo donde va el
         # historial — si la ventana está abierta, sigue el job en vivo.
         self._fill_ai_history()
 
@@ -5454,7 +5454,7 @@ class CreationWorkspace(QWidget):
         """BETA1-L02c: al teclear, refresca la lista al instante PERO difiere el salto
         (debounce). Así se puede escribir seguido sin que la navegación robe el foco;
         el enfoque ocurre tras una breve pausa."""
-        # BETA-MULTIAGENT2-FIX-04: cada consulta nueva vuelve al tope de una página.
+        # BETA2-FIX-04: cada consulta nueva vuelve al tope de una página.
         self._search_visible_limit = _SEARCH_PAGE
         items = self._unified_search(query)
         bar = getattr(self, "_float_search", None)
@@ -5481,7 +5481,7 @@ class CreationWorkspace(QWidget):
         lista corta de dicts rankeados que además sabe el TOTAL de coincidencias.
         Datos efímeros derivados; nunca canon.
 
-        BETA-MULTIAGENT2-FIX-04 (hallazgo G2-04, BLOQUEANTE). El orden era
+        BETA2-FIX-04 (hallazgo G2-04, BLOQUEANTE). El orden era
         ``(no empieza por la consulta, len(titulo), titulo)``: cuando nada
         empezaba por la consulta —el caso normal al buscar una palabra suelta—
         decidía la LONGITUD del título, así que las relaciones de nombre corto
@@ -5523,7 +5523,7 @@ class CreationWorkspace(QWidget):
                     "title": titulo,
                     "titulo_norm": titulo_norm,
                     "type_label": result.type_label or result.category,
-                    # BETA-MULTIAGENT2-FIX-04: el resumen (origen → destino) ya venía
+                    # BETA2-FIX-04: el resumen (origen → destino) ya venía
                     # calculado y no lo pintaba nadie; sin él, tres relaciones «Posee»
                     # distintas se leen exactamente igual en la barra.
                     "summary": str(getattr(result, "summary", "") or ""),
@@ -5569,7 +5569,7 @@ class CreationWorkspace(QWidget):
         return _ResultadosBusqueda(items[:limite], total=total)
 
     def _show_more_search_results(self):
-        """BETA-MULTIAGENT2-FIX-04: amplía el tope visible de la barra («Ver más»).
+        """BETA2-FIX-04: amplía el tope visible de la barra («Ver más»).
 
         No reinicia el debounce ni mueve la cámara: ampliar la lista es leer, no
         navegar. El tope máximo (`_SEARCH_MAX_VISIBLE`) existe porque la barra

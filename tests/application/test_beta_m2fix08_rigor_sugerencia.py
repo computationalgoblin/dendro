@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-08 (G2-13) — rigor de lo que genera la IA.
+"""BETA2-FIX-08 (G2-13) — rigor de lo que genera la IA.
 
 El camino de DIAGNÓSTICO (Regar/Memoria) es honesto por prompt: pide `risks` e
 `issues` con kinds hueco/supuesto. El camino GENERATIVO (Sugerencias) no tenía

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from hosts.DesktopHostPySide.widgets.design_system import PanelScaffold
-# BETA-MULTIAGENT2-FIX-13 (G2-20): la etiqueta legible de cada campo vive en
+# BETA2-FIX-13 (G2-20): la etiqueta legible de cada campo vive en
 # `packages.application` junto al catálogo canónico de campos editables — un solo
 # mapa, no uno paralelo en el host (ui → application está autorizado).
 from packages.application.ai_jobs import has_non_latin_script
@@ -111,7 +111,7 @@ def is_structural_candidate(proposed_data: Any) -> bool:
     return isinstance(proposed_data, dict) and proposed_data.get("kind") in _STRUCTURAL_KINDS
 
 
-# BETA-MULTIAGENT2-FIX-02 (G2-02): una semilla de HITO no lleva sus textos en el
+# BETA2-FIX-02 (G2-02): una semilla de HITO no lleva sus textos en el
 # primer nivel de `proposed_data`, sino ANIDADOS en `proposed_data["milestone"]`
 # (así lo montan las dos rutas que la crean: `ai_jobs.stage_results` y
 # `CandidateService.create_causal_milestone_candidate`). Como el panel solo miraba
@@ -166,7 +166,7 @@ def milestone_year_text(milestone: dict[str, Any]) -> str:
     """Año diegético del hito como texto, o «sin datar» si no lo trae.
 
     Un hito sin año aterriza hoy en «Año 0» al aceptarlo (G2-03, arreglado en
-    BETA-MULTIAGENT2-FIX-03): aquí no se toca la aceptación, solo se deja de
+    BETA2-FIX-03): aquí no se toca la aceptación, solo se deja de
     CALLAR que la semilla viene sin fecha.
     """
     year = (milestone or {}).get("year")
@@ -189,7 +189,7 @@ def milestone_facts_text(
 
     Año (o «sin datar»), tipo y —si existen— padres causales y entidades
     afectadas. El panel no pintaba ninguno: se aceptaban hitos sin ver su fecha
-    ni su tipo (G2-02/G2-03 del beta multi-agente).
+    ni su tipo (G2-02/G2-03 del beta).
     """
     if not isinstance(milestone, dict):
         return ""
@@ -339,7 +339,7 @@ def source_badge_text(candidate: Any) -> str:
     """fila 33: etiqueta legible del origen del candidato (usuario vs IA) y, si
     aplica, su confianza. La revisión distingue de un vistazo qué propuso la IA.
 
-    BETA-MULTIAGENT2-FIX-08 (G2-13): la confianza SOLO se pinta cuando la declaró
+    BETA2-FIX-08 (G2-13): la confianza SOLO se pinta cuando la declaró
     el modelo (`metadata["confianza_declarada"]`). El 0,60/0,62 que se enseñaba
     antes era un literal del código —el mismo número para una boda documentada que
     para una prisión inventada—: un número que no discrimina no se enseña.
@@ -424,7 +424,7 @@ class CandidateReviewPanel(QWidget):
         self._on_close = on_close
         self._on_repair = on_repair
         self._log = log
-        # BETA-MULTIAGENT-FIX-04 (G-04): un accept fallido moría en el QLabel del
+        # BETA-FIX-04 (G-04): un accept fallido moría en el QLabel del
         # panel y en ctx.log (consola oculta) — sin toast, semilla en limbo.
         self._notify = notify
         self._target_edit: QLineEdit | None = None
@@ -504,7 +504,7 @@ class CandidateReviewPanel(QWidget):
             title_initial = str(getattr(self._candidate, "title", "") or "")
             placeholder = "Encabezado de la semilla"
         self._title_edit = QLineEdit(title_initial)
-        # BETA-MULTIAGENT2-FIX-14 (G2-26a): `QLineEdit` deja el cursor AL FINAL, así
+        # BETA2-FIX-14 (G2-26a): `QLineEdit` deja el cursor AL FINAL, así
         # que con un título más largo que el campo se veía la COLA y se escondía el
         # principio («el Ruiz Vargas: extended_description», «rio, la Aprendiza de…»).
         # Un título se lee por donde empieza.

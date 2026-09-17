@@ -121,7 +121,7 @@ class AppContext:
     # arranca colapsado). Estado de UI, no de proyecto → vive aquí, sin migración.
     creation_chrono_expanded_ids: list[str] = field(default_factory=list)
 
-    # BETA-MULTIAGENT2-FIX-14 (G2-30). Sin anotación de tipo a propósito: NO es un
+    # BETA2-FIX-14 (G2-30). Sin anotación de tipo a propósito: NO es un
     # campo del dataclass (no debe aparecer en `__init__`), es estado de proceso.
     #: True si esta app puso `NARRATIVE_AI_API_KEY` en el entorno (y puede quitarla).
     _ai_key_exported = False
@@ -144,7 +144,7 @@ class AppContext:
         return provider in self._PROVEEDORES_CON_CLAVE or bool((self.ai_base_url or "").strip())
 
     def forget_api_key(self) -> None:
-        """BETA-MULTIAGENT2-FIX-14 (G2-30): retira la clave del disco Y del proceso.
+        """BETA2-FIX-14 (G2-30): retira la clave del disco Y del proceso.
 
         No había NINGUNA forma de retirarla: `_save_ia_env` solo la escribía cuando
         el campo traía texto y nunca la borraba al cambiar a `simulated`.
@@ -157,7 +157,7 @@ class AppContext:
     def _apply_ai_environment(self) -> None:
         """Vuelca los ajustes de IA persistidos a las variables de entorno.
 
-        BETA-MULTIAGENT2-FIX-14 (G2-30): la clave SOLO viaja al entorno si el
+        BETA2-FIX-14 (G2-30): la clave SOLO viaja al entorno si el
         proveedor configurado la consume. Antes se exportaba sin mirar el proveedor,
         en CADA arranque y en CADA guardado: apagar la IA (`simulated`) no apagaba
         nada, la clave seguía en el entorno del proceso. Ahora, además, al apagar se
@@ -263,7 +263,7 @@ class AppContext:
             }
             self._apply_ai_environment()
             PREFERENCES_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            # BETA-MULTIAGENT2-FIX-14 (G2-30): el `chmod(0o600)` solo restringe de
+            # BETA2-FIX-14 (G2-30): el `chmod(0o600)` solo restringe de
             # verdad en POSIX. En Windows `Path.chmod` mueve el bit de solo-lectura
             # y NO toca las ACL: ahí no protege nada, así que ni se intenta (dejarlo
             # sugería una protección que en la plataforma de la beta no existe).

@@ -53,7 +53,7 @@ AI_ENTITY_FIELD_ALIASES: dict[str, str] = {
 }
 AI_MILESTONE_FIELD_ALIASES: dict[str, str] = {"body": "rationale", "summary": "description"}
 
-# BETA-MULTIAGENT2-FIX-13 (G2-20): ETIQUETA visible de cada campo editable.
+# BETA2-FIX-13 (G2-20): ETIQUETA visible de cada campo editable.
 #
 # El dato no cambia — `edit_field`, `edit_fields` y las listas blancas de arriba
 # siguen hablando en claves internas, y el prompt le sigue pidiendo a la IA que
@@ -123,7 +123,7 @@ class CandidateService:
     entity_service: Any = None
     relation_service: Any = None
     history_service: Any = None
-    # BETA-MULTIAGENT2-FIX-08 (G2-14): servicio de fuentes para dejar constancia de
+    # BETA2-FIX-08 (G2-14): servicio de fuentes para dejar constancia de
     # DE QUÉ SEMILLA vino cada pieza de canon. Opcional: sin él (y sin proyecto
     # activo) la aceptación sigue funcionando — la trazabilidad nunca convierte un
     # accept correcto en Error.
@@ -241,7 +241,7 @@ class CandidateService:
                      note: str = "", candidate_id: str = "") -> None:
         """Registra la decisión sobre una semilla en el historial del proyecto.
 
-        BETA-MULTIAGENT2-FIX-08 (G2-14/B3): antes esto no escribía NADA por tres
+        BETA2-FIX-08 (G2-14/B3): antes esto no escribía NADA por tres
         razones a la vez — el servicio no se inyectaba, ``add_entry`` no existía y
         el tipo de evento era un literal fuera del enum que ``HistoryService``
         degradaba en silencio a ``creacion_entidad``. Ahora se llama a la API real
@@ -262,7 +262,7 @@ class CandidateService:
         except Exception:  # noqa: BLE001 — el historial es derivado: nunca rompe la decisión
             pass
 
-    # ── Trazabilidad de la aceptación (BETA-MULTIAGENT2-FIX-08, G2-14) ────
+    # ── Trazabilidad de la aceptación (BETA2-FIX-08, G2-14) ────
 
     @staticmethod
     def _provenance_source_type(c: Candidate) -> SourceType:
@@ -409,7 +409,7 @@ class CandidateService:
         if c.candidate_type == CandidateType.ENTIDAD:
             if not self.entity_service:
                 return Error("EntityService not available")
-            # BETA-MULTIAGENT-FIX-04 (G-04): si la propuesta no trae anillo, se
+            # BETA-FIX-04 (G-04): si la propuesta no trae anillo, se
             # hereda del context_scope del candidato (mismo orden de precedencia
             # que ai_jobs._first_active_layer) — las entidades IA dejaban de nacer
             # «Sin anillo» cuando el scope sí lo conocía.
@@ -531,7 +531,7 @@ class CandidateService:
             found_s = any(e.id == sid for e in proj.value.entities)
             found_t = any(e.id == tid for e in proj.value.entities)
             if not found_s or not found_t:
-                # BETA-MULTIAGENT-FIX-04 (G-04): mensaje honesto y en español — y
+                # BETA-FIX-04 (G-04): mensaje honesto y en español — y
                 # el caso concreto del beta: la IA proponía relación con un HITO.
                 milestone_ids = {m.id for m in proj.value.causal_milestones}
                 if tid in milestone_ids or sid in milestone_ids:
@@ -590,14 +590,14 @@ class CandidateService:
             if cand_meta.get("confianza_declarada") and milestone_data.get("confidence") is None:
                 milestone_data["confidence"] = c.confidence
             hito = CausalMilestone.from_dict(milestone_data)
-            # BETA-MULTIAGENT2-FIX-03 (G2-03): PROMOCIÓN. Esta rama appendeaba el
+            # BETA2-FIX-03 (G2-03): PROMOCIÓN. Esta rama appendeaba el
             # hito con los defaults del dominio — `status=candidate`,
             # `created_at=""`, sin normalizar la datación — mientras el toast decía
             # «Semilla integrada al canon». `approve_hito` lo hacía bien a 200
             # líneas de aquí; ahora las dos llaman al MISMO helper.
             promote_milestone(hito, candidate_id=c.id)
             proj.value.causal_milestones.append(hito)
-            # BETA-MULTIAGENT2-FIX-09 (G2-15): una Semilla de hito puede traer sus
+            # BETA2-FIX-09 (G2-15): una Semilla de hito puede traer sus
             # causas; el espejo del padre se reconstruye en el punto único de
             # reconciliación para que A sepa que tiene a B como consecuencia.
             causal_links.sync_children_mirror(proj.value)

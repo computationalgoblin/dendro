@@ -566,7 +566,7 @@ class RelationDetailPanel(QWidget):
             self.more_section.body_layout.addWidget(self.related_milestones_panel)
         root.addWidget(self.more_section)
 
-        # BETA-MULTIAGENT2-FIX-11 (fase B1): certeza de la relación. El campo
+        # BETA2-FIX-11 (fase B1): certeza de la relación. El campo
         # existía en el dominio y el SERVICIO lo tiraba en silencio (ya no). Aquí
         # solo la certeza: el intervalo temporal de la relación se sigue editando
         # arriba en años enteros, que son su espejo autoritativo.

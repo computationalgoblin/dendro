@@ -1,8 +1,8 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA A — contraste de los tokens del CROMO (G2-17).
+"""BETA2-FIX-13 · TANDA A — contraste de los tokens del CROMO (G2-17).
 
 Aritmética pura sobre los tokens: no necesita QApplication.
 
-Frontera declarada con BETA-MULTIAGENT2-FIX-01: aquel ticket es el dueño de los
+Frontera declarada con BETA2-FIX-01: aquel ticket es el dueño de los
 tokens que consumen los dos LIENZOS (`EARTH*`, relleno de nodo, tinta de las
 etiquetas de hito); este fija los del cromo — tintas de panel, botón primario,
 bordes de control y la paleta CATEGÓRICA como token.

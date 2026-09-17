@@ -88,7 +88,7 @@ _RING_ID_ROLE = 4
 # BETA1-HITO-MULTI: holgura (px) para atribuir un clic sobre la franja al carril
 # de entidad más cercano. < media de LANE_WIDTH (92) → zonas de carril sin solape.
 BAND_LANE_TOL = 40.0
-# BETA-MULTIAGENT2-FIX-15 (G2-25): presupuesto de marcadores FANTASMA sembrados en
+# BETA2-FIX-15 (G2-25): presupuesto de marcadores FANTASMA sembrados en
 # la reconstrucción de la escena. El sembrado era ciego —un `_GhostNode` por CADA
 # cruce hito × línea de vida viva—, así que el censo crecía con el PRODUCTO: a 800
 # fichas eran 137.311 de 143.116 ítems (96 % de la escena) y cambiar de vista
@@ -129,7 +129,7 @@ def _enum_value(value: Any, default: str = "") -> str:
 
 
 def _motion_enabled() -> bool:
-    """¿Está activo el movimiento de la app? (BETA-MULTIAGENT2-FIX-01 · ART-29)
+    """¿Está activo el movimiento de la app? (BETA2-FIX-01 · ART-29)
 
     El interruptor canónico vive en `graph_canvas.MOTION_ENABLED` y es el que
     apagan los tests y el arnés de capturas. Se lee de forma diferida porque
@@ -147,7 +147,7 @@ ZOOM_MIN_SCALE = 0.02
 ZOOM_MAX_SCALE = 8.0
 ZOOM_FACTOR = 1.15
 
-# BETA-MULTIAGENT2-FIX-01 (criterio 4): suelo de escala del encuadre inicial de
+# BETA2-FIX-01 (criterio 4): suelo de escala del encuadre inicial de
 # la cronología. Por debajo de esto una marca de hito (radio ~6 px) mide menos
 # de un píxel y la vista deja de existir: en vez de meter el eje entero en el
 # viewport se encuadra el TRAMO más poblado. Es el mismo criterio que el suelo
@@ -438,9 +438,9 @@ class MilestoneMark:
     # comparten, para que ambas franjas se lean.
     y_offset: float = 0.0
     # Desambiguación dentro de la caja (mes/día, o la posición "N.º" si la trae).
-    # Es solo la ETIQUETA que se pinta: NO se ordena por ella (BETA-MULTIAGENT2-FIX-15).
+    # Es solo la ETIQUETA que se pinta: NO se ordena por ella (BETA2-FIX-15).
     sub_label: str = ""
-    # BETA-MULTIAGENT2-FIX-15 (G2-28): clave NUMÉRICA de orden dentro del año
+    # BETA2-FIX-15 (G2-28): clave NUMÉRICA de orden dentro del año
     # (mes del calendario, día, sort_index, título, id) — ver `milestone_order_key`.
     order_key: tuple = (0, 0, 0.0, "", "")
     # FOCO-25: fin opcional del hito (lapso derivado de su duración) → el hito
@@ -536,7 +536,7 @@ def _milestone_sub_label(hito: Any) -> str:
         parts = [p for p in (month, day) if p]
         if parts:
             return " ".join(parts)
-    # BETA-MULTIAGENT2-FIX-03 (G2-03): «Orden 0» era un nombre de campo interno
+    # BETA2-FIX-03 (G2-03): «Orden 0» era un nombre de campo interno
     # asomando por la etiqueta, y salía en TODO hito de IA porque `ai_jobs`
     # fabricaba `sort_index = 0` por defecto (los escritos a mano no lo traen).
     # El desambiguador solo tiene sentido con una posición REAL (1.º, 2.º…): un
@@ -680,7 +680,7 @@ def _entity_in_window(entity: Any, scope: "ChronoScope", present_year: int) -> b
 
 
 def _milestone_in_window(year: int, end_year: int | None, scope: "ChronoScope") -> bool:
-    """BETA-MULTIAGENT2-FIX-15 (G2-27): ¿el intervalo del hito solapa la ventana?
+    """BETA2-FIX-15 (G2-27): ¿el intervalo del hito solapa la ventana?
 
     Misma regla de solape que :func:`_entity_in_window` (que ya la aplica a las
     líneas de vida, y el bucle de eras a los estratos): el hito entra si
@@ -708,7 +708,7 @@ def _milestone_in_window(year: int, end_year: int | None, scope: "ChronoScope") 
 def _calendar_month_names(project: Any) -> tuple[str, ...]:
     """Meses del calendario del proyecto, en su orden REAL (no alfabético).
 
-    BETA-MULTIAGENT2-FIX-15 (G2-28): los necesita `milestone_order_key` para
+    BETA2-FIX-15 (G2-28): los necesita `milestone_order_key` para
     ordenar los hitos con `metadata.exact_date` por índice de mes.
     """
     chronology = getattr(project, "project_chronology", None)
@@ -803,7 +803,7 @@ def build_chrono_layout(
         t for t in trees if scope.collapse_default and t not in scope.expanded_ids
     }
     ring_ids_used = {effective.get(str(getattr(e, "id", "")), UNCLASSIFIED_RING_ID) for e in entities}
-    # BETA-MULTIAGENT2-FIX-15 (G2-27, punto 7): entidades que SUPERAN los filtros
+    # BETA2-FIX-15 (G2-27, punto 7): entidades que SUPERAN los filtros
     # explícitos (tipo/canon/secreto/ventana + foco de anillo). Se acumula aquí —y
     # no del colapso ni de la agregación de sueltas, que ocultan sin filtrar— para
     # decidir si una franja de hito se queda sin ningún participante visible.
@@ -940,7 +940,7 @@ def build_chrono_layout(
     # 5. Hitos: FRANJA horizontal a la altura del año, con un punto en el carril
     #    de cada entidad participante (BETA1-HITO-MULTI). Ya no hay "entidad
     #    principal": todas las afectadas participan en pie de igualdad.
-    # BETA-MULTIAGENT2-FIX-15 (G2-27/G2-28): el bucle respeta la ventana temporal
+    # BETA2-FIX-15 (G2-27/G2-28): el bucle respeta la ventana temporal
     # (como eras y líneas de vida) y lleva una clave de orden NUMÉRICA.
     month_names = _calendar_month_names(project)
     all_entity_ids = {str(getattr(entity, "id", "")) for entity in entities}
@@ -982,7 +982,7 @@ def build_chrono_layout(
     for group in by_year.values():
         if len(group) < 2:
             continue
-        # BETA-MULTIAGENT2-FIX-15 (G2-28): se ordena por la clave NUMÉRICA, no por
+        # BETA2-FIX-15 (G2-28): se ordena por la clave NUMÉRICA, no por
         # el texto de `sub_label` (que ponía «10.º» antes que «2.º» y los meses en
         # orden alfabético). `order_key` ya termina en (título, id): es total.
         group.sort(key=lambda m: m.order_key)
@@ -1031,7 +1031,7 @@ def build_chrono_layout(
     # 6.b Cajas de hito-marco (BETA2-SUB-01): un hito que contiene subhitos se
     #     dibuja como recuadro que los encierra en el eje TIEMPO. La extensión en
     #     tiempo abarca el intervalo del marco y de todos sus subhitos.
-    #     BETA-MULTIAGENT2-FIX-15 (G2-27): esta sección recorría `milestones`
+    #     BETA2-FIX-15 (G2-27): esta sección recorría `milestones`
     #     ENTERA, así que filtrar el bucle de marcas habría dejado marcos de hitos
     #     que ya no se pintan. Solo se enmarca lo EMITIDO (marco y subhitos).
     milestone_boxes: list[MilestoneBox] = []
@@ -1888,7 +1888,7 @@ if HAS_QT:
             self._handle_moved = False
             self._project = None  # BETA1-UX2D: último proyecto (para reconstruir bajo demanda)
             self._rebuild_pending = False  # evita reconstrucciones diferidas duplicadas
-            # BETA-MULTIAGENT2-FIX-01: encuadre inicial DIFERIDO. `set_active_view`
+            # BETA2-FIX-01: encuadre inicial DIFERIDO. `set_active_view`
             # llamaba a `fit_all()` ANTES del `setVisible(True)`, así que el encuadre
             # se calculaba contra un viewport de 100x30 que aún no existía (Elvira:
             # 0,0711 al abrir frente a 0,125 con un fit_all posterior, un 76 % de
@@ -1964,7 +1964,7 @@ if HAS_QT:
             # SEM03: germinación de hitos (mismo patrón que la concéntrica).
             self._milestone_items: dict[str, list] = {}
             self._bloom_items: dict[str, float] = {}
-            # BETA-MULTIAGENT2-FIX-15 (G2-25): registro propio de los marcadores
+            # BETA2-FIX-15 (G2-25): registro propio de los marcadores
             # fantasma (jamás en `_milestone_items`: no germinan ni centran).
             # `_ghosts_seeded` = la escena los sembró en el rebuild (mundo pequeño);
             # si es False se materializan al hover, hito a hito.
@@ -2420,7 +2420,7 @@ if HAS_QT:
         def leaveEvent(self, event):  # noqa: N802 (Qt API)
             self._edge_pan = (0.0, 0.0)
             self._edge_pan_timer.stop()
-            # BETA-MULTIAGENT2-FIX-15: al salir del lienzo se retiran los fantasmas
+            # BETA2-FIX-15: al salir del lienzo se retiran los fantasmas
             # materializados bajo demanda (los sembrados en el rebuild se quedan).
             if not self._ghosts_seeded:
                 self._clear_hover_ghosts()
@@ -2682,7 +2682,7 @@ if HAS_QT:
 
         # UX31: revelado de transición DENTRO del viewport (como en la concéntrica).
         def play_reveal(self, *, duration_ms: int = 220) -> None:
-            # BETA-MULTIAGENT2-FIX-01 (ART-29): sin movimiento, sin velo. Se lee el
+            # BETA2-FIX-01 (ART-29): sin movimiento, sin velo. Se lee el
             # MISMO interruptor que usan tests y capturas (`graph_canvas.
             # MOTION_ENABLED`); import diferido porque graph_canvas importa este
             # módulo y en carga sería circular.
@@ -2789,7 +2789,7 @@ if HAS_QT:
             self._draw_legend(painter, vp, layout)
             painter.restore()
 
-        # ── BETA-MULTIAGENT2-FIX-14 (G2-26d): la leyenda dejó de tapar la línea ──
+        # ── BETA2-FIX-14 (G2-26d): la leyenda dejó de tapar la línea ──
         #
         # `_draw_legend` dibujaba un panel OPACO (alpha 244) anclado al borde
         # derecho y centrado en vertical, ENCIMA de la escena y sin que nadie
@@ -3118,7 +3118,7 @@ if HAS_QT:
             # SEM03: la escena se reconstruye; reinicia el lookup y el glow.
             self._milestone_items = {}
             self._bloom_items = {}
-            # BETA-MULTIAGENT2-FIX-15: los fantasmas viven en su PROPIO registro
+            # BETA2-FIX-15: los fantasmas viven en su PROPIO registro
             # (nunca en `_milestone_items`, que alimenta bloom/centrado) y el
             # `scene.clear()` de arriba ya los ha destruido: sin fugas entre
             # reconstrucciones.
@@ -3583,7 +3583,7 @@ if HAS_QT:
             # desambiguan dentro de la caja. Los rótulos viven dentro del área del
             # grafo (a la derecha del margen de eras) para no chocar con ellas.
             self._milestone_items = {}
-            # BETA-MULTIAGENT2-FIX-15 (G2-25): el sembrado de fantasmas solo cabe
+            # BETA2-FIX-15 (G2-25): el sembrado de fantasmas solo cabe
             # si el censo (hitos × líneas de vida) entra en el presupuesto. Por
             # encima, el rebuild NO siembra ninguno y se materializan al pasar el
             # ratón por la franja del hito (_update_hover_ghosts).
@@ -3690,7 +3690,7 @@ if HAS_QT:
             rect = self._logical_rect(0, 0, layout.width, layout.height)
             scene.setSceneRect(rect.adjusted(-60, -60, 60, 60))
 
-        # ── Fantasmas de vinculación (BETA-MULTIAGENT2-FIX-15, G2-25) ────────
+        # ── Fantasmas de vinculación (BETA2-FIX-15, G2-25) ────────
         def _spawn_ghosts(self, mark: MilestoneMark, *, limit: int) -> list:
             """Marcadores FANTASMA de un hito: uno en el cruce de su franja con el
             carril de cada entidad NO vinculada y viva ese año.
@@ -4181,7 +4181,7 @@ if HAS_QT:
                 self._handle_moved = True
                 event.accept()
                 return
-            # BETA-MULTIAGENT2-FIX-15 (G2-25): hover PASIVO (sin botón pulsado) →
+            # BETA2-FIX-15 (G2-25): hover PASIVO (sin botón pulsado) →
             # materializa los fantasmas del hito apuntado si el rebuild no los
             # sembró. Con botón pulsado (paneo/arrastre) no se toca la escena.
             if event.buttons() == Qt.MouseButton.NoButton:
@@ -4264,7 +4264,7 @@ if HAS_QT:
 
         def _milestone_id_at(self, view_pos) -> str:
             """CRON: id del hito bajo el cursor (marca, franja, fantasma o título),
-            o ''. BETA-MULTIAGENT2-FIX-15: incluye el fantasma —si no, mover el
+            o ''. BETA2-FIX-15: incluye el fantasma —si no, mover el
             ratón sobre uno materializado al hover se leía como "fuera del hito" y
             los retiraba en bucle— y tolera ``None`` (sin posición = sin hito)."""
             item = self.itemAt(view_pos) if view_pos is not None else None
@@ -4317,7 +4317,7 @@ if HAS_QT:
             event.accept()
 
         def populated_rect(self) -> "QRectF | None":
-            """BETA-MULTIAGENT2-FIX-01 (criterio 5): rect del contenido POBLADO —
+            """BETA2-FIX-01 (criterio 5): rect del contenido POBLADO —
             líneas de vida + marcas de hito — en coordenadas de escena.
 
             El `sceneRect` (y también el `itemsBoundingRect`) abarcan el EJE ENTERO

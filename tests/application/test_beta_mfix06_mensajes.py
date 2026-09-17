@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-06: mensajería honesta (G-09 parcial del beta multi-agente).
+"""BETA-FIX-06: mensajería honesta (G-09 parcial del beta).
 
 - El mensaje de proveedor no configurado no menciona la CLI (eliminada en WS-G).
 - Los errores de validación de servicios llegan en español.

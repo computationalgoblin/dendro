@@ -19,7 +19,7 @@ from packages.domain.relation import (
 
 class TestRelationType:
     # El nombre del método arrastraba dos recuentos viejos (38, luego 41).
-    # BETA-MULTIAGENT2-FIX-12 (G2-16) suma la familia de parentesco: 41 + 9 = 50.
+    # BETA2-FIX-12 (G2-16) suma la familia de parentesco: 41 + 9 = 50.
     def test_has_50_values(self):
         assert len(RelationType) == 50
 

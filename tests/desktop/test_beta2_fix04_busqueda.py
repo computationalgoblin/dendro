@@ -1,6 +1,6 @@
-"""BETA-MULTIAGENT2-FIX-04 — la búsqueda deja de expulsar la ficha que buscas.
+"""BETA2-FIX-04 — la búsqueda deja de expulsar la ficha que buscas.
 
-Hallazgo **G2-04** (BLOQUEANTE) de la 2ª ronda de beta testing multi-agente.
+Hallazgo **G2-04** (BLOQUEANTE) de la 2ª ronda de beta testing.
 Rubén sembró la **Posada del Cuervo Ahogado** en un mundo de 800 fichas y al
 final no pudo encontrarla: la barra le enseñó ocho resultados
 ``['Busca', 'Posee', 'Posee', 'Oculta', ...]`` y ninguno era ella. El desempate

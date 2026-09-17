@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-09 (G2-15): el hilo causal en el panel de detalle del hito.
+"""BETA2-FIX-09 (G2-15): el hilo causal en el panel de detalle del hito.
 
 Lo único que la app enseñaba del hilo era un contador («Consecuencias (hitos
 posteriores): 2») que no decía cuáles, no era clicable y no permitía crear ni

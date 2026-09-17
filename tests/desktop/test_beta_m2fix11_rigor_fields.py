@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-11 (fase B): el aparato de rigor tiene formulario.
+"""BETA2-FIX-11 (fase B): el aparato de rigor tiene formulario.
 
 `certainty_level` tenía CERO apariciones en `hosts/`, `precision` solo aparecía
 como texto de lectura en la revisión de semillas, y el campo «Fecha / posición»

@@ -155,9 +155,9 @@ class RelationService:
         if not self._entity_exists(tgt):
             return Error(f"Target entity '{tgt}' does not exist")
 
-        # BETA-MULTIAGENT2-FIX-03 (G2-03, alcance F): un tipo string fuera del
+        # BETA2-FIX-03 (G2-03, alcance F): un tipo string fuera del
         # dominio se aplanaba a `esta_relacionado_con` EN SILENCIO — lo aprobado
-        # dejaba de ser lo guardado. BETA-MULTIAGENT-FIX-04 (ronda 1) ya cerró
+        # dejaba de ser lo guardado. BETA-FIX-04 (ronda 1) ya cerró
         # esto en la aceptación de candidatos; la ruta DIRECTA seguía mintiendo.
         # Vacío/None = default EXPLÍCITO, no desconocido. `coerce_relation_type`
         # (dominio) devuelve None para lo desconocido: ese es el contrato.
@@ -191,7 +191,7 @@ class RelationService:
                 "validity_conditions", "tags", "source_id", "target_id", "layer_ids",
                 "custom_relation_type_id",
                 "birth_year", "death_year",  # BETA1-J04: intervalo temporal
-                # BETA-MULTIAGENT2-FIX-11 (fase B1): nivel de certeza. El campo
+                # BETA2-FIX-11 (fase B1): nivel de certeza. El campo
                 # existía en el dominio desde siempre y el servicio lo TIRABA en
                 # silencio devolviendo Ok — la historiadora no podía marcar qué
                 # relación está documentada y cuál se la inventó ella (HIS-05).
@@ -250,7 +250,7 @@ class RelationService:
         if isinstance(proj, Error):
             return Error(proj.error)
 
-        # BETA-MULTIAGENT2-FIX-12 (G2-16): la ruta MANUAL también aplanaba al
+        # BETA2-FIX-12 (G2-16): la ruta MANUAL también aplanaba al
         # ACTUALIZAR — `setattr` crudo + `_normalize_relation_enums` devolvían el
         # tipo desconocido al genérico y el resultado era `Ok`. FIX-03 cerró la
         # creación; esta es la puerta gemela. Se resuelve ANTES de tocar nada

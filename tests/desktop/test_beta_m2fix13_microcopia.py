@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA E — hablar el idioma del usuario (G2-20).
+"""BETA2-FIX-13 · TANDA E — hablar el idioma del usuario (G2-20).
 
     «"(contrato §16)". La aplicación está citando su propia especificación
     interna, por número de sección, a una novelista. No existe ningún §16 que yo

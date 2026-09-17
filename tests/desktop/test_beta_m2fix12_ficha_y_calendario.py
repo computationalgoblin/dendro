@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-12 (G2-16 / G2-29) — lo que el usuario VE y TOCA.
+"""BETA2-FIX-12 (G2-16 / G2-29) — lo que el usuario VE y TOCA.
 
 Tres pantallas, tres ausencias que expulsaban perfiles enteros:
 

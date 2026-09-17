@@ -35,7 +35,7 @@ from packages.domain.result import Ok
 
 _STRUCTURE_KINDS = frozenset({"ring_create", "ring_merge"})
 
-#: BETA-MULTIAGENT2-FIX-05 (G2-07): filas máximas por sección determinista. Ver
+#: BETA2-FIX-05 (G2-07): filas máximas por sección determinista. Ver
 #: `_add_capped`. Las propuestas de estructura de la IA (pocas y bajo demanda) no
 #: se acotan.
 _MAX_ROWS_PER_SECTION = 12
@@ -77,7 +77,7 @@ class StructureReviewPanel(QWidget):
         self._on_accept = on_accept
         self._on_close = on_close
         self._log = log
-        # BETA-MULTIAGENT2-FIX-06 (G2-08): «Proponer estructura» SÍ decía lo que pasaba,
+        # BETA2-FIX-06 (G2-08): «Proponer estructura» SÍ decía lo que pasaba,
         # pero solo en un QLabel de este panel — cero `ctx.notify`, cero estado global.
         # Un tester midió 5 min 9 s, timeout de lectura, 0 propuestas y CERO toasts en
         # todo el log de la sesión: «pagas una llamada y no te enteras de que la has
@@ -108,7 +108,7 @@ class StructureReviewPanel(QWidget):
     # ── construcción ─────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        # BETA-MULTIAGENT2-FIX-14 (G2-21): `deleteLater()` a secas solo ENCOLA el
+        # BETA2-FIX-14 (G2-21): `deleteLater()` a secas solo ENCOLA el
         # borrado — el widget seguía siendo hijo del panel y seguía pintándose, así
         # que el mensaje nuevo salía ENTRELAZADO con el anterior (fotografiado por
         # una tester al pulsar «Proponer estructura» sin proveedor). `clear_layout`
@@ -176,7 +176,7 @@ class StructureReviewPanel(QWidget):
         body.addWidget(scroll, 1)
 
     def _add_capped(self, rows: QVBoxLayout, findings: list[Any]) -> None:
-        """BETA-MULTIAGENT2-FIX-05 (G2-07): tope por sección, con el resto declarado.
+        """BETA2-FIX-05 (G2-07): tope por sección, con el resto declarado.
 
         El panel pintaba una fila por hallazgo, sin tope ni paginación: sobre la
         campaña larga del beta eran 203 tarjetas de golpe (ahora 126 tras calibrar el

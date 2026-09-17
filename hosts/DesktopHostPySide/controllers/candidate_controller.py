@@ -12,7 +12,7 @@ from hosts.DesktopHostPySide.controllers.mutation_hook import MutationNotifier
 
 
 class CandidateController(MutationNotifier):
-    """BETA-MULTIAGENT2-FIX-14 (G2-22): hereda el aviso de mutación.
+    """BETA2-FIX-14 (G2-22): hereda el aviso de mutación.
 
     Hasta aquí era una clase suelta: aceptar/rechazar/estadiar una semilla mutaba
     el canon en memoria y NADIE se enteraba. La cadena rota era, en orden: sin
@@ -30,7 +30,7 @@ class CandidateController(MutationNotifier):
             project_service=self.ps,
             entity_service=EntityService(self.ps),
             relation_service=RelationService(self.ps),
-            # BETA-MULTIAGENT2-FIX-08 (G2-14/B3): sin estos dos, aceptar una semilla
+            # BETA2-FIX-08 (G2-14/B3): sin estos dos, aceptar una semilla
             # dejaba el canon sin fuente y el historial mudo (ni un solo evento
             # `aceptacion_sugerencia` tras 24 entidades y una aceptación).
             history_service=HistoryService(self.ps),

@@ -48,7 +48,7 @@ class BotanicalSpinBox(QSpinBox):
     def _step(self, direction: int) -> None:
         self.setValue(self.value() + direction * self.singleStep())
 
-    # ── BETA-MULTIAGENT2-FIX-14 (G2-26b): el año «1962» se veía como «19» ──────
+    # ── BETA2-FIX-14 (G2-26b): el año «1962» se veía como «19» ──────
     #
     # `resizeEvent` reservaba `setTextMargins(size, 0, size, 0)` para los botones
     # −/+ (≥24 px por lado) pero NADIE se lo contaba a `sizeHint`/`minimumSizeHint`,

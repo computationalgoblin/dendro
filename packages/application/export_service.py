@@ -90,7 +90,7 @@ class ExportService:
         usados.add(nombre.lower())
         return nombre
 
-    # ── BETA-MULTIAGENT2-FIX-14 (G2-24): la obra entera, no solo el reparto ─────
+    # ── BETA2-FIX-14 (G2-24): la obra entera, no solo el reparto ─────
     #
     # El bundle escribía UNA ficha por entidad y un índice. Un showrunner exportó su
     # biblia de dos temporadas y le salieron 19 fichas de personaje y utilería: fuera
@@ -392,7 +392,7 @@ class ExportService:
         anillos = {
             c.id: c.name for c in (getattr(proyecto, "world_layers", None) or [])
         }
-        # BETA-MULTIAGENT2-FIX-14 (G2-24): se calculan ANTES del bucle para que cada
+        # BETA2-FIX-14 (G2-24): se calculan ANTES del bucle para que cada
         # ficha pueda enlazar los hitos en los que participa (navegable en Obsidian
         # como se navega en Dendro).
         hitos = self._filter_milestones(audience)
@@ -452,7 +452,7 @@ class ExportService:
                 return Error(f"No se pudo escribir «{entidad.name}»: {exc}")
             escritos += 1
 
-        # BETA-MULTIAGENT2-FIX-14 (G2-24): la obra, no solo el reparto.
+        # BETA2-FIX-14 (G2-24): la obra, no solo el reparto.
         n_eras, error = self._escribir_cronologia(destino, proyecto)
         if error:
             return Error(error)

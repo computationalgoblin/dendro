@@ -59,7 +59,7 @@ def review_causal_milestone(
     has_entities = bool(milestone.affected_entity_ids)
     has_relations = bool(milestone.caused_relation_ids)
     has_parents = bool(milestone.causal_parent_hito_ids)
-    # BETA-MULTIAGENT2-FIX-09: las consecuencias se DERIVAN de los padres (única
+    # BETA2-FIX-09: las consecuencias se DERIVAN de los padres (única
     # definición del repo). Leer `causal_child_hito_ids` —que no llenaba nadie—
     # hacía que «Causalidad débil» se disparase SIEMPRE, incluso en el hito que
     # causaba los quince episodios siguientes.

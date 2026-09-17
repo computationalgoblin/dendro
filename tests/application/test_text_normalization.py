@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-04 — helper compartido de normalización de búsqueda.
+"""BETA2-FIX-04 — helper compartido de normalización de búsqueda.
 
 Nace del hallazgo G2-04: buscar en castellano exigía teclear las tildes
 (`cronica` → 0 resultados) porque las tres superficies de búsqueda del repo se

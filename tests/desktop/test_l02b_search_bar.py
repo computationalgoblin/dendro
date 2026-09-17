@@ -117,7 +117,7 @@ def test_unified_search_merges_entities_and_milestones_ranked():
     items = ws._unified_search("al")
     kinds = {it["kind"] for it in items}
     assert kinds == {"graph", "milestone"}  # aparecen ambos tipos
-    # BETA-MULTIAGENT2-FIX-04: el orden se AGRUPA POR CLASE (entidades y ramas >
+    # BETA2-FIX-04: el orden se AGRUPA POR CLASE (entidades y ramas >
     # hitos > relaciones), así que 'Alianza de Reinos' ya no se cuela entre las
     # dos entidades por empezar por el prefijo. La intención original —prefijo
     # primero— sobrevive DENTRO de cada clase.

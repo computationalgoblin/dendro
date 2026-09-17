@@ -89,7 +89,7 @@ class TestPortraitStatusVignette:
         # Media-luna inferior: dentro del círculo, zona baja — el verde puro
         # del retrato queda velado por EARTH_TINT (gana canal rojo).
         low = QColor(image.pixel(_CENTER, _CENTER + int(_RADIUS * 0.76)))
-        # BETA-MULTIAGENT2-FIX-01: el umbral era `red() > 100`, un número mágico
+        # BETA2-FIX-01: el umbral era `red() > 100`, un número mágico
         # que codificaba el EARTH_TINT CLARO de antes (#CDBB97). Ahora el tinte es
         # oscuro (criterio 6 de contraste), así que se comprueba lo que la prueba
         # quería decir: el verde puro del retrato queda velado por TIERRA (el

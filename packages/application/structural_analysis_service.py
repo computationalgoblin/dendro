@@ -129,7 +129,7 @@ class StructuralAnalysisService:
     _structure_proposals: list[StructuralFinding] = field(
         default_factory=list, init=False, repr=False
     )
-    # BETA-MULTIAGENT-FIX-05 (G-05): fingerprints YA APLICADOS en esta sesión.
+    # BETA-FIX-05 (G-05): fingerprints YA APLICADOS en esta sesión.
     # Sin esto una tarjeta aceptada seguía re-aceptable (candidato duplicado) si
     # la caché/las propuestas de sesión la re-emitían antes de refrescarse.
     _applied_fingerprints: set = field(default_factory=set, init=False, repr=False)
@@ -485,7 +485,7 @@ class StructuralAnalysisService:
         superior, pero el motor de impacto no la propagará mientras la relación no
         esté marcada como excepción (§16). El detector la propone; el usuario acepta.
 
-        BETA-MULTIAGENT2-FIX-05 (G2-07) — CALIBRACIÓN. En la campaña larga del beta
+        BETA2-FIX-05 (G2-07) — CALIBRACIÓN. En la campaña larga del beta
         (800 fichas, 1.760 relaciones, 9 anillos) esta vía sola emitía **105 de los 203
         avisos** (51,7 %), sin tope ni agrupación: hasta 13 tarjetas para la MISMA
         entidad. Dos acotaciones, las dos semánticas (no umbrales al tuntún):
@@ -552,7 +552,7 @@ class StructuralAnalysisService:
         source_name = getattr(source, "name", "") or source.id
         target_name = getattr(target, "name", "") or target.id
         rel_type = getattr(rel.relation_type, "value", rel.relation_type)
-        # BETA-MULTIAGENT2-FIX-13 (G2-20). Esto decía, literalmente, «(contrato
+        # BETA2-FIX-13 (G2-20). Esto decía, literalmente, «(contrato
         # §16)»: la aplicación citaba su propia especificación interna, por número
         # de sección, a una novelista que no tiene ningún §16 que abrir. Y usaba
         # «apalancamiento» a pelo, que no significa nada fuera del repo.

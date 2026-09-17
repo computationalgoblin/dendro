@@ -203,7 +203,7 @@ class MilestoneDetailPanel(PanelScaffold):
         form.addRow("Fecha / posición", self.temporal_edit)
         self.body.addLayout(form)
 
-        # BETA-MULTIAGENT2-FIX-11 (fase B2): datación RICA del hito. Escribe en
+        # BETA2-FIX-11 (fase B2): datación RICA del hito. Escribe en
         # `temporality` (el modelo de verdad), no en `metadata["chronology_key"]`
         # —el modelo paralelo improvisado, que se conserva por compatibilidad—, y
         # respeta el año entero como espejo autoritativo de la cronología.
@@ -223,7 +223,7 @@ class MilestoneDetailPanel(PanelScaffold):
         self.body.addWidget(overline_label("Participantes"))
         self.body.addWidget(self.participants_list)
 
-        # ── Hilo causal (BETA-MULTIAGENT2-FIX-09): setup → payoff ──
+        # ── Hilo causal (BETA2-FIX-09): setup → payoff ──
         # Lo único que la app enseñaba del hilo era un contador («Consecuencias: 2»)
         # que no decía cuáles, no era clicable y no permitía crear el enlace. Para
         # el oficio del guionista ese hilo ES el producto.
@@ -530,7 +530,7 @@ class MilestoneDetailPanel(PanelScaffold):
             lines.append(f"Fuentes: {len(sources)}")
         self.links_label.setText("\n".join(lines) if lines else "Sin vinculos adicionales.")
 
-    # ── Hilo causal setup→payoff (BETA-MULTIAGENT2-FIX-09) ───────────────────
+    # ── Hilo causal setup→payoff (BETA2-FIX-09) ───────────────────
 
     def _build_causal_section(self) -> QWidget:
         """Padres e hijos POR NOMBRE, clicables, con alta y baja del enlace."""

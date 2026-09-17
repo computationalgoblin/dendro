@@ -1,6 +1,6 @@
-"""BETA-MULTIAGENT2-FIX-06 (G2-10): el gasto de la navegacion de la wiki.
+"""BETA2-FIX-06 (G2-10): el gasto de la navegacion de la wiki.
 
-Dos hallazgos del beta multi-agente ronda 2, ambos medidos:
+Dos hallazgos del beta ronda 2, ambos medidos:
 
 - `suggest`/`compose_generation` mandaban ~91.777 caracteres (~25.500 tokens) por
   llamada — DOCE veces un riego — **aunque la wiki estuviera vacia**: se pagaba por

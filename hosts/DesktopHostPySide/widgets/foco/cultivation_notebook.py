@@ -136,7 +136,7 @@ class CultivationNotebook(QWidget):
         self.history_provider = history_provider
         self._entity_id = ""
         self._status = ""
-        # BETA-MULTIAGENT2-FIX-06 (G2-08): hay un lote de riego EN VUELO. Es un CAMPO
+        # BETA2-FIX-06 (G2-08): hay un lote de riego EN VUELO. Es un CAMPO
         # del widget, no un `setEnabled` suelto: `refresh()`/`_set_step` se llaman a
         # cada paso del lote y devolvían el botón a la vida, invitando a pagar dos veces.
         self._batch_running = False
@@ -386,7 +386,7 @@ class CultivationNotebook(QWidget):
         self._apply_batch_running()
 
     def set_batch_running(self, running: bool) -> None:
-        """BETA-MULTIAGENT2-FIX-06 (G2-08): el disparador «Regar ahora» se apaga
+        """BETA2-FIX-06 (G2-08): el disparador «Regar ahora» se apaga
         mientras hay un lote en vuelo y vuelve solo al terminar.
 
         La tester de 58 años lo dijo así: la app «deja activo el botón "Regar ahora"

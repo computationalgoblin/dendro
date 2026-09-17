@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-30): la clave de IA se volcaba con la IA apagada.
+"""BETA2-FIX-14 (G2-30): la clave de IA se volcaba con la IA apagada.
 
 `_apply_ai_environment` escribía `NARRATIVE_AI_API_KEY` **sin mirar el proveedor**, y
 se ejecuta en CADA arranque y en CADA guardado. Una tester anti-IA lo comprobó: con

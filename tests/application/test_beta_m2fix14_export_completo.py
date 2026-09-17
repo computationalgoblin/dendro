@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-24): el exportador se llevaba el reparto, no la obra.
+"""BETA2-FIX-14 (G2-24): el exportador se llevaba el reparto, no la obra.
 
 Un showrunner exportó su biblia de dos temporadas y le salieron 19 fichas de personaje
 y utilería: fuera los 18 episodios, las dos temporadas, la cronología, la cadena causal

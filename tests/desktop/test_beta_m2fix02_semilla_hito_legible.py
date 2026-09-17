@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-02 (G2-02): la semilla de HITO se revisa legible.
+"""BETA2-FIX-02 (G2-02): la semilla de HITO se revisa legible.
 
 Antes, `candidate_body_text` solo miraba claves de primer nivel de
 `proposed_data`, y el payload del hito va ANIDADO en `proposed_data["milestone"]`:

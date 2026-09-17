@@ -52,7 +52,7 @@ def test_temporal_lines_include_lapso_and_hitos():
     proj = _project()
     lines = MemoryAIService._entity_temporal_lines(proj, "ana")
     joined = "\n".join(lines)
-    # BETA-MULTIAGENT-FIX-03: los años viajan etiquetados («año N», con era si la hay).
+    # BETA-FIX-03: los años viajan etiquetados («año N», con era si la hay).
     assert "LAPSO: año 10 → año 45" in joined
     # Año ≤ nacimiento ⇒ raíz (fundacional); posterior ⇒ brote.
     assert "[raíz] Coronación (año 5)" in joined

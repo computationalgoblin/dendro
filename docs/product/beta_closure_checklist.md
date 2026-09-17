@@ -23,8 +23,7 @@ restante es la batería de smokes manuales del usuario.
 ## B. Puerta de usuario (PENDIENTE — smokes en plataforma real)
 
 Ejecutar con `python -m hosts.DesktopHostPySide.main` (ventana real, NO offscreen),
-idealmente sobre «La Flor de los Almendros». Los guiones detallados de cada épica
-están en su cierre (`.kanban/resumenes/BETA2-*-cierre*.md`); esta es la pasada
+idealmente sobre «La Flor de los Almendros». Esta es la pasada
 consolidada mínima:
 
 1. **Arranque y proyecto** — abrir el proyecto de muestra: carga sin pérdida,
@@ -39,8 +38,7 @@ consolidada mínima:
 5. **Estructura** — píldora «⚙ N ajustes»: aceptar un ring_move (Mapa+Crono se
    reconstruyen sin expulsar del Foco y persiste tras recargar), una excepción
    ascendente y un branch_move (arrastra el subárbol); «✨ Proponer estructura»
-   crea/fusiona anillos con nombres diegéticos (STRUCT, guion completo en
-   `.kanban/resumenes/BETA2-STRUCT-cierre.md`).
+   crea/fusiona anillos con nombres diegéticos (STRUCT).
 6. **Cronología y calendario** — wizard de calendario (2 eras encadenadas,
    presente, meses/semana), pill temporal con filtros, subhitos contenidos,
    hover preview (CAL/SUB/HOVER).

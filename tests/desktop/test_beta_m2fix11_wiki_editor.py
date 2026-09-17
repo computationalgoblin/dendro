@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-11 (fase C): la wiki se escribe A MANO, sin IA.
+"""BETA2-FIX-11 (fase C): la wiki se escribe A MANO, sin IA.
 
 Antes el cuerpo de la página era `setReadOnly(True)` («lo escribe Regar»), `_save`
 ni siquiera mandaba `cuerpo=`, no había forma de crear una página y la lista

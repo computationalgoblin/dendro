@@ -1,4 +1,4 @@
-"""Sección «Rigor»: certeza y datación rica (BETA-MULTIAGENT2-FIX-11, fase B).
+"""Sección «Rigor»: certeza y datación rica (BETA2-FIX-11, fase B).
 
 El dominio modela desde siempre la frontera que define el oficio de quien
 investiga —cinco niveles de certeza, cinco precisiones temporales, fecha del

@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-06 (G2-09): lo pagado se lee entero y no se tira.
+"""BETA2-FIX-06 (G2-09): lo pagado se lee entero y no se tira.
 
 Un guionista pidió tres mecanismos dramáticos, esperó trece minutos, la IA respondió
 exactamente lo que pedía — y la app se lo enseñó en **una línea cortada por el borde

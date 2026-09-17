@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-07 (criterio 4): lo descartado no se pierde en silencio.
+"""BETA2-FIX-07 (criterio 4): lo descartado no se pierde en silencio.
 
 La app resuelve los enlaces de la página contra el canon antes de persistirlos y tira
 los que no existen. Ese descarte se DICE en la cabecera del visor — la lección de G2-03

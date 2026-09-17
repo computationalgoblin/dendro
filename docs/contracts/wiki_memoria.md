@@ -72,7 +72,7 @@ Una **pagina** es la sintesis editorial de un elemento. Se **modela reutilizando
 
 Las paginas son estado **derivado**, no canon. Se persisten en `Project.narrative_memories`.
 
-#### 3.2.0 Regla de resolucion de enlaces (BETA-MULTIAGENT2-FIX-07)
+#### 3.2.0 Regla de resolucion de enlaces (BETA2-FIX-07)
 
 **Ningun enlace de una pagina se persiste sin existir en el canon.** Todo
 `MemoryCitation` que escribe la IA (`wikilinks`, `citations`, `dependencias` y los
@@ -87,7 +87,7 @@ repo):
 3. `ref_id` que es el **nombre exacto** de un elemento se **reescribe con su id** y su kind
    reales. La comparacion **pliega mayusculas y acentos** (`fold_name`), porque el modelo
    no copia los nombres caracter a caracter. Esto rescata la mayoria de los enlaces: en
-   los dos mundos del beta multi-agente, 37 de 40 refs llevaban el NOMBRE en `ref_id` y 30
+   los dos mundos del beta, 37 de 40 refs llevaban el NOMBRE en `ref_id` y 30
    eran rescatables por coincidencia exacta.
 4. Nombre que corresponde a **varios** elementos (duplicado en el proyecto): **no se
    inventa un ganador**. El enlace **no se persiste** y se cuenta como *ambiguo*.
@@ -116,7 +116,7 @@ enlaces de verdad son los del array, que si se resuelven.
 **Sin cambio de forma en disco.** `MemoryCitation` sigue siendo `{ref_kind, ref_id, nota}`;
 solo cambian los VALORES que se escriben.
 
-#### 3.2.1 Paginas escritas a mano (BETA-MULTIAGENT2-FIX-11)
+#### 3.2.1 Paginas escritas a mano (BETA2-FIX-11)
 
 La IA es el escritor HABITUAL de las paginas, no el unico autorizado. Quien trabaja **sin
 proveedor de IA** tambien tiene wiki: desde el visor de Memoria se **crea** una pagina
@@ -167,7 +167,7 @@ termina el bucle; nunca se superan `max_rounds`; el coste queda acotado y es obs
 navega**: mantiene su contexto local compacto de la entidad regada (diagnostico) y **escribe** su
 pagina.
 
-### 4.1 Cuando NO se navega: la wiki vacia no se cobra (BETA-MULTIAGENT2-FIX-06)
+### 4.1 Cuando NO se navega: la wiki vacia no se cobra (BETA2-FIX-06)
 
 **Decision de producto (G2-10).** Si el indice tiene **cero paginas** (`counts["con_pagina"] == 0`)
 la navegacion **no se ejecuta**: `WikiNavigator.assemble_context` devuelve `Ok` con un bundle vacio
@@ -185,7 +185,7 @@ contexto: `build_suggestion_request` ya arma el contexto compacto por entidad �
 que **Regar escale 1,23x sobre 16x de proyecto**.
 
 **Se dice en voz alta.** El corte NO es una degradacion silenciosa (mismo principio que
-BETA-MULTIAGENT-FIX-02): `_attach_wiki_context` devuelve el motivo, `compose_generation` lo publica
+BETA-FIX-02): `_attach_wiki_context` devuelve el motivo, `compose_generation` lo publica
 como `wiki_skipped` y el host lo saca por el indicador de estado y por un toast.
 
 ### 4.2 Tope de tamano por ronda
@@ -208,7 +208,7 @@ Regar un elemento:
    canon antes de persistirse** segun la seccion 3.2.0; una pagina recien escrita no puede
    nacer con enlaces rotos.
 
-   **Que recibe la IA para poder acertar (BETA-MULTIAGENT2-FIX-07).** Regar sigue sin
+   **Que recibe la IA para poder acertar (BETA2-FIX-07).** Regar sigue sin
    navegar, pero su contexto local **enumera los ids**: cada vecina, cada hito y cada
    relacion viajan como `nombre (kind:id)`. Antes el unico id del prompt era el del propio
    elemento y por eso las unicas refs que resolvian en el beta eran las auto-citas: se le
@@ -232,9 +232,9 @@ Regar un elemento:
    crean paginas vacias; no se pisan estados `Secada`. Se mantiene la **exclusion del lote**
    (`exclude_ids`) y `include_self=False`.
 
-   **Regla vigente desde 2026-08-04 (BETA-MULTIAGENT2-FIX-05, G2-05). Racional.**
+   **Regla vigente desde 2026-08-04 (BETA2-FIX-05, G2-05). Racional.**
    Este parrafo decia lo contrario («para riegos SEPARADOS la propagacion se mantiene a
-   conciencia»). La ronda 2 del beta multi-agente lo desmonto con numeros: la directora de
+   conciencia»). La ronda 2 del beta lo desmonto con numeros: la directora de
    arte regó cuatro entidades en **16 min 30 s de IA real** y su balance neto fue **cero**
    verdes, porque regar B devolvia a `Falta regar` la pagina de A regada un minuto antes.
    Las razones para invertir la regla:
@@ -278,12 +278,12 @@ pedirlo explicitamente con «Regenerar con IA», que propone un diff antes de su
 
 `WikiLintService` hace una pasada de salud, determinista, que detecta: paginas **huerfanas**
 (target inexistente), **enlaces rotos** (wikilinks/citas/dependencias **y anclajes de
-incidencia**, `issues[].anclado_a`, a ids ausentes — BETA-MULTIAGENT2-FIX-07), afirmaciones
+incidencia**, `issues[].anclado_a`, a ids ausentes — BETA2-FIX-07), afirmaciones
 **stale** (`Falta regar`/`Secada`) y **contradicciones** ya modeladas. Opcionalmente, una unica llamada IA
 (sin bucle) detecta contradicciones cruzadas. Todo se ancla como `MemoryIssue` revisable; nunca
 canon.
 
-**Donde vive (BETA-MULTIAGENT2-FIX-11).** El lint tiene pantalla: la pestaña **Wiki** del
+**Donde vive (BETA2-FIX-11).** El lint tiene pantalla: la pestaña **Wiki** del
 panel de proyecto **«Salud del proyecto»** (`ProjectHealthPanel`, pestañas previstas
 Continuidad · Wiki · Estructura). Reglas de esa superficie: se ejecuta **al pulsar**, no al
 abrir; **no deja contador permanente** en la esquina de la pantalla (la app ya tiene dos:
@@ -334,7 +334,7 @@ Elegir el tipo de output SOLO por la metrica no honra peticiones como "crea una 
   composicion del prompt, off-thread (worker `_SuggestionPrepWorker`); el plan viaja como texto de
   estado al indicador de IA. La IA nunca escribe canon.
 
-### 6.2 Rigor de lo generado y trazabilidad de lo aceptado (BETA-MULTIAGENT2-FIX-08)
+### 6.2 Rigor de lo generado y trazabilidad de lo aceptado (BETA2-FIX-08)
 
 El camino de DIAGNOSTICO (Regar/Memoria) era honesto por esquema (`risks`, `issues` con
 contradiccion/hueco/pregunta_abierta/supuesto) y el GENERATIVO no tenia donde serlo. Reglas:

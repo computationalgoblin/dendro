@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-11 (fase A): el lint de la wiki tiene pantalla.
+"""BETA2-FIX-11 (fase A): el lint de la wiki tiene pantalla.
 
 `WikiLintService` existía, funcionaba y tenía CERO importadores en `hosts/`: en los
 mundos del beta detectaba 17 y 27 enlaces rotos que nadie veía («el lint sí los

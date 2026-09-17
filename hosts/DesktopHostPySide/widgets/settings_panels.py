@@ -767,7 +767,7 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
             api_key_edit.setPlaceholderText("Clave guardada")
         ctx.save_preferences()
 
-        # BETA-MULTIAGENT2-FIX-14 (G2-30): el volcado al entorno lo hace ya
+        # BETA2-FIX-14 (G2-30): el volcado al entorno lo hace ya
         # `ctx.save_preferences()` → `_apply_ai_environment()`, que MIRA el
         # proveedor. Repetirlo aquí a mano reexportaba la clave incluso al cambiar
         # a `simulated`: apagar la IA no la apagaba.
@@ -837,7 +837,7 @@ def _build_ia_tab(ctx, ai_controller, on_status, parent: QWidget | None = None) 
     test_btn.clicked.connect(_test_connection)
     btn_row.addWidget(test_btn)
 
-    # BETA-MULTIAGENT2-FIX-14 (G2-30): no había NINGUNA forma de retirar la clave.
+    # BETA2-FIX-14 (G2-30): no había NINGUNA forma de retirar la clave.
     # `_save_ia_env` solo la escribía cuando el campo traía texto y nunca la
     # borraba al pasar a `simulated`: quedaba en claro en `settings.json` para
     # siempre. Este botón la borra del fichero Y del entorno del proceso.

@@ -1,4 +1,4 @@
-"""Panel de proyecto «Hilos sueltos» (BETA-MULTIAGENT2-FIX-09, G2-15).
+"""Panel de proyecto «Hilos sueltos» (BETA2-FIX-09, G2-15).
 
 Lo que un guionista necesita ver de un vistazo: **qué planté y no recogí**. La
 consulta existía en `causal_milestone_service` desde B41 —midiendo otra cosa: 20

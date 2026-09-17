@@ -23,7 +23,7 @@ class WateringBatchWorker(QThread):
     entityStarted = Signal(str)  # noqa: N815 — UI2-05: empieza a regarse entity_id
     entityDone = Signal(str, bool, str)  # noqa: N815 — (entity_id, ok, error)
     progressChanged = Signal(int, int)  # noqa: N815 — (hechas, total)
-    # BETA-MULTIAGENT2-FIX-06 (G2-08): fase EN CURSO del paso (entity_id, mensaje, %).
+    # BETA2-FIX-06 (G2-08): fase EN CURSO del paso (entity_id, mensaje, %).
     # Es una Signal, no un setText: `water_entity` corre en ESTE hilo y tocar un widget
     # desde aquí es un crash esperando su turno (patrón `_SuggestionPrepWorker`).
     phaseChanged = Signal(str, str, int)  # noqa: N815 — (entity_id, mensaje, porcentaje)
@@ -38,7 +38,7 @@ class WateringBatchWorker(QThread):
     def accepts_progress_callback(self) -> bool:
         """¿El servicio de riego acepta ``progress_callback`` en ``water_batch_step``?
 
-        BETA-MULTIAGENT2-FIX-06: el servicio real sí; los dobles de test con firma
+        BETA2-FIX-06: el servicio real sí; los dobles de test con firma
         estrecha, no. Preguntarlo evita que un `TypeError` convierta cada paso en un
         «riego fallido» (el `except` de abajo se lo tragaría) por culpa del feedback.
         """
@@ -83,7 +83,7 @@ class WateringBatchWorker(QThread):
                     break
                 self.entityStarted.emit(entity_id)  # UI2-05: feedback vivo en Mapa/Foco
                 try:
-                    # BETA-MULTIAGENT-FIX-01: el paso conoce el lote completo para
+                    # BETA-FIX-01: el paso conoce el lote completo para
                     # que la propagación de impacto no invalide a sus compañeras.
                     extra: dict[str, Any] = {}
                     if con_fases:
@@ -100,7 +100,7 @@ class WateringBatchWorker(QThread):
                     else:
                         self.entityDone.emit(entity_id, True, "")
                 except TypeError as exc:
-                    # BETA-MULTIAGENT2-FIX-05 (G2-05, punto 10): un `TypeError` aquí NO
+                    # BETA2-FIX-05 (G2-05, punto 10): un `TypeError` aquí NO
                     # es un riego fallido: es una firma incompatible de
                     # `water_batch_step` (un error de programación) que este `except`
                     # convertía en «riego fallido» sin traza. Se nombra distinto para

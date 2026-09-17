@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-07 (G2-12): el contexto de Memoria no puede perder la dirección.
+"""BETA2-FIX-07 (G2-12): el contexto de Memoria no puede perder la dirección.
 
 El canon del guionista decía, sin ambigüedad, `Nadia Kerr --sirve_a--> Otho Vann`. Las
 dos páginas escritas en el mismo lote se contradijeron: la de Nadia la llamaba sirviente

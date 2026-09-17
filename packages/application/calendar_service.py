@@ -77,7 +77,7 @@ class CalendarService:
         present:{era_index, year_within, month, day}, months:[{name,length}],
         weekdays:[...], week_anchor}``.
 
-        BETA-MULTIAGENT2-FIX-12 (G2-29): ``start_year`` (opcional, 0 por defecto) es
+        BETA2-FIX-12 (G2-29): ``start_year`` (opcional, 0 por defecto) es
         el año en que empieza la PRIMERA era — el ancla de «mi historia pasa en este
         mundo». Ausente = comportamiento anterior, bit a bit.
         """

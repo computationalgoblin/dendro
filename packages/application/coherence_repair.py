@@ -251,7 +251,7 @@ def apply_resolved_change(
         hito = CausalMilestone.from_dict({
             "title": ch["title"], "description": ch["summary"] or after,
         })
-        # BETA-MULTIAGENT2-FIX-03 (G2-03): el tercer sitio del mismo delito. Este
+        # BETA2-FIX-03 (G2-03): el tercer sitio del mismo delito. Este
         # hito nacía con los defaults del dominio (`status=candidate`, sin fechas)
         # aunque el usuario acababa de pulsar «Aplicar al canon». Misma promoción
         # que las otras dos rutas — sin duplicarla.

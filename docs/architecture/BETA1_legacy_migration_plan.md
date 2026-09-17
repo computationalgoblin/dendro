@@ -15,7 +15,7 @@ La regla es: cada migración real debe ser un ticket independiente con:
 - migración de carga de proyectos antiguos;
 - tests de roundtrip save/load;
 - tests de compatibilidad con fixtures antiguos;
-- validación completa con `python scripts/run_all_tests.py` ejecutada por el usuario o por el agente si se autoriza.
+- validación completa con `python scripts/run_all_tests.py` ejecutada localmente.
 
 ## 2. Decisiones de producto que guían las migraciones
 

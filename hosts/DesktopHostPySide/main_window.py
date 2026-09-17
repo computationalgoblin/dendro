@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         # superficies que mutan sin formulario: arrastrar un lapso de vida, crear
         # una relación en el Mapa, convertir un fantasma.
         self.ctx.request_save_debounced = self._schedule_silent_save
-        # BETA-MULTIAGENT2-FIX-14 (G2-22): `self.cc` faltaba en esta lista. Aceptar
+        # BETA2-FIX-14 (G2-22): `self.cc` faltaba en esta lista. Aceptar
         # una semilla no ensuciaba el proyecto → no había autoguardado → no había
         # instantánea → Ctrl+Z no llegaba. Y los candidatos que estadía un job de IA
         # (`_auto_stage_and_notify` → `controller.create`) vivían solo en RAM.
@@ -227,7 +227,7 @@ class MainWindow(QMainWindow):
     # ── Shell ────────────────────────────────────────────────────────────────
 
     def _build_menus(self):
-        """Barra de menús con acciones NOMBRADAS (BETA-MULTIAGENT2-FIX-13, G2-19).
+        """Barra de menús con acciones NOMBRADAS (BETA2-FIX-13, G2-19).
 
         Hasta aquí la ventana no tenía ni una sola `QAction`: Deshacer, Rehacer y
         Guardar existían y funcionaban, pero SOLO como teclas dentro de
@@ -543,7 +543,7 @@ class MainWindow(QMainWindow):
         """Apply appearance preferences immediately."""
         _apptrace("UI apply_preferences")
         ctx = self.ctx
-        # BETA-MULTIAGENT2-FIX-13 (G2-18): el override de abajo SÍ emitía el
+        # BETA2-FIX-13 (G2-18): el override de abajo SÍ emitía el
         # tamaño correcto, pero perdía la batalla de precedencia contra los ~190
         # `font-size:` literales que los widgets se ponen a sí mismos (en Qt la
         # hoja del PROPIO widget gana a la del ancestro). Resultado medido por la
@@ -1230,7 +1230,7 @@ class MainWindow(QMainWindow):
                 return True
             if not self.controller.current_path:
                 self.log_msg("Autoguardado: sin ruta de proyecto; cambios en memoria")
-                # BETA-MULTIAGENT2-FIX-14 (G2-22): sin ruta no hay disco, pero SÍ hay
+                # BETA2-FIX-14 (G2-22): sin ruta no hay disco, pero SÍ hay
                 # deshacer. Los diálogos de borrado prometen ahora Ctrl+Z «mientras la
                 # ventana siga abierta»; esa promesa tiene que cumplirse también en un
                 # proyecto que todavía no se ha guardado nunca.
@@ -1331,7 +1331,7 @@ class MainWindow(QMainWindow):
             self._restoring = False
 
     def _undo(self) -> None:
-        # BETA-MULTIAGENT2-FIX-14 (G2-22): asienta lo que esté en vuelo ANTES de
+        # BETA2-FIX-14 (G2-22): asienta lo que esté en vuelo ANTES de
         # deshacer. La instantánea solo se registra al vencer el antirrebote de
         # 1.500 ms, así que un Ctrl+Z inmediato caía en «Nada que deshacer» — y el
         # diálogo de borrado promete ahora que se puede deshacer «mientras la
@@ -1376,7 +1376,7 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _flush_pending_form_autosaves(self) -> int:
-        """BETA-MULTIAGENT2-FIX-14 (G2-23): vuelca los formularios a medio escribir.
+        """BETA2-FIX-14 (G2-23): vuelca los formularios a medio escribir.
 
         Los paneles de detalle (`NodeDetailPanel`, `MilestoneDetailPanel`,
         `RelationDetailPanel`) tienen su PROPIO antirrebote de 800 ms: hasta que
@@ -1418,7 +1418,7 @@ class MainWindow(QMainWindow):
         return volcados
 
     def closeEvent(self, event):
-        # BETA-MULTIAGENT2-FIX-14 (G2-23): PRIMERO volcar lo escrito en los
+        # BETA2-FIX-14 (G2-23): PRIMERO volcar lo escrito en los
         # formularios (su antirrebote propio de 800 ms), porque eso puede ensuciar
         # el proyecto; solo después se para el diferido y se pregunta. Al revés el
         # diálogo mentiría sobre lo que hay en disco.

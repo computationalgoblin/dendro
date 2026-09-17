@@ -81,7 +81,7 @@ _COLUMN: tuple[object, ...] = (
     "delete_focus",
 )
 
-# BETA-MULTIAGENT2-FIX-13 (G2-19), TANDA D — «Si no pone lo que hace, para mí no
+# BETA2-FIX-13 (G2-19), TANDA D — «Si no pone lo que hace, para mí no
 # existe» (Carmen, 58 años). Once círculos de 32×32 con la papelera dentro y sin
 # una sola letra: el ÚNICO rótulo era el tooltip, o sea, había que pasar el ratón
 # por encima y esperar para saber cuál borra.

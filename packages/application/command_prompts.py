@@ -15,7 +15,7 @@ from __future__ import annotations
 from packages.application.prompt_registry import get_prompt
 from packages.domain.entity_taxonomy import OFFERED_RELATION_TYPES
 
-# BETA-MULTIAGENT2-FIX-12 (G2-16): el prompt pedía `"relation_type": "..."` sin
+# BETA2-FIX-12 (G2-16): el prompt pedía `"relation_type": "..."` sin
 # enumerar UN SOLO valor válido, así que el modelo se los inventaba (`valido`,
 # `es_padre_de` cuando el tipo no existía) y el servicio los tiraba. El
 # vocabulario se DERIVA de la taxonomía ofrecida: no hay lista copiada a mano
@@ -51,7 +51,7 @@ _BASE_ES = (
     "report/summary en texto natural). No inventes IDs; para relaciones usa source_name/target_name. "
     "Devuelve SOLO un objeto JSON válido con EXCLUSIVAMENTE las claves indicadas por tu tarea.\n"
     "\n"
-    # BETA-MULTIAGENT2-FIX-13 (G2-20): el prompt base no prohibía Markdown ni fijaba
+    # BETA2-FIX-13 (G2-20): el prompt base no prohibía Markdown ni fijaba
     # el idioma. Resultado: los `**asteriscos**` del modelo entraban literales en el
     # canon («en mi novela no quiero asteriscos») y una respuesta trajo caracteres
     # chinos («Falta de年份 en entidades clave»). Esta regla es la primera línea de
@@ -82,7 +82,7 @@ _BASE_ES = (
     "inspiración OPCIONAL: tienes libertad para inventar FICCIÓN del mundo más allá de "
     "él (no te encierra temáticamente).\n"
     "\n"
-    "LÍMITE DE LA INVENCIÓN (BETA-MULTIAGENT2-FIX-08): inventar ficción NO es rellenar "
+    "LÍMITE DE LA INVENCIÓN (BETA2-FIX-08): inventar ficción NO es rellenar "
     "datos. No presentes como hecho —ni disfrazado de duda erudita («en X o en Y»)— algo "
     "que el canon, el contexto o la referencia no sostengan: dilo como lo que es. Y la "
     "PETICIÓN DEL USUARIO MANDA sobre esta licencia: si pide abstenerse, no rellenar los "
@@ -326,7 +326,7 @@ _INTENT_SPECS_ES: dict[str, str] = {
         "entidades por nombre), hitos (eventos causales) y entity_edits (mejoras de un elemento "
         "existente por su nombre EXACTO). Respeta el anillo/rama de la entidad en foco y la "
         "causalidad superior; no inventes ids.\n"
-        "MARCA DE BASE (OBLIGATORIA, POR PIEZA — BETA-MULTIAGENT2-FIX-08): cada objeto que "
+        "MARCA DE BASE (OBLIGATORIA, POR PIEZA — BETA2-FIX-08): cada objeto que "
         "devuelvas lleva `base` con UNO de estos tres valores y `base_nota` con una línea que "
         "diga en qué te apoyas:\n"
         "- `canon`: lo sostiene el canon/contexto que has recibido (di cuál en `base_nota`).\n"
@@ -349,7 +349,7 @@ _INTENT_SPECS_ES: dict[str, str] = {
         '"hojas": [{"name": "...", "entity_type": "personaje|criatura|objeto", "brief_description": "..."}]}], '
         '"relations": [{"source_name": "...", "target_name": "...", "relation_type": "...", '
         '"description": "...", "base": "canon|inferido|inventado", "base_nota": "..."}], '
-        # BETA-MULTIAGENT2-FIX-03 (G2-03): el formato NO pedía `year`, así que TODO
+        # BETA2-FIX-03 (G2-03): el formato NO pedía `year`, así que TODO
         # hito nacido de Sugerencias llegaba con `year=None` por diseño del prompt y
         # aterrizaba sin datar en la Cronología. El calendario (`cronologia`) ya viaja
         # en el prompt (WIKI-13b): el modelo tiene el marco temporal para elegirlo.

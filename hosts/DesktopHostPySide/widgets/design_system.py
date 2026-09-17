@@ -61,7 +61,7 @@ INPUT_BG    = "#FFFDF8"   # campos de texto
 
 # Tinta (texto) — más profunda y cálida, para contraste profesional
 #
-# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A. La escalera de tinta tenía tres
+# BETA2-FIX-13 (G2-17), TANDA A. La escalera de tinta tenía tres
 # peldaños pero solo los dos primeros se leían: `INK_MUTED` medía 2,93:1 sobre
 # SURFACE, 2,58:1 sobre PAPER y 2,30:1 sobre WELL, e `INK_SOFT` se quedaba a
 # 4,24:1 sobre PAPER. Y no eran tintas decorativas: `QLabel#mutedLabel` es
@@ -112,7 +112,7 @@ SAGE_DEEP   = "#546243"  # verde profundo (reservado; aún sin uso)
 # Tierra (BETA2-JARDIN-01): ciclo de riego en el Mapa — sedienta (marrón) y
 # secada (carbón-tierra).
 #
-# BETA-MULTIAGENT2-FIX-01 (criterio 6): los tintes ANTIGUOS eran claros
+# BETA2-FIX-01 (criterio 6): los tintes ANTIGUOS eran claros
 # (#CDBB97 / #D0CCBE) y medían 1,09:1 contra la parada más oscura de la viñeta
 # (#CFC4A8) y 1,17:1 ENTRE SÍ: dos estados de significado opuesto pintados del
 # mismo color e invisibles sobre el pergamino. Con un lienzo CLARO la única
@@ -246,7 +246,7 @@ TICK_INTERVAL = 40  # ms entre fotogramas de animaciones pintadas a mano
 # y paneles de detalle (antes duplicada idéntica en cada widget). Tonos botánicos
 # coherentes con el pergamino, NUNCA azules/púrpuras fríos.
 #
-# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A: la paleta cubría 10 claves para los
+# BETA2-FIX-13 (G2-17), TANDA A: la paleta cubría 10 claves para los
 # 21 `EntityType` del dominio — 14 tipos caían al neutro y eran indistinguibles
 # entre sí. Se COMPLETA sin mover ni uno de los 9 hex históricos (fijados por
 # `test_ux15_entity_palette.py`): los 14 colores nuevos se eligieron dentro de la
@@ -321,7 +321,7 @@ RELATION_FAMILY_TONES: dict[str, str] = {
     "neutro": "#9A8E72",        # piedra cálida — relación genérica
 }
 
-# BETA-MULTIAGENT2-FIX-13 (G2-17), TANDA A: la paleta declaraba 31 claves para
+# BETA2-FIX-13 (G2-17), TANDA A: la paleta declaraba 31 claves para
 # los 41 `RelationType` del dominio y 7 de esas claves no correspondían a ningún
 # tipo. Faltaban 17 tipos, entre ellos `causo` y `fue_causado_por`, que son la
 # columna vertebral causal del producto: la causalidad se pintaba del neutro.
@@ -374,7 +374,7 @@ RELATION_KIND_PALETTE: dict[str, str] = {
     "condiciona": RELATION_FAMILY_TONES["causalidad"],
     "explica": RELATION_FAMILY_TONES["causalidad"],
     "produce_consecuencia_en": RELATION_FAMILY_TONES["causalidad"],
-    # parentesco (BETA-MULTIAGENT2-FIX-12, G2-16) — el color del vínculo íntimo
+    # parentesco (BETA2-FIX-12, G2-16) — el color del vínculo íntimo
     # ya estaba reservado en `es_familiar_de` esperando a que el dominio tuviera
     # los tipos. Ahora existen y la clave deja de ser huérfana.
     "es_familiar_de": RELATION_FAMILY_TONES["afecto"],
@@ -396,7 +396,7 @@ RELATION_KIND_PALETTE: dict[str, str] = {
 # propósito: el modelo todavía las emite (son el vocabulario natural de un
 # escritor) y sin color caerían al neutro. Se declaran aquí, por escrito, para
 # que ningún lector futuro las confunda con tipos reales.
-# BETA-MULTIAGENT2-FIX-12 (G2-16): `es_familiar_de` YA NO vive aquí — el dominio
+# BETA2-FIX-12 (G2-16): `es_familiar_de` YA NO vive aquí — el dominio
 # tiene la familia de parentesco y su color se declara arriba, con los tipos
 # reales. Las que quedan siguen siendo huérfanas a propósito.
 _RELATION_LEGACY_KEYS: dict[str, str] = {
@@ -421,7 +421,7 @@ def relation_kind_color(rel_type: str | None, default: str = _RELATION_KIND_DEFA
 FONT_SERIF = '"Georgia", "Iowan Old Style", "Palatino Linotype", serif'
 FONT_SANS = '"Segoe UI", "Inter", "Helvetica Neue", "Arial", sans-serif'
 
-# Escala nombrada. BETA-MULTIAGENT2-FIX-13 (G2-18), TANDA C: estos valores dejan
+# Escala nombrada. BETA2-FIX-13 (G2-18), TANDA C: estos valores dejan
 # de ser constantes muertas y pasan a ser FUNCIÓN de la preferencia «Tamaño de
 # fuente» (ver `set_font_scale`). Hasta ahora la preferencia sí llegaba —
 # `main_window._apply_live_preferences` emitía un override correcto— pero perdía
@@ -1139,7 +1139,7 @@ class FlowLayout(QLayout):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# BETA-MULTIAGENT2-FIX-14 (G2-21): vaciar un layout SIN dejar fantasmas
+# BETA2-FIX-14 (G2-21): vaciar un layout SIN dejar fantasmas
 # ─────────────────────────────────────────────────────────────────────────
 
 
@@ -1182,7 +1182,7 @@ def clear_layout(layout, *, conservar_al_final: int = 0) -> int:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# BETA-MULTIAGENT2-FIX-14 (G2-22): microcopia de borrado que no miente
+# BETA2-FIX-14 (G2-22): microcopia de borrado que no miente
 # ─────────────────────────────────────────────────────────────────────────
 #
 # Los tres diálogos de borrado (Foco entidad, Foco relación, Mapa) afirmaban
@@ -1798,7 +1798,7 @@ def install_wheel_guard(container: QWidget) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# BETA-MULTIAGENT2-FIX-13 (G2-20), TANDA E — las tildes.
+# BETA2-FIX-13 (G2-20), TANDA E — las tildes.
 #
 # Los valores de los enums son la FORMA EN DISCO y van sin tilde por diseño
 # (`localizacion`, `faccion`, `catastrofe`…). `enum_human` era un

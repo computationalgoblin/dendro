@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-15 (G2-27) — la ventana temporal filtra TAMBIÉN los hitos.
+"""BETA2-FIX-15 (G2-27) — la ventana temporal filtra TAMBIÉN los hitos.
 
 El bucle de marcas de `build_chrono_layout` no miraba el `scope` ni una vez: acotar
 los años (scrubber) o enfocar una era dejaba los mismos hitos en el lienzo (18, 18 y

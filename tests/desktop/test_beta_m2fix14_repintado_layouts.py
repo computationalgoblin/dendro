@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-21 + «texto fantasma» de G2-26): layouts que no se vacían.
+"""BETA2-FIX-14 (G2-21 + «texto fantasma» de G2-26): layouts que no se vacían.
 
 El idioma repetido por el host —`while layout.count(): layout.takeAt(0)` +
 `widget.deleteLater()`— NO basta: `deleteLater` solo ENCUELA el borrado, así que

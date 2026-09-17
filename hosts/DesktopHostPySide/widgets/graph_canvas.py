@@ -165,7 +165,7 @@ _NODE_FULL_LOD = float(os.environ.get("NARRATIVE_NODE_FULL_LOD", "") or 0.55)
 # (se ve bien de lejos a una fracción del coste). El texto aparece con el detalle
 # completo. Todos los valores son ajustables por entorno.
 _NODE_MIN_LOD = float(os.environ.get("NARRATIVE_NODE_MIN_LOD", "") or 0.12)
-# BETA-MULTIAGENT2-FIX-01: la etiqueta YA NO se ata al LOD del nodo. Atarla a
+# BETA2-FIX-01: la etiqueta YA NO se ata al LOD del nodo. Atarla a
 # _NODE_FULL_LOD (0.55) significaba que al abrir el Mapa (escala de encuadre
 # 0,07–0,18) NINGÚN nombre se pintaba: "un campo de puntos anónimos". El umbral
 # es ahora independiente y muy bajo, porque la legibilidad no la garantiza el
@@ -173,7 +173,7 @@ _NODE_MIN_LOD = float(os.environ.get("NARRATIVE_NODE_MIN_LOD", "") or 0.12)
 # la escala de la vista, así que su LOD efectivo ya incorpora ese piso.
 _LABEL_MIN_LOD = float(os.environ.get("NARRATIVE_LABEL_MIN_LOD", "") or 0.14)
 
-# BETA-MULTIAGENT2-FIX-01: piso de altura de glifo EN PANTALLA (px de
+# BETA2-FIX-01: piso de altura de glifo EN PANTALLA (px de
 # dispositivo) para el nombre de una entidad. Es el piso que declara el propio
 # design system. Bajar el umbral de LOD a secas NO bastaba: el título es un item
 # de escena con fuente de 9 pt que a escala 0,127 se rasteriza a 1–2 px. El
@@ -204,7 +204,7 @@ _ZOOM_STEP = 1.08
 _ZOOM_MAX = 3.0
 _ZOOM_OUT_FLOOR = 0.22
 
-# BETA-MULTIAGENT2-FIX-01 (criterio 4): SUELO de escala del encuadre inicial.
+# BETA2-FIX-01 (criterio 4): SUELO de escala del encuadre inicial.
 # `fitInView` metía la escena entera en el viewport cayera lo que cayera (0,0029
 # con 800 entidades): un amonites fósil vacío. Por debajo de esta escala el nodo
 # ya no es un nodo sino un punto liso (es justo _NODE_MIN_LOD), así que en vez de
@@ -217,7 +217,7 @@ class _LodTextItem(QGraphicsSimpleTextItem):
     etiquetas ilegibles domina el coste al ver el grafo entero; de cerca (pocos
     nodos visibles) se pinta con normalidad.
 
-    BETA-MULTIAGENT2-FIX-01: el umbral ya no es el LOD del nodo. Como el título
+    BETA2-FIX-01: el umbral ya no es el LOD del nodo. Como el título
     de entidad COMPENSA la escala de la vista (`setScale`), su nivel de detalle
     efectivo incluye ese factor >= 1 — de modo que el nombre sobrevive a escalas
     en las que una etiqueta sin compensar (arista, anillo) ya no se pinta. Esa es
@@ -231,7 +231,7 @@ class _LodTextItem(QGraphicsSimpleTextItem):
 
 
 def label_paints_at(view_scale: float, item_scale: float = 1.0) -> bool:
-    """BETA-MULTIAGENT2-FIX-01: ¿se pinta una `_LodTextItem` a esta escala?
+    """BETA2-FIX-01: ¿se pinta una `_LodTextItem` a esta escala?
 
     Pura y sin Qt para poder fijar en un test la PRIORIDAD DE TINTA (criterio 7)
     sin montar una escena: el LOD que ve `paint` es escala_de_vista × escala_del
@@ -482,7 +482,7 @@ class GraphSearchResult:
     parent_tree_name: str = ""
     parent_tree_id: str = ""
     is_inside_collapsed_tree: bool = False
-    # BETA-MULTIAGENT2-FIX-04: POR QUÉ ha coincidido este resultado. Antes se
+    # BETA2-FIX-04: POR QUÉ ha coincidido este resultado. Antes se
     # calculaba al construir el pajar y se tiraba, así que quien ordenaba
     # (`CreationWorkspace._rank`) solo tenía el texto del título y acababa
     # desempatando por `len(titulo)`: las relaciones de título corto expulsaban
@@ -497,7 +497,7 @@ class GraphSearchResult:
         return (self.title, details, self.summary)
 
 
-#: BETA-MULTIAGENT2-FIX-04 — orden ENTRE CLASES de resultado, decidido y escrito
+#: BETA2-FIX-04 — orden ENTRE CLASES de resultado, decidido y escrito
 #: aquí para que no se redescubra en el siguiente beta: **entidades y ramas >
 #: hitos > relaciones**. Una relación nunca puede desplazar a una ficha. Es la
 #: opción predecible: el usuario que teclea «cuervo» busca la posada, no las
@@ -515,7 +515,7 @@ SEARCH_MAX_RESULTS = 40
 class GraphSearchResults(list):
     """Resultados del lienzo + el **total real** de coincidencias antes del recorte.
 
-    BETA-MULTIAGENT2-FIX-04: `search` devolvía `results[:40]` y nadie sabía si
+    BETA2-FIX-04: `search` devolvía `results[:40]` y nadie sabía si
     había 40 o 538 — la tabla de acentos del beta llegó a leer ese tope como si
     fuera un recuento. Sigue siendo una lista (todos los consumidores previos
     funcionan igual) que además sabe cuántas coincidencias hubo de verdad.
@@ -702,7 +702,7 @@ def _fit_text(text: str, max_chars: int) -> str:
 
 
 def _fit_text_px(text: str, font: QFont, max_px: float) -> str:
-    """BETA-MULTIAGENT2-FIX-01 (ART-04): elisión por ANCHO REAL, no por número de
+    """BETA2-FIX-01 (ART-04): elisión por ANCHO REAL, no por número de
     caracteres. `_fit_text` cortaba a 20 caracteres con `len()`, así que en un
     contenedor ancho el título seguía siendo «Ilva Cinabrio, la A…» aunque
     sobrase sitio, y en uno estrecho se salía igual."""
@@ -2456,7 +2456,7 @@ class GraphCanvasView(QGraphicsView):
         from hosts.DesktopHostPySide.widgets.hover_preview_card import HoverPreviewController
 
         self._hover_preview = HoverPreviewController(self, self._hover_content_at)
-        # BETA-MULTIAGENT2-FIX-01: encuadre inicial DIFERIDO. El primer encuadre
+        # BETA2-FIX-01: encuadre inicial DIFERIDO. El primer encuadre
         # se calculaba durante la construcción, con la vista aún oculta (la
         # Creación arranca siempre en Foco) y un viewport sin dimensionar, y
         # nadie lo recalculaba al mostrarla ni al redimensionar. Cuando hay
@@ -2628,7 +2628,7 @@ class GraphCanvasView(QGraphicsView):
     # viewport GPU pinta por encima de cualquier overlay hermano. Un velo de pergamino
     # se desvanece sobre el lienzo al revelar la vista. Fail-soft.
     def play_reveal(self, *, duration_ms: int = 220) -> None:
-        # BETA-MULTIAGENT2-FIX-01 (ART-29): SIN movimiento no hay velo, punto.
+        # BETA2-FIX-01 (ART-29): SIN movimiento no hay velo, punto.
         # `_reveal_alpha` arranca en 1.0 (opaco) y solo baja por QTimer; sin bucle
         # de eventos real la vista se queda bajo una sábana opaca. Es la causa de
         # que la ronda 1 de beta testing perdiera TODAS las capturas de Mapa y
@@ -4644,7 +4644,7 @@ class GraphCanvasView(QGraphicsView):
     ) -> tuple[str, str, bool]:
         """Árbol contenedor de una entidad.
 
-        ``nodos_por_id`` (BETA-MULTIAGENT2-FIX-04) es un índice opcional que
+        ``nodos_por_id`` (BETA2-FIX-04) es un índice opcional que
         evita el escaneo lineal de ``_all_nodes``: la búsqueda lo llama una vez
         por coincidencia y ya lo tiene construido.
         """
@@ -6520,7 +6520,7 @@ class GraphCanvasView(QGraphicsView):
     def search(self, query: str, *, worldbuilding_active: bool = False) -> GraphSearchResults:
         """Busca en el grafo entero y devuelve las mejores coincidencias + el total.
 
-        BETA-MULTIAGENT2-FIX-04. Tres cambios sobre la versión anterior:
+        BETA2-FIX-04. Tres cambios sobre la versión anterior:
 
         1. **Plegado de acentos** (`terminos_de_busqueda`): `cronica` encuentra
            `Crónica` y al revés. Antes solo se hacía `.lower()`, que no toca los

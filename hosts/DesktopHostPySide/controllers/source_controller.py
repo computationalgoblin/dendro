@@ -1,6 +1,6 @@
 """Controlador de fuentes (trazabilidad de lo documentado vs lo inventado).
 
-BETA-MULTIAGENT2-FIX-11 (fase B3): el controlador solo sabía `list_all` y
+BETA2-FIX-11 (fase B3): el controlador solo sabía `list_all` y
 `create`, así que una fuente se podía crear pero **no enlazar a nada** — que es
 justo lo que define el oficio de quien investiga: «esto lo dice López de Ayala y
 esto me lo inventé yo» (HIS-05). Los métodos nuevos devuelven `Result` (no listas

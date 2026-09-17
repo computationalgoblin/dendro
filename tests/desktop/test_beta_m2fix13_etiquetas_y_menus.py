@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA D — etiquetas y descubribilidad (G2-19).
+"""BETA2-FIX-13 · TANDA D — etiquetas y descubribilidad (G2-19).
 
     «Si no pone lo que hace, para mí no existe.» — Carmen, sobre los once
     círculos de 32×32 del rail de Foco, con la papelera dentro.

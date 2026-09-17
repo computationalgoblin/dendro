@@ -527,7 +527,7 @@ def _compact_chronology(project: Any) -> dict[str, Any]:
     if desc:
         out["descripcion"] = desc
     present_year = getattr(chrono, "present_year", 0) or 0
-    # BETA-MULTIAGENT2-FIX-12 (G2-29): el presente se emite cuando la cronología
+    # BETA2-FIX-12 (G2-29): el presente se emite cuando la cronología
     # TIENE eras, no cuando el número es «verdadero». El `if present_year:` de
     # antes trataba el año 0 como «sin configurar» y callaba justo en el caso más
     # dañino: un mundo real cuya única era arranca en 0 y cuyos hitos viven en
@@ -546,7 +546,7 @@ def _compact_chronology(project: Any) -> dict[str, Any]:
         out["era_actual"] = era_name
     if has_eras:
         out["anyo_presente"] = int(present_year)
-    # BETA-MULTIAGENT-FIX-03 (G-03): las eras con sus límites ABSOLUTOS y la
+    # BETA-FIX-03 (G-03): las eras con sus límites ABSOLUTOS y la
     # equivalencia explícita del presente en ambas escalas. Antes viajaban
     # era-nombre + año absoluto + fecha regnal SIN puente y la IA alegaba
     # incoherencias temporales falsas (arraigo hundido, walk bloqueado).
@@ -588,7 +588,7 @@ def _compact_chronology(project: Any) -> dict[str, Any]:
     return out
 
 
-# ── BETA-MULTIAGENT2-FIX-08 (G2-13): rigor de lo generado ────────────────────
+# ── BETA2-FIX-08 (G2-13): rigor de lo generado ────────────────────
 # Cada pieza que la IA propone declara EN QUÉ SE APOYA (`base`) y, si quiere, con
 # cuánta confianza. Ninguna de las dos señales se inventa aquí: sin declaración del
 # modelo, la base queda «no declarada» y la confianza NO se marca como declarada
@@ -825,7 +825,7 @@ def _opt_nature(value: Any) -> str:
     return "mortal"
 
 
-# ── BETA-MULTIAGENT2-FIX-13 (G2-20): la salida del proveedor, saneada ──────
+# ── BETA2-FIX-13 (G2-20): la salida del proveedor, saneada ──────
 #
 # Decisión tomada (pregunta abierta 3 del ticket): el Markdown se LIMPIA, y se
 # limpia en la ESTADÍA (cuando el texto del modelo se convierte en candidato),
@@ -893,7 +893,7 @@ def _normalized_edit_fields(
             continue
         if value is None or not str(value).strip():
             continue
-        # BETA-MULTIAGENT2-FIX-13 (G2-20): se limpia AQUÍ, al estadiar, no al
+        # BETA2-FIX-13 (G2-20): se limpia AQUÍ, al estadiar, no al
         # aceptar. Así lo que el usuario lee en la ventana de decidir es
         # exactamente lo que entrará en su canon si dice que sí — el invariante
         # («la IA nunca escribe canon») se respeta y los asteriscos no llegan.
@@ -902,7 +902,7 @@ def _normalized_edit_fields(
 
 
 def _edit_fields_summary(fields: dict[str, Any]) -> str:
-    # BETA-MULTIAGENT2-FIX-13 (G2-20): el resumen que se LEE usa la etiqueta del
+    # BETA2-FIX-13 (G2-20): el resumen que se LEE usa la etiqueta del
     # campo, no su clave interna. El dato (`edit_fields`) conserva la clave intacta.
     return "\n".join(f"- {field_label(key)}: {value}" for key, value in fields.items())
 
@@ -1017,7 +1017,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         summary = str(milestone.get("summary") or milestone.get("description") or milestone.get("resumen") or "").strip()
         body = str(milestone.get("body") or milestone.get("rationale") or milestone.get("justification") or "").strip()
         chronology_position = str(milestone.get("chronology_position") or milestone.get("chronology_key") or "").strip()
-        # BETA-MULTIAGENT2-FIX-03 (G2-03): NO fabricar un orden que el modelo no
+        # BETA2-FIX-03 (G2-03): NO fabricar un orden que el modelo no
         # propuso. Este `or 0` estampaba `sort_index = 0` en TODO hito de IA y la
         # Cronología lo pintaba como «Orden 0» (un nombre de campo interno asomando
         # por la etiqueta) mientras los hitos escritos a mano no llevaban ninguna.
@@ -1048,7 +1048,7 @@ def stage_results(model_payload: dict[str, Any], job: AIJob) -> dict[str, Any]:
         }
         if sort_index is not None:
             hito_payload["metadata"]["sort_index"] = sort_index
-        # BETA-MULTIAGENT-FIX-04 (G-04): el tipo y los padres causales que la IA
+        # BETA-FIX-04 (G-04): el tipo y los padres causales que la IA
         # proponga ya no se tiran — antes todo hito IA nacía `origen` sin padres.
         proposed_type = str(
             milestone.get("milestone_type") or milestone.get("tipo") or ""
@@ -1939,7 +1939,7 @@ class AIJobService:
             return Error("Job IA cancelado")
         provider_name = str(getattr(self._provider, "provider_name", "ai"))
         if provider_name == "simulated" and not self.allow_simulated:
-            # BETA-MULTIAGENT-FIX-06 (NOV-04): sin instrucciones de la CLI — se
+            # BETA-FIX-06 (NOV-04): sin instrucciones de la CLI — se
             # eliminó en BETA-CIERRE WS-G; el único camino real es Ajustes → IA.
             msg = (
                 "IA no configurada: actívala en los Ajustes de IA (elige un proveedor "

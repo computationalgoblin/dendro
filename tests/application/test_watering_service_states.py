@@ -150,7 +150,7 @@ class TestBasicStates:
 
 @pytest.mark.application
 class TestNeighborhoodInvalidation:
-    """Caducidad por vecindario — RENEGOCIADA en BETA-MULTIAGENT2-FIX-05 (G2-05).
+    """Caducidad por vecindario — RENEGOCIADA en BETA2-FIX-05 (G2-05).
 
     Regla vieja: editar la ficha de cualquier vecina (o de una de 2º grado de
     relevancia alta) caducaba un diagnóstico recién pagado. Era la TERCERA vía de

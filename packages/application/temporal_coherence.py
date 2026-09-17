@@ -15,7 +15,7 @@ Reglas v1 (calendario + vecinos directos):
   6. padre (contenedor) antes que hijo (contenido).
   7. hito hijo causal posterior al hito padre.
 
-Reglas de CONTINUIDAD (BETA-MULTIAGENT2-FIX-10, G2-15) — las tres roturas de
+Reglas de CONTINUIDAD (BETA2-FIX-10, G2-15) — las tres roturas de
 sala de guion que el modelo ya podía computar y nadie miraba, más el aviso que
 explica el ruido de calendario:
   10. bilocación: un cuerpo (personaje/criatura/objeto) participa el mismo año
@@ -372,7 +372,7 @@ def evaluate_milestone(
     return issues
 
 
-# ── Reglas de continuidad (BETA-MULTIAGENT2-FIX-10) ───────────────────────
+# ── Reglas de continuidad (BETA2-FIX-10) ───────────────────────
 
 
 def _label_of(entity: NarrativeEntity | None, entity_id: str) -> str:

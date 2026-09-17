@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-03 (G2-03) — la Cronología deja de decir «Orden 0».
+"""BETA2-FIX-03 (G2-03) — la Cronología deja de decir «Orden 0».
 
 El mundo de la diseñadora de producto (`ux-producto/mundo/la-traductora.json`):
 `present_year = 0`, seis hitos escritos a mano SIN `sort_index` y uno de la IA

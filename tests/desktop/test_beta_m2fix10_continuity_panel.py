@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-10: la Continuidad tiene puerta (pestaña «Salud del proyecto»).
+"""BETA2-FIX-10: la Continuidad tiene puerta (pestaña «Salud del proyecto»).
 
 El tester enumeró los botones visibles de la ventana entera y el único con pinta
 de revisar algo era «! Reportar problema». Aquí se comprueba que la pestaña

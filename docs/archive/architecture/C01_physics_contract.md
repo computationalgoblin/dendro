@@ -14,7 +14,7 @@ Fecha: 2026-06-11 · Rama: `feature/BETA1-C01` · Base: cierre de B03
 | `_clamp_items_to_current_rings` | No existe |
 | `"concentric_physics"` | **No existe en código** — solo en documentación histórica. Requisito "eliminarlo" se cumple por vacuidad |
 | `_layout_mode` / `_layout_mode_active` | Existen y sanos: `GraphCanvasWidget._layout_mode` (persistido en ctx) y `GraphCanvasView._layout_mode_active` ∈ {free, layered, concentric_rings} |
-| Referencia de HANDOFF.md a "graph_physics (concentric_physics + free physics)" | **Intención histórica, no realidad.** B46/B47 no están en este linaje del repo |
+| Referencia histórica a "graph_physics (concentric_physics + free physics)" | **Intención histórica, no realidad.** B46/B47 no están en este linaje del repo |
 | Bugs B46/B47 heredados | Ninguno: no hay física que los contenga. Los 7 fallos B37/B44 de baseline son de layout/canvas, no de física |
 
 **Conclusión:** no hay nada que reutilizar ni reparar. La Fase C construye desde cero

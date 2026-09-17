@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-01 — la Cronología se abre LEGIBLE.
+"""BETA2-FIX-01 — la Cronología se abre LEGIBLE.
 
 Elvira, historiadora: «abrir Cronología y ver mi siglo XIV» → un lienzo vacío
 color pergamino. 370 ítems, todos dentro del viewport, todos a escala 0,0711,

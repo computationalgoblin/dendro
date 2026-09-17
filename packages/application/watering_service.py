@@ -49,11 +49,11 @@ from packages.domain.watering import WateringCostClass, WateringDiagnostic, Wate
 MAX_DIAGNOSTICS_PER_ENTITY = 5
 
 _EXCLUDED_CANON = frozenset({CanonState.ARCHIVADO, CanonState.DESCARTADO})
-# BETA-MULTIAGENT2-FIX-05: `_HIGH_IMPORTANCE` se retiró con la caducidad de 2º grado
+# BETA2-FIX-05: `_HIGH_IMPORTANCE` se retiró con la caducidad de 2º grado
 # de `_is_stale` (ver su docstring). La relevancia narrativa sigue viva en
 # `_IMPORTANCE_SCORE` y ahora también ordena la cola de sed (watering_attention).
 
-# BETA-MULTIAGENT2-FIX-05 (G2-05): vías de dependencia por las que Regar propaga
+# BETA2-FIX-05 (G2-05): vías de dependencia por las que Regar propaga
 # «Falta regar». Regar NO cambia canon (reescribe una página de wiki), así que solo
 # se marca a quien depende de ella DE VERDAD: quien la @menciona y quien la cita en su
 # propia página. La vía `relacion` —una manta topológica sobre todo el vecindario— se
@@ -262,7 +262,7 @@ class WateringService:
     ) -> bool:
         """Caduca el diagnóstico cuando cambió el canon PROPIO de la entidad.
 
-        BETA-MULTIAGENT2-FIX-05 (G2-05, tercera vía de invalidación). Hasta aquí,
+        BETA2-FIX-05 (G2-05, tercera vía de invalidación). Hasta aquí,
         editar la ficha de CUALQUIER vecina —o de una de 2º grado de relevancia alta—
         caducaba un diagnóstico recién pagado. Era el mecanismo que mantenía sediento
         el mundo real del beta (las 4 entidades regadas de la directora de arte, incluida
@@ -575,7 +575,7 @@ class WateringService:
             for layer_id in entity.layer_ids or []
             if layer_id in layers_by_id
         ]
-        # BETA-MULTIAGENT-FIX-03 (G-03): los años viajan con su traducción a era
+        # BETA-FIX-03 (G-03): los años viajan con su traducción a era
         # («año 2140 (Segunda Era, año 940)») para que la IA no compare escalas.
         chrono = getattr(project, "project_chronology", None)
         lines: list[str] = [
@@ -831,10 +831,10 @@ class WateringService:
             # BETA2-WIKI-06: reescrita la página, marca Falta regar las que DEPENDEN
             # de ella de verdad (no la propia).
             if isinstance(res, Ok) and self.impact_service is not None:
-                # BETA-MULTIAGENT-FIX-01 (G-01): los miembros del lote en curso se
+                # BETA-FIX-01 (G-01): los miembros del lote en curso se
                 # excluyen — sin esto se marcaban Falta regar entre sí y el lote
-                # nunca acababa verde (4/4 testers del beta multi-agente).
-                # BETA-MULTIAGENT2-FIX-05 (G2-05): además, la propagación desde Regar
+                # nunca acababa verde (4/4 testers del beta).
+                # BETA2-FIX-05 (G2-05): además, la propagación desde Regar
                 # va SOLO por dependencia real (`_ONLY_VIA_REGAR`). Regar no cambia
                 # canon: reescribe una página de wiki. Marcar por `relacion` degradaba
                 # páginas vigentes de vecinas regadas en otra autorización, así que dos
@@ -967,7 +967,7 @@ class WateringService:
     ) -> str:
         """Navega la wiki y adjunta ``contexto_wiki`` al scope (best-effort, WIKI-08).
 
-        BETA-MULTIAGENT2-FIX-06 (G2-10): devuelve el motivo por el que NO se navegó
+        BETA2-FIX-06 (G2-10): devuelve el motivo por el que NO se navegó
         (hoy: wiki sin una sola página) y lo pasa a ``notice`` para que el host lo diga
         en voz alta. Nada de degradación silenciosa (mismo principio que FIX-02).
         """
@@ -1012,7 +1012,7 @@ class WateringService:
         nutrida/calidad no analiza intención: mantiene el job por métrica. Consume IA (la
         autorización visible es del host, antes de llamar aquí). NUNCA canoniza.
 
-        BETA-MULTIAGENT-FIX-02 (G-02): ``progress_callback`` recibe el nombre de la
+        BETA-FIX-02 (G-02): ``progress_callback`` recibe el nombre de la
         fase en curso y ``cancel_check`` permite el corte cooperativo ENTRE fases
         (la llamada HTTP en vuelo no se aborta, como en el resto de cancelaciones).
         """
@@ -1177,7 +1177,7 @@ class WateringService:
         así una cancelación nunca deja estado corrupto ni pierde parciales.
         ``batch_ids`` (FIX-01): los miembros del lote no se invalidan entre sí.
 
-        ``progress_callback`` (BETA-MULTIAGENT2-FIX-06, G2-08): las fases del pipeline
+        ``progress_callback`` (BETA2-FIX-06, G2-08): las fases del pipeline
         de jobs (BUILDING_CONTEXT / PLANNING / WAITING_FOR_MODEL) que ``water_entity``
         ya sabía reenviar. El cable estaba tendido y desconectado en los dos últimos
         metros: el lote regaba 269 s en silencio absoluto.

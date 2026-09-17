@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-09 (§6): el paso del recorrido deja de mentirle a la IA.
+"""BETA2-FIX-09 (§6): el paso del recorrido deja de mentirle a la IA.
 
 `_rings_context` metía en el prompt un `causal_chain` construido sobre
 `causal_child_hito_ids` —el campo que no escribía nadie—, así que el contexto

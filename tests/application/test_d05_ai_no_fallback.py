@@ -57,7 +57,7 @@ def test_d05_ai_job_candidates_include_trace_metadata() -> None:
     assert isinstance(result, Ok)
     candidate = result.value.result["candidates"][0]
     metadata = candidate["metadata"]
-    # BETA-MULTIAGENT2-FIX-08 (G2-14/B5): la barra de comandos está RETIRADA; el
+    # BETA2-FIX-08 (G2-14/B5): la barra de comandos está RETIRADA; el
     # origen persistido es ahora el job real que produjo la semilla, no una mentira.
     assert candidate["source"] == "ai_generate_entities"
     assert candidate["source_id"] == job.id

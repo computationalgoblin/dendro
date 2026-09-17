@@ -35,7 +35,7 @@ class NextStepChip(QPushButton):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._step: NextStep | None = None
-        # BETA-MULTIAGENT2-FIX-06 (G2-08): riego en vuelo. Campo del widget (no un
+        # BETA2-FIX-06 (G2-08): riego en vuelo. Campo del widget (no un
         # `setEnabled` suelto) porque `set_step` se re-aplica a cada refresco y
         # resucitaría el disparador en mitad del lote.
         self._busy = False
@@ -70,7 +70,7 @@ class NextStepChip(QPushButton):
         return self._step
 
     def set_busy(self, busy: bool) -> None:
-        """BETA-MULTIAGENT2-FIX-06: hay un riego en vuelo → el chip no dispara otro."""
+        """BETA2-FIX-06: hay un riego en vuelo → el chip no dispara otro."""
         self._busy = bool(busy)
         self._apply_busy()
 

@@ -38,7 +38,7 @@ def _cand(**kw):
 
 # ── badge de fuente ──────────────────────────────────────────────────────────
 def test_source_badge_ia_con_confianza_declarada():
-    """BETA-MULTIAGENT2-FIX-08 (G2-13): el porcentaje solo se pinta si la confianza
+    """BETA2-FIX-08 (G2-13): el porcentaje solo se pinta si la confianza
     la DECLARÓ el modelo. El 0,62 literal del código no se enseña como medida."""
     declarada = _cand(confidence=0.62, metadata={"confianza_declarada": True})
     text = source_badge_text(declarada)

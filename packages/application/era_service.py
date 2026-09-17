@@ -158,7 +158,7 @@ class EraService:
         año dentro de la era, estilo regnal) y lo devuelve. Reusa ids/descripciones
         existentes por posición para no churnear. Contrato G01: siempre ≥1 era.
 
-        BETA-MULTIAGENT2-FIX-12 (G2-29): ``start_year`` es el ANCLA del origen de la
+        BETA2-FIX-12 (G2-29): ``start_year`` es el ANCLA del origen de la
         cadena — «este calendario empieza en el año 1900». Antes el cursor era 0 fijo
         y quien escribía de ESTE mundo tenía que inventarse una era tapón de 1.900
         años vacíos para que su eje coincidiera con el anno domini. Se mueve el

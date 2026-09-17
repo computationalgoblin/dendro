@@ -113,7 +113,7 @@ class HistoryService:
         description: str | None = None,
         **kwargs: Any,
     ) -> HistoryEntry:
-        """Alias REAL de :meth:`record` (BETA-MULTIAGENT2-FIX-08, G2-14/B3).
+        """Alias REAL de :meth:`record` (BETA2-FIX-08, G2-14/B3).
 
         ``add_entry`` tenía cuatro llamadores y CERO implementaciones
         (``candidate_service``, ``causal_milestone_service``,
@@ -133,7 +133,7 @@ class HistoryService:
 
         ``_event_type`` degrada lo desconocido a ``CREACION_ENTIDAD``; sin esta
         nota, una cadena mal escrita se convertía en una traza falsa y silenciosa
-        (BETA-MULTIAGENT2-FIX-08). Ahora el valor original viaja en metadata.
+        (BETA2-FIX-08). Ahora el valor original viaja en metadata.
         """
         meta = dict(metadata or {})
         if isinstance(declared, HistoryEventType) or declared is None:

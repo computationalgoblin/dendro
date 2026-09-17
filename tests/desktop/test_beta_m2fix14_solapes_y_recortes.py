@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-26): recortes y solapes, medidos por geometría.
+"""BETA2-FIX-14 (G2-26): recortes y solapes, medidos por geometría.
 
 Dirección de arte aportó el catálogo con mecanismo verificado, no por intuición:
 título de semilla cortado por delante, el año «1962» leído como «19», el aviso de

@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-12 (G2-16) — la familia de PARENTESCO en el dominio.
+"""BETA2-FIX-12 (G2-16) — la familia de PARENTESCO en el dominio.
 
 El enum tenía 41 tipos de relación y CERO de parentesco: en «un árbol genealógico
 para historias» no se podía decir «madre». Aquí se guarda que la familia existe,
@@ -127,7 +127,7 @@ def test_beta_m2fix12_carga_tolerante_intacta() -> None:
     assert rel.relation_type is RelationType.ESTA_RELACIONADO_CON
     assert rel.source_id == "a" and rel.target_id == "b"
 
-    # Alias legado de BETA-MULTIAGENT-FIX-04 (RONDA 1): el typo "cono..." sigue
+    # Alias legado de BETA-FIX-04 (RONDA 1): el typo "cono..." sigue
     # resolviendo al tipo bueno.
     viejo = NarrativeRelation.from_dict(
         {"source_id": "a", "target_id": "b", "relation_type": "cono..."}

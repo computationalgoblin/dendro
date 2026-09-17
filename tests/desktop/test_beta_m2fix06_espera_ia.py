@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-06 (G2-08): la espera de IA deja de ser silencio.
+"""BETA2-FIX-06 (G2-08): la espera de IA deja de ser silencio.
 
 La diseñadora de producto muestreó el indicador de estado cada 250 ms durante cuatro
 operaciones reales: **17 min 44 s de silencio absoluto de 29 min 36 de espera**. Regar

@@ -1,4 +1,4 @@
-"""Promoción de un hito a canon — punto ÚNICO (BETA-MULTIAGENT2-FIX-03, G2-03).
+"""Promoción de un hito a canon — punto ÚNICO (BETA2-FIX-03, G2-03).
 
 Aceptar un hito lo PROMUEVE: deja de ser candidato, queda datado de forma
 honesta (o explícitamente «por datar», nunca con un año inventado), sella sus
@@ -11,7 +11,7 @@ coherencia (``coherence_repair.apply_resolved_change``)— appendeaban el hito
 con los defaults del dominio: ``status=candidate``, ``created_at=""`` y sin
 ``candidate_id``. El toast decía «Semilla integrada al canon» y el registro
 decía otra cosa. Aquí vive la promoción y las tres la llaman: nada de
-duplicarla (regla «no modelos paralelos» de AGENTS.md).
+duplicarla (regla «no modelos paralelos» del proyecto).
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def promote_milestone(
       (``PENDING_NOTE`` en su ``temporality``), jamás con un año inventado.
     - ``created_at`` (solo si venía vacío) y ``updated_at``.
     - ``candidate_id``: trazabilidad hito↔semilla, de primera clase en
-      AGENTS.md. Solo se escribe si se pasa y el hito no lo traía ya.
+      el modelo. Solo se escribe si se pasa y el hito no lo traía ya.
     """
     hito.status = CausalMilestoneStatus.CANON
     normalize_milestone_dating(hito)

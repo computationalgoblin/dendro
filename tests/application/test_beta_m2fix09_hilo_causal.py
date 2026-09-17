@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-09 (G2-15): el hilo causal setup→payoff.
+"""BETA2-FIX-09 (G2-15): el hilo causal setup→payoff.
 
 El mundo del beta (`guionista-serie`, 20 hitos y 21 enlaces de paternidad) dejó
 tres cosas medidas: `causal_child_hito_ids` no lo escribía NADIE, recorrer la

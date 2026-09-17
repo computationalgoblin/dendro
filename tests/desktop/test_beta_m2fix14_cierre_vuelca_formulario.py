@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-23): cerrar dentro de los 800 ms perdía la frase.
+"""BETA2-FIX-14 (G2-23): cerrar dentro de los 800 ms perdía la frase.
 
 Los formularios de detalle tienen su PROPIO antirrebote de 800 ms. `closeEvent`
 paraba solo el suyo (el de la ventana) y llamaba a `_save_active_project()`, que

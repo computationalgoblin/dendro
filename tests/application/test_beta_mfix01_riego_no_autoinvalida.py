@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT-FIX-01: el riego no se auto-invalida (G-01, 4/4 testers).
+"""BETA-FIX-01: el riego no se auto-invalida (G-01, 4/4 testers).
 
 Regar propaga «Falta regar» a las relacionadas, pero los miembros del MISMO lote
 de riego quedan excluidos: sin esto, un lote de vecinas jamás acababa verde (solo
@@ -80,7 +80,7 @@ class _RecordingImpact:
                 "changed_id": changed_id,
                 "include_self": include_self,
                 "exclude_ids": set(exclude_ids or ()),
-                # BETA-MULTIAGENT2-FIX-05: el camino de Regar restringe las vías.
+                # BETA2-FIX-05: el camino de Regar restringe las vías.
                 "only_via": None if only_via is None else set(only_via),
             }
         )
@@ -138,7 +138,7 @@ def test_propagate_excluye_miembros_del_lote():
 def test_propagate_sin_exclusion_marca_relacionadas_regadas():
     """El MOTOR sigue marcando por `relacion` cuando no se restringen las vías.
 
-    BETA-MULTIAGENT2-FIX-05: esto es el comportamiento del motor para un cambio de
+    BETA2-FIX-05: esto es el comportamiento del motor para un cambio de
     CANON (update_entity/accept_candidate…), que es lo que no se puede romper. El
     camino de Regar ya NO llega aquí sin `only_via` — ver
     `test_water_entity_restringe_la_propagacion_a_dependencia_real`.
@@ -216,7 +216,7 @@ def test_water_entity_suelto_no_excluye_a_nadie():
 
 
 def test_water_entity_restringe_la_propagacion_a_dependencia_real():
-    """BETA-MULTIAGENT2-FIX-05 (G2-05): Regar no propaga por la vía `relacion`.
+    """BETA2-FIX-05 (G2-05): Regar no propaga por la vía `relacion`.
 
     Regar reescribe una página de wiki; no cambia canon. La exclusión de lote de
     FIX-01 tapaba el síntoma solo dentro de una autorización; la restricción de vías

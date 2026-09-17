@@ -1,4 +1,4 @@
-"""Pestaña «Continuidad» del panel «Salud del proyecto» (BETA-MULTIAGENT2-FIX-10).
+"""Pestaña «Continuidad» del panel «Salud del proyecto» (BETA2-FIX-10).
 
 El validador temporal determinista existía desde BETA1-J02 y solo se ejecutaba al
 ACEPTAR un candidato de IA: la app vigilaba lo que propone la máquina y no lo que

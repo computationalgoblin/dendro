@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-14 (G2-22): aceptar una semilla no dejaba punto de deshacer.
+"""BETA2-FIX-14 (G2-22): aceptar una semilla no dejaba punto de deshacer.
 
 `CandidateController` era la ÚNICA clase de controlador que no heredaba de
 `MutationNotifier`. La cadena rota, en orden: sin `on_mutated` → sin `_dirty` → sin

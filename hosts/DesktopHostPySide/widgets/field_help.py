@@ -207,7 +207,7 @@ FIELD_HELP: dict[str, str] = {
         "revierte cuando quieras con «Cultivar»."
     ),
     # -----------------------------------------------------------------------
-    # BETA-MULTIAGENT2-FIX-13 (G2-20) — los 8 que faltaban del «Diccionario de
+    # BETA2-FIX-13 (G2-20) — los 8 que faltaban del «Diccionario de
     # Carmen». El glosario cubría 19 términos y estaba bien escrito, pero se
     # quedaba corto justo en las palabras con las que uno se tropieza el primer
     # día: qué es una entidad, qué significa que algo «germine», qué es el Foco.
@@ -438,7 +438,7 @@ def labeled_row(label_text: str, help_key: str, parent: QWidget | None = None) -
 
 
 class GlossaryPanel(QWidget):
-    """El glosario, LEGIBLE SIN HOVER (BETA-MULTIAGENT2-FIX-13, G2-20).
+    """El glosario, LEGIBLE SIN HOVER (BETA2-FIX-13, G2-20).
 
     El catálogo existía desde BETA-AUDIT-06 y estaba bien escrito, pero todos sus
     consumidores eran `setToolTip`. Para quien declara «si no pone lo que hace,

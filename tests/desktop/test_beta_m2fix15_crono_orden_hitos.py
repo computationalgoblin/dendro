@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-15 (G2-28) — los hitos del mismo año se ordenan por una
+"""BETA2-FIX-15 (G2-28) — los hitos del mismo año se ordenan por una
 clave NUMÉRICA, no por el texto que se pinta.
 
 El escalonado de hitos coetáneos desempataba con la cadena `sub_label`, así que la
@@ -131,7 +131,7 @@ def test_clave_homogenea_no_revienta_al_mezclar_fecha_y_sort_index():
 
 def test_sub_label_sigue_siendo_la_etiqueta_pintada():
     # `sub_label` es solo TEXTO y no ha cambiado con este arreglo. OJO: el formato
-    # ya no es «Orden 3» sino «3.º» — lo cambió BETA-MULTIAGENT2-FIX-03 (G2-03),
+    # ya no es «Orden 3» sino «3.º» — lo cambió BETA2-FIX-03 (G2-03),
     # que además dejó de pintar el «Orden 0» que fabricaba la IA.
     assert _milestone_sub_label(_hito("h", "T", 1, sort_index=3)) == "3.º"
     assert _milestone_sub_label(_hito("h", "T", 1, sort_index=0)) == ""

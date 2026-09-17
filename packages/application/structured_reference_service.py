@@ -81,7 +81,7 @@ def _name_index(known: Iterable[tuple[str, str, str]]) -> dict[str, list[tuple[s
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Resolución de los ENLACES DE UNA PÁGINA de wiki (BETA-MULTIAGENT2-FIX-07)
+# Resolución de los ENLACES DE UNA PÁGINA de wiki (BETA2-FIX-07)
 # ═══════════════════════════════════════════════════════════════════════
 #
 # La IA que escribe una página (`update_memory`) rellena `wikilinks`/`citations`/

@@ -23,7 +23,7 @@ def milestone_order_key(
 ) -> tuple[int, int, float, str, str]:
     """Clave NUMÉRICA y homogénea para ordenar hitos DENTRO del mismo año.
 
-    BETA-MULTIAGENT2-FIX-15 (G2-28): la cronología desempataba los hitos
+    BETA2-FIX-15 (G2-28): la cronología desempataba los hitos
     coetáneos con la CADENA que pinta (`sub_label`), así que «10.º» iba antes
     que «2.º» y, con calendario completo, los meses se ordenaban por su NOMBRE
     en orden alfabético. Aquí la clave es numérica y —esto es lo importante—

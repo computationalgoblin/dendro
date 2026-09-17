@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-13 · TANDA E (application) — el vocabulario interno no
+"""BETA2-FIX-13 · TANDA E (application) — el vocabulario interno no
 se imprime (G2-20).
 
 De `ai_jobs` salía literalmente el botón «Editar Marta Iriarte: birth_year» que

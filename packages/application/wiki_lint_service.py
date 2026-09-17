@@ -95,7 +95,7 @@ class WikiLintService:
                 )
             # Contradicciones ya ancladas en la página.
             for issue in block.issues:
-                # BETA-MULTIAGENT2-FIX-07: el ANCLAJE de una incidencia también es un
+                # BETA2-FIX-07: el ANCLAJE de una incidencia también es un
                 # enlace, y también se rompe (2 de 4 anclajes rotos en el mundo del
                 # beta, invisibles porque el lint solo miraba wikilinks/citas/deps).
                 for ref in issue.anclado_a or []:

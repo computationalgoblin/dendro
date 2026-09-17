@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-03 (G2-03) — escrituras que se perdían devolviendo Ok.
+"""BETA2-FIX-03 (G2-03) — escrituras que se perdían devolviendo Ok.
 
 Dos caminos distintos, el mismo delito: la app tiraba el dato y decía que sí.
 

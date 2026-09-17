@@ -1,4 +1,4 @@
-"""BETA-MULTIAGENT2-FIX-08 (G2-14) — trazabilidad de lo aceptado.
+"""BETA2-FIX-08 (G2-14) — trazabilidad de lo aceptado.
 
 El invariante sagrado se cumple (nada entra al canon sin aceptación humana), pero
 una vez dentro el canon no recordaba de dónde vino: el hito aceptado nacía con
