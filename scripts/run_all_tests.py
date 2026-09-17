@@ -147,7 +147,7 @@ def _clean_env() -> dict[str, str]:
 def _pytest_env() -> dict[str, str]:
     """Environment for pytest subprocesses.
 
-    Preserve an existing PYTHONPATH (needed in WSL/Hermes when pytest and other
+    Preserve an existing PYTHONPATH (needed in WSL when pytest and other
     project dependencies are provided by the repo venv's site-packages) while
     ensuring the workspace itself has priority.
     """

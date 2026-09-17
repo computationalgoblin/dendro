@@ -12,9 +12,6 @@
       - narrative_architect_root_local:/root/.local
       - narrative_architect_root_config:/root/.config
       - narrative_architect_root_cache:/root/.cache
-      - narrative_architect_hermes_home:/root/.hermes
-      - narrative_architect_hermes_code:/usr/local/lib/hermes-agent
-      - narrative_architect_hermes_bin:/usr/local/bin
     stdin_open: true
     tty: true
     environment:
@@ -26,6 +23,3 @@ volumes:
   narrative_architect_root_local:
   narrative_architect_root_config:
   narrative_architect_root_cache:
-  narrative_architect_hermes_home:
-  narrative_architect_hermes_code:
-  narrative_architect_hermes_bin:
