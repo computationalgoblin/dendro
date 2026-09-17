@@ -32,7 +32,6 @@ python scripts/build_desktop.py     # → dist/Dendro/Dendro.exe
 ## Estructura del repositorio
 
 ```
-.kanban/                   — Kanban (tickets, plantillas, resúmenes de cierre)
 packages/
 ├── domain/                — Modelo de dominio puro (stdlib, sin dependencias)
 ├── application/           — Casos de uso, servicios, orquestación de IA
@@ -42,8 +41,7 @@ packages/
 hosts/DesktopHostPySide/   — Host de escritorio (PySide6)
 packaging/                 — Spec de PyInstaller
 docs/contracts/            — Contratos autoritativos (mandan sobre sugerencias)
-tests/                     — Pruebas por capa (ver CLAUDE.md para el runner)
-AGENTS.md                  — Reglas fundamentales del proyecto
+tests/                     — Pruebas por capa (runner: scripts/run_all_tests.py)
 ```
 
 ## Arquitectura limpia
@@ -68,8 +66,3 @@ Las reglas de dependencia se verifican estáticamente en `tests/architecture/`.
 7. **La UI no escribe en persistencia** — siempre a través de servicios.
 8. **La aplicación funciona sin IA** — la IA es asistencia opcional.
 9. **Contratos prevalecen** — sobre sugerencias creativas de agentes.
-
-## Kanban
-
-Todo trabajo nace de un ticket en `.kanban/` (Backlog → Ready → In Progress →
-Review → Testing → Done). El estado vivo está en `.kanban/KANBAN.md`.
