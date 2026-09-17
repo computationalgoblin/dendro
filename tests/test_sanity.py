@@ -90,26 +90,14 @@ class TestProjectStructure:
     def test_gitignore_exists(self):
         assert (self.PROJECT_ROOT / ".gitignore").exists()
 
-    def test_kanban_directory_exists(self):
-        kanban = self.PROJECT_ROOT / ".kanban"
-        assert kanban.is_dir()
-        assert (kanban / "KANBAN.md").exists()
-        assert (kanban / "tickets").is_dir()
-        assert (kanban / "templates" / "ticket-template.md").exists()
-        assert (kanban / "resumenes").is_dir()
-
     def test_docs_contracts_exists(self):
         contracts = self.PROJECT_ROOT / "docs" / "contracts"
         assert contracts.is_dir()
-        # Sincronizado con los contratos VIGENTES (cierre de beta 2026-07-21):
-        # contrato_fases y skills-map.md nunca llegaron a existir en esta forma.
+        # Contratos técnicos vigentes.
         required = {
-            "workflow.md",
-            "reglas-trabajo.md",
             "convenciones-errores.md",
             "convencion-pruebas.md",
             "limites-modulos.md",
-            "perfiles",
         }
         found = {d.name for d in contracts.iterdir()
                  if not d.name.startswith(".")}

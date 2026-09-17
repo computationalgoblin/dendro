@@ -19,6 +19,7 @@ Patrón de dobles tomado de ``test_beta_mfix01_riego_no_autoinvalida.py``.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -119,6 +120,8 @@ def _status(watering, entity_id: str) -> str:
 
 
 def _cargar(path: str) -> Project:
+    if not os.path.exists(path):  # pragma: no cover — mundo de evaluación local
+        pytest.skip(f"mundo de evaluación no disponible: {path}")
     with open(path, encoding="utf-8") as handle:
         return Project.from_dict(json.load(handle))
 
